@@ -217,9 +217,15 @@ def _snapshot() -> dict[str, object]:
         },
         "node_groups": {
             "system": {
+                "node_count": 1,
                 "provider": {
                     "node_group_id": "ng-system",
                     "node_group_name": "system",
+                    "resource_uid": "ng-system",
+                    "resource_version": 10,
+                    "reservation": {"policy": "", "reservation_ids": []},
+                    "failure_domains": [],
+                    "gpu_cluster_id": "",
                     "node_template": {
                         "k8s_version": "1.31",
                         "os": "ubuntu24.04",
@@ -231,9 +237,15 @@ def _snapshot() -> dict[str, object]:
                 "gpu": False,
             },
             "worker-gpu": {
+                "node_count": 2,
                 "provider": {
                     "node_group_id": "ng-worker-gpu",
                     "node_group_name": "worker-gpu",
+                    "resource_uid": "ng-worker-gpu",
+                    "resource_version": 20,
+                    "reservation": {"policy": "STRICT", "reservation_ids": ["res-1"]},
+                    "failure_domains": ["eu-north1-a"],
+                    "gpu_cluster_id": "gpucluster-1",
                     "node_template": {
                         "k8s_version": "1.31",
                         "os": "ubuntu24.04",
@@ -274,6 +286,14 @@ def test_provider_graph_builds_all_contiguous_hops_and_exact_group_tuples() -> N
     for groups in targets.values():
         assert [group["id"] for group in groups] == ["ng-system", "ng-worker-gpu"]
         gpu = groups[1]
+        assert gpu["provider_identity"] == {
+            "resource_uid": "ng-worker-gpu",
+            "resource_version": 20,
+            "reservation_policy": "STRICT",
+            "reservation_ids": ["res-1"],
+            "failure_domains": ["eu-north1-a"],
+            "gpu_cluster_id": "gpucluster-1",
+        }
         assert gpu["target"] == {
             "kubernetes_version": groups[0]["target"]["kubernetes_version"],
             "os": "ubuntu24.04",
@@ -612,6 +632,41 @@ def test_live_capability_revalidation_rejects_extra_group_and_gpu_mode_drift() -
     ] = ""
     with pytest.raises(ValueError, match="GPU software mode changed"):
         validate_campaign_segment_capabilities(changed_mode, segment=segment)
+
+
+def test_live_capabilities_exclude_only_exact_journaled_temporary_groups() -> None:
+    snapshot = _snapshot()
+    planned = compile_node_group_hop_targets(
+        snapshot,
+        control_plane_path=("1.31", "1.32"),
+        preferred_os=("ubuntu24.04",),
+        preferred_drivers_presets=("cuda12.8",),
+    )[("1.31", "1.32")]
+    segment = {
+        "mk8s": {
+            "control_plane": {"source_version": "1.31", "target_version": "1.32"},
+            "node_groups": planned,
+        }
+    }
+    temporary = copy.deepcopy(snapshot["node_groups"]["system"])  # type: ignore[index]
+    temporary["provider"]["node_group_id"] = "ng-bridge-a"  # type: ignore[index]
+    temporary["provider"]["node_group_name"] = "cxcli-bridge-a-campaign"  # type: ignore[index]
+    snapshot["node_groups"]["cxcli-bridge-a-campaign"] = temporary  # type: ignore[index]
+    journaled = ({"id": "ng-bridge-a", "name": "cxcli-bridge-a-campaign"},)
+
+    validate_campaign_segment_capabilities(
+        snapshot,
+        segment=segment,
+        journaled_temporary_node_groups=journaled,
+    )
+
+    temporary["provider"]["node_group_name"] = "foreign-group"  # type: ignore[index]
+    with pytest.raises(ValueError, match="temporary node-group identity changed"):
+        validate_campaign_segment_capabilities(
+            snapshot,
+            segment=segment,
+            journaled_temporary_node_groups=journaled,
+        )
 
 
 def test_later_hop_revalidates_journal_bound_replacement_without_mutating_campaign() -> None:

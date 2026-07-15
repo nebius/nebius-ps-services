@@ -147,7 +147,11 @@ def _runner(
     return run
 
 
-def _prove(command_runner: migration.SoperatorMigrationCommandRunner) -> None:
+def _prove(
+    command_runner: migration.SoperatorMigrationCommandRunner,
+    *,
+    journal: Mapping[str, Any] | None = None,
+) -> None:
     migration._prove_cluster_wide_slurmctld_exclusivity(  # noqa: SLF001
         expected_pods=_BRIDGE_PODS,
         expected_workload=(
@@ -159,6 +163,7 @@ def _prove(command_runner: migration.SoperatorMigrationCommandRunner) -> None:
         expected_replicas=2,
         proof_label="test bridge activation",
         campaign_fingerprint="a" * 64,
+        journal=journal or {"campaign_fingerprint": "a" * 64},
         kube_context="test-context",
         command_runner=command_runner,
     )
@@ -166,6 +171,238 @@ def _prove(command_runner: migration.SoperatorMigrationCommandRunner) -> None:
 
 def test_bridge_exclusivity_allows_only_exact_command_gated_target() -> None:
     _prove(_runner())
+
+
+def _bridge_stager(*, command: Sequence[str] | None = None) -> dict[str, Any]:
+    return {
+        "metadata": {
+            "namespace": migration.CONTROLLER_BRIDGE_NAMESPACE,
+            "name": "cxcli-controller-bridge-stager",
+            "uid": "bridge-stager-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "nebius-cxcli",
+                migration.CONTROLLER_BRIDGE_LABEL: "stager",
+            },
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "containers": [
+                {
+                    "name": "stager",
+                    "image": "registry.example/controller_slurmctld@sha256:" + "8" * 64,
+                    "command": list(
+                        command
+                        or (
+                            "/bin/sh",
+                            "-ec",
+                            "trap 'exit 0' TERM INT; while :; do sleep 30; done",
+                        )
+                    ),
+                }
+            ],
+        },
+        "status": {"phase": "Running"},
+    }
+
+
+def test_bridge_exclusivity_allows_exact_inert_campaign_stager() -> None:
+    _prove(_runner(extra_pods=(_bridge_stager(),)))
+
+
+def test_bridge_exclusivity_rejects_stager_with_changed_command() -> None:
+    stager = _bridge_stager(command=("/usr/sbin/slurmctld", "-D"))
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="second nonterminal"):
+        _prove(_runner(extra_pods=(stager,)))
+
+
+def _verified_runtime_fence_pod() -> tuple[dict[str, Any], dict[str, Any]]:
+    campaign = "a" * 64
+    attempt_id = "b" * 32
+    purpose = "source-version-bridge-pre-authority"
+    target = migration.ControllerFenceTarget(
+        node_name="controller-node",
+        node_uid="controller-node-uid",
+        state_markers=("/mnt/controller-spool/current",),
+    )
+    image = "registry.example/controller_slurmctld@sha256:" + "7" * 64
+    epoch_slug = purpose[:32]
+    desired = migration.controller_runtime_fence_pod(
+        campaign_fingerprint=campaign,
+        authority_epoch=f"fence-{epoch_slug}-{attempt_id[:12]}",
+        image=image,
+        target=target,
+    )
+    desired["metadata"]["uid"] = "fence-pod-uid"
+    desired["status"] = {"phase": "Running"}
+    journal = {
+        "campaign_fingerprint": campaign,
+        "runtime_fence_proofs": [
+            {
+                "purpose": purpose,
+                "boundary": f"{purpose}-attempt-{attempt_id}",
+                "attempt_id": attempt_id,
+                "status": "verified",
+                "image": image,
+                "targets": [
+                    {
+                        "node_name": target.node_name,
+                        "node_uid": target.node_uid,
+                        "state_markers": list(target.state_markers),
+                    }
+                ],
+                "results": [
+                    {
+                        "node_uid": target.node_uid,
+                        "pod_name": desired["metadata"]["name"],
+                        "pod_uid": desired["metadata"]["uid"],
+                    }
+                ],
+            }
+        ],
+    }
+    return desired, journal
+
+
+def test_bridge_exclusivity_allows_exact_verified_runtime_fence_pod() -> None:
+    fence, journal = _verified_runtime_fence_pod()
+
+    _prove(_runner(extra_pods=(fence,)), journal=journal)
+
+
+def test_bridge_exclusivity_rejects_runtime_fence_with_changed_command() -> None:
+    fence, journal = _verified_runtime_fence_pod()
+    fence["spec"]["containers"][0]["command"] = ["/usr/sbin/slurmctld", "-D"]
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="second nonterminal"):
+        _prove(_runner(extra_pods=(fence,)), journal=journal)
+
+
+def _inert_bridge_mount_pod() -> dict[str, Any]:
+    return {
+        "metadata": {
+            "namespace": migration.CONTROLLER_BRIDGE_NAMESPACE,
+            "name": "cxcli-controller-bridge-mounts-test",
+            "uid": "bridge-mount-pod-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "nebius-cxcli",
+                "nebius.ai/cxcli-controller-bridge-mounts": "true",
+            },
+            "ownerReferences": [
+                {
+                    "kind": "DaemonSet",
+                    "name": "cxcli-controller-bridge-mounts",
+                    "uid": "bridge-mount-workload-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "containers": [
+                {
+                    "name": "mount-shared-filesystems",
+                    "image": "registry.example/controller_slurmctld@sha256:" + "7" * 64,
+                    "command": list(migration.CONTROLLER_BRIDGE_MOUNT_HELPER_COMMAND),
+                }
+            ]
+        },
+        "status": {"phase": "Running"},
+    }
+
+
+def _inert_legacy_placeholder_pod() -> dict[str, Any]:
+    return {
+        "metadata": {
+            "namespace": "soperator",
+            "name": "controller-placeholder-test",
+            "uid": "placeholder-pod-uid",
+            "labels": {
+                "app.kubernetes.io/managed-by": "slurm-operator",
+                "slurm.nebius.ai/controller-type": "placeholder",
+            },
+            "ownerReferences": [
+                {
+                    "kind": "DaemonSet",
+                    "name": "controller-placeholder",
+                    "uid": "placeholder-workload-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "initContainers": [
+                {
+                    "name": "munge",
+                    "image": "registry.example/munge:legacy",
+                    "restartPolicy": "Always",
+                    "command": ["sleep"],
+                    "args": ["infinity"],
+                }
+            ],
+            "containers": [
+                {
+                    "name": "slurmctld",
+                    "image": "registry.example/controller_slurmctld:legacy",
+                    "command": ["sleep"],
+                    "args": ["infinity"],
+                },
+                {
+                    "name": "wait-for-accounting",
+                    "image": "registry.example/controller_slurmctld:legacy",
+                    "command": ["sleep"],
+                    "args": ["infinity"],
+                },
+                {
+                    "name": "ensure-jail-virtiofs",
+                    "image": "registry.example/controller_slurmctld:legacy",
+                    "command": ["sleep"],
+                    "args": ["infinity"],
+                },
+            ],
+        },
+        "status": {"phase": "Running"},
+    }
+
+
+def _inert_helper_workload(*, placeholder: bool) -> dict[str, Any]:
+    pod = _inert_legacy_placeholder_pod() if placeholder else _inert_bridge_mount_pod()
+    metadata = pod["metadata"]
+    owner = metadata["ownerReferences"][0]
+    labels = dict(metadata["labels"])
+    if not placeholder:
+        labels[migration.CONTROLLER_BRIDGE_LABEL] = "true"
+    return {
+        "metadata": {
+            "namespace": metadata["namespace"],
+            "name": owner["name"],
+            "uid": owner["uid"],
+            "labels": labels,
+        },
+        "spec": {"template": {"spec": pod["spec"]}},
+    }
+
+
+def test_bridge_exclusivity_allows_exact_inert_mount_and_placeholder_helpers() -> None:
+    _prove(
+        _runner(
+            extra_pods=(
+                _inert_bridge_mount_pod(),
+                _inert_legacy_placeholder_pod(),
+            ),
+            extra_workloads={
+                "daemonsets.apps": (
+                    _inert_helper_workload(placeholder=False),
+                    _inert_helper_workload(placeholder=True),
+                )
+            },
+        )
+    )
+
+
+def test_bridge_exclusivity_rejects_mount_helper_with_changed_command() -> None:
+    mount = _inert_bridge_mount_pod()
+    mount["spec"]["containers"][0]["command"] = ["/usr/sbin/slurmctld", "-D"]
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="second nonterminal"):
+        _prove(_runner(extra_pods=(mount,)))
 
 
 @pytest.mark.parametrize(
@@ -252,6 +489,7 @@ def _authority_runner(
     lease = migration.controller_authority_lease(
         namespace=_BRIDGE_NAMESPACE,
         campaign_fingerprint="a" * 64,
+        cluster_id="cluster-1",
         authority_epoch="target-aaaaaaaaaaaa",
         owner="target-singleton",
     )
@@ -295,12 +533,55 @@ def test_zero_authority_proof_allows_only_the_command_gated_target() -> None:
     migration._prove_cluster_wide_slurmctld_absence(  # noqa: SLF001
         proof_label="test fenced bridge",
         campaign_fingerprint="a" * 64,
+        journal={"campaign_fingerprint": "a" * 64},
         kube_context="test-context",
         command_runner=_authority_runner(
             pods=(gated_pod,),
             workloads={"statefulsets.apps.kruise.io": (gated_workload,)},
         ),
     )
+
+
+def test_zero_authority_api_proof_can_reuse_pre_stop_runtime_census(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gated_pod = _pod(
+        "soperator",
+        "controller-0",
+        "gated-pod-uid",
+        container=_gated_container(),
+        owner_uid="gated-workload-uid",
+    )
+    gated_workload = _workload(
+        "statefulsets.apps.kruise.io",
+        "soperator",
+        "controller",
+        "gated-workload-uid",
+        container=_gated_container(),
+    )
+
+    def unexpected_runtime_census(**_kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError("post-stop API proof must not start another all-node census")
+
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_runtime_process_census",
+        unexpected_runtime_census,
+    )
+
+    result = migration._prove_cluster_wide_slurmctld_absence(  # noqa: SLF001
+        proof_label="test fenced bridge API-only",
+        campaign_fingerprint="a" * 64,
+        journal={"campaign_fingerprint": "a" * 64},
+        kube_context="test-context",
+        command_runner=_authority_runner(
+            pods=(gated_pod,),
+            workloads={"statefulsets.apps.kruise.io": (gated_workload,)},
+        ),
+        process_census=False,
+    )
+
+    assert result == []
 
 
 def test_target_singleton_proof_rejects_a_foreign_controller() -> None:
@@ -331,6 +612,7 @@ def test_target_singleton_proof_rejects_a_foreign_controller() -> None:
     journal = {
         "namespace": _BRIDGE_NAMESPACE,
         "campaign_fingerprint": "a" * 64,
+        "cluster_id": "cluster-1",
         "authority": {"epoch": "target-aaaaaaaaaaaa", "owner": "target-singleton"},
         "target_singleton_takeover": {
             "controller_pod_uid": "target-pod-uid",
@@ -379,8 +661,10 @@ def test_runtime_census_starts_all_node_inspectors_together_and_removes_them() -
     )
 
     assert source.index("objects=tuple(desired for _target, desired") < source.index(
-        '"--for=jsonpath={.status.phase}=Succeeded"'
+        "terminal_deadline = time.monotonic() + 300"
     )
+    assert 'phase in {"Succeeded", "Failed"}' in source
+    assert '"--for=jsonpath={.status.phase}=Succeeded"' not in source
     assert "namespace=CONTROLLER_INSPECTOR_NAMESPACE" in source
     assert source.index("try:") < source.index("_kubectl_apply_objects(")
     finally_index = source.index("finally:")
@@ -442,6 +726,34 @@ def test_every_writer_start_revalidates_security_and_full_node_membership() -> N
         )
         nodes_index = source.rindex("_revalidate_controller_runtime_census_nodes", 0, writer_index)
         assert security_index < nodes_index < writer_index
+
+
+def test_source_to_target_bridge_census_runs_before_cold_stop_and_is_reused() -> None:
+    source = inspect.getsource(
+        migration._upgrade_controller_bridge_to_target_version  # noqa: SLF001
+    )
+
+    pre_stop_census = source.index('proof_label="source-version bridge pre-stop runtime census"')
+    stop_dispatch = source.index('"cold_stop_dispatching_at": _utc_now()', pre_stop_census)
+    cold_stop_scale = source.index(
+        "_kubectl_scale_namespace_resource",
+        stop_dispatch,
+    )
+    exact_node_fence = source.index(
+        'boundary="source-version-bridge-stopped"',
+        cold_stop_scale,
+    )
+    api_absence = source.index(
+        'proof_label="source-version bridge cold stop"',
+        exact_node_fence,
+    )
+    reused_node_identity = source.index(
+        "_revalidate_controller_runtime_census_nodes",
+        api_absence,
+    )
+
+    assert pre_stop_census < stop_dispatch < cold_stop_scale < exact_node_fence < api_absence
+    assert "process_census=False" in source[api_absence:reused_node_identity]
 
 
 def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -> None:
@@ -617,6 +929,7 @@ def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_ab
         "stage": "bridge-fenced",
         "namespace": "cxcli-soperator-upgrade-bridge",
         "campaign_fingerprint": "a" * 64,
+        "cluster_id": "cluster-1",
         "authority": {"epoch": "target-aaaaaaaaaaaa", "owner": "target-singleton"},
         "target_singleton_takeover": {
             "client_handoff_propagation": {

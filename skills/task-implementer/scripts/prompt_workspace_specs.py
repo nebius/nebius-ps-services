@@ -55,9 +55,7 @@ def _timestamp(value: object, label: str) -> str:
     except ValueError as exc:
         raise PromptWorkspaceError("RUN_STATE_INVALID", f"{label} is invalid") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise PromptWorkspaceError(
-            "RUN_STATE_INVALID", f"{label} has no UTC offset"
-        )
+        raise PromptWorkspaceError("RUN_STATE_INVALID", f"{label} has no UTC offset")
     return iso_seconds(parsed)
 
 
@@ -83,9 +81,7 @@ def load_steering_ledger(
         raise PromptWorkspaceError(
             "RUN_STATE_INVALID", "steering ledger events are invalid"
         )
-    revision_index = {
-        str(revision.get("revision")): revision for revision in revisions
-    }
+    revision_index = {str(revision.get("revision")): revision for revision in revisions}
     seen: set[str] = set()
     previous_number = 0
     pending_seen = False
@@ -223,9 +219,7 @@ def resolve_steering_revision(
                 "RUN_STATE_INVALID", "steering revision is already resolved"
             )
         return event
-    oldest_pending = next(
-        item for item in events if item["disposition"] == "pending"
-    )
+    oldest_pending = next(item for item in events if item["disposition"] == "pending")
     if oldest_pending["revision"] != revision_id:
         raise PromptWorkspaceError(
             "RUN_STATE_INVALID", "steering revisions must resolve in order"
@@ -285,9 +279,7 @@ def spec_markers(kind: str) -> tuple[str, str]:
 def spec_repo_path(workspace: dict[str, object], kind: str) -> tuple[Path, str]:
     _, filename, _, _, _ = _spec_contract(kind)
     repo_root = Path(required_string(workspace, "repo_root", "workspace manifest"))
-    source_root = Path(
-        required_string(workspace, "source_root", "workspace manifest")
-    )
+    source_root = Path(required_string(workspace, "source_root", "workspace manifest"))
     path = source_root / "docs" / filename
     relative = path.relative_to(repo_root).as_posix()
     return path, relative
@@ -333,9 +325,7 @@ def _required_record_field(section: str, label: str, identifier: str) -> str:
     return matches[0]
 
 
-def _require_bulleted_subsection(
-    section: str, heading: str, identifier: str
-) -> None:
+def _require_bulleted_subsection(section: str, heading: str, identifier: str) -> None:
     match = re.search(
         rf"(?ms)^#### {re.escape(heading)}\s*\n"
         r"(.*?)(?=^#### |^### |^## |\Z)",
@@ -429,9 +419,7 @@ def inspect_spec_document(
             "managed": False,
             "managed_sha256": None,
             "surrounding_sha256": "absent",
-            "rendered_surrounding_sha256": _surrounding_digest(
-                *_new_envelope(kind)
-            ),
+            "rendered_surrounding_sha256": _surrounding_digest(*_new_envelope(kind)),
             "ids": [],
             "requirements": {},
             "statuses": {},
@@ -466,9 +454,7 @@ def inspect_spec_document(
             "managed": False,
             "managed_sha256": None,
             "surrounding_sha256": _digest(raw),
-            "rendered_surrounding_sha256": _surrounding_digest(
-                *_append_envelope(raw)
-            ),
+            "rendered_surrounding_sha256": _surrounding_digest(*_append_envelope(raw)),
             "ids": [],
             "requirements": {},
             "statuses": {},
@@ -520,9 +506,7 @@ def inspect_spec_document(
     statuses: dict[str, str] = {}
     record_sha256: dict[str, str] = {}
     if kind == "requirements":
-        _require_bulleted_heading(
-            body, "Task Implementer Open Questions", relative
-        )
+        _require_bulleted_heading(body, "Task Implementer Open Questions", relative)
         _require_bulleted_heading(
             body, "Task Implementer Requirements Change Log", relative
         )
@@ -551,9 +535,7 @@ def inspect_spec_document(
                 _canonical_managed_text(section_match.group(0))
             )
     else:
-        _require_bulleted_heading(
-            body, "Task Implementer Design Change Log", relative
-        )
+        _require_bulleted_heading(body, "Task Implementer Design Change Log", relative)
         for item in ids:
             section_match = re.search(
                 rf"(?ms)^###\s+{re.escape(item)}:\s+.*?\n"
@@ -572,10 +554,13 @@ def inspect_spec_document(
                 )
             statuses[item] = status
             mapping = _required_record_field(section, "Requirements", item)
-            if re.fullmatch(
-                r"TI-REQ-[0-9]{3,}(?:\s*,\s*TI-REQ-[0-9]{3,})*",
-                mapping,
-            ) is None:
+            if (
+                re.fullmatch(
+                    r"TI-REQ-[0-9]{3,}(?:\s*,\s*TI-REQ-[0-9]{3,})*",
+                    mapping,
+                )
+                is None
+            ):
                 raise PromptWorkspaceError(
                     "SPEC_CONFLICT", f"{item} has no valid requirement mapping"
                 )
@@ -630,15 +615,24 @@ def inspect_spec_documents(
                 "SPEC_CONFLICT",
                 f"{design_id} maps unknown requirements: {', '.join(sorted(unknown))}",
             )
-    next_requirement = max(
-        (int(REQUIREMENT_ID_RE.fullmatch(item).group(1)) for item in requirement_ids),
-        default=0,
-    ) + 1
+    next_requirement = (
+        max(
+            (
+                int(REQUIREMENT_ID_RE.fullmatch(item).group(1))
+                for item in requirement_ids
+            ),
+            default=0,
+        )
+        + 1
+    )
     design_ids = set(map(str, design["ids"]))
-    next_design = max(
-        (int(DESIGN_ID_RE.fullmatch(item).group(1)) for item in design_ids),
-        default=0,
-    ) + 1
+    next_design = (
+        max(
+            (int(DESIGN_ID_RE.fullmatch(item).group(1)) for item in design_ids),
+            default=0,
+        )
+        + 1
+    )
     return {
         "requirements": requirements,
         "design": design,

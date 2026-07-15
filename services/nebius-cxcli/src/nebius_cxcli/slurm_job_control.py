@@ -45,11 +45,13 @@ SLURM_JOB_CONTROL_ACTION_PROMPT = (
     "Action [r refresh, w wait, c cancel, q requeue, h hold, H requeue-and-hold, u release]"
 )
 SLURM_JOB_CONTROL_KEYS = (
-    "Keys: space select | a all | i invert | r refresh | w wait | "
+    "Keys: Esc exit | space select | a all | i invert | r refresh | w wait | "
     "c cancel | q requeue | h hold | H requeue-and-hold | u release | ? help"
 )
 SLURM_JOB_CONTROL_HELP = (
     "Slurm job controls\n\n"
+    "Screen\n"
+    "Esc: leave this screen without changing any jobs.\n\n"
     "Selection\n"
     "space: select or clear the highlighted row.\n"
     "a: select all displayed jobs, or clear all when every row is selected.\n"
@@ -503,6 +505,7 @@ def create_slurm_job_control_app(
         }
         """
         BINDINGS = [
+            Binding("escape", "exit_jobs", "Exit", key_display="Esc"),
             Binding("space", "toggle_selected", "Select", key_display="space"),
             Binding("a", "toggle_all", "All"),
             Binding("i", "invert_selection", "Invert"),
@@ -992,6 +995,12 @@ def create_slurm_job_control_app(
                     self._refresh_status("Pending jobs cannot be requeued: " + ", ".join(pending))
                     return
             self._schedule_action(action, selected)
+
+        def action_exit_jobs(self) -> None:
+            if self.action_running:
+                self._refresh_status("Wait for the current Slurm action to finish before exiting.")
+                return
+            self.exit(None)
 
     return SlurmJobControlApp(tuple(jobs), title)
 

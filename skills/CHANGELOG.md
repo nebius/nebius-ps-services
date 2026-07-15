@@ -144,6 +144,22 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Changed `agent-nebius-auth` to grant its custom Codex Agent group the
+  project-level Nebius `admin` role by default instead of `editor`; the
+  existing `--role` override remains available for explicitly narrower setups.
+
+- Refactored the explicit-only `task-implementer` from sequential
+  execution-plane v1 into a resumable coordinator/worker v2. One unchanged
+  `run <prompt-path-or-unique-filename>` now builds deterministic dependency
+  waves from locked write claims and conflict domains, dispatches isolated
+  full-repository worktrees in capacity-sized batches, verifies one reviewed
+  direct-child commit per worker, integrates task branches in stable order,
+  promotes only by verified fast-forward, and cleans reachable temporary
+  resources without force. Shared specs/docs remain coordinator-owned;
+  failures retain recovery state without mutating the project branch; and
+  unfinished v1 runs fail closed with `WORKFLOW_UPGRADE_REQUIRED` without a
+  compatibility path.
+
 - Refactored the explicit-only `task-implementer` to two public actions:
   idempotent `workspace init [project-folder]` and retry-safe
   `run <prompt-path-or-unique-filename>`. Initialization creates a starter only

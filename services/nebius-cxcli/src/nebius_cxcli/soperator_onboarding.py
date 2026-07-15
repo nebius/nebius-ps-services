@@ -492,7 +492,7 @@ def validate_soperator_onboarding_acceptance(
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
         "a current accepted configuration. External Soperator upgrade requires a locked "
-        "v4 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
+        "v5 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
         "`nebius-cxcli ext-soperator onboard` for this cluster; a journal is never an "
         "upgrade-path authority."
     )
@@ -1336,7 +1336,6 @@ def _soperator_upgrade_support_status_finding(
         "approved_target_chart_version": approved_target_chart,
         "current_k8s_version": current_k8s,
         "target_k8s_version": target_k8s,
-        "override_used": False,
         "references": list(references),
     }
     if recommended_order:
@@ -1372,52 +1371,15 @@ def soperator_upgrade_support_findings(
     return tuple(findings)
 
 
-def soperator_upgrade_support_requires_override(
+def soperator_upgrade_support_rejected(
     report: SoperatorOnboardingReport | Mapping[str, Any],
 ) -> bool:
     for finding in soperator_upgrade_support_findings(report):
-        if (
-            str(finding.get("status", "") or "").strip()
-            in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES
+        if str(finding.get("status", "") or "").strip() in (
+            SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES
         ):
-            evidence = finding.get("evidence")
-            if isinstance(evidence, Mapping) and evidence.get("override_used") is True:
-                continue
             return True
     return False
-
-
-def _soperator_support_finding_with_override(
-    finding: SoperatorOnboardingFinding,
-) -> SoperatorOnboardingFinding:
-    if finding.layer != SOPERATOR_UPGRADE_SUPPORT_LAYER:
-        return finding
-    if finding.status not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
-        return finding
-    evidence = dict(finding.evidence or {})
-    evidence["override_used"] = True
-    evidence["original_severity"] = finding.severity
-    return replace(
-        finding,
-        severity="recommended",
-        message=("Override accepted for unsupported Soperator upgrade path. " + finding.message),
-        evidence=evidence,
-    )
-
-
-def soperator_onboarding_report_with_support_override(
-    report: SoperatorOnboardingReport,
-    *,
-    override_used: bool,
-) -> SoperatorOnboardingReport:
-    if not override_used:
-        return report
-    return replace(
-        report,
-        findings=tuple(
-            _soperator_support_finding_with_override(finding) for finding in report.findings
-        ),
-    )
 
 
 def _soperator_migration_profile_match_finding(
@@ -1584,8 +1546,9 @@ def _default_soperator_migration_plan(
                 notes=(
                     "Upgrade only the Nebius control plane in this phase; do not call Terraform.",
                     "Advance one Kubernetes minor at a time when needed.",
-                    "Leave every source service and worker node group untouched.",
-                    "Create and validate blue/green target groups during compute migration.",
+                    "Leave service and worker node groups untouched until compute migration.",
+                    "Apply node-group changes through the onboarding-accepted in-place or "
+                    "blue-green compute migration.",
                 ),
             )
         )
@@ -1619,35 +1582,35 @@ def _default_soperator_migration_plan(
         )
     if replacement_compute_required:
         if include_compute_migration:
-            rolling_title = "Blue/green compute migration with preserved running jobs"
+            rolling_title = "Accepted compute migration with preserved running jobs"
             rolling_progress_label = (
-                "Compute Migration: target groups aligned, busy source workers retained, "
+                "Compute Migration: eligible groups advancing, busy workers retained, "
                 "<running jobs> jobs remaining"
             )
             rolling_notes = (
-                "Create replacement controller, system, accounting, login, and worker groups.",
-                "Validate target node and workload identities before source retirement.",
-                "Keep each busy source worker until its allocation and epilog finish.",
+                "Execute the onboarding-accepted in-place or blue-green mode.",
+                "Validate exact provider, Kubernetes, Slurm, and workload identities.",
+                "Keep each busy worker blocked until its allocation and epilog finish.",
             )
         elif include_soperator_upgrade:
-            rolling_title = "Soperator chart upgrade on blue/green target compute"
+            rolling_title = "Soperator chart upgrade on accepted target compute"
             rolling_progress_label = (
                 "Soperator Upgrade: replacement compute verified, <running jobs> jobs remaining"
             )
             rolling_notes = (
-                "Create replacement groups before changing source capacity.",
+                "Prepare compute according to the accepted migration mode.",
                 "Apply target Soperator values against exact replacement identities.",
                 "Verify target worker NodeSets before accepting production jobs.",
             )
         else:
-            rolling_title = "Kubernetes target-version blue/green compute replacement"
+            rolling_title = "Kubernetes target-version compute migration"
             rolling_progress_label = (
                 "Kubernetes Upgrade: target-version replacement compute verified, "
                 "<running jobs> jobs remaining"
             )
             rolling_notes = (
-                "Create target-version replacement groups before changing source capacity.",
-                "Keep every source node-group template immutable.",
+                "Use the accepted in-place or blue-green target-version mode.",
+                "Keep every provider mutation bound to the accepted campaign.",
                 "Keep each busy source worker until its allocation and epilog finish.",
             )
         phases.append(
@@ -2020,13 +1983,13 @@ def _configured_soperator_action(
         ),
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-            title="Plan blue/green target compute replacements",
+            title="Plan accepted compute migration",
             layer="placements",
             selected=True,
             disruptive=True,
             reason=(
-                "Service and worker roles move to target-version replacement groups; source "
-                "groups remain immutable until their workload-specific retirement gates pass."
+                "Service and worker roles follow the separately accepted in-place or blue-green "
+                "compute migration and its workload-specific safety gates."
             ),
         ),
         ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK: SoperatorOnboardingAction(
@@ -2049,8 +2012,8 @@ def _configured_soperator_action(
             disruptive=True,
             reason=(
                 "External Soperator targets are not Terraform-owned, so cxcli advances "
-                "the MK8s control plane directly. Source node-group templates remain "
-                "immutable; target compute alignment uses blue/green replacements."
+                "the MK8s control plane directly. Node-group template alignment follows the "
+                "separately accepted in-place or blue-green compute migration mode."
             ),
         ),
         ONBOARDING_ACTION_ENABLE_TOPOLOGY: SoperatorOnboardingAction(
@@ -3019,9 +2982,9 @@ def analyze_soperator_onboarding_snapshot(
                     message=(
                         "Existing Soperator service-role and worker node-group labels were "
                         "detected. cxcli can preserve these role and placement mappings on "
-                        "target-version blue/green replacement groups whenever upgrade work "
-                        "is required; compatibility never authorizes a source node-group "
-                        "template update."
+                        "the accepted in-place or blue-green compute migration whenever "
+                        "upgrade work is required; compatibility alone never authorizes a "
+                        "source node-group mutation."
                     ),
                     evidence={"roles": role_evidence},
                 )
@@ -3529,13 +3492,13 @@ def analyze_soperator_onboarding_snapshot(
                         severity="required",
                         message=(
                             "The external MK8s control plane will be upgraded directly; "
-                            "source node-group templates remain immutable and target compute "
-                            "alignment uses blue/green replacements."
+                            "node-group template alignment follows the separately accepted "
+                            "in-place or blue-green compute migration mode."
                             if provider_inventory_available
                             else (
                                 "External MK8s control-plane and node-group provider "
                                 "inventory was not available during onboarding; cxcli will "
-                                "verify the control-plane hop and blue/green target compute "
+                                "verify the control-plane hop and accepted target compute "
                                 "plan during the external upgrade."
                             )
                         ),
@@ -3553,7 +3516,7 @@ def analyze_soperator_onboarding_snapshot(
                         reason=(
                             "The Soperator chart is already current, but the external MK8s "
                             "control plane has not reached the requested Kubernetes target; "
-                            "compute alignment remains blue/green."
+                            "compute alignment follows the separately accepted migration mode."
                         ),
                     )
                 )
@@ -3677,13 +3640,13 @@ def analyze_soperator_onboarding_snapshot(
                             severity="required",
                             message=(
                                 "The external MK8s control plane will be upgraded directly; "
-                                "source node-group templates remain immutable and target compute "
-                                "alignment uses blue/green replacements."
+                                "node-group template alignment follows the separately accepted "
+                                "in-place or blue-green compute migration mode."
                                 if provider_inventory_available
                                 else (
                                     "External MK8s control-plane and node-group provider "
                                     "inventory was not available during onboarding; cxcli will "
-                                    "verify the control-plane hop and blue/green target compute "
+                                    "verify the control-plane hop and accepted target compute "
                                     "plan before it manages Soperator."
                                 )
                             ),
@@ -3703,7 +3666,7 @@ def analyze_soperator_onboarding_snapshot(
                             reason=(
                                 "External Soperator targets are not Terraform-owned, so cxcli "
                                 "advances the MK8s control plane directly while target OS/GPU "
-                                "alignment is staged through blue/green compute replacements."
+                                "alignment follows the accepted compute migration mode."
                             ),
                         )
                     )
@@ -3717,8 +3680,8 @@ def analyze_soperator_onboarding_snapshot(
                                 "External MK8s control plane and discovered node-group "
                                 "templates already match the target Kubernetes version, node "
                                 "OS image, and GPU driver preset requirements. cxcli will "
-                                "skip external control-plane and blue/green compute remediation "
-                                "unless live state drifts."
+                                "skip external control-plane and compute remediation unless live "
+                                "state drifts."
                             ),
                             evidence=_node_template_inventory_finding_evidence(
                                 node_template_inventory
@@ -3753,13 +3716,13 @@ def analyze_soperator_onboarding_snapshot(
                     actions.append(
                         SoperatorOnboardingAction(
                             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-                            title="Plan blue/green target compute replacements",
+                            title="Plan accepted compute migration",
                             layer="placements",
                             selected=True,
                             disruptive=True,
                             reason=(
-                                "Service and worker roles move to target-version replacement groups; "
-                                "source groups remain immutable until workload-specific retirement."
+                                "Service and worker roles follow the separately accepted in-place "
+                                "or blue-green migration and its workload-specific safety gates."
                             ),
                         )
                     )
@@ -4473,10 +4436,13 @@ def _resume_slurmcluster_identity_resources(
         raise RuntimeError(
             "External Soperator resume SlurmCluster identity scope has an unsupported mode."
         )
-    if str(identity_scope.get("phase_id", "") or "").strip() != "rolling-compute-migration":
+    if str(identity_scope.get("phase_id", "") or "").strip() not in {
+        "populate-jail-refresh",
+        "rolling-compute-migration",
+    }:
         raise RuntimeError(
-            "External Soperator resume SlurmCluster identity scope is not bound to the "
-            "rolling-compute-migration phase."
+            "External Soperator resume SlurmCluster identity scope is not bound to a "
+            "supported target-creation phase."
         )
     source_ref = _mapping_value(identity_scope.get("source"))
     target_ref = _mapping_value(identity_scope.get("target"))
@@ -4664,13 +4630,13 @@ def collect_kubectl_soperator_snapshot(
         if isinstance(namespaces, Mapping)
         else []
     )
-    pvs = _kubectl_list_json_with_single_retry(
+    pvs = _kubectl_list_json_with_bounded_retry(
         ["kubectl", "--context", context, "get", "pv", "-o", "json"],
         timeout,
         errors=collection_errors,
         extra_env=extra_env,
     )
-    pvcs = _kubectl_list_json_with_single_retry(
+    pvcs = _kubectl_list_json_with_bounded_retry(
         ["kubectl", "--context", context, "get", "pvc", "-A", "-o", "json"],
         timeout,
         errors=collection_errors,
@@ -4678,7 +4644,7 @@ def collect_kubectl_soperator_snapshot(
     )
     workloads: Mapping[str, Any] = {}
     if "soperator" in namespace_names:
-        workloads = _kubectl_json(
+        workloads = _kubectl_list_json_with_bounded_retry(
             [
                 "kubectl",
                 "--context",
@@ -4711,7 +4677,7 @@ def collect_kubectl_soperator_snapshot(
     ]
     soperator_resources: Mapping[str, Any] = {}
     if soperator_resource_kinds:
-        soperator_resources = _kubectl_json(
+        soperator_resources = _kubectl_list_json_with_bounded_retry(
             [
                 "kubectl",
                 "--context",
@@ -4726,6 +4692,49 @@ def collect_kubectl_soperator_snapshot(
             errors=collection_errors,
             extra_env=extra_env,
         )
+    if slurmcluster_identity_scope is not None:
+        scoped_slurmclusters = _kubectl_list_json_with_bounded_retry(
+            [
+                "kubectl",
+                "--context",
+                context,
+                "get",
+                "slurmclusters",
+                "-n",
+                "soperator",
+                "-o",
+                "json",
+            ],
+            timeout,
+            errors=collection_errors,
+            extra_env=extra_env,
+        )
+        scoped_items = scoped_slurmclusters.get("items")
+        if not isinstance(scoped_items, list):
+            detail = _last_kubectl_inventory_error(
+                collection_errors,
+                resource="slurmclusters",
+            )
+            raise RuntimeError(
+                "External Soperator checkpoint resume could not collect the exact "
+                "namespace-scoped SlurmCluster inventory after 3 attempts; refusing to "
+                f"infer identity from broad CRD discovery.{detail}"
+            )
+        broad_items = (
+            soperator_resources.get("items", []) if isinstance(soperator_resources, Mapping) else []
+        )
+        soperator_resources = {
+            "apiVersion": "v1",
+            "kind": "List",
+            "items": [
+                *(
+                    item
+                    for item in _sequence_of_mappings(broad_items)
+                    if str(item.get("kind", "") or "").strip().lower() != "slurmcluster"
+                ),
+                *_sequence_of_mappings(scoped_items),
+            ],
+        }
     all_helm_releases = _helm_json(
         ["helm", "--kube-context", context, "list", "-A", "-o", "json"],
         timeout,
@@ -4885,14 +4894,18 @@ def collect_kubectl_soperator_snapshot(
     )
     jail_binding = _soperator_jail_pvc_binding(identity_resources)
     if jail_binding is not None and not isinstance(pvcs.get("items"), list):
+        detail = _last_kubectl_inventory_error(collection_errors, resource="pvc")
         raise RuntimeError(
             "Soperator Jail identity resolution failed: live PVC inventory collection "
-            "failed after 2 attempts; refusing to treat a failed read as an empty inventory."
+            "failed after 3 attempts; refusing to treat a failed read as an empty inventory."
+            f"{detail}"
         )
     if jail_binding is not None and not isinstance(pvs.get("items"), list):
+        detail = _last_kubectl_inventory_error(collection_errors, resource="pv")
         raise RuntimeError(
             "Soperator Jail identity resolution failed: live PV inventory collection "
-            "failed after 2 attempts; refusing to treat a failed read as an empty inventory."
+            "failed after 3 attempts; refusing to treat a failed read as an empty inventory."
+            f"{detail}"
         )
     jail_filesystem_id = _soperator_jail_filesystem_identity(
         soperator_resources=identity_resources,
@@ -4963,6 +4976,7 @@ def _sanitize_kubernetes_node_items(items: Any) -> list[dict[str, Any]]:
             {
                 "metadata": {
                     "name": metadata.get("name"),
+                    "uid": metadata.get("uid"),
                     "labels": copy.deepcopy(to_plain_data(_mapping_value(metadata.get("labels")))),
                 },
                 "spec": {"unschedulable": spec.get("unschedulable") is True},
@@ -5579,36 +5593,41 @@ def _kubectl_json(
     return payload if isinstance(payload, Mapping) else {}
 
 
-def _kubectl_list_json_with_single_retry(
+def _kubectl_list_json_with_bounded_retry(
     command: Sequence[str],
     timeout: int,
     *,
     errors: list[dict[str, Any]] | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
-    """Retry one failed list read without treating an authoritative empty list as failure."""
-    first_errors: list[dict[str, Any]] = []
-    payload = _kubectl_json(
-        command,
-        timeout,
-        errors=first_errors,
-        extra_env=extra_env,
-    )
-    if isinstance(payload.get("items"), list):
-        return payload
-
-    retry_errors: list[dict[str, Any]] = []
-    payload = _kubectl_json(
-        command,
-        timeout,
-        errors=retry_errors,
-        extra_env=extra_env,
-    )
-    if isinstance(payload.get("items"), list):
-        return payload
+    """Retry a failed inventory read without treating an authoritative empty list as failure."""
+    attempt_errors: list[dict[str, Any]] = []
+    payload: Mapping[str, Any] = {}
+    for _attempt in range(3):
+        current_errors: list[dict[str, Any]] = []
+        payload = _kubectl_json(
+            command,
+            timeout,
+            errors=current_errors,
+            extra_env=extra_env,
+        )
+        if isinstance(payload.get("items"), list):
+            return payload
+        attempt_errors.extend(current_errors)
     if errors is not None:
-        errors.extend((*first_errors, *retry_errors))
+        errors.extend(attempt_errors)
     return payload
+
+
+def _last_kubectl_inventory_error(errors: Sequence[Mapping[str, Any]], *, resource: str) -> str:
+    marker = f" get {resource} "
+    matching = [
+        error for error in errors if marker in f" {str(error.get('command', '') or '').strip()} "
+    ]
+    if not matching:
+        return ""
+    message = " ".join(str(matching[-1].get("message", "") or "").split())
+    return f" Last error: {message[:500]}" if message else ""
 
 
 def _helm_json(

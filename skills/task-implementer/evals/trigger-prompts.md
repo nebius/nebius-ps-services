@@ -1,8 +1,8 @@
 # Trigger Prompts
 
-`task-implementer` is explicit-only because it creates private workflow state,
-may edit product code, invokes per-task local commits, and requires fresh
-implementation sessions.
+`task-implementer` is explicit-only because it creates private state, isolated
+Git worktrees/branches, worker commits, and coordinator integration commits.
+Generic parallel requests do not trigger it.
 
 ## Should Trigger
 
@@ -10,115 +10,112 @@ implementation sessions.
 $task-implementer workspace init
 ```
 
-Initialize the exact current project folder, create one starter only when no
-prompt exists, open the generated workspace when possible, and show prompts by
-private submission activity. Do not implement work.
+Initialize the exact current project scope, create one starter only when none
+exists, and do not implement work.
 
 ```text
 $task-implementer workspace init services/nebius-cxcli
 ```
 
-Resolve the explicit folder to the same canonical workspace as running from
-inside it. Repeated initialization preserves prompts and run history.
-
-```text
-$task-implementer run ~/.codex/task-implementer/projects/example/scopes/api/prompts/2026-07-12_1430--add-retries.md
-```
-
-Validate and snapshot the managed prompt, build the internal queue, claim the
-first task in planning, authorize its completed locked plan before product
-edits, then validate, `code-review`, fix, `$commit`, checkpoint, and stop.
+Resolve the monorepo scope while keeping every future worker worktree a full
+repository checkout.
 
 ```text
 $task-implementer run 2026-07-12_1430--add-retries.md
 ```
 
-Resolve the unique filename in the current project's prompt workspace. Resume
-or reconcile its internal state, claim exactly one dependency-ready task, plan
-before implementation, update private activity and checkpoint handoff, and
-stop. A same-session attempt to claim another task must fail with
-`FRESH_SESSION_REQUIRED`.
+Resolve the unique managed prompt, plan all tasks and deterministic dependency
+waves, then coordinate every wave until done or blocked. Keep all internal IDs,
+branches, paths, and transitions private.
 
 ```text
-$task-implementer run <same-edited-prompt-file>
+$task-implementer run <prompt-with-five-disjoint-tasks-then-one-dependent-task>
 ```
 
-Append an immutable revision once, preserve completed tasks and stable IDs,
-reconcile stable requirements before pending work, add the task's just-in-time
-design, and implement the next safe task. Keep all IDs private. Stop with
-`HUMAN_INPUT_REQUIRED` before product edits for ambiguous or destructive
-reversals.
+Put the five completely disjoint tasks in one logical wave, dispatch them in
+capacity-sized batches to isolated full-repository worktrees, and place the
+dependent task in the next wave. Capacity must not change logical waves.
+
+```text
+$task-implementer run <prompt-with-two-tasks-that-touch-the-same-lockfile>
+```
+
+Combine the tasks before IDs lock when they form one coherent result;
+otherwise add a dependency and serialize them. Never dispatch overlapping
+dependency-file writers.
+
+```text
+$task-implementer run <prompt-with-distinct-kubernetes-resources-and-live-apply>
+```
+
+The code/config edits may be analyzed by resource identity, but live external
+Kubernetes mutation remains a singleton conflict domain and needs separate
+explicit authority.
 
 ```text
 $task-implementer run <same-prompt-after-appending-a-Steering-note>
 ```
 
-Do not require a separate steering file or command. If the same session owns a
-clean planning plane, rebind and replan that task before authorization. If
-another session owns planning or any plane is implementing, append one pending
-revision, preserve the plane exactly, return
-`STEERING_QUEUED_AFTER_TASK`, and reconcile it after the task stops.
+Recompute a merely planned wave safely. If assignments or integration already
+started, preserve the immutable active wave and return
+`STEERING_QUEUED_AFTER_WAVE`; reconcile before promotion or at the next wave
+boundary.
 
 ```text
-$task-implementer run <same-prompt-that-adds-a-new-requirement>
+$task-implementer run <same-prompt-after-a-worker-crash>
 ```
 
-Incrementally update only Task Implementer-managed regions in project
-`docs/requirements.md` and `docs/design.md` after plan authorization. Preserve
-user-owned text and commit the specifications with the affected task. Return
-`SPEC_OWNER_CONFLICT` when Agentic SDLC owns either exact file.
+Re-observe coordinator/wave state, journals, refs, and worktrees. Retain exact
+resources, do not dispatch new batch members after failure, and resume without
+duplicating branches, worktrees, assignments, commits, or merges.
+
+```text
+$task-implementer run <same-prompt-after-an-integration-conflict>
+```
+
+Confirm the primary branch remains at the recorded base, retain integration
+and worker resources, and return `INTEGRATION_CONFLICT`. Do not partially merge
+the wave into the project branch.
 
 ```text
 $task-implementer run <same-completed-prompt-file>
 ```
 
-For unchanged content, record activity and return `ALREADY_COMPLETE` without
-product changes. For edited content, start a new internal run and implement its
-first task.
+For unchanged content, record activity and return `ALREADY_COMPLETE`. For
+edited content, start a new internal run.
+
+## Unsupported Public Actions
+
+These must fail; do not translate them to hidden aliases:
 
 ```text
-$task-implementer run <same-prompt-file-after-an-interrupted-task>
-```
-
-Recover only the already claimed task after verifying that the old writer is
-gone and explicitly reviewing the exact recovery worktree digest and changed
-paths against the locked task allowlist. Preserve its plan and evidence; never
-advance to another task during recovery.
-
-## Retired Public Actions
-
-These explicit forms must fail as unsupported public actions; do not translate
-them to hidden compatibility aliases:
-
-```text
+$task-implementer parallel <prompt-path>
+$task-implementer merge <run-id>
+$task-implementer cleanup <run-id>
+$task-implementer upgrade <run-id>
 $task-implementer workspace new "Add retries"
 $task-implementer workspace list
 $task-implementer prepare <prompt-path>
-$task-implementer continue <internal-run-id>
-$task-implementer reconcile <internal-run-id> <prompt-path>
-$task-implementer run <internal-run-id>
-$task-implementer run --new-run <prompt-path>
+$task-implementer continue <run-id>
 $task-implementer steer <steering-file>
 ```
 
-Explain the two-command interface and ask the user to initialize or run a
-managed prompt path/unique filename as appropriate. Never require an internal
-ID.
+Explain the two-command interface without exposing internal IDs.
 
 ## Should Not Trigger
 
 ```text
-I opened a Markdown prompt from two days ago. Help me improve the wording.
+Run parallel agents to implement these independent fixes.
 ```
 
-Treat this as ordinary editing or brainstorming. Do not invoke
-`task-implementer` without an explicit action.
+Use ordinary authorized delegation. Do not invoke `task-implementer` without
+an explicit `$task-implementer` action.
 
 ```text
-How should I organize prompt files for this project?
+I opened an old Markdown prompt. Improve its wording.
 ```
 
-Answer or brainstorm. Do not initialize private state implicitly.
+Treat this as ordinary editing or brainstorming.
 
 ```text
 Implement this small bug fix and run the focused test.
@@ -127,32 +124,14 @@ Implement this small bug fix and run the focused test.
 Use the normal implementation flow.
 
 ```text
-This looks complex. Use global-context-management while you fix it.
+This is complex; use global-context-management.
 ```
 
-Use `global-context-management` for context hygiene. Do not invoke the per-task
-implementation and commit loop without an explicit `task-implementer` request.
+Use `global-context-management` only. It must not trigger this workflow.
 
 ```text
-Review this diff and tell me if the design is good.
+Review this diff, commit it, open a PR, or start Agentic SDLC.
 ```
 
-Use `code-review`, `align`, `design`, or `system-design-rules` as appropriate.
-
-```text
-Start Agentic SDLC for this project.
-```
-
-Use `$sdlc-start`.
-
-```text
-Brainstorm how we could split this migration.
-```
-
-Use `brainstorm` for chat-only ideation.
-
-```text
-Commit the current changes.
-```
-
-Use `$commit` directly for a standalone commit.
+Use the matching `code-review`, `$commit`, `create-pr`, or `$sdlc-start`
+workflow.

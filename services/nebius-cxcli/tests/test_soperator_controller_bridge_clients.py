@@ -65,7 +65,7 @@ def _pod(
 
 def _source_config() -> str:
     config, _originals = migration._bridge_slurm_config_with_timeouts(  # noqa: SLF001
-        "ClusterName=cluster-a\nSlurmctldHost=controller-0\n"
+        "ClusterName=cluster-a\nSlurmctldHost=controller-0(source-controller-svc)\n"
     )
     return config
 
@@ -123,9 +123,7 @@ def _journal(source_login: Mapping[str, Any]) -> dict[str, Any]:
                 {
                     "name": source_login["metadata"]["name"],
                     "uid": source_login["metadata"]["uid"],
-                    "container_id": source_login["status"]["containerStatuses"][0][
-                        "containerID"
-                    ],
+                    "container_id": source_login["status"]["containerStatuses"][0]["containerID"],
                 }
             ]
         },
@@ -187,7 +185,7 @@ def test_source_client_propagation_covers_protected_login_and_every_slurmd() -> 
         ("source-worker", "worker-1-uid"),
     ]
     assert all(item["config_sha256"] == proof["config_sha256"] for item in proof["consumers"])
-    assert sum(command[-2:] == ("scontrol", "reconfigure") for command in calls) == 3
+    assert not any(command[-2:] == ("scontrol", "reconfigure") for command in calls)
     assert "1 login and 2 worker" in lines[0]
 
 
@@ -297,7 +295,9 @@ def test_target_client_propagation_selects_only_exact_target_login_and_workers()
         checkpoint_writer=None,
     )
 
-    assert [(item["role"], item["uid"]) for item in owner["client_handoff_propagation"]["consumers"]] == [
+    assert [
+        (item["role"], item["uid"]) for item in owner["client_handoff_propagation"]["consumers"]
+    ] == [
         ("target-login", "target-login-uid"),
         ("target-worker", "target-worker-uid"),
     ]
@@ -419,7 +419,5 @@ def test_final_target_clients_prove_exact_single_controller_host() -> None:
 def test_client_contract_rejects_duplicate_controller_hosts() -> None:
     with pytest.raises(RuntimeError, match="duplicate-free"):
         migration._controller_bridge_client_config_contract(  # noqa: SLF001
-            "ClusterName=cluster-a\n"
-            "SlurmctldHost=controller-0\n"
-            "SlurmctldHost=controller-0\n"
+            "ClusterName=cluster-a\nSlurmctldHost=controller-0\nSlurmctldHost=controller-0\n"
         )

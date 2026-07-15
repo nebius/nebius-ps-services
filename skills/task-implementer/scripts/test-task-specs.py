@@ -143,7 +143,9 @@ class TaskSpecificationTest(unittest.TestCase):
         design.chmod(0o644)
         return requirements, design
 
-    def assert_error(self, code: str, function: object, *args: object, **kwargs: object) -> None:
+    def assert_error(
+        self, code: str, function: object, *args: object, **kwargs: object
+    ) -> None:
         with self.assertRaises(pw.PromptWorkspaceError) as context:
             function(*args, **kwargs)
         self.assertEqual(context.exception.code, code)
@@ -301,9 +303,7 @@ class TaskSpecificationTest(unittest.TestCase):
             specs.new_spec_document("requirements", requirement_body())
         )
         design.write_bytes(
-            specs.new_spec_document(
-                "design", design_body(requirement="TI-REQ-999")
-            )
+            specs.new_spec_document("design", design_body(requirement="TI-REQ-999"))
         )
         self.assert_error(
             "SPEC_CONFLICT",
@@ -338,15 +338,19 @@ class TaskSpecificationTest(unittest.TestCase):
             )["path"]
         )
         text = prompt.read_text(encoding="utf-8")
-        text = text.replace(
-            "<!-- Required: describe what must be true when the work is complete. -->",
-            "Outcome A.",
-        ).replace(
-            "- [ ] <!-- Required: add an observable, testable completion criterion. -->",
-            "- [ ] Acceptance A.",
-        ).replace(
-            "<!-- Required: name expected checks or ask Codex to derive them from the repo. -->",
-            "Verification A.",
+        text = (
+            text.replace(
+                "<!-- Required: describe what must be true when the work is complete. -->",
+                "Outcome A.",
+            )
+            .replace(
+                "- [ ] <!-- Required: add an observable, testable completion criterion. -->",
+                "- [ ] Acceptance A.",
+            )
+            .replace(
+                "<!-- Required: name expected checks or ask Codex to derive them from the repo. -->",
+                "Verification A.",
+            )
         )
         prompt.write_text(text, encoding="utf-8")
         prompt.chmod(0o600)

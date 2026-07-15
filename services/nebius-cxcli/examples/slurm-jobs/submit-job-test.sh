@@ -689,6 +689,7 @@ scontrol_record_field() {
 
 capture_or_verify_live_job_lineage() {
   local job_id="$1"
+  local state="$2"
   local record
   local observed_job_id
   local submit_time
@@ -705,7 +706,16 @@ capture_or_verify_live_job_lineage() {
   start_time="$(scontrol_record_field "$record" StartTime || true)"
   node_list="$(scontrol_record_field "$record" NodeList || true)"
   restarts="$(scontrol_record_field "$record" Restarts || true)"
-  if [[ "$observed_job_id" != "$job_id" || -z "$submit_time" || -z "$start_time" || "$start_time" == "Unknown" || -z "$node_list" || "$node_list" == "(null)" || "$node_list" == "N/A" || ! "$restarts" =~ ^[0-9]+$ ]]; then
+  if [[ "$observed_job_id" != "$job_id" || -z "$submit_time" || ! "$restarts" =~ ^[0-9]+$ ]]; then
+    log_error "Slurm job ${job_id} lacks a complete JobID/submit/Restarts identity record."
+    return 2
+  fi
+  if [[ -z "${baseline_submit_time[$job_id]+present}" && "$state" == PENDING* ]]; then
+    printf 'job_id=%s lineage_pending submit=%s allocation=unassigned restarts=%s\n' \
+      "$job_id" "$submit_time" "$restarts"
+    return 0
+  fi
+  if [[ -z "$start_time" || "$start_time" == "Unknown" || -z "$node_list" || "$node_list" == "(null)" || "$node_list" == "N/A" ]]; then
     log_error "Slurm job ${job_id} lacks a complete JobID/submit/start/allocation/Restarts lineage record."
     return 2
   fi
@@ -941,7 +951,7 @@ watch_slurm_jobs() {
           watch_failures=$((watch_failures + 1))
         fi
         lineage_status=0
-        if capture_or_verify_live_job_lineage "$job_id"; then
+        if capture_or_verify_live_job_lineage "$job_id" "$state"; then
           :
         else
           lineage_status=$?

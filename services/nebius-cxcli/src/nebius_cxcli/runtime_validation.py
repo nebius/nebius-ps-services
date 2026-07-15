@@ -46,7 +46,14 @@ from .soperator_onboarding import (
     SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     validate_soperator_onboarding_acceptance,
 )
-from .soperator_upgrade_campaign import soperator_upgrade_campaign_fingerprint
+from .soperator_upgrade_campaign import (
+    COMPUTE_MIGRATION_MODE_BLUE_GREEN,
+    COMPUTE_MIGRATION_MODES,
+    MAX_PARALLEL_WORKER_GROUPS,
+    NODE_GROUP_ROLLOUT_STRATEGIES,
+    NODE_GROUP_ROLLOUT_ZERO_SURGE,
+    soperator_upgrade_campaign_fingerprint,
+)
 
 _ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -72,6 +79,7 @@ _SOPERATOR_ONBOARDING_KEYS = frozenset(
         "actions",
         "analysis_fingerprint",
         "collection_errors",
+        "compute_migration",
         "compute_mode",
         "migration_profile_id",
         "node_template_upgrade",
@@ -79,7 +87,6 @@ _SOPERATOR_ONBOARDING_KEYS = frozenset(
         "state",
         "storage_mode",
         "support_message",
-        "support_override_used",
         "support_rule_id",
         "support_status",
         "target_version",
@@ -91,7 +98,6 @@ _SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
         "target_k8s_version",
         "target_os",
         "target_gpu_stack_preset",
-        "slurm_scheduling_pause",
     }
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
@@ -167,12 +173,20 @@ _SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_KEYS = frozenset(
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_COMPUTE_MIGRATION_KEYS = frozenset(
     {
-        "busy_worker_policy",
-        "login_session_policy",
         "mode",
+        "node_group_rollout",
         "slurm_scheduling_pause",
-        "source_node_groups",
-        "target_node_groups",
+        "worker_bootstrap",
+    }
+)
+_SOPERATOR_COMPUTE_MIGRATION_ROLLOUT_KEYS = frozenset({"strategy", "worker"})
+_SOPERATOR_COMPUTE_MIGRATION_WORKER_KEYS = frozenset(
+    {
+        "drain_timeout",
+        "max_parallel_groups",
+        "max_surge",
+        "max_unavailable",
+        "resolved_max_unavailable",
     }
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_SEGMENT_KEYS = frozenset(
@@ -198,11 +212,13 @@ _SOPERATOR_UPGRADE_CAMPAIGN_CONTROL_PLANE_KEYS = frozenset({"source_version", "t
 _SOPERATOR_UPGRADE_CAMPAIGN_NODE_GROUP_KEYS = frozenset(
     {
         "compatibility_source",
+        "fixed_size",
         "gpu_software_mode",
         "id",
         "name",
         "platform",
         "preset",
+        "provider_identity",
         "role",
         "source",
         "target",
@@ -210,6 +226,16 @@ _SOPERATOR_UPGRADE_CAMPAIGN_NODE_GROUP_KEYS = frozenset(
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_NODE_TEMPLATE_KEYS = frozenset(
     {"drivers_preset", "kubernetes_version", "os"}
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_PROVIDER_IDENTITY_KEYS = frozenset(
+    {
+        "failure_domains",
+        "gpu_cluster_id",
+        "reservation_ids",
+        "reservation_policy",
+        "resource_uid",
+        "resource_version",
+    }
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_GPU_SOFTWARE_MODES = frozenset(
     {"none", "operator-managed", "provider-managed"}
@@ -354,11 +380,6 @@ def _validate_soperator_onboarding_node_template(
         node_template.get("target_gpu_stack_preset"),
         f"{field_label}.target_gpu_stack_preset",
     )
-    if "slurm_scheduling_pause" in node_template and not isinstance(
-        node_template.get("slurm_scheduling_pause"),
-        bool,
-    ):
-        raise ValueError(f"{field_label}.slurm_scheduling_pause must be true or false")
 
 
 def _validate_locked_version_record(record: Any, field_label: str) -> tuple[str, str, bool]:
@@ -650,7 +671,23 @@ def _required_campaign_int(
     return value
 
 
-def _validate_soperator_campaign_compute_migration(value: Any, field_label: str) -> None:
+def _validate_positive_duration_or_none(value: Any, field_label: str) -> str:
+    duration = _required_string_for_validation(value, field_label)
+    if duration == "none":
+        return duration
+    if not _REFRESH_INTERVAL_PATTERN.fullmatch(duration) or not re.search(
+        r"[1-9][0-9]*(?:s|m|h)", duration
+    ):
+        raise ValueError(f"{field_label} must be 'none' or a positive duration such as 10m")
+    return duration
+
+
+def _validate_soperator_compute_migration(
+    value: Any,
+    field_label: str,
+    *,
+    require_resolved_all: bool,
+) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
     _validate_unknown_keys(
@@ -658,19 +695,112 @@ def _validate_soperator_campaign_compute_migration(value: Any, field_label: str)
         allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_COMPUTE_MIGRATION_KEYS,
         field_label=field_label,
     )
-    required_values = {
-        "mode": "blue-green-replacement",
-        "source_node_groups": "immutable-until-retirement",
-        "target_node_groups": "replacement",
-        "busy_worker_policy": "retain-until-job-and-epilog-finish",
-        "login_session_policy": "voluntary-handoff",
-    }
-    for key, expected in required_values.items():
-        actual = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
-        if actual != expected:
-            raise ValueError(f"{field_label}.{key} must be '{expected}'")
+    mode = _required_string_for_validation(value.get("mode"), f"{field_label}.mode")
+    if mode not in COMPUTE_MIGRATION_MODES:
+        raise ValueError(
+            f"{field_label}.mode must be one of: " + ", ".join(COMPUTE_MIGRATION_MODES)
+        )
+    if mode == COMPUTE_MIGRATION_MODE_BLUE_GREEN:
+        if "slurm_scheduling_pause" in value or "node_group_rollout" in value:
+            raise ValueError(
+                f"{field_label} blue-green mode does not accept in-place rollout settings"
+            )
+        bootstrap = value.get("worker_bootstrap")
+        if not isinstance(bootstrap, Mapping) or not bootstrap:
+            raise ValueError(f"{field_label}.worker_bootstrap must be a non-empty mapping")
+        for raw_group, raw_count in bootstrap.items():
+            group = str(raw_group or "").strip()
+            if not group:
+                raise ValueError(f"{field_label}.worker_bootstrap keys must be non-empty")
+            _required_campaign_int(
+                raw_count,
+                f"{field_label}.worker_bootstrap[{group}]",
+                minimum=1,
+            )
+        return
+
+    if "worker_bootstrap" in value:
+        raise ValueError(f"{field_label} in-place mode does not accept worker_bootstrap")
     if not isinstance(value.get("slurm_scheduling_pause"), bool):
         raise ValueError(f"{field_label}.slurm_scheduling_pause must be true or false")
+    rollout = value.get("node_group_rollout")
+    rollout_label = f"{field_label}.node_group_rollout"
+    if not isinstance(rollout, Mapping):
+        raise ValueError(f"{rollout_label} must be a mapping")
+    _validate_unknown_keys(
+        rollout,
+        allowed_keys=_SOPERATOR_COMPUTE_MIGRATION_ROLLOUT_KEYS,
+        field_label=rollout_label,
+    )
+    strategy = _required_string_for_validation(rollout.get("strategy"), f"{rollout_label}.strategy")
+    if strategy not in NODE_GROUP_ROLLOUT_STRATEGIES:
+        raise ValueError(
+            f"{rollout_label}.strategy must be one of: " + ", ".join(NODE_GROUP_ROLLOUT_STRATEGIES)
+        )
+    worker = rollout.get("worker")
+    worker_label = f"{rollout_label}.worker"
+    if not isinstance(worker, Mapping):
+        raise ValueError(f"{worker_label} must be a mapping")
+    _validate_unknown_keys(
+        worker,
+        allowed_keys=_SOPERATOR_COMPUTE_MIGRATION_WORKER_KEYS,
+        field_label=worker_label,
+    )
+    _validate_positive_duration_or_none(
+        worker.get("drain_timeout"), f"{worker_label}.drain_timeout"
+    )
+    _required_campaign_int(
+        worker.get("max_parallel_groups"),
+        f"{worker_label}.max_parallel_groups",
+        minimum=1,
+        maximum=MAX_PARALLEL_WORKER_GROUPS,
+    )
+    if strategy == NODE_GROUP_ROLLOUT_ZERO_SURGE:
+        if "max_surge" in worker:
+            raise ValueError(f"{worker_label}.max_surge is invalid for zero-surge")
+        maximum_unavailable = worker.get("max_unavailable")
+        if maximum_unavailable != "all":
+            _required_campaign_int(
+                maximum_unavailable,
+                f"{worker_label}.max_unavailable",
+                minimum=1,
+            )
+        resolved = worker.get("resolved_max_unavailable")
+        if require_resolved_all and maximum_unavailable == "all":
+            if not isinstance(resolved, Mapping):
+                raise ValueError(
+                    f"{worker_label}.resolved_max_unavailable must record every accepted "
+                    "worker group size when max_unavailable is 'all'"
+                )
+            for raw_group, raw_count in resolved.items():
+                group = str(raw_group or "").strip()
+                if not group:
+                    raise ValueError(
+                        f"{worker_label}.resolved_max_unavailable keys must be non-empty"
+                    )
+                _required_campaign_int(
+                    raw_count,
+                    f"{worker_label}.resolved_max_unavailable[{group}]",
+                    minimum=1,
+                    maximum=100,
+                )
+        elif resolved is not None:
+            raise ValueError(
+                f"{worker_label}.resolved_max_unavailable is valid only for compiled 'all'"
+            )
+    else:
+        if "max_unavailable" in worker or "resolved_max_unavailable" in worker:
+            raise ValueError(f"{worker_label}.max_unavailable is invalid for safe-surge")
+        _required_campaign_int(
+            worker.get("max_surge"),
+            f"{worker_label}.max_surge",
+            minimum=1,
+        )
+
+
+def _validate_soperator_campaign_compute_migration(value: Any, field_label: str) -> None:
+    _validate_soperator_compute_migration(value, field_label, require_resolved_all=True)
+
 
 def _validate_soperator_campaign_node_template(
     value: Any,
@@ -722,7 +852,42 @@ def _validate_soperator_campaign_node_group(
     )
     for key in ("role", "platform"):
         _required_string_for_validation(node_group.get(key), f"{field_label}.{key}")
+    _required_campaign_int(
+        node_group.get("fixed_size"),
+        f"{field_label}.fixed_size",
+        minimum=1,
+        maximum=100,
+    )
     _required_string_for_validation(node_group.get("preset"), f"{field_label}.preset")
+    provider_identity = node_group.get("provider_identity")
+    if not isinstance(provider_identity, Mapping):
+        raise ValueError(f"{field_label}.provider_identity must be a mapping")
+    _validate_unknown_keys(
+        provider_identity,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_PROVIDER_IDENTITY_KEYS,
+        field_label=f"{field_label}.provider_identity",
+    )
+    for key in _SOPERATOR_UPGRADE_CAMPAIGN_PROVIDER_IDENTITY_KEYS:
+        if key not in provider_identity:
+            raise ValueError(f"{field_label}.provider_identity.{key} is required")
+    _required_string_for_validation(
+        provider_identity.get("resource_uid"),
+        f"{field_label}.provider_identity.resource_uid",
+    )
+    resource_version = provider_identity.get("resource_version")
+    if resource_version in (None, "") or isinstance(resource_version, bool):
+        raise ValueError(f"{field_label}.provider_identity.resource_version is required")
+    for key in ("reservation_policy", "gpu_cluster_id"):
+        if not isinstance(provider_identity.get(key), str):
+            raise ValueError(f"{field_label}.provider_identity.{key} must be a string")
+    for key in ("reservation_ids", "failure_domains"):
+        values = provider_identity.get(key)
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise ValueError(
+                f"{field_label}.provider_identity.{key} must be an array of non-empty strings"
+            )
     gpu_software_mode = _required_string_for_validation(
         node_group.get("gpu_software_mode"),
         f"{field_label}.gpu_software_mode",
@@ -1402,9 +1567,6 @@ def _validate_soperator_onboarding(
     accepted = onboarding.get("accepted")
     if accepted is not None and not isinstance(accepted, bool):
         raise ValueError(f"{field_label}.accepted must be true or false")
-    support_override_used = onboarding.get("support_override_used")
-    if support_override_used is not None and not isinstance(support_override_used, bool):
-        raise ValueError(f"{field_label}.support_override_used must be true or false")
     for key in (
         "state",
         "storage_mode",
@@ -1439,6 +1601,11 @@ def _validate_soperator_onboarding(
     _validate_soperator_onboarding_node_template(
         onboarding.get("node_template_upgrade"),
         f"{field_label}.node_template_upgrade",
+    )
+    _validate_soperator_compute_migration(
+        onboarding.get("compute_migration"),
+        f"{field_label}.compute_migration",
+        require_resolved_all=False,
     )
     _validate_soperator_upgrade_campaign(
         onboarding.get("upgrade_path"),

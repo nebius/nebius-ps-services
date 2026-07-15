@@ -385,7 +385,9 @@ def initialize_project_workspace(
     return result
 
 
-def load_run_manifests(runs_root: Path, prompt_id: str | None = None) -> list[tuple[Path, dict[str, object]]]:
+def load_run_manifests(
+    runs_root: Path, prompt_id: str | None = None
+) -> list[tuple[Path, dict[str, object]]]:
     results: list[tuple[Path, dict[str, object]]] = []
     for run_dir in sorted(runs_root.glob("run-*")):
         if run_dir.is_symlink() or not run_dir.is_dir():
@@ -395,7 +397,8 @@ def load_run_manifests(runs_root: Path, prompt_id: str | None = None) -> list[tu
         manifest_path = run_dir / "manifest.json"
         if not manifest_path.is_file() or manifest_path.is_symlink():
             raise PromptWorkspaceError(
-                "RUN_STATE_INVALID", f"run manifest is missing or unsafe: {run_dir.name}"
+                "RUN_STATE_INVALID",
+                f"run manifest is missing or unsafe: {run_dir.name}",
             )
         manifest = load_json_object(manifest_path, "run manifest")
         if manifest.get("schema") != RUN_SCHEMA:
@@ -508,7 +511,10 @@ def _snapshot_prompt_unlocked(
             )
         manifest_file = run_dir / "manifest.json"
         manifest = load_json_object(manifest_file, "run manifest")
-        if manifest.get("schema") != RUN_SCHEMA or manifest.get("prompt_id") != document.prompt_id:
+        if (
+            manifest.get("schema") != RUN_SCHEMA
+            or manifest.get("prompt_id") != document.prompt_id
+        ):
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "run does not belong to the submitted prompt"
             )
@@ -686,14 +692,18 @@ def verify_run(
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     run_dir = runs_root / run_id
     if run_dir.is_symlink() or not run_dir.is_dir():
-        raise PromptWorkspaceError("RUN_STATE_INVALID", "run directory is missing or unsafe")
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "run directory is missing or unsafe"
+        )
     require_mode(run_dir, 0o700, "run directory")
     require_inputs_directory(run_dir)
     manifest_path = run_dir / "manifest.json"
     require_mode(manifest_path, 0o600, "run manifest")
     manifest = load_json_object(manifest_path, "run manifest")
     if manifest.get("schema") != RUN_SCHEMA or manifest.get("run_id") != run_id:
-        raise PromptWorkspaceError("RUN_STATE_INVALID", "run manifest identity is invalid")
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "run manifest identity is invalid"
+        )
     if not PROMPT_ID_RE.fullmatch(str(manifest.get("prompt_id", ""))):
         raise PromptWorkspaceError("RUN_STATE_INVALID", "run prompt ID is invalid")
     try:
@@ -731,7 +741,8 @@ def verify_run(
         expected_relative = Path("inputs") / revision_id / "prompt.md"
         if relative != expected_relative:
             raise PromptWorkspaceError(
-                "RUN_STATE_INVALID", "snapshot path does not match the revision contract"
+                "RUN_STATE_INVALID",
+                "snapshot path does not match the revision contract",
             )
         snapshot = run_dir / relative
         if snapshot.is_symlink() or not snapshot.is_file():
@@ -755,7 +766,10 @@ def verify_run(
         if (
             revision_created_at.tzinfo is None
             or revision_created_at.utcoffset() is None
-            or (previous_created_at is not None and revision_created_at < previous_created_at)
+            or (
+                previous_created_at is not None
+                and revision_created_at < previous_created_at
+            )
         ):
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", f"revision timestamp is invalid: {revision_id}"
@@ -899,7 +913,9 @@ def verify_command(
     workspace = verify_workspace(manifest_path)
     document: PromptDocument | None = None
     if prompt_path is not None:
-        prompt_root = Path(required_string(workspace, "prompt_root", "workspace manifest"))
+        prompt_root = Path(
+            required_string(workspace, "prompt_root", "workspace manifest")
+        )
         document = read_prompt(prompt_path, prompt_root, require_content=True)
         ensure_unique_prompt_id(document, prompt_root)
     result: dict[str, object] = {
@@ -930,7 +946,9 @@ def verify_command(
     return result
 
 
-def prompt_rows(manifest_path: Path, query: str | None, date_value: str | None) -> list[dict[str, object]]:
+def prompt_rows(
+    manifest_path: Path, query: str | None, date_value: str | None
+) -> list[dict[str, object]]:
     workspace = verify_workspace(manifest_path)
     prompt_root = Path(required_string(workspace, "prompt_root", "workspace manifest"))
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
@@ -978,11 +996,9 @@ def prompt_rows(manifest_path: Path, query: str | None, date_value: str | None) 
             else:
                 status = str(verified["status"])
             handoff_activity = handoff_last_invoked_at(latest_dir)
-            if (
-                handoff_activity is not None
-                and datetime.fromisoformat(handoff_activity)
-                > datetime.fromisoformat(last_invoked_at)
-            ):
+            if handoff_activity is not None and datetime.fromisoformat(
+                handoff_activity
+            ) > datetime.fromisoformat(last_invoked_at):
                 last_invoked_at = handoff_activity
         rows.append(
             {
@@ -995,9 +1011,7 @@ def prompt_rows(manifest_path: Path, query: str | None, date_value: str | None) 
     rows.sort(
         key=lambda row: (
             datetime.fromisoformat(str(row["last_invoked_at"])).timestamp(),
-            datetime.fromisoformat(
-                creation_by_path[str(row["path"])]
-            ).timestamp(),
+            datetime.fromisoformat(creation_by_path[str(row["path"])]).timestamp(),
             str(row["path"]),
         ),
         reverse=True,

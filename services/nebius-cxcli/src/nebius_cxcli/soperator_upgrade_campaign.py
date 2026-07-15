@@ -12,7 +12,27 @@ from typing import Any
 
 from .runtime_config import to_plain_data
 
-SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v4"
+SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v5"
+
+COMPUTE_MIGRATION_MODE_IN_PLACE = "in-place"
+COMPUTE_MIGRATION_MODE_BLUE_GREEN = "blue-green"
+COMPUTE_MIGRATION_MODES = (
+    COMPUTE_MIGRATION_MODE_IN_PLACE,
+    COMPUTE_MIGRATION_MODE_BLUE_GREEN,
+)
+NODE_GROUP_ROLLOUT_ZERO_SURGE = "zero-surge"
+NODE_GROUP_ROLLOUT_SAFE_SURGE = "safe-surge"
+NODE_GROUP_ROLLOUT_STRATEGIES = (
+    NODE_GROUP_ROLLOUT_ZERO_SURGE,
+    NODE_GROUP_ROLLOUT_SAFE_SURGE,
+)
+DEFAULT_SLURM_SCHEDULING_PAUSE = True
+DEFAULT_NODE_GROUP_ROLLOUT_STRATEGY = NODE_GROUP_ROLLOUT_ZERO_SURGE
+DEFAULT_ZERO_SURGE_MAX_UNAVAILABLE = "all"
+DEFAULT_SAFE_SURGE_COUNT = 1
+DEFAULT_WORKER_DRAIN_TIMEOUT = "10m"
+DEFAULT_MAX_PARALLEL_WORKER_GROUPS = 8
+MAX_PARALLEL_WORKER_GROUPS = 8
 
 _FINGERPRINT_EXCLUDED_KEYS = frozenset({"campaign_id", "created_at", "fingerprint"})
 
@@ -75,7 +95,7 @@ def finalize_soperator_upgrade_campaign(
     *,
     created_at: str = "",
 ) -> dict[str, Any]:
-    """Attach deterministic identity to a compiled v4 campaign."""
+    """Attach deterministic identity to a compiled v5 campaign."""
 
     plain = to_plain_data(dict(campaign))
     result = dict(plain) if isinstance(plain, Mapping) else {}
@@ -324,6 +344,12 @@ def compile_node_group_hop_targets(
             )
         provider = _mapping(raw_group.get("provider"))
         template = _mapping(provider.get("node_template"))
+        autoscaling = _mapping(provider.get("autoscaling"))
+        if autoscaling or provider.get("autoscaling_enabled") is True:
+            raise ValueError(
+                "External Soperator campaign supports fixed-size node groups only; "
+                f"'{group_key}' has autoscaling enabled."
+            )
         node_group_id = _text(provider.get("node_group_id")) or _text(
             raw_group.get("node_group_id")
         )
@@ -334,6 +360,31 @@ def compile_node_group_hop_targets(
         )
         platform = _text(template.get("platform"))
         preset = _text(template.get("preset"))
+        raw_nodes = raw_group.get("nodes")
+        node_count_candidates = (
+            provider.get("target_node_count"),
+            provider.get("node_count"),
+            raw_group.get("node_count"),
+            (
+                len(raw_nodes)
+                if isinstance(raw_nodes, Sequence)
+                and not isinstance(raw_nodes, (str, bytes, bytearray))
+                else None
+            ),
+        )
+        fixed_size = next(
+            (
+                candidate
+                for candidate in node_count_candidates
+                if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0
+            ),
+            0,
+        )
+        if fixed_size > 100:
+            raise ValueError(
+                "External Soperator campaign requires a fixed size in 1..100 "
+                f"for node group '{node_group_name or group_key}'."
+            )
         raw_current_version = _text(template.get("k8s_version"))
         if not raw_current_version:
             raise ValueError(
@@ -372,6 +423,38 @@ def compile_node_group_hop_targets(
                 "External Soperator campaign cannot lock an incomplete node-group "
                 f"identity for '{node_group_name}': missing " + ", ".join(missing_identity) + "."
             )
+        resource_uid = _text(provider.get("resource_uid")) or node_group_id
+        resource_version = provider.get("resource_version")
+        if resource_version in (None, "") or isinstance(resource_version, bool):
+            raise ValueError(
+                "External Soperator campaign cannot lock provider identity for "
+                f"'{node_group_name}': missing resource version."
+            )
+        reservation = _mapping(provider.get("reservation"))
+        raw_reservation_ids = reservation.get("reservation_ids") or provider.get("reservation_ids")
+        reservation_ids = (
+            sorted({_text(item) for item in raw_reservation_ids if _text(item)})
+            if isinstance(raw_reservation_ids, Sequence)
+            and not isinstance(raw_reservation_ids, (str, bytes, bytearray))
+            else []
+        )
+        raw_failure_domains = provider.get("failure_domains")
+        failure_domains = (
+            sorted({_text(item) for item in raw_failure_domains if _text(item)})
+            if isinstance(raw_failure_domains, Sequence)
+            and not isinstance(raw_failure_domains, (str, bytes, bytearray))
+            else []
+        )
+        provider_identity = {
+            "resource_uid": resource_uid,
+            "resource_version": resource_version,
+            "reservation_policy": _text(
+                reservation.get("policy") or provider.get("reservation_policy")
+            ),
+            "reservation_ids": reservation_ids,
+            "failure_domains": failure_domains,
+            "gpu_cluster_id": _text(provider.get("gpu_cluster_id")),
+        }
         hop_pairs = tuple(zip(control_plane_path, control_plane_path[1:], strict=False))
         candidates_by_hop: list[tuple[tuple[str, str], ...]] = []
         for _hop_source, hop_target in hop_pairs:
@@ -415,19 +498,21 @@ def compile_node_group_hop_targets(
                 "os": selected_os,
                 "drivers_preset": selected_driver,
             }
-            result[(hop_source, hop_target)].append(
-                {
-                    "id": node_group_id,
-                    "name": node_group_name,
-                    "role": campaign_node_group_role(str(group_key), raw_group),
-                    "platform": platform,
-                    "preset": preset,
-                    "gpu_software_mode": gpu_mode,
-                    "source": copy.deepcopy(source_tuple),
-                    "target": copy.deepcopy(target_tuple),
-                    "compatibility_source": "nebius-sdk-get-compatibility-matrix",
-                }
-            )
+            compiled_group = {
+                "id": node_group_id,
+                "name": node_group_name,
+                "role": campaign_node_group_role(str(group_key), raw_group),
+                "platform": platform,
+                "preset": preset,
+                "gpu_software_mode": gpu_mode,
+                "provider_identity": copy.deepcopy(provider_identity),
+                "source": copy.deepcopy(source_tuple),
+                "target": copy.deepcopy(target_tuple),
+                "compatibility_source": "nebius-sdk-get-compatibility-matrix",
+            }
+            if fixed_size:
+                compiled_group["fixed_size"] = fixed_size
+            result[(hop_source, hop_target)].append(compiled_group)
             source_tuple = target_tuple
     return result
 
@@ -555,7 +640,7 @@ def effective_campaign_segment_for_replacements(
 def journal_node_group_replacement_transitions(
     checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Extract exact replacement bindings and retirements from a v4 journal."""
+    """Extract exact replacement bindings and retirements from a v5 journal."""
 
     phase_states: list[Mapping[str, Any]] = []
     current_phase_state = checkpoint.get("phase_state")
@@ -889,6 +974,7 @@ def validate_campaign_segment_capabilities(
     snapshot: Mapping[str, Any],
     *,
     segment: Mapping[str, Any],
+    journaled_temporary_node_groups: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     """Fail when live Nebius capabilities no longer support a locked segment."""
 
@@ -905,6 +991,13 @@ def validate_campaign_segment_capabilities(
     live_groups = _mapping(snapshot.get("node_groups"))
     live_by_alias: dict[str, tuple[str, Mapping[str, Any]]] = {}
     live_ids: set[str] = set()
+    temporary_by_id: dict[str, str] = {}
+    for temporary in journaled_temporary_node_groups:
+        group_id = _text(temporary.get("id"))
+        group_name = _text(temporary.get("name"))
+        if not group_id or not group_name or group_id in temporary_by_id:
+            raise ValueError("Journaled temporary node-group identities are invalid.")
+        temporary_by_id[group_id] = group_name
     for key, raw_group in live_groups.items():
         if not isinstance(raw_group, Mapping):
             continue
@@ -912,6 +1005,17 @@ def validate_campaign_segment_capabilities(
         stable_id = _text(provider.get("node_group_id")) or _text(raw_group.get("node_group_id"))
         if not stable_id:
             raise ValueError(f"Live campaign node group '{key}' has no stable provider id.")
+        temporary_name = temporary_by_id.get(stable_id)
+        if temporary_name is not None:
+            live_name = _text(provider.get("node_group_name")) or _text(
+                raw_group.get("node_group_name")
+            )
+            if live_name != temporary_name:
+                raise ValueError(
+                    "Journaled temporary node-group identity changed in live inventory: "
+                    f"{stable_id}."
+                )
+            continue
         if stable_id in live_ids:
             raise ValueError(f"Live campaign node-group id '{stable_id}' is duplicated.")
         live_ids.add(stable_id)

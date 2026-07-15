@@ -56,7 +56,7 @@ from nebius_cxcli.quota_checks import (
     RegionalQuotaAvailability,
 )
 from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
-from nebius_cxcli.soperator_populate_jail import PopulateJailSnapshot
+from nebius_cxcli.soperator_populate_jail import PopulateJailProgress, PopulateJailSnapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -504,6 +504,120 @@ def _stub_soperator_upgrade_runtime(
         return path
 
     monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _discover)
+    monkeypatch.setattr(
+        cli,
+        "load_soperator_discovery_bundle",
+        lambda _path: {
+            "cluster_id": "mk8s",
+            "snapshot": {"kubernetes_nodes": []},
+        },
+    )
+
+    def _verify_bridge_substrate(**kwargs: object) -> None:
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        binding = checkpoint["managed_bridge_binding"]
+        assert isinstance(binding, dict)
+        binding["status"] = "verified"
+
+    monkeypatch.setattr(
+        cli,
+        "_verify_managed_controller_bridge_substrate",
+        _verify_bridge_substrate,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_controller_bridge_placement_domains",
+        lambda _checkpoint: (),
+    )
+
+    class _BridgeApi:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "_SdkSoperatorMigrationNebiusApi", _BridgeApi)
+
+    class _ClusterLease:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _ClusterLease:
+            return self
+
+        def assert_held(self) -> None:
+            pass
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "SoperatorMigrationClusterLease", _ClusterLease)
+
+    def _source_bridge(**kwargs: object) -> tuple[bool, list[str]]:
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        checkpoint["controller_bridge"] = {
+            "schema": cli.CONTROLLER_BRIDGE_SCHEMA,
+            "stage": cli.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {"first_bridge_write_at": "2026-07-15T00:00:00Z"},
+        }
+        return True, ["source bridge active"]
+
+    monkeypatch.setattr(cli, "_execute_controller_ha_bridge_phase", _source_bridge)
+    monkeypatch.setattr(
+        cli,
+        "_target_values_gated_by_controller_bridge",
+        lambda **kwargs: dict(cast(Mapping[str, Any], kwargs["values"])),
+    )
+
+    def _target_bridge(**kwargs: object) -> list[str]:
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.TARGET_HA_ACTIVE.value
+        return ["target bridge active"]
+
+    monkeypatch.setattr(cli, "_upgrade_controller_bridge_to_target_version", _target_bridge)
+
+    def _target_handoff(**kwargs: object) -> list[str]:
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.HANDOFF_VALIDATED.value
+        return ["target singleton active"]
+
+    monkeypatch.setattr(cli, "_handoff_controller_bridge_to_target_singleton", _target_handoff)
+
+    def _restore_bridge_partitions(**kwargs: object) -> tuple[bool, list[str]]:
+        checkpoint = cast(dict[str, Any], kwargs["checkpoint"])
+        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.PARTITIONS_RESTORED.value
+        final_health_revalidator = cast(
+            Callable[[Mapping[str, Any]], None], kwargs["final_health_revalidator"]
+        )
+        final_health_revalidator(
+            {
+                "authority_epoch": "target-epoch",
+                "pre_target_generation": 0,
+                "target_generation": 1,
+            }
+        )
+        return True, ["partitions restored"]
+
+    def _cleanup_bridge(**kwargs: object) -> tuple[bool, list[str]]:
+        checkpoint = cast(dict[str, Any], kwargs["checkpoint"])
+        checkpoint["controller_bridge"]["stage"] = cli.BridgeStage.CLEANED.value
+        return True, ["bridge cleaned"]
+
+    monkeypatch.setattr(
+        cli,
+        "_restore_slurm_partitions_before_controller_bridge_cleanup",
+        _restore_bridge_partitions,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_cleanup_controller_bridge_after_final_health",
+        _cleanup_bridge,
+    )
 
     before_state = cli.ProtectedCustomerState(
         target_ref="mk8s",
@@ -595,10 +709,38 @@ def _stub_soperator_upgrade_runtime(
         )
 
     monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
-    monkeypatch.setattr(
-        cli,
-        "wait_for_active_passive_populate_jail_job",
-        lambda *_args, **_kwargs: PopulateJailSnapshot(
+
+    def _wait_for_active_passive_populate_jail_job(
+        *_args: object,
+        **kwargs: object,
+    ) -> PopulateJailSnapshot:
+        on_progress = kwargs.get("on_progress")
+        if callable(on_progress):
+            on_progress(
+                PopulateJailProgress(
+                    status="completed",
+                    observed_at="2026-07-15T00:00:00+00:00",
+                    job_name=str(kwargs["job_name"]),
+                    job_uid=str(kwargs["expected_job_uid"]),
+                    job_started_at="2026-07-15T00:00:00Z",
+                    deadline_at="2026-07-15T00:45:00+00:00",
+                    pod_name="populate-jail-pod",
+                    pod_uid="populate-jail-pod-uid",
+                    pod_phase="Succeeded",
+                    container_state="terminated",
+                    exit_code=0,
+                    log_status="collected",
+                    log_line_count=2,
+                    log_sha256="a" * 64,
+                    total_files=20,
+                    files_restored=20,
+                    total_bytes=100,
+                    bytes_restored=100,
+                    summary_seen=True,
+                    summary_complete=True,
+                )
+            )
+        return PopulateJailSnapshot(
             slurmcluster_name="mk8s",
             image=target_populate_jail_image,
             job_name="mk8s-populate-jail-passive-slotb",
@@ -606,7 +748,12 @@ def _stub_soperator_upgrade_runtime(
             job_complete=True,
             job_image=target_populate_jail_image,
             status="collected",
-        ),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "wait_for_active_passive_populate_jail_job",
+        _wait_for_active_passive_populate_jail_job,
     )
     monkeypatch.setattr(
         cli,
@@ -652,11 +799,6 @@ def _stub_soperator_upgrade_runtime(
         ),
     )
 
-    def _post_jail_smoke(**kwargs: Any) -> list[str]:
-        kwargs["phase"]["post_jail_slurm_smoke"] = {"status": "passed"}
-        return ["post-jail Slurm smoke passed"]
-
-    monkeypatch.setattr(cli, "_ensure_post_jail_slurm_smoke", _post_jail_smoke)
     runtime_state: dict[str, Any] = {
         "maintenance": "none",
         "live_jobs": {},
@@ -967,8 +1109,10 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         to_gpu_stack_preset=None,
         node_group="",
         disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="auto",
+        drain_timeout="none",
         strategy_max_surge_count=None,
+        zero_surge_max_unavailable="all",
+        max_parallel_worker_groups=8,
         backup_dir=None,
         populate_jail_refresh="auto",
         jail_persistent_mounts=("/data=/mnt/jail-store/shared/data",),
@@ -996,8 +1140,14 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     assert "--confirm-jail-rootfs-overwrite" not in args
     assert "--slurm-scheduling-pause" in args
     assert args[args.index("--cancel-job") + 1] == "17"
-    assert args[args.index("--login-session-policy") + 1] == "wait-active"
-    assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
+    assert "--login-session-policy" not in args
+    assert "--login-session-drain-timeout" not in args
+    assert args[args.index("--node-group-strategy") + 1] == "zero-surge"
+    assert args[args.index("--zero-surge-max-unavailable") + 1] == "all"
+    assert args[args.index("--worker-drain-timeout") + 1] == "none"
+    assert args[args.index("--max-parallel-worker-groups") + 1] == "8"
+    assert "--execute" in args
+    assert "--approve" in args
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
         "43",
@@ -1023,6 +1173,7 @@ def test_soperator_upgrade_command_omitted_pause_flag_defaults_true(
             str(tmp_path / "config.yaml"),
             "--target",
             "mk8s",
+            "--dry-run",
             "--no-interactive",
         ],
     )
@@ -1223,7 +1374,6 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         dry_run=False,
         approve=True,
         approve_remediation=False,
-        allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
     )
 
@@ -1272,7 +1422,6 @@ def _run_soperator_upgrade_for_test(
     login_session_drain_timeout: str = "30m",
     slurm_scheduling_pause: bool = True,
     dry_run: bool = False,
-    allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
 ) -> None:
     cli._run_soperator_upgrade_command(
@@ -1284,8 +1433,10 @@ def _run_soperator_upgrade_for_test(
         to_gpu_stack_preset=to_gpu_stack_preset,
         node_group=node_group,
         disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="auto",
+        drain_timeout="none",
         strategy_max_surge_count=None,
+        zero_surge_max_unavailable="all",
+        max_parallel_worker_groups=8,
         backup_dir=None,
         populate_jail_refresh=populate_jail_refresh,
         jail_persistent_mounts=jail_persistent_mounts,
@@ -1300,7 +1451,6 @@ def _run_soperator_upgrade_for_test(
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
-        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         interactive=interactive,
     )
 
@@ -4006,7 +4156,8 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         paths.config_path,
         target_ref="mk8s",
         to_chart_version="0.26.0",
-        login_session_policy="wait-active",
+        execute=True,
+        approve=True,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -4029,7 +4180,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         "soperator-static-ready",
         ("soperator-validation", "Preflight"),
         "render",
-        ("validate", "Validate rendered Soperator upgrade to 0.26.0"),
+        ("validate", "Validate gated Soperator staging at 0.26.0"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -4140,6 +4291,19 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         report["populate_jail_refresh"]["persistent_migration_writer_hold"]["status"] == "restored"
     )
     phase_state = report["phase_state"]
+    populate_execution = phase_state["populate-jail-refresh"]["execution"]
+    assert populate_execution["status"] == "completed"
+    assert populate_execution["started_at"]
+    assert populate_execution["last_resumed_at"]
+    assert populate_execution["completed_at"]
+    populate_monitor = phase_state["populate-jail-refresh"]["passive_slot_populate_monitor"]
+    assert populate_monitor["status"] == "completed"
+    assert populate_monitor["progress"]["summary_complete"] is True
+    assert populate_monitor["log"] == {
+        "status": "collected",
+        "line_count": 2,
+        "sha256": "a" * 64,
+    }
     for phase_id in cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
         verification = phase_state[phase_id]["fast_verification"]
         assert verification["status"] in {"passed", "skipped"}
@@ -4378,7 +4542,8 @@ def test_soperator_upgrade_rejects_passive_job_replaced_before_switch(
             paths.config_path,
             target_ref="mk8s",
             to_chart_version="0.26.0",
-            login_session_policy="wait-active",
+            execute=True,
+            approve=True,
         )
 
     checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
@@ -5399,6 +5564,7 @@ def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes
         "protected-state-capture",
         "activechecks-suspend",
         "soperator-preflight-validation",
+        "controller-ha-bridge",
         "slurm-job-drain",
         "mk8s-node-template",
         "post-mk8s-validation",
@@ -5415,7 +5581,7 @@ def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes
 
     assert flux_apply_calls >= 2
     assert ("validate", "Soperator cluster upgrade preflight") not in calls
-    assert ("validate", "Validate rendered Soperator upgrade to 0.26.0") in calls
+    assert ("validate", "Validate gated Soperator staging at 0.26.0") in calls
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["status"] == "completed"
@@ -5528,6 +5694,7 @@ def test_soperator_upgrade_keyboard_interrupt_keeps_current_phase_pending_and_re
         "protected-state-capture",
         "activechecks-suspend",
         "soperator-preflight-validation",
+        "controller-ha-bridge",
         "slurm-job-drain",
         "mk8s-node-template",
         "post-mk8s-validation",
@@ -5543,14 +5710,14 @@ def test_soperator_upgrade_keyboard_interrupt_keeps_current_phase_pending_and_re
 
     assert flux_apply_calls >= 2
     assert ("validate", "Soperator cluster upgrade preflight") not in calls
-    assert ("validate", "Validate rendered Soperator upgrade to 0.26.0") in calls
+    assert ("validate", "Validate gated Soperator staging at 0.26.0") in calls
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["status"] == "completed"
     assert "soperator-chart" in checkpoint["completed_phases"]
 
 
-def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubectl_drain(
+def test_soperator_upgrade_runs_node_template_phase_without_raw_kubectl_drain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5579,8 +5746,7 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
                             "enabled": True,
                             "namespace": "soperator",
                             "release-name": "soperator",
-                            "target_ref": "mk8s",
-                            "version": "0.25.0",
+                            "version": "1.22.0",
                         }
                     ]
                 },
@@ -5597,6 +5763,12 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     )
     monkeypatch.setattr(
         cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_run_internal_render_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
     )
     monkeypatch.setattr(
         cli,
@@ -5622,8 +5794,13 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     )
     monkeypatch.setattr(
         cli,
-        "_handle_soperator_upgrade_running_jobs",
-        lambda **_kwargs: calls.append("slurm-jobs") or ("worker-1",),
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-1",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_slurm_quiet",
+        lambda **_kwargs: (calls.append("slurm-jobs") or [], ()),
     )
     monkeypatch.setattr(
         cli,
@@ -5649,26 +5826,29 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         calls,
         populate_jail_image_changed=False,
     )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-1",),
+    )
 
     _run_soperator_upgrade_for_test(
         config_path=paths.config_path,
-        to_chart_version=None,
-        to_k8s_version="1.33",
-        node_group="worker",
+        to_chart_version="4.0.2-ps.4",
+        to_k8s_version="1.32",
         job_policy="fail",
-        allow_unsupported_soperator_upgrade_path=True,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert payload["apps"]["charts"][0]["version"] == "0.25.0"
+    assert payload["apps"]["charts"][0]["version"] == "4.0.2-ps.4"
     assert "slurm-jobs" in calls
     mk8s_calls = [
         call for call in calls if isinstance(call, tuple) and call[0] == "mk8s-node-template"
     ]
     assert len(mk8s_calls) == 1
-    assert mk8s_calls[0][1]["to_k8s_version"] == "1.33"
-    assert mk8s_calls[0][1]["node_group"] == "worker"
-    assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
+    assert mk8s_calls[0][1]["to_k8s_version"] == "1.32"
+    assert mk8s_calls[0][1]["node_group"] == ""
+    assert not any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
     checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert any(
@@ -5698,7 +5878,7 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
 
 
-def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_leave_false_drain(
+def test_soperator_upgrade_shared_safety_failure_after_bridge_write_keeps_slurm_fenced(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5728,7 +5908,7 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
                             "namespace": "soperator",
                             "release-name": "soperator",
                             "target_ref": "mk8s",
-                            "version": "0.25.0",
+                            "version": "1.22.0",
                         }
                     ]
                 },
@@ -5774,11 +5954,21 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
             calls.append(("soperator-validation", kwargs["phase_label"])) or ()
         ),
     )
-    monkeypatch.setattr(
-        cli,
-        "_handle_soperator_upgrade_running_jobs",
-        lambda **_kwargs: calls.append("slurm-jobs") or ("worker-1",),
-    )
+    pause_record = _cli_slurm_pause_record("main")
+
+    def _pause_slurm_jobs(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
+        calls.append("slurm-jobs")
+        kwargs["slurm_decision_recorder"](
+            {
+                "at": "2026-07-10T12:00:00Z",
+                "action": "scheduling-pause-applied",
+                "partitions": [pause_record.as_payload()],
+                "pending_jobs": "queued-not-blocking",
+            }
+        )
+        return [], (pause_record,)
+
+    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_slurm_jobs)
     monkeypatch.setattr(
         cli,
         "_run_soperator_mk8s_node_template_phase",
@@ -5798,6 +5988,12 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
     )
     monkeypatch.setattr(
         cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-1",),
+    )
+    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_slurm_jobs)
+    monkeypatch.setattr(
+        cli,
         "_managed_soperator_upgrade_run_post_verification",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("shared safety failed")),
     )
@@ -5805,19 +6001,17 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
     with pytest.raises(RuntimeError, match="shared safety failed"):
         _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
-            to_chart_version=None,
-            to_k8s_version="1.33",
-            node_group="worker",
+            to_chart_version="4.0.2-ps.4",
+            to_k8s_version="1.32",
             job_policy="fail",
-            allow_unsupported_soperator_upgrade_path=True,
         )
 
-    assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
+    assert not any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
     checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "shared-safety-verification"
-    assert checkpoint["failure"]["slurm_restore"] == "not-required"
-    assert checkpoint["slurm"]["restore_manual_command"] is None
+    assert checkpoint["failure"]["slurm_restore"] == "left-changed"
+    assert checkpoint["slurm"]["partition_restore_manual_command"]
 
 
 def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
@@ -5877,13 +6071,19 @@ def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
         "_run_soperator_mk8s_node_template_phase",
         lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
     )
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version=None,
-        to_k8s_version="1.33",
-        dry_run=True,
+    monkeypatch.setattr(
+        cli,
+        "_run_managed_soperator_upgrade_dry_run_discovery",
+        lambda **_kwargs: calls.append("live-discovery"),
     )
+
+    with pytest.raises(RuntimeError, match="Run the next hop first"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version=None,
+            to_k8s_version="1.33",
+            dry_run=True,
+        )
 
     rendered = " ".join(rich_console.export_text().split())
     assert "Managed Kubernetes hop (execution blocked)" in rendered
@@ -5891,7 +6091,7 @@ def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
     assert "Requested Kubernetes target: `1.33`" in rendered
     assert "Requested path would skip multiple live operations: 1.31 -> 1.32 -> 1.33" in (rendered)
     assert "Run the next hop first with --to-k8s-version 1.32" in rendered
-    assert calls == ["migration-guard"]
+    assert calls == ["migration-guard", "live-discovery"]
 
 
 def test_soperator_upgrade_execute_blocks_skipped_k8s_minor_before_checkpoint(
@@ -5949,7 +6149,6 @@ def test_soperator_upgrade_execute_blocks_skipped_k8s_minor_before_checkpoint(
         "_run_soperator_mk8s_node_template_phase",
         lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
     )
-
     with pytest.raises(RuntimeError, match="Run the next hop first with --to-k8s-version 1.32"):
         _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
@@ -6020,13 +6219,19 @@ def test_soperator_upgrade_dry_run_blocks_k8s_boundary_before_chart_upgrade(
         "_run_soperator_mk8s_node_template_phase",
         lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
     )
-
-    _run_soperator_upgrade_for_test(
-        config_path=paths.config_path,
-        to_chart_version=target_chart_version,
-        to_k8s_version="1.33",
-        dry_run=True,
+    monkeypatch.setattr(
+        cli,
+        "_run_managed_soperator_upgrade_dry_run_discovery",
+        lambda **_kwargs: calls.append("live-discovery"),
     )
+
+    with pytest.raises(RuntimeError, match="chart-first run"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version=target_chart_version,
+            to_k8s_version="1.33",
+            dry_run=True,
+        )
 
     rendered = " ".join(rich_console.export_text().split())
     assert "Managed upgrade order (execution blocked)" in rendered
@@ -6038,7 +6243,7 @@ def test_soperator_upgrade_dry_run_blocks_k8s_boundary_before_chart_upgrade(
         f"--to-chart-version {target_chart_version}"
     ) in rendered
     assert "--to-k8s-version 1.33" in rendered
-    assert calls == ["migration-guard"]
+    assert calls == ["migration-guard", "live-discovery"]
 
 
 def test_soperator_upgrade_execute_blocks_k8s_boundary_before_chart_upgrade(
@@ -6162,6 +6367,11 @@ def test_soperator_upgrade_allows_k8s_to_order_boundary_before_chart_upgrade(
         "_raise_if_soperator_upgrade_would_bypass_migration",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        cli,
+        "_run_managed_soperator_upgrade_dry_run_discovery",
+        lambda **_kwargs: None,
+    )
 
     _run_soperator_upgrade_for_test(
         config_path=paths.config_path,
@@ -6258,11 +6468,11 @@ def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
         lambda **_kwargs: ("worker-gpu-0-0",),
     )
 
-    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
-        calls.append(("slurm-gate", kwargs["node_names"], kwargs["policy"]))
+    def _job_gate(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
+        calls.append(("slurm-gate", kwargs["node_names"], kwargs["job_policy"]))
         raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
 
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
+    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _job_gate)
     _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
     monkeypatch.setattr(
         cli,
@@ -6368,11 +6578,11 @@ def test_soperator_upgrade_force_populate_jail_refresh_job_policy_fail_blocks_be
         lambda **_kwargs: ("worker-gpu-0-0",),
     )
 
-    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
-        calls.append(("slurm-gate", kwargs["node_names"], kwargs["policy"]))
+    def _job_gate(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
+        calls.append(("slurm-gate", kwargs["node_names"], kwargs["job_policy"]))
         raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
 
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
+    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _job_gate)
 
     with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
         _run_soperator_upgrade_for_test(
@@ -6387,7 +6597,7 @@ def test_soperator_upgrade_force_populate_jail_refresh_job_policy_fail_blocks_be
         "validate",
         "Validate rendered Soperator active/passive jail rootfs refresh",
     ) not in calls
-    assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
+    assert sum(1 for call in calls if isinstance(call, tuple) and call[0] == "flux-apply") == 1
 
 
 def test_soperator_upgrade_slurm_node_filter_maps_worker_pod_and_instance_aliases(
@@ -6870,8 +7080,8 @@ def test_managed_pre_release_config_failure_keeps_slurm_paused_without_restore(
         lambda **_kwargs: ("worker-0",),
     )
 
-    def _pause_running_jobs(**kwargs: Any) -> tuple[str, ...]:
-        kwargs["decision_recorder"](
+    def _pause_running_jobs(**kwargs: Any) -> tuple[list[str], tuple[Any, ...]]:
+        kwargs["slurm_decision_recorder"](
             {
                 "at": "2026-07-10T12:00:00Z",
                 "action": "scheduling-pause-applied",
@@ -6879,9 +7089,9 @@ def test_managed_pre_release_config_failure_keeps_slurm_paused_without_restore(
                 "pending_jobs": "queued-not-blocking",
             }
         )
-        return ("worker-0",)
+        return [], (pause_record,)
 
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _pause_running_jobs)
+    monkeypatch.setattr(cli, "_ensure_slurm_quiet", _pause_running_jobs)
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_restore_slurm_partitions",
@@ -6925,7 +7135,7 @@ def test_managed_pre_release_config_failure_keeps_slurm_paused_without_restore(
     assert restore_mutations == []
     assert checkpoint["slurm"]["paused_partitions"] == [pause_record.as_payload()]
     assert checkpoint["failure"]["slurm_restore"] == "left-changed"
-    assert "slurm-partitions-kept-paused-after-pre-release-failure" in {
+    assert "slurm-partitions-kept-paused-after-bridge-write-failure" in {
         event["event"] for event in checkpoint["events"]
     }
 
@@ -7023,16 +7233,26 @@ def test_post_jail_slurm_release_order_defers_restore_until_final_gates() -> Non
         accept_only_position < admission_closed_position < terminal_gate_position < freeze_position
     )
 
-    managed_source = inspect.getsource(cli._run_managed_soperator_cluster_upgrade)  # noqa: SLF001
-    managed_pre_release_position = managed_source.find(pre_release_token)
-    managed_restore_position = managed_source.find(
-        "_restore_managed_slurm_before_post_jail_smoke(",
-        managed_pre_release_position,
+    managed_source = inspect.getsource(  # noqa: SLF001
+        cli._run_managed_soperator_cluster_upgrade_locked
     )
-    managed_smoke_position = managed_source.find(full_smoke_token, managed_pre_release_position)
-    assert managed_pre_release_position < managed_restore_position < managed_smoke_position
-    assert "if slurm_pause_records and not post_jail_pre_release_failed:" in managed_source
-    assert "slurm-partitions-kept-paused-after-pre-release-failure" in managed_source
+    managed_pre_release_position = managed_source.find(pre_release_token)
+    managed_target_position = managed_source.find('"target-controller-bridge"')
+    managed_safety_position = managed_source.find('"shared-safety-verification"')
+    managed_restore_position = managed_source.find('"slurm-restore"', managed_safety_position)
+    assert (
+        managed_pre_release_position
+        < managed_target_position
+        < managed_safety_position
+        < managed_restore_position
+    )
+    assert "_restore_managed_slurm_before_post_jail_smoke(" not in managed_source
+    assert full_smoke_token not in managed_source
+    assert (
+        "if slurm_pause_records and not post_jail_pre_release_failed and not roll_forward_only:"
+        in managed_source
+    )
+    assert "slurm-partitions-kept-paused-after-bridge-write-failure" in managed_source
 
     full_smoke_source = inspect.getsource(
         soperator_migration._ensure_post_jail_slurm_smoke  # noqa: SLF001
@@ -8299,8 +8519,10 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         to_gpu_stack_preset=None,
         node_group="",
         disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-        drain_timeout="auto",
+        drain_timeout="none",
         strategy_max_surge_count=None,
+        zero_surge_max_unavailable="all",
+        max_parallel_worker_groups=8,
         backup_dir=None,
         populate_jail_refresh="auto",
         jail_persistent_mounts=(),
@@ -8338,7 +8560,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "live-activechecks-suspend",
         ("soperator-validation", "Preflight"),
         "render",
-        ("validate", "Validate rendered Soperator upgrade to 0.26.0"),
+        ("validate", "Validate gated Soperator staging at 0.26.0"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -8733,7 +8955,7 @@ def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verificat
     )
 
 
-def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
+def test_soperator_upgrade_keeps_activechecks_suspended_after_bridge_write_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8824,18 +9046,12 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
     chart = payload["apps"]["charts"][0]
     assert chart["version"] == "0.26.0"
-    assert chart["values"]["soperator-activechecks"]["enabled"] is True
-    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
-    assert calls[-4:] == [
-        "render",
-        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
-        ),
-        "soperator-static-ready",
-    ]
+    assert chart["values"]["soperator-activechecks"]["enabled"] is False
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is False
+    assert (
+        "validate",
+        "Validate rendered Soperator ActiveChecks restore after failed upgrade",
+    ) not in calls
     checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
@@ -8843,15 +9059,15 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
         "error": "postflight failed",
         "interrupted": False,
         "pending_phase": "postflight-validation",
-        "activechecks_restore": "restored",
+        "activechecks_restore": "retained-suspended-roll-forward-only",
         "slurm_restore": "not-required",
     }
-    assert "activechecks-restored-after-failure" in [
+    assert "activechecks-retained-after-bridge-write-failure" in [
         event["event"] for event in checkpoint["events"]
     ]
     upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "- Status: `failed`" in upgrade_report
-    assert "`activechecks-restored-after-failure`" in upgrade_report
+    assert "`activechecks-retained-after-bridge-write-failure`" in upgrade_report
 
 
 def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failure(
@@ -9121,6 +9337,14 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
         "soperator-static-ready",
         "live-activechecks-suspend",
         ("soperator-validation", "Preflight"),
+        "render",
+        ("validate", "Validate gated Soperator staging at 0.26.0"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "soperator-static-ready",
         ("soperator-validation", "Postflight"),
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks restore"),
@@ -9583,15 +9807,12 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         **_kwargs: object,
     ) -> tuple[object, bool]:
         del choices, type_hint, required, unset_on_skip
-        answers: dict[str, Any] = {
-            "soperator.upgrade.dry_run": True,
-        }
         prompt_paths.append(path_label)
         prompt_hints[path_label] = cast(str | None, _kwargs.get("prompt_hint"))
         prompt_defaults[path_label] = current
         if path_label == "soperator.upgrade.to_chart_version":
             return current, False
-        return answers[path_label], False
+        raise AssertionError(f"unexpected prompt: {path_label}")
 
     monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
     monkeypatch.setattr(cli, "_soperator_upgrade_catalog_to_version_default", lambda: "0.26.0")
@@ -9604,14 +9825,18 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         "_raise_if_soperator_upgrade_would_bypass_migration",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        cli,
+        "_run_managed_soperator_upgrade_dry_run_discovery",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(cli, "console", rich_console)
 
-    cli.soperator_upgrade_command(paths.config_path)
+    cli.soperator_upgrade_command(paths.config_path, dry_run=True)
 
     rendered = rich_console.export_text()
     assert prompt_paths == [
         "soperator.upgrade.to_chart_version",
-        "soperator.upgrade.dry_run",
     ]
     assert prompt_hints["soperator.upgrade.to_chart_version"] == "current: 0.25.0"
     assert prompt_defaults["soperator.upgrade.to_chart_version"] == "0.26.0"
@@ -25706,9 +25931,11 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
     ].split("Comments:", maxsplit=1)[0]
     normalized_onboard_examples = " ".join(ext_soperator_onboard_examples.split())
     assert (
-        "--to-k8s-version <major.minor> --no-interactive; | nebius-cxcli "
+        "--compute-migration-mode in-place --to-k8s-version <major.minor> "
+        "--no-interactive; | nebius-cxcli "
         "ext-soperator onboard ./deployments --client-name acme"
     ) in normalized_onboard_examples
+    assert "--compute-migration-mode blue-green" in normalized_onboard_examples
     assert "nebius-cxcli validate" not in normalized_onboard_examples
     assert "nebius-cxcli render" not in normalized_onboard_examples
     assert "--cluster-id selects" not in ext_soperator_onboard_examples
@@ -26246,14 +26473,25 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--jail-persistent-mount" in normalized_managed_soperator_upgrade_help
     assert "<mountPath>=<localPath>" in normalized_managed_soperator_upgrade_help
     assert "/mnt/jail-store/shared/checkpoints" in normalized_managed_soperator_upgrade_help
-    assert "--login-session-policy" in normalized_managed_soperator_upgrade_help
-    assert "--login-session-drain-timeout" in normalized_managed_soperator_upgrade_help
-    assert "target-ready keeps normal slot switches gated" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert "wait-active waits for active SSH sessions" in (
-        normalized_managed_soperator_upgrade_help
-    )
+    for flag in (
+        "--node-group-strategy",
+        "--zero-surge-max-unavailable",
+        "--strategy-max-surge-count",
+        "--worker-drain-timeout",
+        "--max-parallel-worker-groups",
+        "--execute",
+        "--approve",
+    ):
+        assert flag in normalized_managed_soperator_upgrade_help
+    for removed in (
+        "--node-group ",
+        "--strategy ",
+        "--drain-timeout",
+        "--login-session-policy",
+        "--login-session-drain-timeout",
+        "--allow-unsupported-soperator-upgrade-path",
+    ):
+        assert removed not in normalized_managed_soperator_upgrade_help
     assert "--preserve-jail-home" not in normalized_managed_soperator_upgrade_help
     assert "--no-preserve-jail-home" not in normalized_managed_soperator_upgrade_help
     assert "--jail-sfs-resize-policy" in normalized_managed_soperator_upgrade_help
@@ -26276,13 +26514,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "--to-chart-version <chart-version> --job-policy wait-to-finish --job-wait-timeout 2h "
         "--dry-run"
     ) in normalized_managed_soperator_upgrade_help
-    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert "Default: interactive in a prompt-capable terminal" in (
-        normalized_managed_soperator_upgrade_help
-    )
-    assert "Automation should pass --no-interactive --job-policy <policy>" in (
+    assert "--execute --approve" in normalized_managed_soperator_upgrade_help
+    assert "Refreshes live discovery into a temporary bundle" in (
         normalized_managed_soperator_upgrade_help
     )
     assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
@@ -26431,7 +26664,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert (
-        "onboard registers one cluster identity or reconciles its complete v4 campaign "
+        "onboard registers one cluster identity or reconciles its complete v5 campaign "
         "in config.yaml"
     ) in normalized_soperator_help
     assert "upgrade reconciles live state and advances at most one campaign segment" in (
@@ -26464,7 +26697,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_soperator_help
     assert "CXCLI managed clusters use soperator upgrade" in (normalized_soperator_help)
     assert (
-        "external MK8s control-plane, blue/green compute, chart, and Jail changes remain owned "
+        "external MK8s control-plane, accepted in-place or blue-green compute, chart, and Jail "
+        "changes remain owned "
         "by ext-soperator upgrade"
     ) in normalized_soperator_help
     assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
@@ -26522,7 +26756,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
         normalized_soperator_onboard_help
     )
-    assert "keep-existing-compute preserves discovered role" in (normalized_soperator_onboard_help)
+    assert "Compute-layout decision for an existing Soperator" in (
+        normalized_soperator_onboard_help
+    )
     assert "source version used only when discovery cannot infer" in (
         normalized_soperator_onboard_help
     )
@@ -26534,18 +26770,27 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_onboard_help
     )
     assert "locks every contiguous hop" in normalized_soperator_onboard_help
-    assert "--cluster-id mk8scluster-..." in normalized_soperator_onboard_help
+    assert "--cluster-id CLUSTER_ID" in normalized_soperator_onboard_help
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
+    for migration_option in (
+        "--compute-migration-mode",
+        "--slurm-scheduling-pause",
+        "--node-group-strategy",
+        "--zero-surge-max-unavailable",
+        "--strategy-max-surge-count",
+        "--worker-drain-timeout",
+        "--max-parallel-worker-groups",
+        "--blue-green-worker-bootstrap",
+    ):
+        assert migration_option in normalized_soperator_onboard_help
     assert "create a project config under the deployments root" in normalized_soperator_onboard_help
     for removed_option in (
         "--worker-rollout-strategy",
         "--service-role-rollout-strategy",
         "--worker-wave-groups",
         "--worker-wave-percent",
-        "--max-parallel-worker-groups",
-        "--strategy-max-surge-count",
         "--strategy-max-unavailable-count",
         "--strategy-drain-timeout",
     ):
@@ -26562,8 +26807,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "Soperator/chart target, and Jail Upgrade" in normalized_soperator_onboard_help
     assert (
-        "Non-interactive mode requires the exact final --to-k8s-version; when omitted it "
-        "prints the recommended reachable target and writes no target or campaign"
+        "Non-interactive mode requires --compute-migration-mode and the exact final "
+        "--to-k8s-version; when the target version is omitted it prints the recommended "
+        "reachable target and writes no target or campaign"
     ) in normalized_soperator_onboard_help
     assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
         normalized_soperator_onboard_help
@@ -26691,11 +26937,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "--execute --approve refreshes discovery, creates a restore-capable backup"
+        "--execute --approve refreshes discovery, creates or reuses the checkpointed "
+        "restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
     assert "runs at most one locked campaign segment" in normalized_ext_soperator_upgrade_help
-    assert "Soperator/storage/compute/GPU-stack/Jail Upgrade work" in (
-        normalized_ext_soperator_upgrade_help
+    assert (
+        "accepted Soperator storage/compute/GPU-stack/Jail Upgrade work assigned to that segment"
+        in (normalized_ext_soperator_upgrade_help)
     )
     assert "If the accepted campaign still contains more segments" in (
         normalized_ext_soperator_upgrade_help
@@ -26705,7 +26953,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         in (normalized_ext_soperator_upgrade_help)
     )
     assert (
-        "The v4 operation journal never supplies a missing desired path"
+        "The v5 operation journal never supplies a missing desired path"
         in normalized_ext_soperator_upgrade_help
     )
     assert "rerun the idempotent onboard command only to check for and accept a later campaign" in (
@@ -26716,15 +26964,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "--service-role-rollout-strategy",
         "--worker-wave-groups",
         "--worker-wave-percent",
-        "--max-parallel-worker-groups",
-        "--strategy-max-surge-count",
         "--strategy-max-unavailable-count",
         "--strategy-drain-timeout",
     ):
         assert removed_option not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "Unsupported campaigns and non-v4 journals fail closed" in (
+    assert "Unsupported campaigns and non-v5 journals fail closed" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "external upgrade has no support-policy override" in (
@@ -28851,11 +29097,8 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
     assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
     assert mk8s_inputs["node_groups"]["worker"]["nodeset_name"] == "worker"
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 3,
-        "max_node_count": 5,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
@@ -29510,15 +29753,488 @@ def test_soperator_production_service_role_counts_materialize_mk8s_groups() -> N
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert node_groups["system"]["node_count"] == 2
-    assert node_groups["controller"]["node_count"] == 3
+    assert node_groups["system"]["node_count"] == 3
+    assert node_groups["controller"]["node_count"] == 2
     assert node_groups["login"]["node_count"] == 4
     assert node_groups["accounting"]["node_count"] == 5
     assert node_groups["worker"]["node_count"] == 1
     assert all("node_count_input" not in group for group in node_groups.values())
 
 
-def test_soperator_production_service_role_autoscaling_materializes_mk8s_groups() -> None:
+def test_soperator_production_profiles_render_fixed_bridge_domains() -> None:
+    _default_profile, profiles = cli._soperator_nodesets_profiles()  # noqa: SLF001
+
+    for profile_name, profile in profiles.items():
+        groups = profile["mk8s"]["node_groups"]
+        system = groups["system"]
+        controller = groups["controller"]
+
+        assert system["node_count"] == 3, profile_name
+        assert controller["node_count"] == 2, profile_name
+        assert "node_count_input" not in system, profile_name
+        assert "node_count_input" not in controller, profile_name
+        assert "autoscaling" not in system, profile_name
+        assert "autoscaling" not in controller, profile_name
+        assert "autoscaling_input" not in system, profile_name
+        assert "autoscaling_input" not in controller, profile_name
+        assert system["jail"] is True, profile_name
+        assert controller["jail"] is True, profile_name
+        assert system["sfs_filesystem_keys"] == ["controller-spool"], profile_name
+        assert controller["sfs_filesystem_keys"] == ["controller-spool"], profile_name
+        assert system["node_labels"]["nebius.ai/soperator-bridge-domain"] == "system"
+        assert controller["node_labels"]["nebius.ai/soperator-bridge-domain"] == "controller"
+
+
+def test_managed_soperator_mk8s_rolls_bridge_domains_last_and_serially(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dispatched: list[str] = []
+    intents: list[str] = []
+    verified: list[str] = []
+
+    def _record_upgrade(**kwargs: Any) -> None:
+        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
+        if batch is None:
+            dispatched.append(kwargs["node_group"])
+        else:
+            dispatched.extend(batch.group_names)
+
+    monkeypatch.setattr(
+        cli,
+        "upgrade_node_template_command",
+        _record_upgrade,
+    )
+
+    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
+        config_path=tmp_path / "config.yaml",
+        source_payload={
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {
+                            "node_groups": {
+                                "controller": {},
+                                "worker": {},
+                                "system": {},
+                                "login": {},
+                            }
+                        },
+                    }
+                ]
+            }
+        },
+        target_ref="cluster1",
+        to_k8s_version="1.33",
+        to_os=None,
+        to_gpu_stack_preset=None,
+        node_group="",
+        disruption_policy="zero-surge",
+        drain_timeout="auto",
+        strategy_max_surge_count=None,
+        provider_roll_domain_writer=intents.append,
+        provider_roll_domain_verifier=verified.append,
+    )
+
+    assert rolled == ("login", "controller", "system", "worker")
+    assert dispatched == intents == verified == list(rolled)
+
+
+def test_managed_soperator_mk8s_batches_only_job_free_workers_at_eight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    batches: list[tuple[str, ...]] = []
+    intents: list[str] = []
+    verified: list[str] = []
+    worker_groups = tuple(f"worker-{index}" for index in range(1, 11))
+
+    def _record_batch(**_kwargs: Any) -> None:
+        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
+        assert batch is not None
+        batches.append(batch.group_names)
+
+    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
+    source_payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {"node_groups": {name: {} for name in worker_groups}},
+                }
+            ]
+        }
+    }
+
+    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
+        config_path=tmp_path / "config.yaml",
+        source_payload=source_payload,
+        target_ref="cluster1",
+        to_k8s_version="1.33",
+        to_os="ubuntu24.04",
+        to_gpu_stack_preset=None,
+        node_group="",
+        disruption_policy="zero-surge",
+        drain_timeout="none",
+        strategy_max_surge_count=None,
+        zero_surge_max_unavailable="all",
+        max_parallel_worker_groups=8,
+        provider_roll_domain_writer=intents.append,
+        provider_roll_domain_verifier=verified.append,
+    )
+
+    assert rolled == worker_groups
+    assert batches == [worker_groups[:8], worker_groups[8:]]
+    assert intents == verified == list(worker_groups)
+
+
+def test_managed_soperator_mk8s_leaves_busy_workers_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    batches: list[tuple[str, ...]] = []
+    workers = tuple(f"worker-{index}" for index in range(1, 11))
+    busy = set(workers[-3:])
+
+    def _record_batch(**_kwargs: Any) -> None:
+        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
+        assert batch is not None
+        batches.append(batch.group_names)
+
+    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match="worker-8, worker-9, worker-10"):
+        cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
+            config_path=tmp_path / "config.yaml",
+            source_payload={
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "cluster1",
+                            "enabled": True,
+                            "inputs": {"node_groups": {name: {} for name in workers}},
+                        }
+                    ]
+                }
+            },
+            target_ref="cluster1",
+            to_k8s_version="1.33",
+            to_os="ubuntu24.04",
+            to_gpu_stack_preset=None,
+            node_group="",
+            disruption_policy="zero-surge",
+            drain_timeout="none",
+            strategy_max_surge_count=None,
+            max_parallel_worker_groups=8,
+            worker_group_busy_checker=lambda group: group in busy,
+        )
+
+    assert batches == [workers[:7]]
+
+
+def test_managed_node_template_batch_resolves_config_key_alias() -> None:
+    live_group = SimpleNamespace(
+        id="group-id",
+        name="training-gpu",
+        source=SimpleNamespace(key="gpu"),
+    )
+
+    selected = cli._managed_node_template_batch_selection(  # noqa: SLF001
+        (live_group,),
+        ("gpu",),
+    )
+
+    assert selected == (live_group,)
+
+
+def test_managed_node_template_batch_rejects_ambiguous_alias() -> None:
+    groups = (
+        SimpleNamespace(
+            id="group-a",
+            name="training-gpu",
+            source=SimpleNamespace(key="gpu"),
+        ),
+        SimpleNamespace(
+            id="group-b",
+            name="gpu",
+            source=SimpleNamespace(key="other"),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="alias is ambiguous: gpu"):
+        cli._managed_node_template_batch_selection(groups, ("gpu",))  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("intent_newly_recorded", "live_matches_preimage", "live_is_owned_drain", "expected"),
+    (
+        (True, True, False, "dispatch"),
+        (False, False, True, "adopt"),
+    ),
+)
+def test_managed_worker_drain_reconciliation_safe_actions(
+    intent_newly_recorded: bool,
+    live_matches_preimage: bool,
+    live_is_owned_drain: bool,
+    expected: str,
+) -> None:
+    assert (
+        cli._managed_worker_drain_reconcile_action(  # noqa: SLF001
+            intent_newly_recorded=intent_newly_recorded,
+            live_matches_preimage=live_matches_preimage,
+            live_is_owned_drain=live_is_owned_drain,
+        )
+        == expected
+    )
+
+
+def test_managed_worker_drain_reconciliation_does_not_resend_uncertain_rpc() -> None:
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match="no Slurm RPC was resent"):
+        cli._managed_worker_drain_reconcile_action(  # noqa: SLF001
+            intent_newly_recorded=False,
+            live_matches_preimage=True,
+            live_is_owned_drain=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("intent_newly_recorded", "live_matches_preimage", "live_is_owned_drain", "expected"),
+    (
+        (True, False, True, "dispatch"),
+        (False, True, False, "adopt"),
+    ),
+)
+def test_managed_worker_restore_reconciliation_safe_actions(
+    intent_newly_recorded: bool,
+    live_matches_preimage: bool,
+    live_is_owned_drain: bool,
+    expected: str,
+) -> None:
+    assert (
+        cli._managed_worker_restore_reconcile_action(  # noqa: SLF001
+            intent_newly_recorded=intent_newly_recorded,
+            live_matches_preimage=live_matches_preimage,
+            live_is_owned_drain=live_is_owned_drain,
+        )
+        == expected
+    )
+
+
+def test_managed_worker_restore_reconciliation_does_not_resend_uncertain_rpc() -> None:
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match="no Slurm RPC was resent"):
+        cli._managed_worker_restore_reconcile_action(  # noqa: SLF001
+            intent_newly_recorded=False,
+            live_matches_preimage=False,
+            live_is_owned_drain=True,
+        )
+
+
+def test_soperator_support_policy_has_no_dry_run_override() -> None:
+    report = {
+        "findings": [
+            {
+                "layer": cli.SOPERATOR_UPGRADE_SUPPORT_LAYER,
+                "status": "unsupported",
+                "severity": "blocked",
+                "message": "unsupported test path",
+                "evidence": {
+                    "rule_id": "test-unsupported",
+                    "source_soperator_version": "0.0.1",
+                    "target_soperator_version": "9.9.9",
+                    "target_k8s_version": "9.9",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="fails closed and has no support-policy override"):
+        cli._enforce_soperator_support_policy_for_report(  # noqa: SLF001
+            report,
+            command_name="soperator upgrade dry-run",
+        )
+
+
+def test_managed_soperator_mk8s_rechecks_dispatch_lock_after_clear_classification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workers = ("worker-1", "worker-2", "worker-3")
+    batches: list[tuple[str, ...]] = []
+    unlocked: list[str] = []
+
+    def _record_batch(**_kwargs: Any) -> None:
+        batch = cli._MANAGED_NODE_TEMPLATE_BATCH_CONTEXT.get()  # noqa: SLF001
+        assert batch is not None
+        batches.append(batch.group_names)
+
+    monkeypatch.setattr(cli, "upgrade_node_template_command", _record_batch)
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match="worker-2"):
+        cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
+            config_path=tmp_path / "config.yaml",
+            source_payload={
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "cluster1",
+                            "enabled": True,
+                            "inputs": {"node_groups": {name: {} for name in workers}},
+                        }
+                    ]
+                }
+            },
+            target_ref="cluster1",
+            to_k8s_version="1.33",
+            to_os="ubuntu24.04",
+            to_gpu_stack_preset=None,
+            node_group="",
+            disruption_policy="zero-surge",
+            drain_timeout="none",
+            strategy_max_surge_count=None,
+            worker_group_busy_checker=lambda _group: False,
+            worker_group_dispatch_locker=lambda group: group != "worker-2",
+            worker_group_dispatch_unlocker=unlocked.append,
+        )
+
+    assert batches == [("worker-1", "worker-3")]
+    assert unlocked == ["worker-1", "worker-3"]
+
+
+def test_managed_soperator_mk8s_does_not_redispatch_restored_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dispatched: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "upgrade_node_template_command",
+        lambda **_kwargs: dispatched.append("provider-dispatch"),
+    )
+
+    rolled = cli._run_soperator_mk8s_node_template_phase(  # noqa: SLF001
+        config_path=tmp_path / "config.yaml",
+        source_payload={
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {"node_groups": {"worker-1": {}}},
+                    }
+                ]
+            }
+        },
+        target_ref="cluster1",
+        to_k8s_version="1.33",
+        to_os="ubuntu24.04",
+        to_gpu_stack_preset=None,
+        node_group="",
+        disruption_policy="zero-surge",
+        drain_timeout="none",
+        strategy_max_surge_count=None,
+        worker_group_completed_checker=lambda _group: True,
+        worker_group_busy_checker=lambda _group: True,
+        worker_group_dispatch_locker=lambda _group: None,
+    )
+
+    assert rolled == ("worker-1",)
+    assert dispatched == []
+
+
+def test_managed_bridge_uid_rebind_is_limited_to_journaled_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint: dict[str, Any] = {
+        "managed_bridge_binding": {
+            "schema": cli._MANAGED_BRIDGE_BINDING_SCHEMA,  # noqa: SLF001
+            "status": "planned",
+            "placement_domains": {"controller": {}, "system": {}},
+            "storage_fingerprints": {},
+        }
+    }
+    source_payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {"node_groups": {"controller": {}, "system": {}}},
+                }
+            ]
+        }
+    }
+
+    def _domains(controller_uid: str, system_uid: str) -> tuple[Any, Any]:
+        return (
+            cli.BridgePlacementDomain.managed(
+                name="controller",
+                role="controller",
+                node_group_id="group-controller",
+                selector={"domain": "controller"},
+                live_node_uid=controller_uid,
+                ready_capacity=2,
+                template={
+                    "eligible_node_uids": [controller_uid],
+                    "attachment_fingerprint": "controller-storage",
+                },
+            ),
+            cli.BridgePlacementDomain.managed(
+                name="system",
+                role="system",
+                node_group_id="group-system",
+                selector={"domain": "system"},
+                live_node_uid=system_uid,
+                ready_capacity=3,
+                template={
+                    "eligible_node_uids": [system_uid],
+                    "attachment_fingerprint": "system-storage",
+                },
+            ),
+        )
+
+    live_domains = _domains("controller-old", "system-old")
+    monkeypatch.setattr(
+        cli,
+        "managed_bridge_placement_domains_from_live_nodes",
+        lambda **_kwargs: live_domains,
+    )
+    cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        source_payload=source_payload,
+        target_ref="cluster1",
+        snapshot={"kubernetes_nodes": []},
+    )
+
+    live_domains = _domains("controller-new", "system-old")
+    cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        source_payload=source_payload,
+        target_ref="cluster1",
+        snapshot={"kubernetes_nodes": []},
+        allow_rebind_role="controller",
+    )
+    assert checkpoint["managed_bridge_binding"]["rebinds"][-1]["role"] == "controller"
+
+    live_domains = _domains("controller-new", "system-new")
+    with pytest.raises(RuntimeError, match="system.*outside its checkpointed provider roll"):
+        cli._verify_managed_controller_bridge_substrate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            source_payload=source_payload,
+            target_ref="cluster1",
+            snapshot={"kubernetes_nodes": []},
+            allow_rebind_role="controller",
+        )
+
+
+def test_soperator_production_bridge_roles_ignore_stale_autoscaling_inputs() -> None:
     payload = {
         "infra": {
             "components": [
@@ -29564,19 +30280,16 @@ def test_soperator_production_service_role_autoscaling_materializes_mk8s_groups(
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-    assert node_groups["system"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 4,
-    }
-    assert "node_count" not in node_groups["system"]
-    assert node_groups["controller"]["node_count"] == 3
+    assert node_groups["system"]["node_count"] == 3
+    assert "autoscaling" not in node_groups["system"]
+    assert node_groups["controller"]["node_count"] == 2
     assert node_groups["login"]["node_count"] == 1
     assert node_groups["accounting"]["node_count"] == 1
     assert all("node_count_input" not in group for group in node_groups.values())
     assert all("autoscaling_input" not in group for group in node_groups.values())
 
 
-def test_soperator_production_disabled_service_autoscaling_clears_stale_group_scale() -> None:
+def test_soperator_production_ignores_stale_service_autoscaling_inputs() -> None:
     payload = {
         "infra": {
             "components": [
@@ -29617,13 +30330,11 @@ def test_soperator_production_disabled_service_autoscaling_clears_stale_group_sc
 
     assert cli._materialize_soperator_component_defaults(payload) is True
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 4,
-    }
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
 
     mk8s_inputs["soperator"]["system_autoscaling"] = {"enabled": False}
-    assert cli._materialize_soperator_component_defaults(payload) is True
+    assert cli._materialize_soperator_component_defaults(payload) is False
 
     system_group = mk8s_inputs["node_groups"]["system"]
     assert system_group["node_count"] == 3
@@ -30665,7 +31376,7 @@ def test_soperator_production_autoscaling_rejects_invalid_bounds() -> None:
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "system_autoscaling": {
+                            "login_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 4,
                                 "max_node_count": 2,
@@ -30696,7 +31407,7 @@ def test_soperator_production_autoscaling_rejects_invalid_bounds() -> None:
 
     with pytest.raises(
         ValueError,
-        match="soperator.system_autoscaling.max_node_count",
+        match="soperator.login_autoscaling.max_node_count",
     ):
         cli._materialize_soperator_component_defaults(payload)
 
@@ -30711,7 +31422,7 @@ def test_soperator_production_service_role_autoscaling_rejects_scale_to_zero() -
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "system_autoscaling": {
+                            "login_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 0,
                                 "max_node_count": 0,
@@ -30742,7 +31453,7 @@ def test_soperator_production_service_role_autoscaling_rejects_scale_to_zero() -
 
     with pytest.raises(
         ValueError,
-        match="soperator.system_autoscaling.max_node_count must be at least 1",
+        match="soperator.login_autoscaling.max_node_count must be at least 1",
     ):
         cli._materialize_soperator_component_defaults(payload)
 
@@ -31046,11 +31757,8 @@ def test_soperator_cpu_profile_materializes_only_cpu_worker_nodeset() -> None:
         "accounting",
         "worker-cpu",
     }
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 3,
-        "max_node_count": 5,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
@@ -31139,11 +31847,8 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert "gpu_enabled" not in mk8s_inputs
     assert "gpu_node_groups" not in mk8s_inputs
     assert "gpu_nodes_count_per_group" not in mk8s_inputs
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 3,
-        "max_node_count": 5,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2

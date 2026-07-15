@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SA_NAME="codex-agent-sa"
-ROLE="editor"
+ROLE="admin"
 REPAIR="false"
 DRY_RUN="false"
 ENDPOINT="api.nebius.cloud"
@@ -38,6 +38,7 @@ Usage:
 
 Creates or repairs local Codex Agent Nebius service-account auth. Runtime token
 injection is handled by the installed PreToolUse hook, not by this script.
+Defaults: service account 'codex-agent-sa', project role 'admin'.
 Install or refresh that hook from the skills repo root with:
 
   ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks

@@ -500,6 +500,7 @@ def test_slurm_job_control_textual_app_uses_single_concise_legend() -> None:
 
     assert footer_count == 0
     assert "Keys:" in keys_text
+    assert "Esc exit" in keys_text
     assert "c cancel" in keys_text
     assert "q requeue" in keys_text
     assert "h hold" in keys_text
@@ -507,6 +508,20 @@ def test_slurm_job_control_textual_app_uses_single_concise_legend() -> None:
     assert "u release" in keys_text
     assert "? help" in keys_text
     assert keys_text == SLURM_JOB_CONTROL_KEYS
+
+
+def test_slurm_job_control_textual_app_escape_exits_without_action() -> None:
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            return app.return_value
+
+    assert asyncio.run(_run()) is None
 
 
 def test_slurm_job_control_textual_help_opens_modal_overlay() -> None:
@@ -536,6 +551,7 @@ def test_slurm_job_control_textual_help_opens_modal_overlay() -> None:
     assert row_count == 20
     assert closed_count == 0
     assert "Requeue stops the current execution" in help_text
+    assert "Esc: leave this screen without changing any jobs" in help_text
     assert "Slurm may show a job as COMPLETING" in help_text
     assert "u: release selected held jobs" in help_text
     assert "durably queues actions" in help_text

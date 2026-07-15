@@ -31,11 +31,17 @@ from prompt_workspace_core import (  # noqa: E402
     verify_workspace,
 )
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
-from prompt_workspace_execution import (  # noqa: E402
-    authorize_execution_plane,
-    checkpoint_execution_plane,
-    claim_execution_plane,
-    rebind_planning_execution_plane,
+from prompt_workspace_waves import (  # noqa: E402
+    accept_task_result,
+    cleanup_wave,
+    dispatch_wave,
+    integrate_wave,
+    plan_waves,
+    prepare_wave,
+    promote_wave,
+    recover_task,
+    replan_waves,
+    start_task,
 )
 from prompt_workspace_runs import (  # noqa: E402
     initialize_project_workspace,
@@ -59,16 +65,21 @@ __all__ = [
     "RUN_SCHEMA",
     "WORKSPACE_SCHEMA",
     "PromptWorkspaceError",
-    "authorize_execution_plane",
-    "checkpoint_execution_plane",
-    "claim_execution_plane",
+    "accept_task_result",
+    "cleanup_wave",
     "create_prompt",
     "init_workspace",
     "initialize_project_workspace",
     "inspect_spec_documents",
     "main",
     "project_workspace_manifest",
-    "rebind_planning_execution_plane",
+    "dispatch_wave",
+    "integrate_wave",
+    "plan_waves",
+    "prepare_wave",
+    "promote_wave",
+    "recover_task",
+    "replan_waves",
     "prompt_rows",
     "prompt_slug",
     "resolve_prompt_reference",
@@ -90,13 +101,19 @@ def open_in_editor(editor: str, target: Path, *, workspace: bool) -> None:
     try:
         result = subprocess.run(arguments, check=False, timeout=15)
     except FileNotFoundError:
-        print(f"WARN editor executable is unavailable; open manually: {target}", file=sys.stderr)
+        print(
+            f"WARN editor executable is unavailable; open manually: {target}",
+            file=sys.stderr,
+        )
         return
     except subprocess.TimeoutExpired:
         print(f"WARN editor did not return promptly; target: {target}", file=sys.stderr)
         return
     if result.returncode != 0:
-        print(f"WARN editor exited with status {result.returncode}; open manually: {target}", file=sys.stderr)
+        print(
+            f"WARN editor exited with status {result.returncode}; open manually: {target}",
+            file=sys.stderr,
+        )
 
 
 def add_common_workspace(parser: argparse.ArgumentParser) -> None:
@@ -174,34 +191,74 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser.add_argument("--prompt", type=Path)
     verify_parser.add_argument("--run-id")
 
-    claim_parser = subparsers.add_parser(
-        "plane-claim", help="Internal: claim one task for planning."
+    wave_plan = subparsers.add_parser(
+        "wave-plan", help="Internal: lock dependency waves."
     )
-    add_common_workspace(claim_parser)
-    claim_parser.add_argument("--run-id", required=True)
-    claim_parser.add_argument("--recover", action="store_true")
-    claim_parser.add_argument(
-        "--confirmed-recovery-worktree-sha256",
-        help=argparse.SUPPRESS,
-    )
+    add_common_workspace(wave_plan)
+    wave_plan.add_argument("--run-id", required=True)
+    wave_plan.add_argument("--capacity", required=True, type=int)
 
-    authorize_parser = subparsers.add_parser(
-        "plane-authorize", help="Internal: authorize a locked task plan."
+    wave_replan = subparsers.add_parser(
+        "wave-replan", help="Internal: replace one resource-free planned wave."
     )
-    add_common_workspace(authorize_parser)
-    authorize_parser.add_argument("--run-id", required=True)
+    add_common_workspace(wave_replan)
+    wave_replan.add_argument("--run-id", required=True)
+    wave_replan.add_argument("--capacity", required=True, type=int)
 
-    replan_parser = subparsers.add_parser(
-        "plane-replan", help="Internal: rebind one clean planning task for steering."
+    wave_prepare = subparsers.add_parser(
+        "wave-prepare", help="Internal: create integration worktree."
     )
-    add_common_workspace(replan_parser)
-    replan_parser.add_argument("--run-id", required=True)
+    add_common_workspace(wave_prepare)
+    wave_prepare.add_argument("--run-id", required=True)
 
-    checkpoint_parser = subparsers.add_parser(
-        "plane-checkpoint", help="Internal: checkpoint one task and stop."
+    wave_dispatch = subparsers.add_parser(
+        "wave-dispatch", help="Internal: create immutable worker assignments."
     )
-    add_common_workspace(checkpoint_parser)
-    checkpoint_parser.add_argument("--run-id", required=True)
+    add_common_workspace(wave_dispatch)
+    wave_dispatch.add_argument("--run-id", required=True)
+    wave_dispatch.add_argument("--contract-commit", required=True)
+
+    task_start = subparsers.add_parser(
+        "task-start", help="Internal: authorize one assigned worker."
+    )
+    add_common_workspace(task_start)
+    task_start.add_argument("--run-id", required=True)
+    task_start.add_argument("--task-id", required=True)
+    task_start.add_argument("--assignment-sha256", required=True)
+
+    task_recover = subparsers.add_parser(
+        "task-recover", help="Internal: transfer one interrupted worker task."
+    )
+    add_common_workspace(task_recover)
+    task_recover.add_argument("--run-id", required=True)
+    task_recover.add_argument("--task-id", required=True)
+    task_recover.add_argument("--confirmed-stopped", action="store_true")
+
+    task_finish = subparsers.add_parser(
+        "task-finish", help="Internal: verify one worker result."
+    )
+    add_common_workspace(task_finish)
+    task_finish.add_argument("--run-id", required=True)
+    task_finish.add_argument("--task-id", required=True)
+
+    wave_integrate = subparsers.add_parser(
+        "wave-integrate", help="Internal: merge ready tasks in stable order."
+    )
+    add_common_workspace(wave_integrate)
+    wave_integrate.add_argument("--run-id", required=True)
+
+    wave_promote = subparsers.add_parser(
+        "wave-promote", help="Internal: fast-forward the primary branch."
+    )
+    add_common_workspace(wave_promote)
+    wave_promote.add_argument("--run-id", required=True)
+    wave_promote.add_argument("--evidence", required=True, type=Path)
+
+    wave_cleanup = subparsers.add_parser(
+        "wave-cleanup", help="Internal: remove reachable managed resources."
+    )
+    add_common_workspace(wave_cleanup)
+    wave_cleanup.add_argument("--run-id", required=True)
 
     steering_parser = subparsers.add_parser(
         "steering-resolve", help="Internal: record one steering disposition."
@@ -227,6 +284,7 @@ def emit(value: object, json_output: bool) -> None:
     if json_output:
         print(json.dumps(value, sort_keys=True))
         return
+
     def emit_rows(rows: list[object]) -> None:
         for item in rows:
             if isinstance(item, dict):
@@ -286,7 +344,9 @@ def main(argv: list[str]) -> int:
                 args.codex_home,
             )
             if not args.no_open:
-                open_in_editor(args.editor, Path(str(result["vscode_workspace"])), workspace=True)
+                open_in_editor(
+                    args.editor, Path(str(result["vscode_workspace"])), workspace=True
+                )
         elif args.command == "intake":
             result = route_project_prompt(
                 args.project_path,
@@ -311,30 +371,33 @@ def main(argv: list[str]) -> int:
                 result = verify_command(args.workspace, None, args.run_id)
             else:
                 result = verify_command(args.workspace, args.prompt, args.run_id)
-        elif args.command == "plane-claim":
-            result = claim_execution_plane(
+        elif args.command == "wave-plan":
+            result = plan_waves(args.workspace, args.run_id, args.capacity)
+        elif args.command == "wave-replan":
+            result = replan_waves(args.workspace, args.run_id, args.capacity)
+        elif args.command == "wave-prepare":
+            result = prepare_wave(args.workspace, args.run_id)
+        elif args.command == "wave-dispatch":
+            result = dispatch_wave(args.workspace, args.run_id, args.contract_commit)
+        elif args.command == "task-start":
+            result = start_task(
+                args.workspace, args.run_id, args.task_id, args.assignment_sha256
+            )
+        elif args.command == "task-recover":
+            result = recover_task(
                 args.workspace,
                 args.run_id,
-                recover=args.recover,
-                confirmed_recovery_worktree_sha256=(
-                    args.confirmed_recovery_worktree_sha256
-                ),
+                args.task_id,
+                confirmed_stopped=args.confirmed_stopped,
             )
-        elif args.command == "plane-authorize":
-            result = authorize_execution_plane(
-                args.workspace,
-                args.run_id,
-            )
-        elif args.command == "plane-replan":
-            result = rebind_planning_execution_plane(
-                args.workspace,
-                args.run_id,
-            )
-        elif args.command == "plane-checkpoint":
-            result = checkpoint_execution_plane(
-                args.workspace,
-                args.run_id,
-            )
+        elif args.command == "task-finish":
+            result = accept_task_result(args.workspace, args.run_id, args.task_id)
+        elif args.command == "wave-integrate":
+            result = integrate_wave(args.workspace, args.run_id)
+        elif args.command == "wave-promote":
+            result = promote_wave(args.workspace, args.run_id, args.evidence)
+        elif args.command == "wave-cleanup":
+            result = cleanup_wave(args.workspace, args.run_id)
         elif args.command == "steering-resolve":
             workspace = verify_workspace(args.workspace)
             runs_root = Path(str(workspace["runs_root"]))
@@ -378,11 +441,7 @@ def main(argv: list[str]) -> int:
             if key not in {"project_id", "scope_id"}
         }
     if args.command == "intake" and args.json:
-        result = {
-            key: value
-            for key, value in result.items()
-            if key != "_internal"
-        }
+        result = {key: value for key, value in result.items() if key != "_internal"}
     emit(result, args.json or getattr(args, "internal_json", False))
     return 0
 

@@ -107,7 +107,8 @@ def _capture(
     )
 
     assert lines == [
-        "Running-job lineage: captured 1 immutable allocation baseline(s) after scheduling pause."
+        "Running-job lineage: captured 1 immutable allocation baseline(s) and 0 natural "
+        "completion proof(s) after scheduling pause."
     ]
     return checkpoint, journal
 
@@ -191,6 +192,121 @@ def test_natural_successful_completion_uses_exact_accounting_lineage(
     preservation = journal["preservation_jobs"]
     assert isinstance(preservation, dict)
     assert preservation["verifications"][0]["jobs"]["42"]["status"] == "completed-preserved"
+
+
+def test_natural_completion_during_capture_is_journaled_and_resumable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint: dict[str, object] = {}
+    journal = _journal()
+    preservation = journal["preservation_jobs"]
+    assert isinstance(preservation, dict)
+    preservation.update(
+        {
+            "capture_state": "dispatching",
+            "capture_job_ids": ["42"],
+            "capture_intent_at": "2026-07-12T10:05:00Z",
+        }
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_slurm_job_control_observation",
+        lambda **_kwargs: _observation(state="COMPLETED"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_slurm_preservation_sacct_observation",
+        lambda **_kwargs: {
+            "job_id": "42",
+            "submit_time": "2026-07-12T10:00:00",
+            "start_time": "2026-07-12T10:01:00",
+            "node_list": "worker-1",
+            "restarts": "0",
+            "state": "COMPLETED",
+            "exit_code": "0:0",
+        },
+    )
+
+    lines = migration._capture_controller_bridge_preservation_jobs(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+        checkpoint_writer=lambda: None,
+    )
+
+    assert "1 natural completion proof(s)" in lines[0]
+    assert preservation["capture_state"] == "complete"
+    assert preservation["jobs"] == {}
+    assert preservation["completed_during_capture"]["42"]["accounting"]["state"] == "COMPLETED"
+
+    resumed = migration._capture_controller_bridge_preservation_jobs(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+        checkpoint_writer=lambda: None,
+    )
+    assert (
+        "reused 0 immutable allocation baseline(s) and 1 natural completion proof(s)" in resumed[0]
+    )
+
+    verified = migration._verify_controller_bridge_preservation_jobs(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        proof_stage="source-version-bridge-active",
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+        checkpoint_writer=lambda: None,
+    )
+    assert "verified 1 job(s)" in verified[0]
+    assert preservation["verifications"][0]["jobs"]["42"]["status"] == "completed-during-capture"
+
+
+def test_failed_job_during_capture_remains_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint: dict[str, object] = {}
+    journal = _journal()
+    preservation = journal["preservation_jobs"]
+    assert isinstance(preservation, dict)
+    preservation.update(
+        {
+            "capture_state": "dispatching",
+            "capture_job_ids": ["42"],
+            "capture_intent_at": "2026-07-12T10:05:00Z",
+        }
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_slurm_job_control_observation",
+        lambda **_kwargs: _observation(state="FAILED"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_slurm_preservation_sacct_observation",
+        lambda **_kwargs: {
+            "job_id": "42",
+            "submit_time": "2026-07-12T10:00:00",
+            "start_time": "2026-07-12T10:01:00",
+            "node_list": "worker-1",
+            "restarts": "0",
+            "state": "FAILED",
+            "exit_code": "1:0",
+        },
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="did not prove an exact natural COMPLETED/0:0 accounting result",
+    ):
+        migration._capture_controller_bridge_preservation_jobs(  # noqa: SLF001
+            checkpoint=checkpoint,
+            journal=journal,
+            kube_context="context",
+            command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+            checkpoint_writer=lambda: None,
+        )
 
 
 def test_applied_operator_requeue_is_not_misreported_as_upgrade_disruption(

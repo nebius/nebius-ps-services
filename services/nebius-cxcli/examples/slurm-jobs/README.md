@@ -207,12 +207,13 @@ a timestamped proof stream from Slurm's live queue:
 ./submit-job-test.sh --watch-jobs
 ```
 
-The watcher matches `sop-*-job-test*` job names by default, polls `squeue`, and
-captures each visible job's exact JobID, submit time, start time, allocation,
-and `Restarts` value through `scontrol` before the upgrade. Every later sample
-must keep that lineage unchanged. Brief controller-RPC visibility gaps are
-reported and retried without discarding the last baseline. Scope the proof to
-known IDs when needed:
+The watcher matches `sop-*-job-test*` job names by default and polls `squeue`.
+An unallocated pending job is tracked by exact JobID, submit time, and
+`Restarts` without requiring a start time or node allocation. As soon as the job
+starts, the watcher captures its start time and allocation through `scontrol`;
+every later sample must keep that running lineage unchanged. Brief
+controller-RPC visibility gaps are reported and retried without discarding the
+last baseline. Scope the proof to known IDs when needed:
 
 ```bash
 ./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346

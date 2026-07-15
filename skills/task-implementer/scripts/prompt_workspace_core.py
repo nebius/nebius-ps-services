@@ -305,7 +305,9 @@ def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
     return root, source_root, scope
 
 
-def workspace_identity(root: Path, source_root: Path, scope: str) -> tuple[str, str, str]:
+def workspace_identity(
+    root: Path, source_root: Path, scope: str
+) -> tuple[str, str, str]:
     root_hash = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
     project_id = f"{safe_segment(root.name, fallback='project')}-{root_hash}"
     scope_value = root.name if scope == "." else scope
@@ -415,7 +417,10 @@ def init_workspace(
             "task-implementer state root must not be a symlink",
         )
     state_root = requested_state_root.resolve()
-    if is_relative_to(state_root, root) or enclosing_git_storage(state_root) is not None:
+    if (
+        is_relative_to(state_root, root)
+        or enclosing_git_storage(state_root) is not None
+    ):
         raise PromptWorkspaceError(
             "WORKSPACE_PATH_INVALID",
             "task-implementer state must be outside Git worktrees and metadata",
@@ -556,15 +561,20 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
             "WORKSPACE_MISMATCH", "workspace source root is not canonical"
         )
     scope = required_string(manifest, "scope", "workspace manifest")
-    expected_scope = source_root.relative_to(root).as_posix() if source_root != root else "."
-    expected_source = root if expected_scope == "." else (root / expected_scope).resolve()
+    expected_scope = (
+        source_root.relative_to(root).as_posix() if source_root != root else "."
+    )
+    expected_source = (
+        root if expected_scope == "." else (root / expected_scope).resolve()
+    )
     if (
         scope != expected_scope
         or source_root != expected_source
         or not source_root.is_dir()
     ):
         raise PromptWorkspaceError(
-            "WORKSPACE_MISMATCH", "workspace source scope no longer matches the Git root"
+            "WORKSPACE_MISMATCH",
+            "workspace source scope no longer matches the Git root",
         )
 
     project_id, scope_id, scope_slug = workspace_identity(root, source_root, scope)
@@ -651,11 +661,31 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
     require_mode(vscode_path, 0o600, "VS Code workspace")
 
     vscode = load_json_object(vscode_path, "VS Code workspace")
+    try:
+        task = vscode["tasks"]["tasks"][0]
+        helper_path = Path(task["args"][0])
+        python_executable = Path(task["command"])
+    except (KeyError, IndexError, TypeError) as exc:
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "VS Code workspace task is invalid"
+        ) from exc
+    if (
+        not helper_path.is_absolute()
+        or helper_path.is_symlink()
+        or not helper_path.is_file()
+        or helper_path.name != "prompt_workspace.py"
+        or not python_executable.is_absolute()
+        or python_executable.is_symlink()
+        or not python_executable.is_file()
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "VS Code workspace command is unsafe"
+        )
     expected_vscode = workspace_document(
         path,
         source_root,
-        Path(__file__).resolve().with_name("prompt_workspace.py"),
-        Path(sys.executable).resolve(),
+        helper_path,
+        python_executable,
     )
     if vscode != expected_vscode:
         raise PromptWorkspaceError(
@@ -681,7 +711,8 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
     for line in lines[1:closing]:
         if not line or line.lstrip().startswith("#") or ":" not in line:
             raise PromptWorkspaceError(
-                "PROMPT_INPUT_INVALID", "prompt frontmatter must use simple key: value lines"
+                "PROMPT_INPUT_INVALID",
+                "prompt frontmatter must use simple key: value lines",
             )
         key, raw_value = line.split(":", 1)
         key = key.strip()
@@ -699,11 +730,13 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
                 decoded = json.loads(value)
             except json.JSONDecodeError as exc:
                 raise PromptWorkspaceError(
-                    "PROMPT_INPUT_INVALID", f"prompt frontmatter value is invalid: {key}"
+                    "PROMPT_INPUT_INVALID",
+                    f"prompt frontmatter value is invalid: {key}",
                 ) from exc
             if not isinstance(decoded, str):
                 raise PromptWorkspaceError(
-                    "PROMPT_INPUT_INVALID", f"prompt frontmatter value must be text: {key}"
+                    "PROMPT_INPUT_INVALID",
+                    f"prompt frontmatter value must be text: {key}",
                 )
             value = decoded
         if not value:
@@ -758,7 +791,9 @@ def meaningful_section(value: str) -> str:
     return without_markers.strip()
 
 
-def read_prompt(path: Path, prompt_root: Path, *, require_content: bool) -> PromptDocument:
+def read_prompt(
+    path: Path, prompt_root: Path, *, require_content: bool
+) -> PromptDocument:
     requested = path.expanduser()
     if requested.is_symlink():
         raise PromptWorkspaceError(
@@ -767,7 +802,9 @@ def read_prompt(path: Path, prompt_root: Path, *, require_content: bool) -> Prom
     try:
         canonical = requested.resolve(strict=True)
     except FileNotFoundError as exc:
-        raise PromptWorkspaceError("PROMPT_PATH_INVALID", "prompt file is missing") from exc
+        raise PromptWorkspaceError(
+            "PROMPT_PATH_INVALID", "prompt file is missing"
+        ) from exc
     if canonical.parent != prompt_root.resolve() or canonical.suffix.lower() != ".md":
         raise PromptWorkspaceError(
             "PROMPT_PATH_INVALID", "prompt must be a direct Markdown child of prompts/"
@@ -826,7 +863,8 @@ def read_prompt(path: Path, prompt_root: Path, *, require_content: bool) -> Prom
         for heading in REQUIRED_SECTIONS:
             if not meaningful_section(sections[heading]):
                 raise PromptWorkspaceError(
-                    "PROMPT_INPUT_INVALID", f"required prompt section is empty: {heading}"
+                    "PROMPT_INPUT_INVALID",
+                    f"required prompt section is empty: {heading}",
                 )
     return PromptDocument(
         path=canonical,

@@ -18,12 +18,7 @@ from prompt_workspace_core import (
     resolve_prompt_reference,
     verify_workspace,
 )
-from prompt_workspace_execution import (
-    load_execution_planes,
-    session_fingerprint,
-    validate_completed_plane_history,
-    validate_execution_index,
-)
+from prompt_workspace_execution import load_coordinator_state
 from prompt_workspace_runs import (
     _snapshot_prompt_unlocked,
     load_prompt_activity,
@@ -46,9 +41,7 @@ def _existing_route_result(
 ) -> dict[str, object]:
     revision_id = str(verified["revision"])
     revisions = manifest_revisions(manifest)
-    revision = next(
-        item for item in revisions if item.get("revision") == revision_id
-    )
+    revision = next(item for item in revisions if item.get("revision") == revision_id)
     return {
         "run_id": run_dir.name,
         "revision": revision_id,
@@ -66,9 +59,7 @@ def _latest_route_result(
 ) -> dict[str, object]:
     revision_id = str(verified["latest_revision"])
     revisions = manifest_revisions(manifest)
-    revision = next(
-        item for item in revisions if item.get("revision") == revision_id
-    )
+    revision = next(item for item in revisions if item.get("revision") == revision_id)
     return {
         "run_id": run_dir.name,
         "revision": revision_id,
@@ -95,29 +86,23 @@ def _record_steering(
 
 
 def _steering_action(
-    planes: list[dict[str, object]],
+    coordinator: dict[str, object] | None,
+    run_dir: Path,
 ) -> tuple[str, str, str | None]:
-    active = [
-        plane for plane in planes if plane["phase"] in {"planning", "implementation"}
-    ]
-    if not active:
+    if coordinator is None:
         return "reconcile", "reconcile_pending", None
-    if len(active) != 1:
-        raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "run has multiple active execution planes"
+    active_wave = coordinator.get("active_wave")
+    if isinstance(active_wave, str):
+        wave = load_json_object(
+            run_dir / "orchestration" / "waves" / f"{active_wave}.json",
+            "active wave",
         )
-    plane = active[0]
-    if plane["phase"] == "planning":
-        try:
-            same_owner = plane["owner_session_sha256"] == session_fingerprint()
-        except PromptWorkspaceError:
-            same_owner = False
-        if same_owner:
-            return "reconcile_planning", "reconcile_pending", None
+        if wave.get("status") == "planned":
+            return "reconcile", "reconcile_pending", None
     return (
-        "steering_queued",
+        "steering_queued_after_wave",
         "steering_pending",
-        "STEERING_QUEUED_AFTER_TASK",
+        "STEERING_QUEUED_AFTER_WAVE",
     )
 
 
@@ -159,8 +144,8 @@ def route_project_prompt(
         )
         load_prompt_activity(runs_root.parent)
         all_runs = load_run_manifests(runs_root)
-        execution_planes = {
-            run_dir.name: load_execution_planes(run_dir) for run_dir, _ in all_runs
+        coordinator_states = {
+            run_dir.name: load_coordinator_state(run_dir) for run_dir, _ in all_runs
         }
         verified_runs = {
             run_dir.name: verify_run(workspace, run_dir.name, None)
@@ -169,13 +154,12 @@ def route_project_prompt(
         active = [
             (run_dir, manifest)
             for run_dir, manifest in all_runs
-            if str(verified_runs[run_dir.name]["status"])
-            not in TERMINAL_RUN_STATUSES
+            if str(verified_runs[run_dir.name]["status"]) not in TERMINAL_RUN_STATUSES
             or bool(verified_runs[run_dir.name]["steering_pending"])
             or bool(verified_runs[run_dir.name]["reconciliation_pending"])
-            or any(
-                plane["phase"] in {"planning", "implementation"}
-                for plane in execution_planes[run_dir.name]
+            or (
+                coordinator_states[run_dir.name] is not None
+                and coordinator_states[run_dir.name]["status"] == "running"
             )
         ]
         matching = [
@@ -211,9 +195,7 @@ def route_project_prompt(
             if status in TERMINAL_RUN_STATUSES and bool(
                 verified["reconciliation_pending"]
             ):
-                internal = _latest_route_result(
-                    active_dir, active_manifest, verified
-                )
+                internal = _latest_route_result(active_dir, active_manifest, verified)
                 _record_steering(active_dir, internal, invoked_at)
                 action = "reconcile"
                 status = "reconcile_pending"
@@ -264,7 +246,7 @@ def route_project_prompt(
                     action = "continue"
                 if bool(verified["steering_pending"]):
                     action, status, outcome = _steering_action(
-                        execution_planes[active_dir.name]
+                        coordinator_states[active_dir.name], active_dir
                     )
             elif document.sha256 == latest_sha256:
                 if bool(verified["reconciliation_pending"]):
@@ -317,17 +299,9 @@ def route_project_prompt(
                         raise PromptWorkspaceError(
                             "RUN_STATE_INVALID", "completed run handoff is missing"
                         )
-                    if execution_planes[latest_dir.name]:
-                        validate_execution_index(
-                            execution_planes[latest_dir.name], completed_handoff
-                        )
-                    for plane in execution_planes[latest_dir.name]:
-                        if plane["phase"] == "stopped":
-                            validate_completed_plane_history(
-                                workspace,
-                                plane,
-                                completed_handoff,
-                            )
+                    # Completed v1 history remains readable. V2 state is
+                    # validated when loaded; there is no v1 execution path.
+                    load_coordinator_state(latest_dir)
                 if (
                     str(verified["status"]) == "done"
                     and document.sha256 == latest_sha256

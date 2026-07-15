@@ -300,6 +300,20 @@ for process in "$proc_root"/[0-9]*; do
     slurmctld:*|*:slurmctld|*:slurmctld\\ \\(deleted\\)) ;;
     *) continue ;;
   esac
+  scriptd_child=0
+  if test "$comm:$exe_base" = "slurmscriptd:slurmctld"; then
+    if ! cmdline=$(tr '\\000' ' ' <"$process/cmdline" 2>/dev/null); then
+      if ! test -d "$process"; then
+        continue
+      fi
+      unreadable_process_count=$((unreadable_process_count + 1))
+      continue
+    fi
+    test -d "$process" || continue
+    if test "$cmdline" = "slurmctld: slurmscriptd "; then
+      scriptd_child=1
+    fi
+  fi
   if ! cgroup=$(cat "$process/cgroup" 2>/dev/null); then
     if ! test -d "$process"; then
       continue
@@ -310,6 +324,26 @@ for process in "$proc_root"/[0-9]*; do
     continue
   fi
   test -d "$process" || continue
+  if test "$scriptd_child" -eq 1; then
+    parent_pid=""
+    if status=$(cat "$process/status" 2>/dev/null); then
+      while read -r status_key status_value ignored_status_fields; do
+        case "$status_key" in
+          PPid:) parent_pid=$status_value ;;
+        esac
+      done <<CXCLI_STATUS_EOF
+$status
+CXCLI_STATUS_EOF
+    fi
+    parent_process="$proc_root/$parent_pid"
+    if test -n "$parent_pid" && test -d "$parent_process"; then
+      parent_comm=$(cat "$parent_process/comm" 2>/dev/null || true)
+      parent_cgroup=$(cat "$parent_process/cgroup" 2>/dev/null || true)
+      if test "$parent_comm" = "slurmctld" && test "$parent_cgroup" = "$cgroup"; then
+        continue
+      fi
+    fi
+  fi
   slurmctld_count=$((slurmctld_count + 1))
   match_count=0
   matched_id=""
@@ -402,7 +436,6 @@ def controller_runtime_census_pod(
             "restartPolicy": "Never",
             "activeDeadlineSeconds": 300,
             "tolerations": [{"operator": "Exists"}],
-            "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [
                 {
                     "name": "inspector",
@@ -410,11 +443,15 @@ def controller_runtime_census_pod(
                     "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-ec", _controller_runtime_census_script(target)],
                     "securityContext": {
-                        "allowPrivilegeEscalation": False,
+                        # Host PID visibility alone cannot read every stable
+                        # userspace /proc entry from the container user
+                        # namespace. The dedicated, network-denied inspector
+                        # namespace is the narrow privilege boundary for this
+                        # fail-closed node-level proof.
+                        "privileged": True,
                         "readOnlyRootFilesystem": True,
                         "runAsNonRoot": False,
                         "runAsUser": 0,
-                        "capabilities": {"drop": ["ALL"]},
                     },
                     "resources": {
                         "requests": {"cpu": "5m", "memory": "16Mi"},
@@ -557,7 +594,22 @@ for process in "$proc_root"/[0-9]*; do
       *" - "*) ;;
       *) unreadable_process_count=$((unreadable_process_count + 1)); continue ;;
     esac
-    mount_options=$(printf '%s\n' "$mount_line" | awk '{{print $6}}')
+    # mountinfo field 6 is the per-mount option set.  Parse it in the shell:
+    # spawning one awk process for every mount of every host PID makes the
+    # fail-closed census take minutes on an otherwise small controller node.
+    mount_options=$mount_line
+    mountinfo_fields_valid=1
+    for ignored_mountinfo_field in 1 2 3 4 5; do
+      case "$mount_options" in
+        *" "*) mount_options=${{mount_options#* }} ;;
+        *) mountinfo_fields_valid=0; break ;;
+      esac
+    done
+    if test "$mountinfo_fields_valid" -ne 1; then
+      unreadable_process_count=$((unreadable_process_count + 1))
+      continue
+    fi
+    mount_options=${{mount_options%% *}}
     case ",$mount_options," in
       *,rw,*) ;;
       *) continue ;;
@@ -589,7 +641,7 @@ def controller_runtime_fence_pod(
     image: str,
     target: ControllerFenceTarget,
 ) -> dict[str, Any]:
-    """Build a short-lived host-PID inspector without host filesystem mounts."""
+    """Build a short-lived privileged host-PID inspector without host mounts."""
 
     campaign = _sha256(campaign_fingerprint, field="controller fence campaign_fingerprint")
     epoch = _safe_label(authority_epoch, field="controller fence authority_epoch")
@@ -598,7 +650,12 @@ def controller_runtime_fence_pod(
     marker_digest = controller_fence_marker_sha256(target.state_markers)
     suffix = hashlib.sha256(f"{target.node_uid}\0{epoch}".encode()).hexdigest()[:12]
     name = f"cxcli-controller-fence-{suffix}"
-    script = _controller_runtime_fence_script(target)
+    script = (
+        _controller_runtime_fence_script(target)
+        + "\ntouch /dev/shm/cxcli-fence-verified\n"
+        + "trap 'exit 0' TERM INT\n"
+        + "sleep 600"
+    )
     labels = {
         "app.kubernetes.io/managed-by": "nebius-cxcli",
         "nebius.ai/cxcli-controller-bridge": "fence",
@@ -624,19 +681,27 @@ def controller_runtime_fence_pod(
             "automountServiceAccountToken": False,
             "restartPolicy": "Never",
             "tolerations": [{"operator": "Exists"}],
-            "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
             "containers": [
                 {
                     "name": "inspector",
                     "image": image,
                     "imagePullPolicy": "IfNotPresent",
                     "command": ["/bin/sh", "-ec", script],
+                    "readinessProbe": {
+                        "exec": {"command": ["test", "-f", "/dev/shm/cxcli-fence-verified"]},
+                        "periodSeconds": 1,
+                        "failureThreshold": 300,
+                    },
                     "securityContext": {
-                        "allowPrivilegeEscalation": False,
+                        # Host PID visibility alone cannot read every stable
+                        # userspace /proc entry from the container user
+                        # namespace.  The dedicated, network-denied inspector
+                        # namespace is the narrow privilege boundary for this
+                        # fail-closed node-level proof.
+                        "privileged": True,
                         "readOnlyRootFilesystem": True,
                         "runAsNonRoot": False,
                         "runAsUser": 0,
-                        "capabilities": {"drop": ["ALL"]},
                     },
                     "resources": {
                         "requests": {"cpu": "5m", "memory": "16Mi"},
@@ -762,11 +827,15 @@ def controller_authority_lease(
     *,
     namespace: str,
     campaign_fingerprint: str,
+    cluster_id: str,
     authority_epoch: str,
     owner: str,
 ) -> dict[str, Any]:
     namespace = _safe_label(namespace, field="controller authority namespace")
     campaign = _sha256(campaign_fingerprint, field="controller authority campaign_fingerprint")
+    cluster = _required_text(cluster_id, field="controller authority cluster_id")
+    if re.search(r"[\r\n]", cluster):
+        raise ValueError("controller authority cluster_id must be one line.")
     epoch = _safe_label(authority_epoch, field="controller authority epoch")
     owner = _safe_label(owner, field="controller authority owner")
     return {
@@ -782,6 +851,7 @@ def controller_authority_lease(
             },
             "annotations": {
                 "nebius.ai/cxcli-campaign-fingerprint": campaign,
+                "nebius.ai/cxcli-cluster-id": cluster,
                 "nebius.ai/cxcli-authority-epoch": epoch,
             },
         },
@@ -797,12 +867,14 @@ def validate_controller_authority_lease(
     *,
     namespace: str,
     campaign_fingerprint: str,
+    cluster_id: str,
     authority_epoch: str,
     owner: str,
 ) -> dict[str, str]:
     expected = controller_authority_lease(
         namespace=namespace,
         campaign_fingerprint=campaign_fingerprint,
+        cluster_id=cluster_id,
         authority_epoch=authority_epoch,
         owner=owner,
     )

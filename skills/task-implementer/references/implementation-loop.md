@@ -1,378 +1,214 @@
-# Implementation Loop
+# Dependency-Wave Implementation Loop
 
-Use this reference for queue construction, automatic reconciliation, per-task
-gates, interruption recovery, and fresh-session handoff. Use
-`prompt-workspace.md` for private storage, validation, snapshot, activity, and
-routing mechanics. Keep this workflow smaller than Agentic SDLC.
+Read this reference before task decomposition, scheduling, worker dispatch,
+integration, promotion, cleanup, or recovery.
+The dependency wave is the logical unit of parallelism and atomic promotion.
 
-## Source Order
+## Task Contract
 
-1. The exact immutable prompt revision bound in the private handoff, including
-   constraints, non-goals, acceptance criteria, verification, references, and
-   steering. Never use the editable prompt as execution truth after
-   snapshotting.
-2. Current repository instructions such as `AGENTS.md`.
-3. Validated managed regions in project `docs/requirements.md` and
-   `docs/design.md`, followed by current code, tests, other docs, changelog,
-   generated artifacts, Git state, and focused local command output.
-4. Related skills. Use `brainstorm` for source-ranked context and assumption
-   checks, `design` for architecture or contract choices, `code-review` as the
-   implementation gate, and `$commit` as the local checkpoint gate.
-5. Current official vendor documentation for version-sensitive behavior.
+Inspect the repository before locking IDs. Normalize the prompt into stable
+`TI-REQ-nnn` requirements and stable `task-1..task-n` records. Each pending
+task must contain:
 
-If repository evidence changes the prompt's proposed ordering, follow the
-evidence and record the reason. Do not silently broaden the requested outcome.
+- source revision and requirement/design mapping;
+- priority and dependencies;
+- goal, rationale, plan, implementation steps, and rollback/stop conditions;
+- write claims using `exact: repo/path` or `prefix: repo/directory`;
+- conflict domains using `class:stable-key`;
+- focused validation, end-to-end validation, and done criteria.
 
-## First Invocation And Queue Construction
+Combine overlapping work before IDs lock when one worker can produce one
+coherent result. Otherwise add an explicit dependency and serialize it. Never
+renumber locked IDs or rewrite completed evidence.
 
-The first accepted `run <prompt>` invocation normalizes requirements, performs
-queue construction,
-claims `task-1` for planning, authorizes its locked plan, and implements that
-task; it does not stop for a separate user approval command.
+## Conflict Analysis
 
-Build a dependency-first queue in the handoff:
+Two tasks cannot share a wave when they:
 
-- `task-1`: first prerequisite or highest-priority independent deliverable.
-- `task-2`: next deliverable whose dependencies can be satisfied.
-- `task-n`: final integration or cleanup only when it is a real work item.
+- write the same path or overlapping directory prefix;
+- modify the same core interface or API;
+- change the same database schema or migration chain;
+- touch the same dependency manifest or lockfile;
+- depend on a new shared abstraction;
+- modify the same Kubernetes or Terraform resource identity;
+- require the same exclusive test resource;
+- perform external mutations; or
+- make incompatible architecture assumptions.
 
-Each task has one coherent observable result. It may include source, tests,
-docs, changelog, config, and validation when they belong to the same behavior.
-For serial multi-layer applications, prefer vertical tasks over horizontal
-layers. Use a foundation task only when it unblocks later slices, such as a
-schema contract, authentication, migration, shared test harness, or safety
-preflight.
+Unknown claims or domains force a singleton wave. Live database, Kubernetes,
+Terraform, migration execution, and publication actions are singleton even
+when their resource keys differ, and they retain their own explicit authority
+requirements.
 
-Avoid ceremony-only tasks such as "inspect code" or "run tests". Those are
-gates inside a task. Do not split merely because multiple files are involved.
-One prompt may produce many tasks; never create separate task files.
+## Deterministic Scheduling
 
-Every queued task records:
+Use stable queue order and earliest-fit placement:
 
-- stable internal task ID and status
-- source revision and relevant prompt headings
-- stable `TI-REQ-nnn` mappings; every active requirement maps to a task or an
-  explicit open question
-- priority, dependencies, goal, rationale, and done criteria
-- likely files and vertical slice or layers covered
-- brainstorm/context and design needs
-- a `TI-DES-nnn` record when that task becomes active
-- implementation plan outline and rollback notes
-- focused and end-to-end validation targets
+1. Validate all dependency references and reject self-dependencies or cycles.
+2. A task may enter only a wave strictly after every dependency.
+3. Starting at the earliest eligible wave, place it in the first wave whose
+   claims and domains are pairwise disjoint.
+4. If ownership is incomplete, place it alone.
+5. Record logical waves before considering runtime worker capacity.
+6. Split a wide logical wave into stable capacity-sized dispatch batches. Batch
+   boundaries do not become dependencies and do not change the wave ID.
 
-After writing and verifying the queue, claim exactly `task-1` in the private
-execution plane. Planning and implementation remain separate enforced phases.
+For the standard fixture, tasks 1-5 form wave 1, tasks 6-7 form wave 2, then
+tasks 8, 9, and 10 form singleton waves.
 
-## Incremental Requirements And Design
+## Preparing A Wave
 
-Keep the committed artifacts lightweight and deterministic:
+Require a clean named project branch and exact `HEAD`. Preflight the private
+root and Git common directory. Reject claims crossing a submodule/gitlink with
+`UNSUPPORTED_SUBMODULE_SCOPE`; do not initialize submodules. Reject claims
+crossing a tracked symlink with `UNSUPPORTED_SYMLINK_SCOPE` rather than treating
+lexical ownership as filesystem containment.
 
-- Normalize the complete desired-state prompt and each accepted revision delta
-  into requirements before creating or reconciling tasks. The helper validates
-  structured IDs and mappings; the agent owns semantic classification.
-- Allocate IDs from the maximum committed Task Implementer-managed ID. Never reuse
-  or renumber IDs, and never ask the user to supply them.
-- Update compatible requirements in place, append new IDs, and mark removals
-  `superseded`. Preserve a short semantic change log without prompt bodies,
-  paths, internal revisions, digests, secrets, or raw logs.
-- Design just in time for the selected task. Every task gets a compact
-  `TI-DES-nnn` record; invoke the full `design` skill only for non-trivial
-  choices. An implemented design is historical evidence, so later reversals
-  append corrective records.
-- Keep proposed requirements/design text and the pre-authorization user-owned
-  envelope digests in the locked task plan. Do not write repository documents
-  before `plane-authorize`.
-- After authorization, create missing documents from
-  `assets/requirements-managed-region.md` and
-  `assets/design-managed-region.md`, append to generic documents, or replace
-  only an existing managed body. Run private `spec-inspect` before commit.
-- Commit specification changes with the affected task. When only committed
-  specification truth changes, create a real docs-only task and checkpoint.
+Journal intent before each Git mutation, execute argv-based Git without a
+shell, then record return status and observed `HEAD`. Create a unique sanitized
+integration branch and full-repository worktree from the exact project base,
+then lock it. Never include prompt text or secrets in branch names.
 
-## Execution Plane State Machine
+The coordinator preallocates managed requirement/design IDs and records. Shared
+specifications, README/design documentation, and changelog are
+coordinator-owned. If this changes tracked files, create one locked contract
+commit in the integration worktree. Every worker branch starts at that exact
+commit.
 
-Every task owns one private `execution/task-n.json` record guarded by the scope
-lock. Store only SHA-256 fingerprints of runtime-provided `CODEX_THREAD_ID`,
-never the raw identifier. This is a cooperative correlation guard, not an
-authenticated security identity.
+## Assigning Workers
+
+Create one locked full-repository worktree and validated unique branch per task.
+The assignment records the worker's absolute scope cwd. For a monorepo scope
+`services/nebius-cxcli`, the cwd is
+`<task-worktree>/services/nebius-cxcli`, not a service-only checkout.
+
+Reserve the main thread for coordination. Prefer native worker agents up to
+available capacity. If native agents are unavailable, start fresh sequential
+`codex exec` workers in the same isolated worktrees. Never let the coordinator
+implement worker tasks. After one worker fails, stop dispatching new batch
+members but allow already-active workers to finish and report.
+
+Each worker must:
+
+1. Read its immutable assignment and verify its digest.
+2. Verify absolute cwd, real worktree root, branch, exact base SHA, clean state,
+   scope, claims, and conflict domains.
+3. Stop with `REPLAN_REQUIRED` before editing if an undeclared path or domain
+   is needed.
+4. Implement exactly one task without touching the primary checkout, shared
+   handoff/spec/docs, other refs/worktrees, Git maintenance, or external state.
+5. Run focused and end-to-end validation.
+6. Invoke `code-review`, fix safe scoped findings, and revalidate.
+7. Invoke `$commit` exactly once. The task branch must contain exactly one
+   direct-child commit from the common contract base.
+8. Write one private result with assignment digest, status, commit, exact paths,
+   validation, end-to-end evidence, and review evidence. Stop.
+
+Task `committed` means ready for integration, not done.
+
+## Verifying And Integrating
+
+The coordinator independently verifies every result:
+
+- assignment/result identities and immutable digests match;
+- worktree and branch identities match the assignment;
+- branch is clean and its `HEAD` is the reported commit;
+- exactly one commit descends directly from the common base;
+- actual changed paths exactly match the result and fit locked claims;
+- validation and review evidence are present.
+
+After all tasks are committed, merge branches into the integration branch in
+stable task-ID order:
 
 ```text
-unclaimed -> planning -> implementation -> stopped
+git merge --no-ff --no-edit <task-branch>
 ```
 
-- `plane-claim` selects the first dependency-ready pending task, requires a
-  clean Git worktree, records `HEAD`, the worktree baseline, bound revision,
-  and session-participant history, marks the task `in_progress`, and locks
-  ownership to the current runtime session. The same session may retry that
-  task idempotently. Another session receives
-  `WORKSPACE_BUSY` unless the Skill explicitly performs verified recovery of
-  the same task.
-- `plane-authorize` is the only transition into `implementation`. It requires
-  complete plan/specification fields, resolved steering, and an unchanged Git
-  status fingerprint, then binds SHA-256 digests of the plan and queue
-  contract. Post-implementation review, commit, changed-file, evidence, and
-  blocker fields are normalized out of that lock so they can be populated
-  after implementation. No product edit is allowed before authorization.
-- `plane-replan` may rebind only the same session's clean planning plane to the
-  latest pending steering revision. It keeps the same task and claim baseline,
-  clears required plan fields, and cannot authorize until reconciliation marks
-  every processed steering event `applied`, `blocked`, or `no_effect`.
-- `plane-checkpoint` verifies the plan/queue digests, exact commit message and
-  changed-path evidence, managed specification IDs/digests/envelopes, task
-  checkpoint, validation, review, current commit descended from claim-time
-  `HEAD`, clean worktree, next task, repeated run command, and explicit stop
-  instruction. It completes at most the claimed task and marks its plane
-  `stopped`.
-- Stopping binds a completed-task/checkpoint digest. A later reconciled prompt
-  may change only pending work; every later claim and checkpoint revalidates
-  every historical completed digest and commit before it advances. Resolve the
-  immediate predecessor from `Run.Last completed task`, never timestamp
-  ordering.
-- The execution index is bijective: every `done` task has exactly one populated
-  checkpoint and one stopped plane. Only the currently active implementation
-  task may temporarily have a checkpoint before its plane stops.
-- A stopped plane prevents every session fingerprint that participated in that
-  task from claiming any other task in the scope. A distinct runtime session
-  must read the handoff and claim again in `planning`.
-- Steering submitted during `implementation` never changes the active plane,
-  handoff binding, plan, or queue. The old revision checkpoints normally; a
-  fresh session reconciles the ordered pending revisions before the next claim.
+Never cherry-pick, rebase, squash, push, or merge directly into the project
+branch. An unexpected conflict aborts the merge, marks the wave blocked, leaves
+the project branch unchanged, and retains all worktrees/branches.
 
-The scope filesystem lock serializes each state transition. Ordered atomic
-writes plus retry validation converge partial transitions. The durable plane
-extends exclusive ownership across the product-edit interval after the lock is
-released.
+After worker merges, the coordinator may update only shared managed specs,
+README/design docs, and changelog evidence. Make a final integration commit
+only for a non-empty shared-file diff. Any product-code correction becomes a
+new isolated task.
 
-## Per-Task Context, Design, And Plan
+## Validation And Promotion
 
-After `plane-claim` and before any product edit:
+Run combined validation and integration `code-review` in the integration
+worktree. Reconcile all queued steering. If steering contradicts the active
+wave, preserve the integration branch and stop before promotion.
 
-1. Read the bound snapshot, complete handoff, and current repository evidence.
-   Gather task-specific context with targeted reads. Use `brainstorm` when the
-   task needs source-ranked context, tradeoff framing, or assumption challenges.
-   Keep it read-only and summarize only recommendation-changing findings.
-2. Route to `design` when the task is non-trivial, changes contracts, crosses
-   ownership boundaries, has missing code, has ambiguous behavior, or has
-   multiple plausible implementations. If needed but unavailable, record a
-   compact local design note marked `design_skill_unavailable`.
-3. Create a short implementation plan in the handoff: exact steps, an allowlist
-   of exact repo-relative files (one per line), vertical slice or layers,
-   docs/changelog impact, focused and
-   end-to-end validation, stop conditions, rollback notes, and review/commit
-   gates.
-4. Populate Goal, Plan, Likely files, Implementation steps, Validation,
-   End-to-end validation, Done criteria, Rollback notes, Stop conditions,
-   Requirement IDs, Design ID, Requirements proposal, Design record, and both
-   document-envelope digests. Include both managed document paths in Likely
-   files. These fields may not be empty or deferred for new tasks.
-5. Invoke `plane-authorize`. If the worktree changed after the planning claim,
-   stop with `WORKTREE_CONFLICT`; do not absorb those edits into the plan by
-   inference.
-6. Implement only after the helper returns phase `implementation`. Render the
-   managed documents first so interruption recovery converges on the same IDs
-   and content.
+Recheck that the primary checkout is clean, on the recorded named branch, at
+the recorded base. Promote atomically:
 
-## One-Task Completion Gate
-
-Every accepted implementation invocation completes exactly one task:
-
-1. Verify project/scope identity, manifest, bound revision and digest, handoff,
-   dependencies, runtime session, and execution-plane ownership.
-2. Claim the dependency-ready task in `planning`.
-3. Complete the Per-Task Context, Design, And Plan gate and authorize its plan.
-4. Render and inspect the authorized managed requirements/design regions, then
-   implement only the active task in phase `implementation`.
-5. Run `spec-inspect`, focused validation, and the task's relevant end-to-end
-   checks.
-6. Inspect the diff and remove unrelated cleanup.
-7. Use `code-review` on the task changes.
-8. Fix safe scoped findings, re-run validation, and refresh review after
-   material fixes.
-9. Use `$commit` exactly once to create the local task checkpoint. The helper
-   rejects multiple post-claim commits.
-10. Update the handoff with context, design, plan, changed files,
-   validation, review, fixes, commit hash/message or blocker, residual risks,
-   managed-region digests, checkpoint, last invocation, and exact next-session
-   command.
-11. Invoke `plane-checkpoint`. It verifies and atomically records task
-    completion, the next task, and the mandatory stop boundary.
-12. Stop this session. The helper rejects a next-task claim from the same
-    runtime session fingerprint with `FRESH_SESSION_REQUIRED`.
-
-If review finds an unresolvable scoped blocker, mark the task `blocked` with
-`REVIEW_BLOCKER`. If `$commit` cannot safely create the checkpoint, use
-`COMMIT_BLOCKER` or `WORKTREE_CONFLICT`.
-
-Because `$commit` stages the complete repository diff from the Git root, do not
-invoke it when unrelated user changes are present and are not intentionally
-part of the active task or prior recorded checkpoints. Stop rather than create
-a mixed commit.
-
-## Automatic Reconciliation
-
-When an unfinished prompt's bytes differ from its bound immutable revision,
-the same `run <prompt>` invocation performs an internal reconciliation before
-selecting a task. This is not a separate public action.
-
-1. Acquire the scope lock and inspect the authoritative active execution plane.
-2. Append the edited prompt exactly once when its bytes differ from the latest
-   revision. Record a pending steering event. Reuse an existing latest revision
-   on unchanged retry; allow later different revisions while earlier events are
-   pending.
-3. If the same session owns a clean planning plane, rebind only that same task
-   and clear its unfinished plan. If another session owns planning or any plane
-   is implementing, return `STEERING_QUEUED_AFTER_TASK` without changing its
-   execution contract.
-4. At a safe boundary, process pending revisions in order. Compare the complete
-   desired state and each delta, classifying requirements, constraints,
-   acceptance criteria, design constraints, priorities, removals,
-   clarifications, and corrections.
-5. Reconcile stable requirements before tasks. Preserve completed tasks and
-   designs exactly. Preserve an unchanged pending task; otherwise mark it
-   `superseded` and append replacements with the next unused IDs.
-6. Clear corrections to completed work append corrective requirements/tasks.
-   Ambiguous, destructive, or irreversible reversals become `blocked` and
-   return `HUMAN_INPUT_REQUIRED` before repository edits.
-7. Bind the latest revision and record each processed disposition. A
-   formatting-only revision becomes `no_effect` and changes no requirement,
-   design, task, repository file, or commit.
-8. When reconciliation changes a stopped checkpoint's recommended next task,
-   preserve the checkpoint and append exactly one override in this form:
-
-   ```text
-   <predecessor> | <old-next> -> <new-next> | <revision> | <bound-sha256>
-   ```
-
-9. Select the dependency-ready task and complete the one-task gate.
-
-Never overwrite a snapshot, discard a steering event, renumber an ID, or
-change completed task/checkpoint text.
-
-## Completed Prompts
-
-- An unchanged completed prompt records current invocation activity and returns
-  `ALREADY_COMPLETE` without product edits or a new internal run.
-- An edited completed prompt creates a new internal run linked to the same
-  prompt identity, builds a new queue, implements its first task, and preserves
-  all historical state.
-- Steering accepted while the final task was still implementing remains part
-  of that run. After its old-revision checkpoint stops, a fresh session
-  reconciles the pending delta and appends corrective or new tasks when needed.
-
-No public new-run flag is needed.
-
-## Interruption Recovery
-
-On retry, verify state before writing:
-
-- Snapshot created, no handoff: reuse the same internal run and revision, build
-  the handoff, then claim the first task in planning.
-- Handoff created, no scoped edits: recover or resume the same execution plane.
-- Scoped edits exist, no commit: inspect them against the active task and
-  continue only when ownership and intent are unambiguous.
-- Commit exists, checkpoint missing: verify the commit exists, belongs to the
-  active task, and matches recorded/scoped evidence; reconstruct the checkpoint
-  without creating another commit.
-- Reconciliation revision appended, handoff not rebound: reuse the same
-  revision and finish reconciliation.
-- Steering revision appended before ledger persistence: recover the manifest
-  revision once and create its missing pending disposition.
-- One managed document rendered before the other: validate both preimages,
-  reuse the same stable IDs and locked proposals, and converge without a second
-  managed region or change-log entry.
-- Specification commit exists, checkpoint missing: read the exact managed
-  regions from that commit, verify IDs, mappings, user-owned envelopes, and
-  digests, then reconstruct the checkpoint without another commit.
-
-Recovery never selects another task. A different session must call internal
-`plane-claim --recover --confirmed-recovery-worktree-sha256 <digest>` only
-after explicit confirmation that the prior writer is no longer active and
-after reviewing the exact worktree digest and changed paths against the locked
-file allowlist. Without digest-bound confirmation, stop with
-`HUMAN_INPUT_REQUIRED`.
-Planning recovery requires the original Git baseline to remain unchanged.
-Implementation recovery verifies and preserves the already locked plan and
-records a recovery worktree digest.
-
-Every runtime session fingerprint that participated in a completed task is
-permanently ineligible for every other task in that scope. This remains true
-after recovery or intervening fresh sessions; an A-B-A task-session sequence
-fails with `FRESH_SESSION_REQUIRED`.
-
-Never create duplicate revisions, task IDs, product edits, or commits. If
-concurrent ownership cannot be ruled out, stop with `WORKSPACE_BUSY` or
-`HUMAN_INPUT_REQUIRED`.
-
-## Handoff Discipline
-
-The private handoff is the durable execution truth between fresh sessions. The
-run manifest owns immutable revision metadata only; do not place mutable status
-there.
-
-Read the complete handoff before implementation. Keep it concise enough for a
-fresh agent. Record summaries, not transcripts:
-
-- internal identity, source path, manifest, bound revision and digest
-- `Last invoked at`, revision history, and reconciliation summary
-- steering dispositions, requirement/design mappings, open requirements, and
-  revision-bound next-task overrides
-- queue, active task, completed checkpoints, and overall status
-- execution-plane task, phase, plan/queue digests, baseline, participant
-  history, recovery count, and stop boundary
-- changed files and vertical slice or layers covered
-- focused and end-to-end validation results
-- code-review decision and scoped fixes
-- commit hash/message or exact checkpoint blocker
-- committed managed-region digests and `spec-inspect` result
-- assumptions, risks, failure classification, and minimum missing input
-- next task and exact repeated `run <prompt>` command
-
-Do not store raw logs, prompt bodies, copied docs, credentials, private
-endpoints, customer data, or unrelated exploration output.
-
-## Fresh Session Patterns
-
-Interactive:
-
-1. Finish the selected task through validation, review, fixes, and `$commit`.
-2. Save the handoff checkpoint, pass `plane-checkpoint`, and stop.
-3. Start a fresh Codex session from the same project folder.
-4. Invoke `$task-implementer run <same-prompt-path-or-unique-filename>`. The
-   new runtime session claims the next task back in `planning`.
-
-Noninteractive:
-
-1. Claim, plan-authorize, and finish exactly one task in one `codex exec`
-   process.
-2. Save the reviewed and committed checkpoint, pass `plane-checkpoint`, then
-   let the process exit.
-3. Start a new process for the next task with the same project directory and
-   prompt reference. Do not pass an internal ID.
-4. Do not use `codex exec resume` for normal handoff.
-
-Example when the private root needs write access:
-
-```bash
-codex --ask-for-approval never exec \
-  --cd <project-folder> \
-  --sandbox workspace-write \
-  --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer" \
-  'Use $task-implementer run <same-prompt-file>. Implement exactly one task, update the handoff, and stop.'
+```text
+git merge --ff-only <verified-integration-SHA>
 ```
 
-Do not let the helper or VS Code launch this command. Use one implementation
-process at a time.
+Verify the integration branch still identifies that SHA. If Git reports
+failure, re-observe project `HEAD` and classify it as unchanged,
+successfully promoted, or unexpectedly moved. Never reset, rebase, force, or
+repeat blindly.
 
-## Final Alignment
+Only after the project `HEAD` equals the verified integration tip may the
+coordinator mark wave tasks `done` in `handoff.md`. Dependency satisfaction is
+promotion-based, not worker-result-based.
 
-After the last task, align the changed surface:
+## Cleanup
 
-- code and module wiring
-- tests and fixtures
-- CLI/help or API behavior
-- docs, README, design docs, and changelog
-- config, generated artifacts, and CI/workflow surfaces
-- prompt-workspace and handoff contracts affected by implementation
+After verified promotion, prove every temporary branch is reachable from the
+promoted project `HEAD`. For each clean managed worktree:
 
-Use `$align` when available. Otherwise perform the equivalent local checklist,
-record that substitution in the final checkpoint, set status `done`, and stop.
+1. unlock the exact path;
+2. run non-force `git worktree remove <path>`;
+3. run `git branch -d <branch>`.
+
+Remove task resources before the integration resource. Never use `--force`,
+`rm -rf`, broad `git worktree prune`, or `git gc`. Dirty, unreachable, or
+failed resources remain recorded. Cleanup failure does not roll back promotion.
+
+## Resume And Failure Classification
+
+A repeated `run` loads coordinator, wave, assignment, result, journal, and Git
+truth before choosing a transition. It must converge after interruptions such
+as:
+
+- intent journal written but worktree command outcome unknown;
+- worktree created but state update interrupted;
+- worker commit exists but result acceptance interrupted;
+- worker stopped with declared dirty state or one direct-child commit;
+- some ordered merges completed;
+- fast-forward succeeded but private promotion state did not update;
+- one worktree or branch cleaned before interruption.
+
+Idempotent retries re-observe exact refs and worktrees. They never recreate a
+foreign collision, duplicate a commit/merge, overwrite a divergent immutable
+assignment/result, or force cleanup.
+
+For an interrupted running task, require explicit confirmation that the old
+worker stopped before transferring the locked assignment to a fresh session.
+Recovery accepts only the locked base, one direct-child commit, and dirty paths
+inside the assignment claims. A blocked task or undeclared path stays retained
+for operator-directed recovery; do not delete or replace unmerged evidence.
+
+Failure rules:
+
+- worker failure: retain its exact branch/worktree; stop new dispatches;
+- scope expansion: `REPLAN_REQUIRED` before edit/commit;
+- merge conflict: abort integration merge and retain the wave;
+- validation/review failure: retain integration state before promotion;
+- primary branch drift: `PROMOTION_BLOCKED` with no mutation;
+- promotion uncertainty: classify observed `HEAD` before retry;
+- cleanup failure: report retained inventory after successful promotion;
+- missing safe local bootstrap: `ENVIRONMENT_BLOCKER` without copying primary
+  checkout state;
+- unfinished v1 state: `WORKFLOW_UPGRADE_REQUIRED`, no migration shim.
+
+## Final Run Completion
+
+Start the next planned wave from the newly promoted project `HEAD`. After the
+last wave is promoted and safely cleaned, run changed-surface `$align`, verify
+managed specification state, record final evidence, set the coordinator and
+handoff to `done`, and stop. Static validation and observed live/runtime proof
+must be reported separately.

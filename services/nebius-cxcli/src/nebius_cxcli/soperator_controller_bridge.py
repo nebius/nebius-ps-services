@@ -13,13 +13,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-CONTROLLER_BRIDGE_SCHEMA = "nebius-cxcli-soperator-controller-bridge/v1"
+CONTROLLER_BRIDGE_SCHEMA = "nebius-cxcli-soperator-controller-bridge/v2"
 CONTROLLER_BRIDGE_SOURCE_CONFIGURATION_SCHEMA = (
     "nebius-cxcli-controller-bridge-source-configuration/v1"
 )
-CONTROLLER_BRIDGE_MOUNT_CANARY_SCHEMA = (
-    "nebius-cxcli-controller-bridge-mount-canary/v1"
-)
+CONTROLLER_BRIDGE_MOUNT_CANARY_SCHEMA = "nebius-cxcli-controller-bridge-mount-canary/v1"
 CONTROLLER_BRIDGE_PRE_SOURCE_MUTATION_CANARY = "pre-source-mutation"
 CONTROLLER_BRIDGE_PRE_SOURCE_FENCE_CANARY = "pre-source-fence"
 CONTROLLER_BRIDGE_NAMESPACE = "cxcli-soperator-upgrade-bridge"
@@ -35,6 +33,24 @@ CONTROLLER_BRIDGE_CONTROLLER_HOSTS = (
     "cxcli-slurm-controller-bridge-1"
     "(cxcli-slurm-controller-bridge-1.cxcli-slurm-controller-bridge."
     "cxcli-soperator-upgrade-bridge.svc)",
+)
+CONTROLLER_BRIDGE_MOUNT_HELPER_COMMAND = (
+    "/bin/sh",
+    "-ec",
+    (
+        "mount_one() { "
+        'tag="$1"; path="$2"; host_path="/host${path}"; '
+        'mkdir -p "${host_path}"; '
+        'if ! awk -v target="${host_path}" -v source="${tag}" '
+        "'$1 == source && $2 == target && $4 ~ /(^|,)rw(,|$)/ "
+        "{ found=1 } END { exit(found ? 0 : 1) }' /proc/mounts; then "
+        'umount "${host_path}" 2>/dev/null || true; '
+        'mount -t virtiofs -o rw,relatime "${tag}" "${host_path}"; '
+        "fi; }; "
+        'mount_one "$CONTROLLER_SPOOL_TAG" "$CONTROLLER_SPOOL_PATH"; '
+        'mount_one "$JAIL_TAG" "$JAIL_PATH"; '
+        "while :; do sleep 30; done"
+    ),
 )
 
 
@@ -60,15 +76,11 @@ _BRIDGE_AUTHORITY_OWNERS = frozenset(
     {"source-singleton", "bridge-source", "bridge-target", "target-singleton", "none"}
 )
 _CONTROLLER_RUNTIME_FENCE_SCHEMA = "nebius-cxcli-controller-runtime-fence/v1"
-CONTROLLER_BRIDGE_JWT_MATERIAL_CONTRACT_SCHEMA = (
-    "nebius-cxcli-controller-jwt-material-contract/v1"
-)
+CONTROLLER_BRIDGE_JWT_MATERIAL_CONTRACT_SCHEMA = "nebius-cxcli-controller-jwt-material-contract/v1"
 CONTROLLER_BRIDGE_JWT_MATERIAL_PREFLIGHT_SCHEMA = (
     "nebius-cxcli-controller-jwt-material-preflight/v1"
 )
-CONTROLLER_BRIDGE_JWT_MATERIAL_PROOF_SCHEMA = (
-    "nebius-cxcli-controller-jwt-material-proof/v1"
-)
+CONTROLLER_BRIDGE_JWT_MATERIAL_PROOF_SCHEMA = "nebius-cxcli-controller-jwt-material-proof/v1"
 
 
 def _utc_now() -> str:
@@ -202,9 +214,214 @@ class BridgeSourceBinding:
 
 
 @dataclass(frozen=True)
-class BridgeNodeGroupPlan:
+class BridgePlacementDomain:
+    """One immutable scheduling domain used by a bridge controller Pod.
+
+    External campaigns own temporary one-node domains. Managed campaigns bind
+    the pre-existing controller and system groups and may mutate only
+    Kubernetes bridge resources.
+    """
+
     name: str
+    role: str
     template: Mapping[str, Any]
+    ownership: str = "external-temporary"
+    node_group_id: str = ""
+    selector: Mapping[str, str] | None = None
+    live_node_uid: str = ""
+    mutation_policy: str = "provider-create-delete"
+    cleanup_policy: str = "delete-domain"
+    mount_policy: str = "cxcli-mount-daemonset"
+    ready_capacity: int = 1
+
+    def __post_init__(self) -> None:
+        _safe_token(self.name, field="bridge placement-domain name")
+        if self.role not in {"controller", "system", "external-a", "external-b"}:
+            raise ValueError("bridge placement-domain role is invalid.")
+        if self.ownership not in {"managed-existing", "external-temporary"}:
+            raise ValueError("bridge placement-domain ownership is invalid.")
+        expected = {
+            "managed-existing": (
+                "kubernetes-only",
+                "preserve-domain",
+                "reuse-chart-mount-substrate",
+            ),
+            "external-temporary": (
+                "provider-create-delete",
+                "delete-domain",
+                "cxcli-mount-daemonset",
+            ),
+        }[self.ownership]
+        if (
+            self.mutation_policy,
+            self.cleanup_policy,
+            self.mount_policy,
+        ) != expected:
+            raise ValueError(
+                "bridge placement-domain ownership, mutation, cleanup, and mount policies "
+                "must form one canonical adapter contract."
+            )
+        if self.ownership == "managed-existing" and not self.node_group_id:
+            raise ValueError("managed bridge placement domains require a stable node-group ID.")
+        if isinstance(self.ready_capacity, bool) or self.ready_capacity < 1:
+            raise ValueError("bridge placement-domain ready_capacity must be positive.")
+
+    @classmethod
+    def external(
+        cls, *, name: str, role: str, template: Mapping[str, Any]
+    ) -> BridgePlacementDomain:
+        return cls(name=name, role=role, template=template)
+
+    @classmethod
+    def managed(
+        cls,
+        *,
+        name: str,
+        role: str,
+        node_group_id: str,
+        selector: Mapping[str, str],
+        live_node_uid: str,
+        ready_capacity: int,
+        template: Mapping[str, Any] | None = None,
+    ) -> BridgePlacementDomain:
+        return cls(
+            name=name,
+            role=role,
+            template=template or {},
+            ownership="managed-existing",
+            node_group_id=_required_text(
+                node_group_id,
+                field="managed bridge placement-domain node_group_id",
+            ),
+            selector=dict(selector),
+            live_node_uid=_required_text(
+                live_node_uid,
+                field="managed bridge placement-domain live_node_uid",
+            ),
+            mutation_policy="kubernetes-only",
+            cleanup_policy="preserve-domain",
+            mount_policy="reuse-chart-mount-substrate",
+            ready_capacity=ready_capacity,
+        )
+
+
+def managed_bridge_placement_domains_from_live_nodes(
+    *,
+    desired_node_groups: Mapping[str, Any],
+    kubernetes_nodes: Sequence[Mapping[str, Any]],
+) -> tuple[BridgePlacementDomain, BridgePlacementDomain]:
+    """Bind the canonical managed bridge domains without provider mutation.
+
+    This is deliberately strict: an existing managed cluster must first be
+    reconciled to the current production profile. The upgrade path never
+    creates replacement capacity or accepts an autoscaled compatibility shape.
+    """
+
+    domains: list[BridgePlacementDomain] = []
+    group_ids: set[str] = set()
+    node_uids: set[str] = set()
+    for role, expected_capacity in (("controller", 2), ("system", 3)):
+        raw_group = desired_node_groups.get(role)
+        if not isinstance(raw_group, Mapping):
+            raise ValueError(f"managed bridge substrate lacks the {role} node group.")
+        if raw_group.get("node_count") != expected_capacity or "autoscaling" in raw_group:
+            raise ValueError(
+                f"managed bridge {role} must be fixed at {expected_capacity} nodes with "
+                "autoscaling absent; reconcile desired state before upgrading."
+            )
+        filesystem_keys = raw_group.get("sfs_filesystem_keys")
+        if not isinstance(filesystem_keys, Sequence) or isinstance(
+            filesystem_keys, (str, bytes, bytearray)
+        ):
+            filesystem_keys = ()
+        normalized_filesystems = {
+            str(item or "").strip() for item in filesystem_keys if str(item or "").strip()
+        }
+        if raw_group.get("jail") is not True or "controller-spool" not in normalized_filesystems:
+            raise ValueError(
+                f"managed bridge {role} must attach both Jail and controller-spool storage."
+            )
+        desired_labels = raw_group.get("node_labels")
+        if not isinstance(desired_labels, Mapping) or (
+            str(desired_labels.get("nebius.ai/soperator-bridge-domain", "") or "").strip() != role
+        ):
+            raise ValueError(
+                f"managed bridge {role} lacks its canonical Kubernetes placement label."
+            )
+
+        matching_nodes: list[Mapping[str, Any]] = []
+        for node in kubernetes_nodes:
+            metadata = node.get("metadata")
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            labels = metadata.get("labels")
+            labels = labels if isinstance(labels, Mapping) else {}
+            if str(labels.get("nebius.ai/soperator-bridge-domain", "") or "").strip() == role:
+                matching_nodes.append(node)
+        if len(matching_nodes) != expected_capacity:
+            raise ValueError(
+                f"managed bridge {role} requires exactly {expected_capacity} live nodes; "
+                f"discovered {len(matching_nodes)}."
+            )
+
+        live_group_ids: set[str] = set()
+        live_uids: list[str] = []
+        for node in matching_nodes:
+            metadata = node.get("metadata")
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            labels = metadata.get("labels")
+            labels = labels if isinstance(labels, Mapping) else {}
+            group_id = str(labels.get("nebius.com/node-group-id", "") or "").strip()
+            uid = str(metadata.get("uid", "") or "").strip()
+            spec = node.get("spec")
+            spec = spec if isinstance(spec, Mapping) else {}
+            status = node.get("status")
+            status = status if isinstance(status, Mapping) else {}
+            conditions = status.get("conditions")
+            ready = any(
+                isinstance(condition, Mapping)
+                and condition.get("type") == "Ready"
+                and str(condition.get("status", "") or "").lower() == "true"
+                for condition in (
+                    conditions
+                    if isinstance(conditions, Sequence)
+                    and not isinstance(conditions, (str, bytes, bytearray))
+                    else ()
+                )
+            )
+            if not group_id or not uid or spec.get("unschedulable") is True or not ready:
+                raise ValueError(
+                    f"managed bridge {role} contains a node without stable group ID, UID, "
+                    "Ready capacity, or schedulability."
+                )
+            live_group_ids.add(group_id)
+            live_uids.append(uid)
+        if len(live_group_ids) != 1:
+            raise ValueError(f"managed bridge {role} spans multiple node-group scheduling domains.")
+        node_group_id = next(iter(live_group_ids))
+        if node_group_id in group_ids or any(uid in node_uids for uid in live_uids):
+            raise ValueError("managed bridge controller and system domains are not distinct.")
+        group_ids.add(node_group_id)
+        node_uids.update(live_uids)
+        domains.append(
+            BridgePlacementDomain.managed(
+                name=role,
+                role=role,
+                node_group_id=node_group_id,
+                selector={"nebius.ai/soperator-bridge-domain": role},
+                live_node_uid=sorted(live_uids)[0],
+                ready_capacity=expected_capacity,
+                template={
+                    "eligible_node_uids": sorted(live_uids),
+                    "attachment_fingerprint": _journal_payload_fingerprint(
+                        {
+                            "jail": True,
+                            "sfs_filesystem_keys": sorted(normalized_filesystems),
+                        }
+                    ),
+                },
+            )
+        )
+    return domains[0], domains[1]
 
 
 @dataclass(frozen=True)
@@ -220,7 +437,7 @@ class BridgePlan:
     state_save_location: str
     controller_spool_attachment: Mapping[str, Any]
     jail_attachment: Mapping[str, Any]
-    node_groups: tuple[BridgeNodeGroupPlan, BridgeNodeGroupPlan]
+    placement_domains: tuple[BridgePlacementDomain, BridgePlacementDomain]
     namespace: str = CONTROLLER_BRIDGE_NAMESPACE
 
     def __post_init__(self) -> None:
@@ -236,10 +453,21 @@ class BridgePlan:
             raise ValueError("bridge state_save_location must be absolute.")
         _safe_token(self.namespace, field="bridge namespace")
         names = [
-            _safe_token(item.name, field="bridge node-group name") for item in self.node_groups
+            _safe_token(item.name, field="bridge placement-domain name")
+            for item in self.placement_domains
         ]
         if len(set(names)) != 2:
-            raise ValueError("bridge node groups require two distinct names.")
+            raise ValueError("bridge placement domains require two distinct names.")
+        ownerships = {item.ownership for item in self.placement_domains}
+        if len(ownerships) != 1:
+            raise ValueError("bridge placement domains must use one capacity adapter.")
+        if "managed-existing" in ownerships and {item.role for item in self.placement_domains} != {
+            "controller",
+            "system",
+        }:
+            raise ValueError(
+                "managed bridge placement domains must be the controller and system roles."
+            )
         if not self.controller_spool_attachment:
             raise ValueError("bridge controller-spool attachment must be provided.")
         if not self.jail_attachment:
@@ -282,21 +510,29 @@ def new_bridge_journal(
             {
                 "slot": index,
                 "name": item.name,
-                "id": "",
+                "role": item.role,
+                "ownership": item.ownership,
+                "id": item.node_group_id,
+                "selector": dict(item.selector or {}),
+                "live_node_uid": item.live_node_uid,
+                "mutation_policy": item.mutation_policy,
+                "cleanup_policy": item.cleanup_policy,
+                "mount_policy": item.mount_policy,
                 "scheduling_failure_domain": {
                     "topology_key": "nebius.com/node-group-id",
-                    "node_group_id": "",
+                    "node_group_id": item.node_group_id,
                 },
-                "fixed_node_count": 1,
+                "ready_capacity": item.ready_capacity,
                 "kubernetes_version": plan.source_kubernetes_version,
                 "controller_spool_attachment_sha256": _journal_payload_fingerprint(
                     plan.controller_spool_attachment
                 ),
                 "jail_attachment_sha256": _journal_payload_fingerprint(plan.jail_attachment),
-                "created": False,
+                "created": item.ownership == "external-temporary" and False,
+                "bound": item.ownership == "managed-existing",
                 "excluded_from_provider_upgrade": True,
             }
-            for index, item in enumerate(plan.node_groups)
+            for index, item in enumerate(plan.placement_domains)
         ],
         "kubernetes_resources": [],
         "security_contract": {},
@@ -333,6 +569,7 @@ def new_bridge_journal(
         "pre_source_fence_readiness": {},
         "source_fence_intent": {},
         "source_configuration": {},
+        "configuration_recoveries": [],
         "jwt_material_contract": {},
         "cold_reader": {},
         "fencing": {
@@ -428,6 +665,7 @@ def new_bridge_journal(
             "kubernetes_resources_deleted": [],
             "namespace_deleted": False,
             "node_groups_deleted": [],
+            "node_groups_preserved": [],
             "bridge_resources_absent": False,
             "bridge_storage_bindings": {},
             "bridge_storage_verified_at": "",
@@ -514,7 +752,6 @@ def _validate_client_propagation_proof(
         ):
             raise ValueError(f"{field} consumer configuration digest differs.")
         for rpc_field in (
-            "reconfigure_sha256",
             "ping_sha256",
             "show_config_sha256",
         ):
@@ -541,8 +778,40 @@ def _validate_source_configuration_transition(
         or len(names) != 1
     ):
         raise ValueError("Controller bridge source configuration requires one ConfigMap.")
-    _required_text(names[0], field="bridge source configuration ConfigMap name")
-    _required_text(value.get("config_key"), field="bridge source configuration data key")
+    config_map_name = _safe_token(
+        names[0],
+        field="bridge source configuration ConfigMap name",
+    )
+    config_key = _required_text(
+        value.get("config_key"),
+        field="bridge source configuration data key",
+    )
+    source_reference = _required_mapping(
+        value.get("source_reference"),
+        field="bridge source configuration source_reference",
+    )
+    _safe_token(
+        source_reference.get("jailed_config_name"),
+        field="bridge source configuration JailedConfig name",
+    )
+    for field in (
+        "jailed_config_uid",
+        "jailed_config_resource_version",
+        "config_map_uid",
+    ):
+        _required_text(
+            source_reference.get(field),
+            field=f"bridge source configuration source_reference {field}",
+        )
+    if (
+        source_reference.get("config_map_name") != config_map_name
+        or source_reference.get("config_key") != config_key
+        or source_reference.get("path") != "/etc/slurm/slurm.conf"
+    ):
+        raise ValueError(
+            "Controller bridge source configuration must bind exactly one active "
+            "JailedConfig /etc/slurm/slurm.conf item."
+        )
     original_value = value.get("original_slurm_conf")
     intended_value = value.get("intended_slurm_conf")
     if not isinstance(original_value, str) or not original_value.strip():
@@ -626,7 +895,7 @@ def _validate_source_configuration_transition(
                 raw_copy.get(field),
                 field=f"bridge {copy_name} configuration copy {field}",
             )
-        if str(raw_copy.get("name", "") or "") != str(names[0]):
+        if str(raw_copy.get("name", "") or "") != config_map_name:
             raise ValueError(f"Controller bridge {copy_name} configuration copy name differs.")
         for field in (
             "preimage_data_sha256",
@@ -674,6 +943,65 @@ def _validate_source_configuration_transition(
         for copy_value in copies.values()
     ):
         raise ValueError("Configured controller bridge requires both exact ConfigMap copies.")
+    source_ping_sha256 = str(value.get("source_ping_sha256", "") or "").strip()
+    if source_ping_sha256:
+        _sha256(
+            source_ping_sha256,
+            field="bridge source configuration source_ping_sha256",
+        )
+
+
+def _validate_configuration_recoveries(journal: Mapping[str, Any]) -> None:
+    recoveries = journal.get("configuration_recoveries", [])
+    if not isinstance(recoveries, Sequence) or isinstance(recoveries, (str, bytes, bytearray)):
+        raise ValueError("Controller bridge configuration_recoveries must be a list.")
+    for index, recovery in enumerate(recoveries):
+        field = f"bridge configuration recovery {index}"
+        if not isinstance(recovery, Mapping):
+            raise ValueError(f"{field} must be a mapping.")
+        if (
+            recovery.get("schema") != "nebius-cxcli-controller-bridge-configuration-recovery/v1"
+            or recovery.get("reason")
+            != "operator-restored-exact-preimage-before-authority-transfer"
+        ):
+            raise ValueError(f"{field} contract is unsupported.")
+        _sha256(
+            recovery.get("prior_intended_slurm_conf_sha256"),
+            field=f"{field} prior intended slurm.conf sha256",
+        )
+        _sha256(
+            recovery.get("source_ping_sha256"),
+            field=f"{field} source ping sha256",
+        )
+        _required_text(recovery.get("recovered_at"), field=f"{field} recovered_at")
+        copies = recovery.get("copies")
+        if not isinstance(copies, Mapping) or set(copies) != {"source", "bridge"}:
+            raise ValueError(f"{field} must bind exact source and bridge copies.")
+        for copy_name, copy_record in copies.items():
+            if not isinstance(copy_record, Mapping):
+                raise ValueError(f"{field} {copy_name} copy must be a mapping.")
+            for identity_field in ("namespace", "name", "uid", "resource_version"):
+                _required_text(
+                    copy_record.get(identity_field),
+                    field=f"{field} {copy_name} {identity_field}",
+                )
+            for digest_field in ("data_sha256", "material_sha256"):
+                _sha256(
+                    copy_record.get(digest_field),
+                    field=f"{field} {copy_name} {digest_field}",
+                )
+
+
+def _scheduling_domain_repair_window(journal: Mapping[str, Any]) -> bool:
+    authority = journal.get("authority")
+    return (
+        journal.get("stage") == BridgeStage.SUBSTRATE_READY.value
+        and not journal.get("source_configuration")
+        and isinstance(authority, Mapping)
+        and authority.get("owner") == "source-singleton"
+        and not str(authority.get("first_bridge_write_at", "") or "")
+        and authority.get("source_restart_prohibited") is False
+    )
 
 
 def _validate_shared_mount_canary(
@@ -707,13 +1035,15 @@ def _validate_shared_mount_canary(
     )
     if image not in {source_image, target_image}:
         raise ValueError("Controller bridge shared-mount canary image is outside its image lock.")
-    if purpose in {
-        CONTROLLER_BRIDGE_PRE_SOURCE_MUTATION_CANARY,
-        CONTROLLER_BRIDGE_PRE_SOURCE_FENCE_CANARY,
-    } and image != source_image:
-        raise ValueError(
-            "Controller bridge pre-source canary must use the exact source image."
-        )
+    if (
+        purpose
+        in {
+            CONTROLLER_BRIDGE_PRE_SOURCE_MUTATION_CANARY,
+            CONTROLLER_BRIDGE_PRE_SOURCE_FENCE_CANARY,
+        }
+        and image != source_image
+    ):
+        raise ValueError("Controller bridge pre-source canary must use the exact source image.")
     _sha256(
         canary.get("token_sha256"),
         field=f"bridge {purpose} shared-mount canary token sha256",
@@ -770,9 +1100,7 @@ def _validate_shared_mount_canary(
             )
             != jail_attachment_sha256
         ):
-            raise ValueError(
-                "Controller bridge canary and node-group Jail attachments differ."
-            )
+            raise ValueError("Controller bridge canary and node-group Jail attachments differ.")
 
     pods = canary.get("pods")
     if (
@@ -813,15 +1141,31 @@ def _validate_shared_mount_canary(
                 "failure_domain",
             )
         }
+        runtime_binding = {
+            field: str(scheduling_domain.get(field, "") or "")
+            for field in ("topology_value", "node_name", "node_uid")
+        }
+        missing_runtime_binding = not any(runtime_binding.values())
+        if any(runtime_binding.values()) != all(runtime_binding.values()):
+            raise ValueError(
+                "Controller bridge scheduling-domain runtime binding is partially populated."
+            )
         if (
             values["node_group_id"] != str(group.get("id", "") or "")
-            or values["node_name"] != str(scheduling_domain.get("node_name", "") or "")
-            or values["node_uid"] != str(scheduling_domain.get("node_uid", "") or "")
-            or values["failure_domain"] != str(scheduling_domain.get("zone", "") or "")
+            or values["failure_domain"] != str(group.get("id", "") or "")
+            or (missing_runtime_binding and not _scheduling_domain_repair_window(journal))
+            or (
+                not missing_runtime_binding
+                and (
+                    values["node_name"] != runtime_binding["node_name"]
+                    or values["node_uid"] != runtime_binding["node_uid"]
+                    or values["failure_domain"] != runtime_binding["topology_value"]
+                )
+            )
         ):
             raise ValueError(
                 "Controller bridge shared-mount canary Pod binding differs from its "
-                "journaled node group and failure domain."
+                "journaled node group and scheduling domain."
             )
         pod_uids.add(values["pod_uid"])
         node_uids.add(values["node_uid"])
@@ -834,7 +1178,7 @@ def _validate_shared_mount_canary(
     ):
         raise ValueError(
             "Controller bridge shared-mount canary requires distinct Pods, Nodes, and "
-            "provider failure domains."
+            "immutable node-group scheduling domains."
         )
 
     storage = _required_mapping(
@@ -882,9 +1226,7 @@ def _validate_shared_mount_canary(
     if dict(storage) != expected_storage or any(
         not all(binding.values()) for binding in expected_storage.values()
     ):
-        raise ValueError(
-            "Controller bridge shared-mount canary PV/PVC identity binding differs."
-        )
+        raise ValueError("Controller bridge shared-mount canary PV/PVC identity binding differs.")
 
 
 def pre_source_mutation_mount_canary(journal: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -913,15 +1255,10 @@ def _mount_canary_for_purpose(
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes, bytearray)):
         raise ValueError("Controller bridge shared_mount_canaries must be a list.")
     matches = [
-        item
-        for item in records
-        if isinstance(item, Mapping)
-        and item.get("purpose") == purpose
+        item for item in records if isinstance(item, Mapping) and item.get("purpose") == purpose
     ]
     if len(matches) != 1:
-        raise ValueError(
-            f"Controller bridge {boundary} requires one {purpose} shared-SFS canary."
-        )
+        raise ValueError(f"Controller bridge {boundary} requires one {purpose} shared-SFS canary.")
     _validate_shared_mount_canary(journal, matches[0])
     return matches[0]
 
@@ -935,9 +1272,7 @@ def _validate_pre_source_fence_boundary(
     intent = journal.get("source_fence_intent")
     if not isinstance(readiness, Mapping) or not isinstance(intent, Mapping):
         raise ValueError("Controller bridge pre-source-fence records must be mappings.")
-    required = _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[
-        BridgeStage.SOURCE_FENCED.value
-    ]
+    required = _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SOURCE_FENCED.value]
     if not readiness:
         if required:
             raise ValueError("Controller bridge source fence lacks fresh readiness proof.")
@@ -945,8 +1280,7 @@ def _validate_pre_source_fence_boundary(
             raise ValueError("Controller bridge source fence intent lacks readiness proof.")
         return
     if (
-        readiness.get("schema")
-        != "nebius-cxcli-controller-bridge-pre-source-fence-readiness/v1"
+        readiness.get("schema") != "nebius-cxcli-controller-bridge-pre-source-fence-readiness/v1"
         or readiness.get("status") != "verified"
         or readiness.get("source_replicas") != 1
     ):
@@ -955,9 +1289,12 @@ def _validate_pre_source_fence_boundary(
         readiness.get("semantic_sha256"),
         field="bridge pre-source-fence readiness semantic sha256",
     )
-    if _journal_payload_fingerprint(
-        {key: value for key, value in readiness.items() if key != "semantic_sha256"}
-    ) != semantic_sha256:
+    if (
+        _journal_payload_fingerprint(
+            {key: value for key, value in readiness.items() if key != "semantic_sha256"}
+        )
+        != semantic_sha256
+    ):
         raise ValueError("Controller bridge pre-source-fence readiness fingerprint differs.")
     for field in (
         "authority_epoch",
@@ -971,10 +1308,9 @@ def _validate_pre_source_fence_boundary(
             field=f"bridge pre-source-fence readiness {field}",
         )
     source = _required_mapping(journal.get("source_binding"), field="bridge source_binding")
-    if (
-        readiness.get("source_workload_uid") != source.get("controller_workload_uid")
-        or readiness.get("source_pod_uid") != source.get("controller_pod_uid")
-    ):
+    if readiness.get("source_workload_uid") != source.get(
+        "controller_workload_uid"
+    ) or readiness.get("source_pod_uid") != source.get("controller_pod_uid"):
         raise ValueError("Controller bridge pre-source-fence source identity differs.")
     canary = pre_source_fence_mount_canary(journal)
     canary_sha256 = _sha256(
@@ -1016,11 +1352,10 @@ def _validate_pre_source_fence_boundary(
             or proof.get("name") != group.get("name")
             or proof.get("controller_spool_attachment_sha256")
             != group.get("controller_spool_attachment_sha256")
-            or proof.get("jail_attachment_sha256")
-            != group.get("jail_attachment_sha256")
+            or proof.get("jail_attachment_sha256") != group.get("jail_attachment_sha256")
             or proof.get("node_name") != domain.get("node_name")
             or proof.get("node_uid") != domain.get("node_uid")
-            or proof.get("failure_domain") != domain.get("zone")
+            or proof.get("failure_domain") != domain.get("topology_value")
             or isinstance(resource_version, bool)
             or not isinstance(resource_version, int)
             or resource_version <= 0
@@ -1083,12 +1418,12 @@ def _validate_jwt_material_contract(
     *,
     stage: str,
 ) -> None:
-    proof_required = _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[
-        BridgeStage.TARGET_SINGLETON_ACTIVE.value
-    ]
-    preflight_required = _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[
-        BridgeStage.BRIDGE_FENCED.value
-    ]
+    proof_required = (
+        _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.TARGET_SINGLETON_ACTIVE.value]
+    )
+    preflight_required = (
+        _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.BRIDGE_FENCED.value]
+    )
     contract = journal.get("jwt_material_contract")
     if not isinstance(contract, Mapping) or not contract:
         if preflight_required:
@@ -1119,9 +1454,7 @@ def _validate_jwt_material_contract(
     )
     _required_text(contract.get("captured_at"), field="bridge JWT material captured_at")
     raw_bindings = contract.get("source_secret_bindings")
-    if not isinstance(raw_bindings, Sequence) or isinstance(
-        raw_bindings, (str, bytes, bytearray)
-    ):
+    if not isinstance(raw_bindings, Sequence) or isinstance(raw_bindings, (str, bytes, bytearray)):
         raise ValueError("Controller bridge JWT source Secret bindings must be a list.")
     bindings: list[dict[str, Any]] = []
     for raw_binding in raw_bindings:
@@ -1145,8 +1478,7 @@ def _validate_jwt_material_contract(
         tuple(binding["name"] for binding in bindings) != secret_names
         or len({binding["uid"] for binding in bindings}) != len(bindings)
         or any(binding["namespace"] != source.get("namespace") for binding in bindings)
-        or tuple(sorted({key for binding in bindings for key in binding["data_keys"]}))
-        != data_keys
+        or tuple(sorted({key for binding in bindings for key in binding["data_keys"]})) != data_keys
     ):
         raise ValueError("Controller bridge JWT source Secret bindings differ.")
 
@@ -1270,10 +1602,8 @@ def _validate_jwt_material_contract(
             )
         )
         or proof.get("controller_pod_uid") != takeover.get("controller_pod_uid")
-        or proof.get("controller_workload_uid")
-        != preflight.get("controller_workload_uid")
-        or proof.get("controller_workload_uid")
-        != takeover.get("controller_workload_uid")
+        or proof.get("controller_workload_uid") != preflight.get("controller_workload_uid")
+        or proof.get("controller_workload_uid") != takeover.get("controller_workload_uid")
         or proof.get("authority_epoch")
         != _required_mapping(journal.get("authority"), field="bridge authority").get("epoch")
     ):
@@ -1425,9 +1755,10 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         raise ValueError("Controller bridge requires exactly two node-group records.")
     names: set[str] = set()
     ids: set[str] = set()
-    zones: set[str] = set()
+    scheduling_domains: set[str] = set()
     attachment_digests: set[str] = set()
     jail_attachment_digests: set[str] = set()
+    adapter_ownerships: set[str] = set()
     for index, group in enumerate(node_groups):
         if not isinstance(group, Mapping) or group.get("slot") != index:
             raise ValueError("Controller bridge node-group slots must be ordered 0 and 1.")
@@ -1441,12 +1772,43 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                 "Controller bridge scheduling failure domain must use the immutable "
                 "Nebius node-group-id topology key."
             )
+        ownership = _required_text(
+            group.get("ownership"),
+            field="bridge placement-domain ownership",
+        )
+        adapter_ownerships.add(ownership)
+        expected_policy = {
+            "managed-existing": (
+                "kubernetes-only",
+                "preserve-domain",
+                "reuse-chart-mount-substrate",
+            ),
+            "external-temporary": (
+                "provider-create-delete",
+                "delete-domain",
+                "cxcli-mount-daemonset",
+            ),
+        }.get(ownership)
         if (
-            group.get("fixed_node_count") != 1
+            expected_policy is None
+            or (
+                group.get("mutation_policy"),
+                group.get("cleanup_policy"),
+                group.get("mount_policy"),
+            )
+            != expected_policy
+        ):
+            raise ValueError("Controller bridge placement-domain adapter policy is invalid.")
+        ready_capacity = group.get("ready_capacity")
+        if (
+            isinstance(ready_capacity, bool)
+            or not isinstance(ready_capacity, int)
+            or ready_capacity < 1
             or group.get("excluded_from_provider_upgrade") is not True
         ):
             raise ValueError(
-                "Controller bridge node groups must be fixed at one and excluded from upgrades."
+                "Controller bridge placement domains require positive Ready capacity and "
+                "provider-upgrade exclusion."
             )
         attachment_digests.add(
             _sha256(
@@ -1467,22 +1829,24 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                 "Controller bridge scheduling failure-domain value must match its "
                 "immutable node-group ID."
             )
-        zone = str(scheduling_domain.get("zone", "") or "").strip()
-        if zone and (
-            scheduling_domain.get("provider_topology_key") != "topology.kubernetes.io/zone"
+        topology_value = str(scheduling_domain.get("topology_value", "") or "").strip()
+        if topology_value and (
+            topology_value != group_id
             or not str(scheduling_domain.get("node_name", "") or "").strip()
             or not str(scheduling_domain.get("node_uid", "") or "").strip()
         ):
             raise ValueError(
-                "Controller bridge provider failure domain must bind an exact zone, node, "
-                "and immutable node UID."
+                "Controller bridge scheduling domain must bind its exact immutable node-group "
+                "ID, node, and Node UID."
             )
-        if zone:
-            zones.add(zone)
+        if topology_value:
+            scheduling_domains.add(topology_value)
         if group_id:
             ids.add(group_id)
     if len(names) != 2:
         raise ValueError("Controller bridge node-group names must be distinct.")
+    if len(adapter_ownerships) != 1:
+        raise ValueError("Controller bridge placement domains must use one capacity adapter.")
     if len(attachment_digests) != 1:
         raise ValueError(
             "Controller bridge node groups must bind one identical controller-spool "
@@ -1492,18 +1856,36 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         raise ValueError(
             "Controller bridge node groups must bind one identical Jail attachment fingerprint."
         )
-    if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SUBSTRATE_READY.value] and (
-        len(ids) != 2 or any(not group.get("created") for group in node_groups)
+    if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SUBSTRATE_READY.value]:
+        if len(ids) != 2:
+            raise ValueError("Controller bridge substrate requires two distinct node groups.")
+        ownership = next(iter(adapter_ownerships))
+        if ownership == "external-temporary" and any(
+            group.get("created") is not True for group in node_groups
+        ):
+            raise ValueError(
+                "External controller bridge substrate requires two cxcli-created node groups."
+            )
+        if ownership == "managed-existing" and any(
+            group.get("bound") is not True or not str(group.get("live_node_uid", "") or "").strip()
+            for group in node_groups
+        ):
+            raise ValueError(
+                "Managed controller bridge substrate requires two exact existing domain "
+                "bindings and live Node UIDs."
+            )
+    if (
+        scheduling_domains
+        and len(scheduling_domains) != 2
+        and not _scheduling_domain_repair_window(journal)
     ):
-        raise ValueError("Controller bridge substrate requires two distinct created node groups.")
-    if zones and len(zones) != 2:
-        raise ValueError("Controller bridge provider availability-zone domains must be distinct.")
+        raise ValueError("Controller bridge immutable node-group domains must be distinct.")
     if (
         _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SOURCE_HA_ACTIVE.value]
-        and len(zones) != 2
+        and len(scheduling_domains) != 2
     ):
         raise ValueError(
-            "Controller bridge writer stages require two proven provider availability zones."
+            "Controller bridge writer stages require two proven immutable node-group domains."
         )
 
     authority = journal.get("authority")
@@ -1886,19 +2268,47 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
     if not isinstance(source_configuration, Mapping):
         raise ValueError("Controller bridge source_configuration must be a mapping.")
     _validate_source_configuration_transition(source_configuration, stage=stage)
+    if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SOURCE_CONFIGURED.value]:
+        reconfigured_at = str(source_configuration.get("reconfigured_at", "") or "").strip()
+        source_ping_sha256 = str(source_configuration.get("source_ping_sha256", "") or "").strip()
+        authority = _required_mapping(journal.get("authority"), field="bridge authority")
+        recoverable_pre_authority_gap = (
+            stage == BridgeStage.SOURCE_CONFIGURED.value
+            and bool(reconfigured_at)
+            and not source_ping_sha256
+            and authority.get("owner") == "source-singleton"
+            and not str(authority.get("first_bridge_write_at", "") or "")
+            and authority.get("source_restart_prohibited") is False
+        )
+        if not (reconfigured_at and source_ping_sha256) and not recoverable_pre_authority_gap:
+            raise ValueError(
+                "Configured controller bridge requires paired source reconfigure and primary "
+                "ping proof outside the exact pre-authority recovery window."
+            )
     if stage == BridgeStage.PLANNED.value and source_configuration:
         raise ValueError(
             "Controller bridge source configuration cannot precede substrate readiness."
         )
+    _validate_configuration_recoveries(journal)
     _validate_pre_source_fence_boundary(journal, stage=stage)
     _validate_jwt_material_contract(journal, stage=stage)
     if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.SOURCE_FENCED.value]:
         source_proof = source_configuration.get("client_propagation")
+        source_contract = source_configuration.get("client_config_contract")
+        source_controller_hosts = (
+            source_contract.get("controller_hosts")
+            if isinstance(source_contract, Mapping)
+            else None
+        )
+        if not isinstance(source_controller_hosts, Sequence) or isinstance(
+            source_controller_hosts, (str, bytes, bytearray)
+        ):
+            raise ValueError("bridge source client configuration controller_hosts must be a list.")
         _validate_client_propagation_proof(
             source_proof,
             field="bridge source client propagation",
             cluster_name=str(journal.get("cluster_name", "") or ""),
-            controller_hosts=("controller-0", *CONTROLLER_BRIDGE_CONTROLLER_HOSTS),
+            controller_hosts=source_controller_hosts,
             roles=("source-login", "source-worker"),
             raised_timeouts=True,
         )
@@ -1964,9 +2374,11 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
     if preservation_jobs.get("schema") != "nebius-cxcli-slurm-preservation-jobs/v1":
         raise ValueError("Controller bridge preservation_jobs schema mismatch.")
     preservation_records = preservation_jobs.get("jobs")
+    completed_during_capture = preservation_jobs.get("completed_during_capture", {})
     preservation_verifications = preservation_jobs.get("verifications")
     if (
         not isinstance(preservation_records, Mapping)
+        or not isinstance(completed_during_capture, Mapping)
         or not isinstance(preservation_verifications, Sequence)
         or isinstance(preservation_verifications, (str, bytes, bytearray))
     ):
@@ -1986,6 +2398,21 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                     f"Controller bridge preservation job record {field} must be a mapping."
                 )
         _required_text(record.get("captured_at"), field="bridge preservation job captured_at")
+    if set(preservation_records) & set(completed_during_capture):
+        raise ValueError("Controller bridge preservation and capture-completion job ids overlap.")
+    for job_id, record in completed_during_capture.items():
+        _required_text(job_id, field="bridge capture-completion job id")
+        if not isinstance(record, Mapping):
+            raise ValueError("Controller bridge capture-completion record must be a mapping.")
+        if record.get("schema") != "nebius-cxcli-slurm-preservation-jobs/v1":
+            raise ValueError("Controller bridge capture-completion record schema mismatch.")
+        if not isinstance(record.get("accounting"), Mapping):
+            raise ValueError("Controller bridge capture-completion accounting is invalid.")
+        _required_text(
+            record.get("accounting_sha256"),
+            field="bridge capture-completion accounting sha256",
+        )
+        _required_text(record.get("observed_at"), field="bridge capture-completion observed_at")
     for verification in preservation_verifications:
         if not isinstance(verification, Mapping):
             raise ValueError("Controller bridge preservation verification must be a mapping.")
@@ -2438,12 +2865,31 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         ):
             raise ValueError("Controller bridge cleanup proof is incomplete.")
         deleted = cleanup.get("node_groups_deleted")
-        if not isinstance(deleted, Sequence) or isinstance(deleted, (str, bytes, bytearray)):
+        preserved = cleanup.get("node_groups_preserved")
+        if (
+            not isinstance(deleted, Sequence)
+            or isinstance(deleted, (str, bytes, bytearray))
+            or not isinstance(preserved, Sequence)
+            or isinstance(preserved, (str, bytes, bytearray))
+        ):
             raise ValueError("Controller bridge cleanup node-group proof must be a list.")
-        if set(str(item or "") for item in deleted) != {
-            str(item.get("id", "") or "") for item in node_groups if isinstance(item, Mapping)
-        }:
-            raise ValueError("Controller bridge cleanup must delete both journaled node groups.")
+        expected_deleted = {
+            str(item.get("id", "") or "")
+            for item in node_groups
+            if isinstance(item, Mapping) and item.get("cleanup_policy") == "delete-domain"
+        }
+        expected_preserved = {
+            str(item.get("id", "") or "")
+            for item in node_groups
+            if isinstance(item, Mapping) and item.get("cleanup_policy") == "preserve-domain"
+        }
+        if set(str(item or "") for item in deleted) != expected_deleted:
+            raise ValueError(
+                "Controller bridge cleanup must delete both journaled node groups for the "
+                "external adapter; managed domains are preserved."
+            )
+        if set(str(item or "") for item in preserved) != expected_preserved:
+            raise ValueError("Controller bridge cleanup preserved-domain proof is incomplete.")
         deleted_resources = cleanup.get("kubernetes_resources_deleted")
         if not isinstance(deleted_resources, Sequence) or isinstance(
             deleted_resources, (str, bytes, bytearray)
@@ -2472,8 +2918,7 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             for item in kubernetes_resources
             if isinstance(item, Mapping)
             and (
-                item.get("kind")
-                in {"Namespace", "PersistentVolume", "PersistentVolumeClaim"}
+                item.get("kind") in {"Namespace", "PersistentVolume", "PersistentVolumeClaim"}
                 or (item.get("kind") == "RoleBinding" and item.get("namespace") == "soperator")
             )
         ]
@@ -2669,8 +3114,13 @@ def record_bridge_authority(
 
 
 def bridge_node_group_payloads(plan: BridgePlan) -> tuple[dict[str, Any], dict[str, Any]]:
+    if any(domain.ownership != "external-temporary" for domain in plan.placement_domains):
+        raise ValueError(
+            "Managed controller bridges bind existing placement domains and must not render "
+            "provider node-group create payloads."
+        )
     payloads: list[dict[str, Any]] = []
-    for slot, item in enumerate(plan.node_groups):
+    for slot, item in enumerate(plan.placement_domains):
         template = copy.deepcopy(dict(item.template))
         metadata = copy.deepcopy(dict(template.get("metadata", {})))
         labels = copy.deepcopy(dict(metadata.get("labels", {})))
@@ -2766,20 +3216,78 @@ def bridge_kubernetes_objects(
         raise ValueError("bridge state PV requires node match expressions.")
     if replicas not in {0, 2}:
         raise ValueError("bridge StatefulSet replicas must be 0 while gated or 2 while active.")
+    controller_spool_mount_tag = _required_text(
+        plan.controller_spool_attachment.get("mount_tag"),
+        field="bridge controller-spool mount tag",
+    )
+    jail_mount_tag = _required_text(
+        plan.jail_attachment.get("mount_tag"),
+        field="bridge Jail mount tag",
+    )
 
     pod_spec = copy.deepcopy(dict(controller_pod_spec))
     pod_spec.pop("nodeName", None)
     pod_spec.setdefault("automountServiceAccountToken", False)
-    pod_spec["nodeSelector"] = {CONTROLLER_BRIDGE_LABEL: "true"}
-    pod_spec["tolerations"] = [
-        {
-            "key": CONTROLLER_BRIDGE_TAINT_KEY,
-            "operator": "Equal",
-            "value": "true",
-            "effect": "NoSchedule",
+    managed_adapter = all(
+        domain.ownership == "managed-existing" for domain in plan.placement_domains
+    )
+    pod_spec["priorityClassName"] = "cxcli-soperator-upgrade-bridge"
+    if managed_adapter:
+        pod_spec.pop("nodeSelector", None)
+        tolerations = [
+            copy.deepcopy(dict(item))
+            for item in pod_spec.get("tolerations", [])
+            if isinstance(item, Mapping)
+        ]
+        for role in ("controller", "system"):
+            toleration = {
+                "key": "slurm.nebius.ai/nodeset-name",
+                "operator": "Equal",
+                "value": role,
+                "effect": "NoSchedule",
+            }
+            if toleration not in tolerations:
+                tolerations.append(toleration)
+        pod_spec["tolerations"] = tolerations
+        domain_values = sorted({domain.role for domain in plan.placement_domains})
+        node_affinity = {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [
+                    {
+                        "matchExpressions": [
+                            {
+                                "key": "nebius.ai/soperator-bridge-domain",
+                                "operator": "In",
+                                "values": domain_values,
+                            }
+                        ]
+                    }
+                ]
+            }
         }
-    ]
-    pod_spec["affinity"] = {
+        pod_spec["topologySpreadConstraints"] = [
+            {
+                "maxSkew": 1,
+                "minDomains": 2,
+                "topologyKey": "nebius.ai/soperator-bridge-domain",
+                "whenUnsatisfiable": "DoNotSchedule",
+                "labelSelector": {
+                    "matchLabels": {CONTROLLER_BRIDGE_LABEL: "true"},
+                },
+            }
+        ]
+    else:
+        pod_spec["nodeSelector"] = {CONTROLLER_BRIDGE_LABEL: "true"}
+        pod_spec["tolerations"] = [
+            {
+                "key": CONTROLLER_BRIDGE_TAINT_KEY,
+                "operator": "Equal",
+                "value": "true",
+                "effect": "NoSchedule",
+            }
+        ]
+        node_affinity = None
+    affinity = {
         "podAntiAffinity": {
             "requiredDuringSchedulingIgnoredDuringExecution": [
                 {
@@ -2789,6 +3297,9 @@ def bridge_kubernetes_objects(
             ]
         }
     }
+    if node_affinity is not None:
+        affinity["nodeAffinity"] = node_affinity
+    pod_spec["affinity"] = affinity
     volumes = [
         copy.deepcopy(dict(item))
         for item in pod_spec.get("volumes", [])
@@ -2815,7 +3326,11 @@ def bridge_kubernetes_objects(
         "app.kubernetes.io/managed-by": "nebius-cxcli",
         CONTROLLER_BRIDGE_LABEL: "true",
     }
-    pod_security_level = _bridge_pod_security_enforce_level(pod_spec)
+    # The bridge mounts provider-attached virtiofs devices into the host mount
+    # namespace before its local PVs can be consumed.  That bootstrap requires
+    # one tightly selected privileged DaemonSet even when the mirrored source
+    # controller itself only requires baseline Pod Security.
+    pod_security_level = "baseline" if managed_adapter else "privileged"
     namespace = plan.namespace
     network_policies = bridge_network_policy_objects(
         namespace=namespace,
@@ -2825,6 +3340,18 @@ def bridge_kubernetes_objects(
         ownership_labels=ownership_labels,
     )
     objects: tuple[dict[str, Any], ...] = (
+        {
+            "apiVersion": "scheduling.k8s.io/v1",
+            "kind": "PriorityClass",
+            "metadata": {
+                "name": "cxcli-soperator-upgrade-bridge",
+                "labels": ownership_labels,
+            },
+            "value": 100000000,
+            "globalDefault": False,
+            "preemptionPolicy": "Never",
+            "description": "Priority for the temporary cxcli Slurm authority bridge.",
+        },
         {
             "apiVersion": "v1",
             "kind": "Namespace",
@@ -2938,6 +3465,80 @@ def bridge_kubernetes_objects(
         },
         {
             "apiVersion": "apps/v1",
+            "kind": "DaemonSet",
+            "metadata": {
+                "namespace": namespace,
+                "name": "cxcli-controller-bridge-mounts",
+                "labels": ownership_labels,
+            },
+            "spec": {
+                "selector": {
+                    "matchLabels": {
+                        "nebius.ai/cxcli-controller-bridge-mounts": "true",
+                    }
+                },
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app.kubernetes.io/managed-by": "nebius-cxcli",
+                            "nebius.ai/cxcli-controller-bridge-mounts": "true",
+                        }
+                    },
+                    "spec": {
+                        "automountServiceAccountToken": False,
+                        "enableServiceLinks": False,
+                        "nodeSelector": {CONTROLLER_BRIDGE_LABEL: "true"},
+                        "tolerations": [
+                            {
+                                "key": CONTROLLER_BRIDGE_TAINT_KEY,
+                                "operator": "Equal",
+                                "value": "true",
+                                "effect": "NoSchedule",
+                            }
+                        ],
+                        "containers": [
+                            {
+                                "name": "mount-shared-filesystems",
+                                "image": plan.source_slurm_image,
+                                "imagePullPolicy": "IfNotPresent",
+                                "command": list(CONTROLLER_BRIDGE_MOUNT_HELPER_COMMAND),
+                                "env": [
+                                    {
+                                        "name": "CONTROLLER_SPOOL_TAG",
+                                        "value": controller_spool_mount_tag,
+                                    },
+                                    {
+                                        "name": "CONTROLLER_SPOOL_PATH",
+                                        "value": state_local_path,
+                                    },
+                                    {"name": "JAIL_TAG", "value": jail_mount_tag},
+                                    {"name": "JAIL_PATH", "value": jail_local_path},
+                                ],
+                                "securityContext": {
+                                    "privileged": True,
+                                    "runAsUser": 0,
+                                },
+                                "volumeMounts": [
+                                    {
+                                        "name": "host-mnt",
+                                        "mountPath": "/host/mnt",
+                                        "mountPropagation": "Bidirectional",
+                                    }
+                                ],
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "host-mnt",
+                                "hostPath": {"path": "/mnt", "type": "Directory"},
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+        {
+            "apiVersion": "apps/v1",
             "kind": "StatefulSet",
             "metadata": {
                 "namespace": namespace,
@@ -2966,6 +3567,8 @@ def bridge_kubernetes_objects(
             },
         },
     )
+    if managed_adapter:
+        return tuple(item for item in objects if item.get("kind") != "DaemonSet")
     return objects
 
 
@@ -3049,7 +3652,7 @@ def bridge_network_policy_objects(
                             "namespaceSelector": {
                                 "matchLabels": {"kubernetes.io/metadata.name": "kube-system"}
                             },
-                            "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}},
+                            "podSelector": {"matchLabels": {"k8s-app": "coredns"}},
                         }
                     ],
                     "ports": [{"protocol": protocol, "port": 53} for protocol in ("UDP", "TCP")],
@@ -3132,31 +3735,146 @@ def _bridge_pod_security_enforce_level(pod_spec: Mapping[str, Any]) -> str:
     return "baseline"
 
 
+_CONTROLLER_AUTHORITY_OVERLAY_FIELDS = frozenset(
+    {
+        "clustername",
+        "slurmctldhost",
+        "statesavelocation",
+        "slurmctldtimeout",
+        "slurmdtimeout",
+    }
+)
+
+
+def compose_controller_authority_config(
+    slurm_conf: str,
+    *,
+    authority_owner: str,
+    controller_hosts: Sequence[str],
+    cluster_name: str | None = None,
+    state_save_location: str | None = None,
+    compatibility_fields: Mapping[str, str] | None = None,
+) -> str:
+    """Apply the cxcli-owned authority overlay without rewriting customer config."""
+
+    hosts = [_required_text(item, field="authority SlurmctldHost") for item in controller_hosts]
+    expected_host_counts = {
+        "source-singleton": {1, 3},
+        "bridge-source": {2},
+        "bridge-target": {2},
+        "target-singleton": {1},
+    }
+    if (
+        authority_owner not in expected_host_counts
+        or len(hosts) not in expected_host_counts[authority_owner]
+    ):
+        raise ValueError(
+            f"controller authority owner {authority_owner!r} cannot use {len(hosts)} host(s)."
+        )
+    if len(set(hosts)) != len(hosts):
+        raise ValueError("controller authority host set must be distinct.")
+    if authority_owner.startswith("bridge-") and len(hosts) != 2:
+        raise ValueError("bridge authority rejects singleton-only controller configuration.")
+
+    source_lines = slurm_conf.splitlines()
+    discovered_cluster_names = [
+        match.group(1).strip()
+        for line in source_lines
+        if (match := re.match(r"^\s*ClusterName\s*=\s*(\S+)\s*$", line, flags=re.IGNORECASE))
+    ]
+    resolved_cluster_name = (
+        _required_text(cluster_name, field="authority ClusterName")
+        if cluster_name is not None
+        else discovered_cluster_names[0]
+        if len(discovered_cluster_names) == 1
+        else ""
+    )
+    if not resolved_cluster_name:
+        raise ValueError("controller authority composition requires exactly one ClusterName.")
+    if state_save_location is not None and not state_save_location.startswith("/"):
+        raise ValueError("controller authority StateSaveLocation must be absolute.")
+
+    compatibility = dict(compatibility_fields or {})
+    normalized_compatibility: dict[str, str] = {}
+    for raw_key, raw_value in compatibility.items():
+        key = str(raw_key or "").strip()
+        normalized_key = key.lower()
+        if normalized_key not in _CONTROLLER_AUTHORITY_OVERLAY_FIELDS - {
+            "clustername",
+            "slurmctldhost",
+            "statesavelocation",
+        }:
+            raise ValueError(f"unsupported controller compatibility overlay field: {key}.")
+        normalized_compatibility[key] = _required_text(
+            raw_value,
+            field=f"authority compatibility field {key}",
+        )
+
+    overlay_keys = {
+        "clustername",
+        "slurmctldhost",
+        *({"statesavelocation"} if state_save_location is not None else set()),
+        *(key.lower() for key in normalized_compatibility),
+    }
+    kept = [
+        line
+        for line in source_lines
+        if not (
+            (match := re.match(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", line))
+            and match.group(1).lower() in overlay_keys
+        )
+    ]
+    overlay = [
+        f"ClusterName={resolved_cluster_name}",
+        *(f"SlurmctldHost={host}" for host in hosts),
+    ]
+    if state_save_location is not None:
+        overlay.append(f"StateSaveLocation={state_save_location}")
+    overlay.extend(f"{key}={value}" for key, value in normalized_compatibility.items())
+    kept[0:0] = overlay
+    return "\n".join(kept).rstrip() + "\n"
+
+
 def source_controller_config_with_bridge_hosts(
     slurm_conf: str,
     *,
-    source_host: str = "controller-0",
+    source_host: str | None = None,
     bridge_hosts: Sequence[str] = CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
 ) -> str:
-    hosts = [_required_text(source_host, field="source SlurmctldHost")]
-    hosts.extend(_required_text(item, field="bridge SlurmctldHost") for item in bridge_hosts)
+    normalized_bridge_hosts = [
+        _required_text(item, field="bridge SlurmctldHost") for item in bridge_hosts
+    ]
+    bridge_names = {item.split("(", 1)[0] for item in normalized_bridge_hosts}
+    existing_hosts = [
+        match.group(1).strip()
+        for line in slurm_conf.splitlines()
+        if (
+            match := re.match(
+                r"^\s*SlurmctldHost\s*=\s*(\S+)\s*$",
+                line,
+                flags=re.IGNORECASE,
+            )
+        )
+    ]
+    if source_host is None:
+        source_candidates = [
+            item for item in existing_hosts if item.split("(", 1)[0] not in bridge_names
+        ]
+        if len(source_candidates) > 1:
+            raise ValueError(
+                "source controller bridge config requires exactly one non-bridge source host."
+            )
+        normalized_source_host = source_candidates[0] if source_candidates else "controller-0"
+    else:
+        normalized_source_host = _required_text(source_host, field="source SlurmctldHost")
+    hosts = [normalized_source_host, *normalized_bridge_hosts]
     if len(hosts) != 3 or len(set(hosts)) != 3:
         raise ValueError("source controller bridge config requires three distinct hosts.")
-    kept = [
-        line
-        for line in slurm_conf.splitlines()
-        if not re.match(r"^\s*SlurmctldHost\s*=", line, flags=re.IGNORECASE)
-    ]
-    insert_at = next(
-        (
-            index + 1
-            for index, line in enumerate(kept)
-            if re.match(r"^\s*ClusterName\s*=", line, flags=re.IGNORECASE)
-        ),
-        0,
+    return compose_controller_authority_config(
+        slurm_conf,
+        authority_owner="source-singleton",
+        controller_hosts=hosts,
     )
-    kept[insert_at:insert_at] = [f"SlurmctldHost={host}" for host in hosts]
-    return "\n".join(kept).rstrip() + "\n"
 
 
 def bridge_only_controller_config(
@@ -3170,47 +3888,21 @@ def bridge_only_controller_config(
         raise ValueError("bridge controller config requires two distinct hosts.")
     if not state_save_location.startswith("/"):
         raise ValueError("bridge StateSaveLocation must be absolute.")
-    kept = [
-        line
-        for line in slurm_conf.splitlines()
-        if not re.match(
-            r"^\s*(?:SlurmctldHost|StateSaveLocation)\s*=",
-            line,
-            flags=re.IGNORECASE,
-        )
-    ]
-    insert_at = next(
-        (
-            index + 1
-            for index, line in enumerate(kept)
-            if re.match(r"^\s*ClusterName\s*=", line, flags=re.IGNORECASE)
-        ),
-        0,
+    return compose_controller_authority_config(
+        slurm_conf,
+        authority_owner="bridge-source",
+        controller_hosts=hosts,
+        state_save_location=state_save_location,
     )
-    kept[insert_at:insert_at] = [
-        *(f"SlurmctldHost={host}" for host in hosts),
-        f"StateSaveLocation={state_save_location}",
-    ]
-    return "\n".join(kept).rstrip() + "\n"
 
 
 def final_singleton_controller_config(slurm_conf: str, *, target_host: str = "controller-0") -> str:
     target = _required_text(target_host, field="target SlurmctldHost")
-    kept = [
-        line
-        for line in slurm_conf.splitlines()
-        if not re.match(r"^\s*SlurmctldHost\s*=", line, flags=re.IGNORECASE)
-    ]
-    insert_at = next(
-        (
-            index + 1
-            for index, line in enumerate(kept)
-            if re.match(r"^\s*ClusterName\s*=", line, flags=re.IGNORECASE)
-        ),
-        0,
+    return compose_controller_authority_config(
+        slurm_conf,
+        authority_owner="target-singleton",
+        controller_hosts=(target,),
     )
-    kept.insert(insert_at, f"SlurmctldHost={target}")
-    return "\n".join(kept).rstrip() + "\n"
 
 
 def target_controller_gate_values(values: Mapping[str, Any]) -> dict[str, Any]:

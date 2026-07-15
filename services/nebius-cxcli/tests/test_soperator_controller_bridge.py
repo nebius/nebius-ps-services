@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -16,7 +17,7 @@ from nebius_cxcli.soperator_controller_bridge import (
     CONTROLLER_BRIDGE_PRE_SOURCE_MUTATION_CANARY,
     CONTROLLER_BRIDGE_SOURCE_CONFIGURATION_SCHEMA,
     CONTROLLER_BRIDGE_STATE_PVC,
-    BridgeNodeGroupPlan,
+    BridgePlacementDomain,
     BridgePlan,
     BridgeSourceBinding,
     BridgeStage,
@@ -27,6 +28,7 @@ from nebius_cxcli.soperator_controller_bridge import (
     bridge_node_group_payloads,
     bridge_only_controller_config,
     final_singleton_controller_config,
+    managed_bridge_placement_domains_from_live_nodes,
     new_bridge_journal,
     record_bridge_authority,
     source_controller_config_with_bridge_hosts,
@@ -56,9 +58,7 @@ def _pre_source_mutation_canary(journal: Mapping[str, object]) -> dict[str, obje
     resources = journal["kubernetes_resources"]
     assert isinstance(node_groups, list)
     assert isinstance(resources, list)
-    pv_by_name = {
-        item["name"]: item for item in resources if item["kind"] == "PersistentVolume"
-    }
+    pv_by_name = {item["name"]: item for item in resources if item["kind"] == "PersistentVolume"}
     pvc_by_name = {
         item["name"]: item for item in resources if item["kind"] == "PersistentVolumeClaim"
     }
@@ -72,6 +72,7 @@ def _pre_source_mutation_canary(journal: Mapping[str, object]) -> dict[str, obje
             "pvc_name": pvc["name"],
             "pvc_uid": pvc["uid"],
         }
+
     attachment_sha256 = str(node_groups[0]["controller_spool_attachment_sha256"])
     return {
         "schema": CONTROLLER_BRIDGE_MOUNT_CANARY_SCHEMA,
@@ -93,7 +94,7 @@ def _pre_source_mutation_canary(journal: Mapping[str, object]) -> dict[str, obje
                 "node_name": group["scheduling_failure_domain"]["node_name"],
                 "node_uid": group["scheduling_failure_domain"]["node_uid"],
                 "node_group_id": group["id"],
-                "failure_domain": group["scheduling_failure_domain"]["zone"],
+                "failure_domain": group["scheduling_failure_domain"]["topology_value"],
             }
             for index, group in enumerate(node_groups)
         ],
@@ -120,13 +121,11 @@ def _install_pre_source_fence_boundary(journal: dict[str, object]) -> None:
             "id": group["id"],
             "name": group["name"],
             "resource_version": 17 + index,
-            "controller_spool_attachment_sha256": group[
-                "controller_spool_attachment_sha256"
-            ],
+            "controller_spool_attachment_sha256": group["controller_spool_attachment_sha256"],
             "jail_attachment_sha256": group["jail_attachment_sha256"],
             "node_name": group["scheduling_failure_domain"]["node_name"],
             "node_uid": group["scheduling_failure_domain"]["node_uid"],
-            "failure_domain": group["scheduling_failure_domain"]["zone"],
+            "failure_domain": group["scheduling_failure_domain"]["topology_value"],
         }
         for index, group in enumerate(node_groups)
     ]
@@ -186,7 +185,6 @@ def _client_propagation_proof(
                 "container_id": f"containerd://{role}",
                 "restart_count": 0,
                 "config_sha256": digest,
-                "reconfigure_sha256": "1" * 64,
                 "ping_sha256": "2" * 64,
                 "show_config_sha256": "3" * 64,
             }
@@ -260,13 +258,15 @@ def _plan() -> BridgePlan:
             "mount_tag": "jail",
             "existing_filesystem": {"id": "filesystem-jail"},
         },
-        node_groups=(
-            BridgeNodeGroupPlan(
+        placement_domains=(
+            BridgePlacementDomain.external(
                 name="cxcli-controller-bridge-a",
+                role="external-a",
                 template=deepcopy(source_template),
             ),
-            BridgeNodeGroupPlan(
+            BridgePlacementDomain.external(
                 name="cxcli-controller-bridge-b",
+                role="external-b",
                 template=deepcopy(source_template),
             ),
         ),
@@ -417,6 +417,7 @@ def test_bridge_journal_starts_with_required_v4_sections() -> None:
     assert journal["authority"]["owner"] == "source-singleton"
     assert journal["authority"]["source_restart_prohibited"] is False
     assert journal["source_configuration"] == {}
+    assert journal["configuration_recoveries"] == []
     assert journal["tui_actions"]["checkpoint_path"] == "slurm.action_journal"
     assert journal["login_session_handoff"]["target_binding"] == {}
     assert journal["authority_lease"]["holder_identity"] == ("source-epoch-1:source-singleton")
@@ -641,8 +642,7 @@ def test_old_controller_taint_is_replaced_by_one_shared_bridge_scheduling_contra
     ]
     source_role_key = "slurm.nebius.ai/nodeset-name"
     assert any(
-        taint["key"] == source_role_key
-        for taint in plan.node_groups[0].template["taints"]
+        taint["key"] == source_role_key for taint in plan.placement_domains[0].template["taints"]
     )
     assert all(
         payload["spec"]["template"]["taints"]
@@ -693,6 +693,8 @@ def test_old_controller_taint_is_replaced_by_one_shared_bridge_scheduling_contra
         namespace=plan.namespace,
         slot=0,
         image=plan.source_slurm_image,
+        campaign_fingerprint=plan.campaign_fingerprint,
+        cluster_id=plan.cluster_id,
     )
     stager = migration._bridge_stager_pod(plan=plan)  # noqa: SLF001
 
@@ -754,7 +756,7 @@ def test_bridge_statefulset_is_two_replicas_with_shared_state_and_anti_affinity(
 
     for item in objects:
         assert item["metadata"]["labels"][CONTROLLER_BRIDGE_LABEL] == "true"
-    assert namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == ("baseline")
+    assert namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == ("privileged")
     assert namespace["metadata"]["labels"]["pod-security.kubernetes.io/warn"] == ("restricted")
     assert set(network_policies) == {
         "cxcli-controller-bridge-default-deny",
@@ -775,6 +777,12 @@ def test_bridge_statefulset_is_two_replicas_with_shared_state_and_anti_affinity(
         },
     ]
     assert required_policy["egress"][-1]["to"] == [{"ipBlock": {"cidr": "10.96.0.1/32"}}]
+    assert required_policy["egress"][1]["to"] == [
+        {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
+            "podSelector": {"matchLabels": {"k8s-app": "coredns"}},
+        }
+    ]
     assert "0.0.0.0/0" not in repr(required_policy)
     assert '{"namespaceSelector": {}}' not in repr(required_policy)
     assert {port["port"] for rule in required_policy["egress"] for port in rule["ports"]} == {
@@ -824,6 +832,167 @@ def test_bridge_statefulset_is_two_replicas_with_shared_state_and_anti_affinity(
         "requiredDuringSchedulingIgnoredDuringExecution"
     ]
     assert required[0]["topologyKey"] == "nebius.com/node-group-id"
+    mount_daemonset = next(item for item in objects if item["kind"] == "DaemonSet")
+    mount_spec = mount_daemonset["spec"]["template"]["spec"]
+    assert mount_spec["nodeSelector"] == {CONTROLLER_BRIDGE_LABEL: "true"}
+    assert mount_spec["automountServiceAccountToken"] is False
+    assert mount_spec["containers"][0]["image"] == _plan().source_slurm_image
+    assert mount_spec["containers"][0]["securityContext"] == {
+        "privileged": True,
+        "runAsUser": 0,
+    }
+    assert {item["name"]: item["value"] for item in mount_spec["containers"][0]["env"]} == {
+        "CONTROLLER_SPOOL_TAG": "controller-spool",
+        "CONTROLLER_SPOOL_PATH": "/mnt/controller-spool",
+        "JAIL_TAG": "jail",
+        "JAIL_PATH": "/mnt/jail",
+    }
+
+
+def test_managed_bridge_reuses_controller_and_system_domains_without_provider_payloads() -> None:
+    plan = replace(
+        _plan(),
+        placement_domains=(
+            BridgePlacementDomain.managed(
+                name="controller",
+                role="controller",
+                node_group_id="group-controller",
+                selector={"nebius.ai/soperator-bridge-domain": "controller"},
+                live_node_uid="controller-node-uid",
+                ready_capacity=2,
+            ),
+            BridgePlacementDomain.managed(
+                name="system",
+                role="system",
+                node_group_id="group-system",
+                selector={"nebius.ai/soperator-bridge-domain": "system"},
+                live_node_uid="system-node-uid",
+                ready_capacity=3,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="must not render provider node-group create"):
+        bridge_node_group_payloads(plan)
+
+    objects = bridge_kubernetes_objects(
+        plan,
+        controller_pod_spec={
+            "containers": [{"name": "slurmctld", "image": plan.source_slurm_image}],
+        },
+        state_volume_name="state",
+        state_volume_claim_name=CONTROLLER_BRIDGE_STATE_PVC,
+        state_storage_class="controller-spool",
+        state_storage_size="20Gi",
+        state_local_path="/mnt/controller-spool",
+        state_node_match_expressions=(
+            {
+                "key": "nebius.ai/soperator-bridge-domain",
+                "operator": "In",
+                "values": ["controller", "system"],
+            },
+        ),
+        jail_volume_claim_name=CONTROLLER_BRIDGE_JAIL_PVC,
+        jail_storage_class="jail",
+        jail_storage_size="512Gi",
+        jail_local_path="/mnt/jail",
+        jail_access_modes=("ReadWriteMany",),
+        jail_volume_mode="Filesystem",
+        soperator_namespace="soperator",
+        soperator_cluster_name="old-cluster",
+        kubernetes_api_cidrs=("10.96.0.1/32",),
+        replicas=2,
+    )
+
+    assert not any(item["kind"] == "DaemonSet" for item in objects)
+    priority_class = next(item for item in objects if item["kind"] == "PriorityClass")
+    assert priority_class["preemptionPolicy"] == "Never"
+    namespace = next(item for item in objects if item["kind"] == "Namespace")
+    assert namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == "baseline"
+    statefulset = next(item for item in objects if item["kind"] == "StatefulSet")
+    pod_spec = statefulset["spec"]["template"]["spec"]
+    assert "nodeSelector" not in pod_spec
+    assert pod_spec["priorityClassName"] == "cxcli-soperator-upgrade-bridge"
+    assert pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+        "nodeSelectorTerms"
+    ][0]["matchExpressions"][0] == {
+        "key": "nebius.ai/soperator-bridge-domain",
+        "operator": "In",
+        "values": ["controller", "system"],
+    }
+    assert pod_spec["topologySpreadConstraints"] == [
+        {
+            "maxSkew": 1,
+            "minDomains": 2,
+            "topologyKey": "nebius.ai/soperator-bridge-domain",
+            "whenUnsatisfiable": "DoNotSchedule",
+            "labelSelector": {"matchLabels": {CONTROLLER_BRIDGE_LABEL: "true"}},
+        }
+    ]
+    assert {
+        item["value"]
+        for item in pod_spec["tolerations"]
+        if item.get("key") == "slurm.nebius.ai/nodeset-name"
+    } == {"controller", "system"}
+
+
+def test_managed_bridge_live_substrate_binds_distinct_fixed_ready_domains() -> None:
+    desired = {
+        role: {
+            "node_count": count,
+            "jail": True,
+            "sfs_filesystem_keys": ["jail", "controller-spool"],
+            "node_labels": {"nebius.ai/soperator-bridge-domain": role},
+        }
+        for role, count in (("controller", 2), ("system", 3))
+    }
+    nodes = []
+    for role, count in (("controller", 2), ("system", 3)):
+        for index in range(count):
+            nodes.append(
+                {
+                    "metadata": {
+                        "name": f"{role}-{index}",
+                        "uid": f"{role}-uid-{index}",
+                        "labels": {
+                            "nebius.ai/soperator-bridge-domain": role,
+                            "nebius.com/node-group-id": f"group-{role}",
+                        },
+                    },
+                    "spec": {"unschedulable": False},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                }
+            )
+
+    controller, system = managed_bridge_placement_domains_from_live_nodes(
+        desired_node_groups=desired,
+        kubernetes_nodes=nodes,
+    )
+
+    assert controller.node_group_id == "group-controller"
+    assert controller.ready_capacity == 2
+    assert system.node_group_id == "group-system"
+    assert system.ready_capacity == 3
+    assert controller.mutation_policy == system.mutation_policy == "kubernetes-only"
+
+
+def test_managed_bridge_live_substrate_rejects_autoscaling() -> None:
+    desired = {
+        role: {
+            "node_count": count,
+            "jail": True,
+            "sfs_filesystem_keys": ["controller-spool"],
+            "node_labels": {"nebius.ai/soperator-bridge-domain": role},
+        }
+        for role, count in (("controller", 2), ("system", 3))
+    }
+    desired["controller"]["autoscaling"] = {"min_node_count": 2, "max_node_count": 2}
+
+    with pytest.raises(ValueError, match="autoscaling absent"):
+        managed_bridge_placement_domains_from_live_nodes(
+            desired_node_groups=desired,
+            kubernetes_nodes=(),
+        )
 
 
 def test_bridge_network_policy_rejects_world_and_link_local_api_cidrs() -> None:
@@ -941,11 +1110,15 @@ def test_bridge_substrate_refuses_preexisting_foreign_resource(
 
 
 def test_source_and_final_controller_configs_have_exact_ordered_hosts() -> None:
-    source = "ClusterName=old-cluster\nSlurmctldHost=controller-0\nSlurmctldPort=6817\n"
+    source = (
+        "ClusterName=old-cluster\n"
+        "SlurmctldHost=controller-0(soperator-controller-svc)\n"
+        "SlurmctldPort=6817\n"
+    )
 
     bridged = source_controller_config_with_bridge_hosts(source)
     assert [line for line in bridged.splitlines() if line.startswith("SlurmctldHost=")] == [
-        "SlurmctldHost=controller-0",
+        "SlurmctldHost=controller-0(soperator-controller-svc)",
         "SlurmctldHost=cxcli-slurm-controller-bridge-0"
         "(cxcli-slurm-controller-bridge-0.cxcli-slurm-controller-bridge."
         "cxcli-soperator-upgrade-bridge.svc)",
@@ -1033,8 +1206,7 @@ def _cleaned_journal() -> dict[str, object]:
                 "scheduling_failure_domain": {
                     "topology_key": "nebius.com/node-group-id",
                     "node_group_id": node_group_id,
-                    "provider_topology_key": "topology.kubernetes.io/zone",
-                    "zone": f"eu-north1-{chr(ord('a') + index)}",
+                    "topology_value": node_group_id,
                     "node_name": f"bridge-node-{index}",
                     "node_uid": f"bridge-node-uid-{index}",
                 },
@@ -1251,6 +1423,15 @@ def _cleaned_journal() -> dict[str, object]:
     journal["source_configuration"] = {
         "schema": CONTROLLER_BRIDGE_SOURCE_CONFIGURATION_SCHEMA,
         "config_map_names": ["slurm-config"],
+        "source_reference": {
+            "jailed_config_name": "soperator-slurm-configs",
+            "jailed_config_uid": "jailed-config-uid",
+            "jailed_config_resource_version": "30",
+            "config_map_name": "slurm-config",
+            "config_map_uid": "source-config-uid",
+            "config_key": "slurm.conf",
+            "path": "/etc/slurm/slurm.conf",
+        },
         "config_key": "slurm.conf",
         "original_slurm_conf": original_slurm_conf,
         "original_slurm_conf_sha256": hashlib.sha256(
@@ -1268,6 +1449,8 @@ def _cleaned_journal() -> dict[str, object]:
             intended_slurm_conf
         ),
         "intent_at": "2026-07-12T10:02:00Z",
+        "reconfigured_at": "2026-07-12T10:03:30Z",
+        "source_ping_sha256": "9" * 64,
         "copies": {
             copy_name: {
                 "namespace": namespace,
@@ -1512,12 +1695,9 @@ def test_cleaned_bridge_journal_enforces_pvc_namespace_pv_delete_order() -> None
         if item["kind"] == "PersistentVolume" and item["name"].endswith("jail-pv")
     )
     key = "|".join(
-        str(jail_pv[field])
-        for field in ("api_version", "kind", "namespace", "name", "uid")
+        str(jail_pv[field]) for field in ("api_version", "kind", "namespace", "name", "uid")
     )
-    journal["cleanup"]["kubernetes_operations"][key]["intent_at"] = (
-        "2026-07-12T10:23:30Z"
-    )
+    journal["cleanup"]["kubernetes_operations"][key]["intent_at"] = "2026-07-12T10:23:30Z"
 
     with pytest.raises(ValueError, match="both PVs after"):
         validate_bridge_journal(journal)

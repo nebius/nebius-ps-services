@@ -118,11 +118,7 @@ def _pre_activation_gpu_checkpoint() -> dict[str, Any]:
                 "replacement_node_group_name": group_name,
             },
         }
-    return {
-        "phase_state": {
-            "rolling-compute-migration": {"target_node_groups": target_groups}
-        }
-    }
+    return {"phase_state": {"rolling-compute-migration": {"target_node_groups": target_groups}}}
 
 
 def _pre_activation_image_lock() -> dict[str, str]:
@@ -135,30 +131,28 @@ def _pre_activation_image_lock() -> dict[str, str]:
 
 
 def _install_pre_activation_gpu_fleet_lineage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        migration,
-        "_gpu_worker_target_lineage_bindings",
-        lambda **_kwargs: (
-            {"namespace": "soperator", "name": "training", "uid": "cluster-uid"},
-            {
-                "worker-gpu-a": {
-                    "target_slurmcluster_uid": "cluster-uid",
-                    "nodeset_uid": "nodeset-uid-a",
-                    "workload_uid": "workload-uid-a",
-                    "configured_replicas": "1",
-                },
-                "worker-gpu-b": {
-                    "target_slurmcluster_uid": "cluster-uid",
-                    "nodeset_uid": "nodeset-uid-b",
-                    "workload_uid": "workload-uid-b",
-                    "configured_replicas": "1",
-                },
+    def probe_job(**kwargs: Any) -> dict[str, Any]:
+        node = dict(kwargs["node"])
+        runner = kwargs["command_runner"]
+        second = str(node["node"]) == "gpu-node-1"
+        driver = getattr(runner, "second_driver", "550.90.07") if second else "550.90.07"
+        libcuda = getattr(runner, "second_libcuda_sha256", "a" * 64) if second else "a" * 64
+        return {
+            **node,
+            "status": "passed",
+            "probe_kind": "node-probe-job",
+            "probe_stage": kwargs["stage"],
+            "job": f"probe-{node['node']}-{kwargs['stage']}",
+            "job_uid": f"probe-uid-{node['node']}-{kwargs['stage']}",
+            "gpu_count": 8,
+            "driver_version": driver,
+            "source_library_sha256": {
+                "libcuda.so.1": libcuda,
+                "libnvidia-ml.so.1": "b" * 64,
             },
-        ),
-    )
-    monkeypatch.setattr(migration, "_gpu_worker_pod_matches_lineage", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(migration, "_gpu_driver_jail_pod_contract_reason", lambda _item: "")
-    monkeypatch.setattr(migration, "_gpu_driver_jail_init_passed", lambda _item: True)
+        }
+
+    monkeypatch.setattr(migration, "_ensure_gpu_fleet_probe_job", probe_job)
 
 
 def _pre_activation_gpu_fleet_runner(
@@ -211,6 +205,8 @@ def _pre_activation_gpu_fleet_runner(
             )
         raise AssertionError(command)
 
+    runner.second_driver = second_driver  # type: ignore[attr-defined]
+    runner.second_libcuda_sha256 = second_libcuda_sha256  # type: ignore[attr-defined]
     return runner
 
 
@@ -218,12 +214,13 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_image = "registry.example.invalid/populate-jail:4.0.2-slurm25.11.3-cuda12.9.0"
-    resolution = _populate_image_resolution(source_image)
+    runner_source = "registry.example.invalid/controller_slurmctld:4.0.2-slurm25.11.3"
+    resolution = _populate_image_resolution(runner_source)
     image = resolution.immutable_reference
     desired = build_jail_gpu_post_population_resources(
         namespace="soperator",
         target_ref="training",
-        populate_jail_image=image,
+        runner_image=image,
         passive_pvc="jail-rootfs-slot-b-pvc",
     )
     resources: dict[str, dict[str, Any]] = {}
@@ -250,13 +247,6 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     monkeypatch.setattr(migration, "_kubectl_get_namespace_resource", get_resource)
     monkeypatch.setattr(migration, "_kubectl_apply_objects", apply_objects)
     monkeypatch.setattr(migration, "_wait_for_job_complete_or_failed", lambda **_kwargs: None)
-    resolver_calls: list[tuple[str, str, str]] = []
-
-    def resolve_image(image_ref: str, *, os_name: str, architecture: str) -> OCIImageResolution:
-        resolver_calls.append((image_ref, os_name, architecture))
-        return resolution
-
-    monkeypatch.setattr(migration, "resolve_oci_image", resolve_image)
     monkeypatch.setattr(
         migration,
         "_jail_gpu_post_population_job_pod",
@@ -292,8 +282,8 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
         target_ref="training",
         values=_gpu_values(),
         populate_image=source_image,
+        runner_image_lock=resolution.as_payload(),
         passive_pvc="jail-rootfs-slot-b-pvc",
-        scheduling=None,
         populate_job={
             "uid": "populate-job-uid",
             "pvc_uid": "passive-pvc-uid",
@@ -307,9 +297,9 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     assert gate["status"] == "passed"
     assert gate["binding"]["source_populate_job_uid"] == "populate-job-uid"
     assert gate["binding"]["image"] == source_image
-    assert gate["binding"]["resolved_image"] == image
-    assert gate["binding"]["image_index_digest"] == resolution.index_digest
-    assert gate["binding"]["image_platform_digest"] == resolution.platform_digest
+    assert gate["binding"]["runner_image"] == image
+    assert gate["binding"]["runner_image_index_digest"] == resolution.index_digest
+    assert gate["binding"]["runner_image_platform_digest"] == resolution.platform_digest
     assert gate["image_lock"] == resolution.as_payload()
     assert gate["resource_uids"] == {
         "config_map_uid": "cm-uid",
@@ -323,16 +313,17 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     }
     assert len(gate["log_sha256"]) == 64
     assert gate["pod"]["pod_uid"] == "pod-uid"
-    assert resolver_calls == [(source_image, "linux", "amd64")]
     applied_job = resources[f"job/{desired.job['metadata']['name']}"]
     applied_container = applied_job["spec"]["template"]["spec"]["containers"][0]
     assert applied_container["image"] == image
-    assert applied_job["metadata"]["annotations"][
-        "nebius.ai/cxcli-populate-image-index-digest"
-    ] == resolution.index_digest
-    assert applied_job["metadata"]["annotations"][
-        "nebius.ai/cxcli-populate-image-platform-digest"
-    ] == resolution.platform_digest
+    assert (
+        applied_job["metadata"]["annotations"]["nebius.ai/cxcli-runner-image-index-digest"]
+        == resolution.index_digest
+    )
+    assert (
+        applied_job["metadata"]["annotations"]["nebius.ai/cxcli-runner-image-platform-digest"]
+        == resolution.platform_digest
+    )
     assert writes
     assert "passive rootfs" in lines[0]
 
@@ -341,13 +332,14 @@ def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_image = "registry.example.invalid/populate-jail:4.0.2-slurm25.11.3-cuda12.9.0"
-    resolution = _populate_image_resolution(source_image, index_hex="c", platform_hex="d")
+    runner_source = "registry.example.invalid/controller_slurmctld:4.0.2-slurm25.11.3"
+    resolution = _populate_image_resolution(runner_source, index_hex="c", platform_hex="d")
     image = resolution.immutable_reference
-    gpu_scheduling = migration._jail_gpu_post_population_scheduling(_gpu_values(), None)
+    gpu_scheduling = migration._jail_gpu_post_population_scheduling(_gpu_values())
     desired = build_jail_gpu_post_population_resources(
         namespace="soperator",
         target_ref="training",
-        populate_jail_image=image,
+        runner_image=image,
         passive_pvc="jail-rootfs-slot-b-pvc",
         scheduling=gpu_scheduling,
     )
@@ -362,17 +354,15 @@ def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound
         "nebius.ai/cxcli-source-populate-job-uid": "source-job",
         "nebius.ai/cxcli-source-populate-pvc-uid": "pvc-uid",
         "nebius.ai/cxcli-passive-pvc": "jail-rootfs-slot-b-pvc",
-        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(
-            source_image.encode()
-        ).hexdigest(),
-        "nebius.ai/cxcli-populate-image-index-digest": resolution.index_digest,
-        "nebius.ai/cxcli-populate-image-platform-digest": resolution.platform_digest,
+        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(source_image.encode()).hexdigest(),
+        "nebius.ai/cxcli-runner-image-index-digest": resolution.index_digest,
+        "nebius.ai/cxcli-runner-image-platform-digest": resolution.platform_digest,
     }
     desired_config["metadata"].setdefault("annotations", {}).update(annotations)
     desired_job["metadata"].setdefault("annotations", {}).update(annotations)
-    desired_job["spec"]["template"].setdefault("metadata", {}).setdefault(
-        "annotations", {}
-    ).update(annotations)
+    desired_job["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {}).update(
+        annotations
+    )
     monkeypatch.setattr(
         migration,
         "_kubectl_get_namespace_resource",
@@ -386,17 +376,15 @@ def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound
                 "source_populate_pvc_uid": "pvc-uid",
                 "passive_pvc": "jail-rootfs-slot-b-pvc",
                 "image": source_image,
-                "resolved_image": image,
-                "image_index_digest": resolution.index_digest,
-                "image_platform_digest": resolution.platform_digest,
+                "runner_image": image,
+                "runner_image_index_digest": resolution.index_digest,
+                "runner_image_platform_digest": resolution.platform_digest,
                 "script_sha256": desired.script_sha256,
                 "scheduling_sha256": migration._fingerprint(gpu_scheduling),
                 "config_map": desired.config_map["metadata"]["name"],
                 "job": desired.job["metadata"]["name"],
                 "config_contract_sha256": migration._fingerprint(
-                    migration._jail_gpu_post_population_resource_contract(
-                        desired_config
-                    )
+                    migration._jail_gpu_post_population_resource_contract(desired_config)
                 ),
                 "job_contract_sha256": migration._fingerprint(
                     migration._jail_gpu_post_population_resource_contract(desired_job)
@@ -417,8 +405,8 @@ def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound
             target_ref="training",
             values=_gpu_values(),
             populate_image=source_image,
+            runner_image_lock=resolution.as_payload(),
             passive_pvc="jail-rootfs-slot-b-pvc",
-            scheduling=None,
             populate_job={
                 "uid": "source-job",
                 "pvc_uid": "pvc-uid",
@@ -429,13 +417,181 @@ def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound
         )
 
 
+def test_external_jail_gpu_post_population_recovers_unbound_failed_populate_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_image = "registry.example.invalid/populate-jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    old_resolution = _populate_image_resolution(source_image, index_hex="1", platform_hex="2")
+    runner_source = "registry.example.invalid/controller_slurmctld:4.0.2-slurm25.11.3"
+    runner_resolution = _populate_image_resolution(runner_source, index_hex="3", platform_hex="4")
+    scheduling = migration._failed_populate_runner_gpu_post_population_scheduling(
+        _gpu_values(),
+        priority_class_name="soperator-worker-high-priority",
+    )
+    old_resources = build_jail_gpu_post_population_resources(
+        namespace="soperator",
+        target_ref="training",
+        runner_image=old_resolution.immutable_reference,
+        passive_pvc="jail-rootfs-slot-b-pvc",
+        scheduling=scheduling,
+    )
+    old_config = copy.deepcopy(dict(old_resources.config_map))
+    old_job = copy.deepcopy(dict(old_resources.job))
+    migration._restore_failed_populate_runner_gpu_job_contract(
+        old_job,
+        priority_class_name="soperator-worker-high-priority",
+    )
+    old_job["spec"]["template"]["spec"]["containers"][0]["command"] = [
+        "/bin/bash",
+        "-c",
+        migration._JAIL_GPU_POST_POPULATION_EVIDENCE_WRAPPER,
+    ]
+    old_annotations = {
+        "nebius.ai/cxcli-source-populate-job-uid": "populate-job-uid",
+        "nebius.ai/cxcli-source-populate-pvc-uid": "passive-pvc-uid",
+        "nebius.ai/cxcli-passive-pvc": "jail-rootfs-slot-b-pvc",
+        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(source_image.encode()).hexdigest(),
+        "nebius.ai/cxcli-populate-image-index-digest": old_resolution.index_digest,
+        "nebius.ai/cxcli-populate-image-platform-digest": old_resolution.platform_digest,
+    }
+    for manifest in (old_config, old_job):
+        manifest["metadata"].setdefault("annotations", {}).update(old_annotations)
+    old_job["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {}).update(
+        old_annotations
+    )
+    old_config_contract_sha256 = migration._fingerprint(
+        migration._jail_gpu_post_population_resource_contract(old_config)
+    )
+    old_job_contract_sha256 = migration._fingerprint(
+        migration._jail_gpu_post_population_resource_contract(old_job)
+    )
+    old_job["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"][
+        "nvidia.com/gpu"
+    ] = "1"
+    old_config["metadata"].update({"uid": "old-cm-uid", "resourceVersion": "10"})
+    old_job["metadata"].update({"uid": "old-job-uid", "resourceVersion": "11"})
+    old_job["status"] = {
+        "conditions": [{"type": "Failed", "status": "True"}],
+        "failed": 1,
+    }
+    old_pod_spec = old_job["spec"]["template"]["spec"]
+    old_container = old_pod_spec["containers"][0]
+    assert old_pod_spec.get("runtimeClassName") is None
+    assert old_pod_spec["priorityClassName"] == "soperator-worker-high-priority"
+    assert old_container.get("env") is None
+    assert old_container["resources"] == {"limits": {"nvidia.com/gpu": "1"}}
+    config_name = str(old_config["metadata"]["name"])
+    job_name = str(old_job["metadata"]["name"])
+    resources: dict[str, dict[str, Any]] = {
+        f"configmap/{config_name}": old_config,
+        f"job/{job_name}": old_job,
+    }
+
+    def get_resource(**kwargs: Any) -> tuple[bool, Mapping[str, Any]]:
+        payload = resources.get(str(kwargs["resource"]))
+        return (payload is not None, copy.deepcopy(payload or {}))
+
+    def apply_objects(*, objects: Sequence[Mapping[str, Any]], **_kwargs: Any) -> None:
+        for item in objects:
+            payload = copy.deepcopy(dict(item))
+            metadata = payload.setdefault("metadata", {})
+            kind = str(payload["kind"])
+            metadata["uid"] = "new-cm-uid" if kind == "ConfigMap" else "new-job-uid"
+            if kind == "Job":
+                payload["status"] = {
+                    "conditions": [{"type": "Complete", "status": "True"}],
+                    "succeeded": 1,
+                }
+            resources[f"{kind.lower()}/{metadata['name']}"] = payload
+
+    deleted: list[tuple[str, str]] = []
+
+    def delete_resource(*, api_path: str, uid: str, **_kwargs: Any) -> None:
+        deleted.append((api_path, uid))
+        key = f"job/{job_name}" if "/jobs/" in api_path else f"configmap/{config_name}"
+        resources.pop(key)
+
+    monkeypatch.setattr(migration, "_kubectl_get_namespace_resource", get_resource)
+    monkeypatch.setattr(migration, "_kubectl_apply_objects", apply_objects)
+    monkeypatch.setattr(
+        migration, "_delete_kubernetes_resource_with_uid_precondition", delete_resource
+    )
+    monkeypatch.setattr(migration, "_wait_for_job_complete_or_failed", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_jail_gpu_post_population_job_pod",
+        lambda **_kwargs: {
+            "pod_uid": "new-pod-uid",
+            "node_name": "gpu-node-0",
+            "configured_image": runner_resolution.immutable_reference,
+            "resolved_image_digest": runner_resolution.platform_digest,
+            "image_id": runner_resolution.immutable_reference,
+        },
+    )
+    phase: dict[str, Any] = {
+        "gpu_post_population": {
+            "status": "intent-recorded",
+            "image_lock": old_resolution.as_payload(),
+            "binding": {
+                "source_populate_job_uid": "populate-job-uid",
+                "source_populate_pvc_uid": "passive-pvc-uid",
+                "passive_pvc": "jail-rootfs-slot-b-pvc",
+                "image": source_image,
+                "resolved_image": old_resolution.immutable_reference,
+                "image_index_digest": old_resolution.index_digest,
+                "image_platform_digest": old_resolution.platform_digest,
+                "script_sha256": old_resources.script_sha256,
+                "scheduling_sha256": migration._fingerprint(scheduling),
+                "config_map": config_name,
+                "job": job_name,
+                "config_contract_sha256": old_config_contract_sha256,
+                "job_contract_sha256": old_job_contract_sha256,
+            },
+        }
+    }
+
+    lines = migration._ensure_jail_gpu_post_population_gate(
+        phase=phase,
+        command_runner=lambda args, **_kwargs: _result(
+            args,
+            stdout=(
+                "gpu-jail-post-population: driver=550.90.07 visible_gpus=8 status=passed\n"
+                "gpu-jail-source-evidence: driver=550.90.07 libcuda_sha256="
+                + "b" * 64
+                + " libnvidia_ml_sha256="
+                + "c" * 64
+                + "\n"
+            ),
+        ),
+        kube_context="ctx",
+        target_ref="training",
+        values=_gpu_values(),
+        populate_image=source_image,
+        runner_image_lock=runner_resolution.as_payload(),
+        passive_pvc="jail-rootfs-slot-b-pvc",
+        populate_job={
+            "uid": "populate-job-uid",
+            "pvc_uid": "passive-pvc-uid",
+            "pvc": "jail-rootfs-slot-b-pvc",
+            "image": source_image,
+        },
+        checkpoint_writer=None,
+    )
+
+    assert [uid for _path, uid in deleted] == ["old-job-uid", "old-cm-uid"]
+    assert phase["gpu_post_population_failed_intent_recovery"]["status"] == (
+        "replaced-before-switch"
+    )
+    assert phase["gpu_post_population"]["status"] == "passed"
+    assert phase["gpu_post_population"]["image_lock"] == runner_resolution.as_payload()
+    assert "passive rootfs" in lines[0]
+
+
 def test_gpu_post_population_image_lock_rejects_checkpoint_drift_without_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_image = "registry.example.invalid/populate-jail:4.0.2"
-    gate: dict[str, Any] = {
-        "image_lock": _populate_image_resolution(source_image).as_payload()
-    }
+    source_image = "registry.example.invalid/controller_slurmctld:4.0.2-slurm25.11.3"
+    gate: dict[str, Any] = {"image_lock": _populate_image_resolution(source_image).as_payload()}
     gate["image_lock"]["architecture"] = "arm64"
     monkeypatch.setattr(
         migration,
@@ -449,7 +605,7 @@ def test_gpu_post_population_image_lock_rejects_checkpoint_drift_without_resolut
     ):
         migration._checkpoint_jail_gpu_post_population_image_lock(
             gate=gate,
-            populate_image=source_image,
+            runner_image_lock=_populate_image_resolution(source_image).as_payload(),
             checkpoint_writer=None,
         )
 
@@ -537,9 +693,7 @@ def test_external_jail_gpu_temporary_partition_is_root_only(
             return _result(selected)
         return _result(
             selected,
-            stdout=(
-                f"PartitionName={selected[3]} Nodes=worker-gpu-0 RootOnly=YES State=UP\n"
-            ),
+            stdout=(f"PartitionName={selected[3]} Nodes=worker-gpu-0 RootOnly=YES State=UP\n"),
         )
 
     monkeypatch.setattr(migration, "_kubectl_exec_login_once", exec_login_once)
@@ -577,13 +731,7 @@ def test_external_jail_gpu_post_population_uses_gpu_nodeset_scheduling() -> None
         }
     )
 
-    scheduling = migration._jail_gpu_post_population_scheduling(
-        values,
-        {
-            "nodeSelector": {"slurm.nebius.ai/nodeset-name": "system"},
-            "priorityClassName": "populate-fallback",
-        },
-    )
+    scheduling = migration._jail_gpu_post_population_scheduling(values)
 
     assert scheduling == {
         "nodeSelector": {
@@ -598,8 +746,121 @@ def test_external_jail_gpu_post_population_uses_gpu_nodeset_scheduling() -> None
                 "effect": "NoSchedule",
             }
         ],
-        "priorityClassName": "soperator-worker-high-priority",
     }
+
+
+def test_gpu_pre_activation_fleet_uses_accepted_in_place_group_identities() -> None:
+    checkpoint = {
+        "compute_migration": {"mode": migration.COMPUTE_MIGRATION_MODE_IN_PLACE},
+        "operation_intent": {
+            "intended_postcondition": {
+                "mk8s": {
+                    "node_groups": [
+                        {
+                            "id": "gpu-group-id-0",
+                            "name": "worker-gpu-a-0",
+                            "role": "worker-gpu-a",
+                            "fixed_size": 1,
+                            "gpu_software_mode": "provider-managed",
+                        },
+                        {
+                            "id": "gpu-group-id-1",
+                            "name": "worker-gpu-b-0",
+                            "role": "worker-gpu-b",
+                            "fixed_size": 1,
+                            "gpu_software_mode": "provider-managed",
+                        },
+                    ]
+                }
+            }
+        },
+    }
+
+    bindings = migration._target_gpu_node_group_bindings(
+        checkpoint=checkpoint,
+        gpu_nodesets=("worker-gpu-a", "worker-gpu-b"),
+    )
+
+    assert bindings == (
+        {
+            "state_key": "in-place:worker-gpu-a-0",
+            "node_group_id": "gpu-group-id-0",
+            "node_group_name": "worker-gpu-a-0",
+            "nodeset": "worker-gpu-a",
+            "accepted_nodeset_label": "worker-gpu-a",
+            "fixed_node_count": 1,
+        },
+        {
+            "state_key": "in-place:worker-gpu-b-0",
+            "node_group_id": "gpu-group-id-1",
+            "node_group_name": "worker-gpu-b-0",
+            "nodeset": "worker-gpu-b",
+            "accepted_nodeset_label": "worker-gpu-b",
+            "fixed_node_count": 1,
+        },
+    )
+
+
+def test_gpu_pre_activation_in_place_maps_one_legacy_role_to_target_nodeset() -> None:
+    checkpoint = {
+        "compute_migration": {"mode": migration.COMPUTE_MIGRATION_MODE_IN_PLACE},
+        "operation_intent": {
+            "intended_postcondition": {
+                "mk8s": {
+                    "node_groups": [
+                        {
+                            "id": "gpu-group-id-0",
+                            "name": "worker-0-0",
+                            "role": "worker-0",
+                            "fixed_size": 1,
+                            "gpu_software_mode": "provider-managed",
+                        }
+                    ]
+                }
+            }
+        },
+    }
+    bindings = migration._target_gpu_node_group_bindings(
+        checkpoint=checkpoint,
+        gpu_nodesets=("worker",),
+    )
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        return _result(
+            args,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "gpu-node-0",
+                                "uid": "node-uid-0",
+                                "resourceVersion": "7",
+                                "labels": {
+                                    "nebius.com/node-group-id": "gpu-group-id-0",
+                                    "slurm.nebius.ai/nodeset": "worker-0",
+                                },
+                            },
+                            "spec": {},
+                            "status": {
+                                "allocatable": {"nvidia.com/gpu": "8"},
+                                "conditions": [{"type": "Ready", "status": "True"}],
+                            },
+                        }
+                    ]
+                }
+            ),
+        )
+
+    fleet = migration._ready_owned_target_gpu_nodes(
+        command_runner=runner,
+        kube_context="ctx",
+        node_groups=bindings,
+    )
+
+    assert bindings[0]["nodeset"] == "worker"
+    assert fleet[0]["nodeset"] == "worker"
+    assert fleet[0]["node_uid"] == "node-uid-0"
 
 
 def test_gpu_pre_activation_fleet_gate_binds_every_ready_node_uid(
@@ -639,7 +900,8 @@ def test_gpu_pre_activation_fleet_gate_binds_every_ready_node_uid(
     assert gate["status"] == "passed"
     assert gate["scope"] == "pre-activation-source-fleet"
     assert gate["target_ready_gpu_node_uids"] == ["node-uid-0", "node-uid-1"]
-    assert {worker["node_uid"] for worker in gate["workers"]} == {
+    assert gate["workers"] == []
+    assert {node["node_uid"] for node in gate["target_ready_gpu_nodes"]} == {
         "node-uid-0",
         "node-uid-1",
     }
@@ -680,7 +942,7 @@ def test_gpu_pre_activation_mixed_fleet_blocks_slot_switch(
 
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
-        match="driver/library evidence|source probe",
+        match="driver/library evidence|source probe|mixed NVIDIA driver",
     ):
         migration._ensure_gpu_worker_jail_release_gate(
             phase=phase,
@@ -838,8 +1100,13 @@ def test_gpu_fleet_probe_job_is_node_pinned_and_read_only() -> None:
 
     assert pod_spec["nodeName"] == "gpu-node-spare"
     assert pod_spec["automountServiceAccountToken"] is False
+    assert pod_spec["runtimeClassName"] == "nvidia"
     assert container["image"] == _pre_activation_image_lock()["immutable_reference"]
-    assert container["resources"]["limits"] == {"nvidia.com/gpu": 1}
+    assert container["resources"] == {}
+    assert container["env"] == [
+        {"name": "NVIDIA_VISIBLE_DEVICES", "value": "all"},
+        {"name": "NVIDIA_DRIVER_CAPABILITIES", "value": "compute,utility"},
+    ]
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
     assert container["securityContext"]["capabilities"] == {
         "drop": ["ALL"],
@@ -853,7 +1120,7 @@ def test_gpu_fleet_probe_job_is_node_pinned_and_read_only() -> None:
         }
     ]
     assert pod_spec["volumes"][0]["hostPath"] == {
-        "path": "/run/nvidia/driver",
+        "path": "/",
         "type": "Directory",
     }
 
@@ -919,7 +1186,7 @@ def test_gpu_activation_boundary_blocks_exact_owned_fleet_membership_drift(
     assert gate["activation_revalidation"]["status"] == "failed"
 
 
-def test_gpu_activation_boundary_reprobes_exact_fleet_and_worker_guards(
+def test_gpu_activation_boundary_reprobes_exact_fleet_without_source_workload_lineage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_pre_activation_gpu_fleet_lineage(monkeypatch)
@@ -976,10 +1243,7 @@ def test_gpu_activation_boundary_reprobes_exact_fleet_and_worker_guards(
     validation = gate["activation_revalidation"]
     assert validation["status"] == "passed"
     assert validation["fleet_identity_sha256"] == gate["fleet_identity_sha256"]
-    assert {item["pod_uid"] for item in validation["workers"]} == {
-        "pod-uid-0",
-        "pod-uid-1",
-    }
+    assert validation["workers"] == []
     assert stages == ["activation", "activation"]
     assert "immediately before switch" in lines[0]
 
@@ -1021,7 +1285,7 @@ def test_gpu_post_population_rejects_non_amd64_gpu_nodeset() -> None:
         migration.SoperatorMigrationPhasePending,
         match="requires a linux/amd64 GPU NodeSet",
     ):
-        migration._jail_gpu_post_population_scheduling(values, None)
+        migration._jail_gpu_post_population_scheduling(values)
 
 
 def test_external_jail_gpu_release_probe_uses_post_population_evidence_marker() -> None:
@@ -1035,7 +1299,7 @@ def test_external_jail_gpu_release_probe_uses_post_population_evidence_marker() 
 def test_gpu_pre_activation_source_probe_rejects_broken_or_out_of_rootfs_sources() -> None:
     probe = migration._GPU_PRE_ACTIVATION_FLEET_SOURCE_PROBE  # noqa: SLF001
 
-    assert 'driver_root=/run/nvidia/driver' in probe
+    assert "driver_root=/run/nvidia/driver" in probe
     assert 'source="$(readlink -f -- "${host_lib_dir}/${soname}")"' in probe
     assert "host driver library is missing or broken" in probe
     assert "host driver library resolves outside the read-only host NVIDIA root" in probe
@@ -1187,9 +1451,7 @@ def test_external_jail_gpu_smoke_lost_response_is_indeterminate_and_not_retried(
 
     with pytest.raises(migration.SoperatorMigrationPhasePending, match="will not blindly retry"):
         migration._jail_gpu_pinned_h100_smoke(
-            command_runner=lambda args, **_kwargs: (
-                calls.append(args) or _result(args)
-            ),
+            command_runner=lambda args, **_kwargs: calls.append(args) or _result(args),
             kube_context="ctx",
             state=state,
             slurm_node="worker-gpu-0",

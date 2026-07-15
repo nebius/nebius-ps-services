@@ -1689,11 +1689,8 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         group = mk8s_inputs["node_groups"][group_name]
         assert group["platform"] == "cpu-d3"
         assert group["preset"] == "32vcpu-128gb"
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 4,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 1
@@ -1705,9 +1702,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         }
     ]
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert "autoscaling = {" in main_tf
-    assert "min_node_count = 1" in main_tf
-    assert "max_node_count = 4" in main_tf
+    assert "node_count = 3" in main_tf
 
 
 def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Path) -> None:
@@ -2080,7 +2075,9 @@ data:
     def fake_run(command: list[str], **_kwargs: object) -> Result:
         calls.append(command)
         if command[:3] == ["helm", "dependency", "build"]:
-            raise AssertionError("helm dependency build should not run for packaged file dependency")
+            raise AssertionError(
+                "helm dependency build should not run for packaged file dependency"
+            )
         return Result()
 
     monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
@@ -3997,9 +3994,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     onboard_report = soperator_cluster_report_dir / "discovery"
     migrate_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
     migration_detail_report = (
-        soperator_cluster_report_dir
-        / "ext-soperator-upgrade"
-        / "deploy-smoke-report-external.json"
+        soperator_cluster_report_dir / "ext-soperator-upgrade" / "deploy-smoke-report-external.json"
     )
     segment_report_dir = (
         soperator_cluster_report_dir
@@ -4065,7 +4060,9 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert migrate_report.read_text(encoding="utf-8").startswith("# External Soperator Upgrade Report")
+    assert migrate_report.read_text(encoding="utf-8").startswith(
+        "# External Soperator Upgrade Report"
+    )
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert segment_report.read_text(encoding="utf-8") == "# Segment Report\n"
     assert segment_json_report.read_text(encoding="utf-8") == '{"segment": "segment-1"}\n'

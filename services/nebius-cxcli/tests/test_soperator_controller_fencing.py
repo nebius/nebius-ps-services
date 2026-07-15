@@ -74,7 +74,7 @@ def _census_target(
     )
 
 
-def test_runtime_fence_pod_uses_host_pid_without_host_mount_or_privilege() -> None:
+def test_runtime_fence_pod_uses_dedicated_privileged_host_pid_boundary() -> None:
     pod = controller_runtime_fence_pod(
         campaign_fingerprint="a" * 64,
         authority_epoch="bridge-target-abcdef",
@@ -89,16 +89,18 @@ def test_runtime_fence_pod_uses_host_pid_without_host_mount_or_privilege() -> No
     assert "volumes" not in pod["spec"]
     container = pod["spec"]["containers"][0]
     assert container["securityContext"] == {
-        "allowPrivilegeEscalation": False,
+        "privileged": True,
         "readOnlyRootFilesystem": True,
         "runAsNonRoot": False,
         "runAsUser": 0,
-        "capabilities": {"drop": ["ALL"]},
     }
+    assert "securityContext" not in pod["spec"]
     script = container["command"][2]
     assert 'for process in "$proc_root"/[0-9]*' in script
     assert "slurmctld_count" in script
     assert "writable_state_mount_count" in script
+    assert "ignored_mountinfo_field" in script
+    assert "| awk" not in script
     assert "hostPath" not in repr(pod)
     assert pod["metadata"]["labels"][CONTROLLER_FENCE_LABEL] == "true"
 
@@ -147,7 +149,15 @@ def test_runtime_census_pod_binds_host_pid_scan_to_exact_cri_identity() -> None:
     assert pod["metadata"]["namespace"] == CONTROLLER_INSPECTOR_NAMESPACE
     assert pod["spec"]["automountServiceAccountToken"] is False
     assert "volumes" not in pod["spec"]
-    script = pod["spec"]["containers"][0]["command"][2]
+    assert "securityContext" not in pod["spec"]
+    container = pod["spec"]["containers"][0]
+    assert container["securityContext"] == {
+        "privileged": True,
+        "readOnlyRootFilesystem": True,
+        "runAsNonRoot": False,
+        "runAsUser": 0,
+    }
+    script = container["command"][2]
     assert 'for process in "$proc_root"/[0-9]*' in script
     assert 'cat "$process/cgroup"' in script
     assert _process_binding().runtime_id in script
@@ -162,12 +172,18 @@ def _write_fake_process(
     exe: str,
     cgroup: str,
     mountinfo: str | None = None,
+    cmdline: bytes | None = None,
+    ppid: int = 1,
 ) -> None:
     process = proc_root / str(pid)
     process.mkdir(parents=True)
     (process / "comm").write_text(f"{comm}\n", encoding="utf-8")
-    (process / "cmdline").write_bytes(f"{exe}\0-D\0".encode())
+    (process / "cmdline").write_bytes(cmdline or f"{exe}\0-D\0".encode())
     (process / "cgroup").write_text(f"0::{cgroup}\n", encoding="utf-8")
+    (process / "status").write_text(
+        f"Name:\t{comm}\nState:\tS (sleeping)\nPid:\t{pid}\nPPid:\t{ppid}\n",
+        encoding="utf-8",
+    )
     (process / "exe").symlink_to(exe)
     if mountinfo is not None:
         (process / "mountinfo").write_text(mountinfo, encoding="utf-8")
@@ -184,21 +200,16 @@ def _write_cat_fault_shim(
     bin_dir.mkdir()
     cases: list[str] = []
     if vanished_pid is not None:
-        cases.append(
-            f'  */{vanished_pid}/comm) rm -rf -- "${{1%/comm}}"; exit 1 ;;'
-        )
+        cases.append(f'  */{vanished_pid}/comm) rm -rf -- "${{1%/comm}}"; exit 1 ;;')
     if vanished_mountinfo_pid is not None:
         cases.append(
-            f'  */{vanished_mountinfo_pid}/mountinfo) '
-            'rm -rf -- "${1%/mountinfo}"; exit 1 ;;'
+            f'  */{vanished_mountinfo_pid}/mountinfo) rm -rf -- "${{1%/mountinfo}}"; exit 1 ;;'
         )
     if unreadable_pid is not None:
         cases.append(f"  */{unreadable_pid}/comm) exit 1 ;;")
     shim = bin_dir / "cat"
     shim.write_text(
-        "#!/bin/sh\ncase \"$1\" in\n"
-        + "\n".join(cases)
-        + "\nesac\nexec /bin/cat \"$@\"\n",
+        '#!/bin/sh\ncase "$1" in\n' + "\n".join(cases) + '\nesac\nexec /bin/cat "$@"\n',
         encoding="utf-8",
     )
     shim.chmod(0o755)
@@ -278,6 +289,92 @@ def test_runtime_census_accepts_config_script_child_only_with_exact_cri_binding(
     evidence = parse_controller_runtime_census_evidence(result.stdout, target=target)
     assert evidence.exclusive is True
     assert evidence.as_payload()["schema"] == CONTROLLER_CENSUS_SCHEMA
+
+
+def test_runtime_census_ignores_exact_slurmscriptd_child_of_expected_controller(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    binding = _process_binding()
+    cgroup = f"/kubepods.slice/cri-containerd-{binding.runtime_id}.scope"
+    _write_fake_process(
+        proc_root,
+        pid=202,
+        comm="slurmctld",
+        exe="/usr/sbin/slurmctld",
+        cgroup=cgroup,
+    )
+    _write_fake_process(
+        proc_root,
+        pid=203,
+        ppid=202,
+        comm="slurmscriptd",
+        exe="/usr/sbin/slurmctld",
+        cmdline=b"slurmctld: slurmscriptd\0",
+        cgroup=cgroup,
+    )
+    target = _census_target(binding)
+
+    result = subprocess.run(  # noqa: S603
+        [
+            "/bin/sh",
+            "-ec",
+            fencing._controller_runtime_census_script(  # noqa: SLF001
+                target,
+                proc_root=str(proc_root),
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "slurmctld_count=1" in result.stdout
+    assert "ambiguous_process_count=0" in result.stdout
+
+
+def test_runtime_census_rejects_changed_slurmscriptd_process_title(tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    binding = _process_binding()
+    cgroup = f"/kubepods.slice/cri-containerd-{binding.runtime_id}.scope"
+    _write_fake_process(
+        proc_root,
+        pid=202,
+        comm="slurmctld",
+        exe="/usr/sbin/slurmctld",
+        cgroup=cgroup,
+    )
+    _write_fake_process(
+        proc_root,
+        pid=203,
+        ppid=202,
+        comm="slurmscriptd",
+        exe="/usr/sbin/slurmctld",
+        cmdline=b"slurmctld: changed-helper\0",
+        cgroup=cgroup,
+    )
+    target = _census_target(binding)
+
+    result = subprocess.run(  # noqa: S603
+        [
+            "/bin/sh",
+            "-ec",
+            fencing._controller_runtime_census_script(  # noqa: SLF001
+                target,
+                proc_root=str(proc_root),
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "slurmctld_count=2" in result.stdout
+    assert "ambiguous_process_count=1" in result.stdout
 
 
 def test_runtime_census_rejects_container_id_prefix_collision(tmp_path: Path) -> None:
@@ -459,6 +556,7 @@ def test_authority_lease_binds_campaign_epoch_owner_and_immutable_identity() -> 
     desired = controller_authority_lease(
         namespace="cxcli-soperator-upgrade-bridge",
         campaign_fingerprint="c" * 64,
+        cluster_id="cluster-1",
         authority_epoch="target-singleton-abcdef",
         owner="target-singleton",
     )
@@ -470,6 +568,7 @@ def test_authority_lease_binds_campaign_epoch_owner_and_immutable_identity() -> 
         live,
         namespace="cxcli-soperator-upgrade-bridge",
         campaign_fingerprint="c" * 64,
+        cluster_id="cluster-1",
         authority_epoch="target-singleton-abcdef",
         owner="target-singleton",
     )
@@ -485,6 +584,7 @@ def test_authority_lease_binds_campaign_epoch_owner_and_immutable_identity() -> 
             live,
             namespace="cxcli-soperator-upgrade-bridge",
             campaign_fingerprint="c" * 64,
+            cluster_id="cluster-1",
             authority_epoch="target-singleton-abcdef",
             owner="target-singleton",
         )
@@ -503,6 +603,7 @@ def test_authority_lease_transition_reconciles_a_lost_patch_response(
     lease = controller_authority_lease(
         namespace=namespace,
         campaign_fingerprint=campaign,
+        cluster_id="cluster-1",
         authority_epoch="bridge-target-aaaaaaaaaaaa",
         owner="bridge-target",
     )
@@ -553,6 +654,7 @@ def test_authority_lease_transition_reconciles_a_lost_patch_response(
     journal: dict[str, object] = {
         "namespace": namespace,
         "campaign_fingerprint": campaign,
+        "cluster_id": "cluster-1",
         "authority_lease_transitions": [],
     }
     with pytest.raises(TimeoutError, match="response lost"):
@@ -599,6 +701,7 @@ def test_authority_lease_cas_revalidates_node_provider_identity_immediately_befo
     lease = controller_authority_lease(
         namespace=namespace,
         campaign_fingerprint="f" * 64,
+        cluster_id="cluster-1",
         authority_epoch="bridge-source-aaaaaaaaaaaa",
         owner="bridge-source",
     )
@@ -627,6 +730,7 @@ def test_authority_lease_cas_revalidates_node_provider_identity_immediately_befo
             journal={
                 "namespace": namespace,
                 "campaign_fingerprint": "f" * 64,
+                "cluster_id": "cluster-1",
                 "authority_lease_transitions": [],
             },
             from_epoch="bridge-source-aaaaaaaaaaaa",
@@ -755,6 +859,7 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
     slurmctld_count = 0
     node_get_count = 0
     replace_node_on_get = 0
+    commands: list[tuple[str, ...]] = []
 
     def apply_objects(**kwargs: object) -> None:
         objects = kwargs["objects"]
@@ -764,7 +869,10 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
         assert isinstance(metadata, dict)
         pod_name = str(metadata["name"])
         metadata["uid"] = f"uid-{len(applied_pods)}"
-        pod["status"] = {"phase": "Succeeded"}
+        pod["status"] = {
+            "phase": "Running",
+            "containerStatuses": [{"name": "inspector", "ready": True}],
+        }
         applied_pods[pod_name] = pod
 
     def json_from_command(
@@ -791,6 +899,7 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
     ) -> migration.SoperatorMigrationCommandResult:
         del input_text, timeout_seconds, check
         command = tuple(args)
+        commands.append(command)
         if "logs" not in command:
             return migration.SoperatorMigrationCommandResult(command, 0, "", "")
         output = "\n".join(
@@ -859,6 +968,19 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
             fresh_attempt=True,
         )
 
+    slurmctld_count = 0
+    resumed = migration._prove_controller_runtime_fence(  # noqa: SLF001
+        journal=journal,
+        boundary="writer-pre-scale",
+        targets=(target,),
+        image="registry.example/controller@sha256:" + "f" * 64,
+        kube_context="test-context",
+        command_runner=runner,
+        checkpoint_writer=lambda: None,
+        fresh_attempt=True,
+    )
+    assert resumed[0]["slurmctld_count"] == 0
+
     proofs = journal["runtime_fence_proofs"]
     assert isinstance(proofs, list)
     assert len(proofs) == 3
@@ -869,3 +991,9 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
     assert len({proof["attempt_id"] for proof in proofs}) == 3
     assert len({proof["boundary"] for proof in proofs}) == 3
     assert len(applied_pods) == 3
+
+    creation_waits = [
+        command for command in commands if "wait" in command and "--for=create" in command
+    ]
+    assert len(creation_waits) == 4
+    assert all("--timeout=2m" in command for command in creation_waits)

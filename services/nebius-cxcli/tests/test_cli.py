@@ -1421,6 +1421,9 @@ def _add_v3_campaign_provider_data(
             provider.setdefault("node_group_name", str(group_name))
             provider.setdefault("resource_uid", f"nodegroup-{group_name}")
             provider.setdefault("resource_version", 201)
+            provider.setdefault("reservation", {"policy": "", "reservation_ids": []})
+            provider.setdefault("failure_domains", [])
+            provider.setdefault("gpu_cluster_id", "")
             provider.setdefault("provider_state", "RUNNING")
             provider.setdefault("provider_reconciling", False)
             provider.setdefault("operation_terminal", True)
@@ -2858,6 +2861,85 @@ def test_completed_segment_journal_preserves_original_to_replacement_id_binding(
     assert transitions["retired_ids"] == ["nodegroup-old"]
 
 
+def test_live_waypoint_ignores_only_exact_journaled_controller_bridge_groups() -> None:
+    source_group = {
+        "id": "nodegroup-source",
+        "name": "worker",
+        "role": "worker",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "gpu_software_mode": "none",
+        "node_template": {
+            "kubernetes_version": "1.31",
+            "os": "ubuntu24.04",
+            "drivers_preset": "",
+        },
+    }
+    temporary_group = {
+        **source_group,
+        "id": "nodegroup-bridge-a",
+        "name": "cxcli-bridge-a-campaign",
+    }
+    expected = {"control_plane_version": "1.31", "node_groups": [source_group]}
+    observed = {
+        "control_plane_version": "1.31",
+        "node_groups": [source_group, temporary_group],
+    }
+    transitions = {
+        "temporary_groups": [{"id": "nodegroup-bridge-a", "name": "cxcli-bridge-a-campaign"}]
+    }
+
+    assert cli_module._external_soperator_mk8s_waypoint_matches_with_transitions(  # noqa: SLF001
+        observed=observed,
+        expected=expected,
+        node_group_transitions=transitions,
+    )
+
+    changed_name = copy.deepcopy(observed)
+    changed_name["node_groups"][1]["name"] = "foreign-group"
+    assert not cli_module._external_soperator_mk8s_waypoint_matches_with_transitions(  # noqa: SLF001
+        observed=changed_name,
+        expected=expected,
+        node_group_transitions=transitions,
+    )
+
+    unexpected = copy.deepcopy(observed)
+    unexpected["node_groups"].append({**temporary_group, "id": "nodegroup-unexpected"})
+    assert not cli_module._external_soperator_mk8s_waypoint_matches_with_transitions(  # noqa: SLF001
+        observed=unexpected,
+        expected=expected,
+        node_group_transitions=transitions,
+    )
+
+
+def test_controller_bridge_temporary_groups_require_terminal_provider_identity() -> None:
+    group = {
+        "id": "nodegroup-bridge-a",
+        "name": "cxcli-bridge-a-campaign",
+        "created": True,
+        "operation": {
+            "attempt_state": "provider-terminal",
+            "verified_postcondition": {
+                "node_group_id": "nodegroup-bridge-a",
+                "name": "cxcli-bridge-a-campaign",
+            },
+        },
+    }
+    transitions = cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
+        {"controller_bridge": {"node_groups": [group]}}
+    )
+    assert transitions["temporary_groups"] == [
+        {"id": "nodegroup-bridge-a", "name": "cxcli-bridge-a-campaign"}
+    ]
+
+    missing_proof = copy.deepcopy(group)
+    missing_proof["operation"]["attempt_state"] = "provider-pending"
+    with pytest.raises(RuntimeError, match="terminal provider proof"):
+        cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
+            {"controller_bridge": {"node_groups": [missing_proof]}}
+        )
+
+
 def test_zero_segment_campaign_still_enforces_exact_node_group_inventory(
     tmp_path: Path,
 ) -> None:
@@ -4190,7 +4272,7 @@ def test_locked_ext_soperator_upgrade_path_generates_two_node_hops_for_pinned_so
     assert all(segment["jail_rootfs"]["refresh_required"] is False for segment in segments)
 
 
-def test_campaign_compilation_locks_blue_green_compute_contract(
+def test_campaign_compilation_locks_default_in_place_compute_contract(
     tmp_path: Path,
 ) -> None:
     config_path = _write_old_soperator_migration_config(
@@ -4217,13 +4299,20 @@ def test_campaign_compilation_locks_blue_green_compute_contract(
         target_ref="external-cluster",
     )
 
-    assert campaign["compute_migration"] == {
-        "mode": "blue-green-replacement",
-        "slurm_scheduling_pause": True,
-        "source_node_groups": "immutable-until-retirement",
-        "target_node_groups": "replacement",
-        "busy_worker_policy": "retain-until-job-and-epilog-finish",
-        "login_session_policy": "voluntary-handoff",
+    compute_migration = campaign["compute_migration"]
+    assert compute_migration["mode"] == "in-place"
+    assert compute_migration["slurm_scheduling_pause"] is True
+    assert compute_migration["node_group_rollout"] == {
+        "strategy": "zero-surge",
+        "worker": {
+            "max_unavailable": "all",
+            "resolved_max_unavailable": {
+                "nodegroup-cpu-pool": 1,
+                "nodegroup-gpu-pool": 2,
+            },
+            "drain_timeout": "10m",
+            "max_parallel_groups": 8,
+        },
     }
 
 
@@ -4259,7 +4348,7 @@ def test_ext_soperator_upgrade_requires_config_campaign_even_with_valid_journal(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v4 campaign in" in normalized_output
+    assert "requires a locked v5 campaign in" in normalized_output
     assert "journal is never an upgrade-path authority" in normalized_output
 
 
@@ -4294,7 +4383,7 @@ def test_ext_soperator_upgrade_rejects_every_non_v3_campaign_schema_without_writ
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "unsupported campaign schema" in normalized_output
-    assert "requires nebius-cxcli-ext-soperator-upgrade-campaign/v4" in normalized_output
+    assert "requires nebius-cxcli-ext-soperator-upgrade-campaign/v5" in normalized_output
     assert "No conversion is supported" in normalized_output
     assert config_path.read_bytes() == before
     assert not _ext_soperator_checkpoint_path(config_path).exists()
@@ -5315,7 +5404,7 @@ def test_soperator_route_guidance_explains_keep_existing_migration_required(
     assert "Route: render -> ext-soperator upgrade, not render -> deploy." not in text
     assert "deploy only reconciles the rendered Terraform/Flux desired state" not in text
     assert "Soperator chart upgrade" in text
-    assert "external MK8s control-plane-only upgrade with blue/green compute" in text
+    assert "external MK8s control-plane upgrade with accepted compute migration" in text
     assert "via Nebius API" not in text
     assert "target GPU/RDMA stack remediation" in text
     assert "selected with external upgrade work" not in text
@@ -5487,7 +5576,7 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
     )
     assert "external-cluster" in message
     assert "Soperator chart upgrade" in message
-    assert "external MK8s control-plane-only upgrade with blue/green compute" in message
+    assert "external MK8s control-plane upgrade with accepted compute migration" in message
     assert "aligned SFS/data migration" not in message
     assert "nebius-cxcli ext-soperator upgrade" in message
     assert "--dry-run" in message
@@ -5676,18 +5765,27 @@ class _FakeSoperatorMigrationNebiusApi:
         *,
         node_group_id: str,
         original_node_group: Mapping[str, object],
-        update_args: Sequence[str],
-        strategy_args: Sequence[str],
+        desired_spec: Mapping[str, object] | None = None,
+        update_mask_paths: Sequence[str] = (),
+        operation_accepted: Callable[[str], None] | None = None,
+        update_args: Sequence[str] = (),
+        strategy_args: Sequence[str] = (),
         clear_template_gpu_settings: bool = False,
-        timeout_seconds: int = 2700,
+        timeout_seconds: int = 3900,
     ) -> Mapping[str, object]:
-        del timeout_seconds
-        node_group = soperator_migration_module._node_group_full_update_payload(  # noqa: SLF001
-            original_node_group=original_node_group,
-            update_args=update_args,
-            strategy_args=strategy_args,
-            clear_template_gpu_settings=clear_template_gpu_settings,
-        )
+        del update_mask_paths, timeout_seconds
+        if desired_spec is not None:
+            node_group = dict(to_plain_data(dict(original_node_group)))
+            node_group["spec"] = dict(to_plain_data(dict(desired_spec)))
+        else:
+            node_group = soperator_migration_module._node_group_full_update_payload(  # noqa: SLF001
+                original_node_group=original_node_group,
+                update_args=update_args,
+                strategy_args=strategy_args,
+                clear_template_gpu_settings=clear_template_gpu_settings,
+            )
+        if operation_accepted is not None:
+            operation_accepted(f"operation-node-group-{node_group_id}")
         node_group.setdefault(
             "status",
             {
@@ -9933,6 +10031,18 @@ def test_component_add_rejects_external_target_without_v3_campaign(
                     "state": "no-soperator-detected",
                     "actions": ["install-soperator"],
                     "storage_mode": "keep-existing-storage",
+                    "compute_migration": {
+                        "mode": "in-place",
+                        "slurm_scheduling_pause": True,
+                        "node_group_rollout": {
+                            "strategy": "zero-surge",
+                            "worker": {
+                                "max_unavailable": "all",
+                                "drain_timeout": "10m",
+                                "max_parallel_groups": 8,
+                            },
+                        },
+                    },
                 },
             }
         ]
@@ -9944,7 +10054,7 @@ def test_component_add_rejects_external_target_without_v3_campaign(
 
     assert result.exit_code == 1
     assert "soperator_onboarding.upgrade_path is required" in result.output
-    assert "nebius-cxcli-ext-soperator-upgrade-campaign/v4" in result.output
+    assert "nebius-cxcli-ext-soperator-upgrade-campaign/v5" in result.output
     assert config_path.read_bytes() == before
 
 
@@ -10916,6 +11026,8 @@ def test_soperator_onboard_pending_campaign_reports_mixed_live_hop_without_repla
             str(config_path),
             "--target-id",
             "external-cluster",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11000,6 +11112,8 @@ def test_soperator_onboard_active_campaign_rejects_unsupported_sidecar_without_w
             str(config_path),
             "--target-id",
             "external-cluster",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11184,6 +11298,12 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
     assert prompt_labels == [
         "Nebius MK8s cluster",
         "deploy.targets[].soperator_onboarding.compute_mode",
+        "deploy.targets[].soperator_onboarding.compute_migration.mode",
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.strategy",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_unavailable",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.drain_timeout",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_parallel_groups",
     ]
     assert snapshot_clusters == ["mk8scluster-e00beta"]
     assert "Registered external MK8s target: selected-cluster" in result.output
@@ -11313,8 +11433,15 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
     assert onboarding["state"] == "existing-soperator-supported"
     assert onboarding["source_version"] == "3.0.5"
     assert onboarding["migration_profile_id"] == "v3-to-target"
-    assert onboarding["node_template_upgrade"]["slurm_scheduling_pause"] is True
-    assert "rollout" not in onboarding["node_template_upgrade"]
+    assert onboarding["compute_migration"]["slurm_scheduling_pause"] is True
+    assert onboarding["compute_migration"]["node_group_rollout"] == {
+        "strategy": "zero-surge",
+        "worker": {
+            "max_unavailable": "all",
+            "drain_timeout": "10m",
+            "max_parallel_groups": 8,
+        },
+    }
 
 
 def test_soperator_onboard_uses_detected_profile_for_mixed_release_identity() -> None:
@@ -11491,8 +11618,8 @@ def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
     assert onboarding["state"] == "existing-soperator-supported"
     assert onboarding["source_version"] == "1.23.3"
     assert onboarding["migration_profile_id"] == "legacy-v1-to-target"
-    assert onboarding["node_template_upgrade"]["slurm_scheduling_pause"] is True
-    assert "rollout" not in onboarding["node_template_upgrade"]
+    assert onboarding["compute_migration"]["slurm_scheduling_pause"] is True
+    assert onboarding["compute_migration"]["node_group_rollout"]["strategy"] == "zero-surge"
     _assert_soperator_onboard_next_steps(
         result.output,
         config_path=config_path,
@@ -11561,6 +11688,8 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
             "3.0.5",
             "--to-k8s-version",
             "1.32",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11627,6 +11756,8 @@ def test_soperator_onboard_noninteractive_accepts_full_locked_k8s_path(
             "keep-existing-compute",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11636,8 +11767,8 @@ def test_soperator_onboard_noninteractive_accepts_full_locked_k8s_path(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
-    assert onboarding["node_template_upgrade"]["slurm_scheduling_pause"] is True
-    assert "rollout" not in onboarding["node_template_upgrade"]
+    assert onboarding["compute_migration"]["slurm_scheduling_pause"] is True
+    assert onboarding["compute_migration"]["node_group_rollout"]["strategy"] == "zero-surge"
     campaign = onboarding["upgrade_path"]
     assert campaign["compute_migration"]["slurm_scheduling_pause"] is True
     conflicting = copy.deepcopy(campaign)
@@ -11715,6 +11846,8 @@ def test_soperator_onboard_command_sdk_failure_writes_no_config_or_report(
             "keep-existing-compute",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11808,6 +11941,8 @@ def test_soperator_onboard_command_incomplete_provider_graph_writes_no_config_or
             "keep-existing-compute",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11874,6 +12009,8 @@ def test_soperator_onboard_noninteractive_without_final_k8s_target_recommends_wi
             "legacy-cluster",
             "--kube-context",
             "legacy-context",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -11939,6 +12076,8 @@ def test_soperator_onboard_noninteractive_rejects_unsupported_future_k8s_minor(
             "keep-existing-compute",
             "--to-k8s-version",
             "1.35",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -12054,6 +12193,8 @@ def test_soperator_onboard_noninteractive_validates_catalog_pinned_chart_version
             "3.0.5",
             "--to-k8s-version",
             "1.32",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
         ],
     )
@@ -12065,7 +12206,7 @@ def test_soperator_onboard_noninteractive_validates_catalog_pinned_chart_version
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["target_version"] == target_chart_version
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
-    assert onboarding["support_override_used"] is False
+    assert "support_override_used" not in onboarding
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     assert soperator["version"] == target_chart_version
 
@@ -12123,6 +12264,8 @@ def test_soperator_onboard_deployments_root_creates_project_config(
             "training-context",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -12167,6 +12310,8 @@ def test_soperator_onboard_deployments_root_creates_project_config(
             "create-aligned-sfs",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -12196,6 +12341,8 @@ def test_soperator_onboard_deployments_root_creates_project_config(
             "create-aligned-sfs",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -12256,6 +12403,8 @@ def test_soperator_onboard_project_directory_updates_existing_config(
             "external-context",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -12327,6 +12476,8 @@ def test_soperator_onboard_deployments_root_existing_config_restores_gitignore(
             "external-context",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -13261,13 +13412,14 @@ def test_soperator_onboarding_compute_mode_label_uses_no_change_wording() -> Non
     choices = cli_module._soperator_onboarding_compute_mode_choices("keep-existing-compute")
 
     assert choices[0].value == "keep-existing-compute"
-    assert choices[0].label == "Preserve source shapes on blue/green replacements"
+    assert choices[0].label == "Preserve discovered compute role and shape mappings"
 
 
 def test_soperator_onboard_interactive_prints_mode_choice_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    guidance: list[str] = []
 
     class FakeConsole:
         is_terminal = False
@@ -13276,6 +13428,7 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
             text = " ".join(str(arg) for arg in args)
             if "If you are not sure" in text:
                 events.append("guidance")
+                guidance.append(text)
 
     report = SimpleNamespace(actions=(), findings=(), migration_plan=(), source_version="")
 
@@ -13345,11 +13498,74 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
 
     assert row["soperator_onboarding"]["storage_mode"] == "keep-existing-storage"
     assert row["soperator_onboarding"]["compute_mode"] == "keep-existing-compute"
+    assert "default in-place zero-surge migration" in guidance[0]
+    assert "Blue-green remains available" in guidance[0]
+    assert "required blue/green" not in guidance[0]
     assert events == [
         "guidance",
         "deploy.targets[].soperator_onboarding.storage_mode",
         "deploy.targets[].soperator_onboarding.compute_mode",
+        "deploy.targets[].soperator_onboarding.compute_migration.mode",
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.strategy",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_unavailable",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.drain_timeout",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_parallel_groups",
     ]
+
+
+def test_soperator_onboard_reobserve_preserves_accepted_in_place_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _target_from_options(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"instance_id": "external-cluster"}
+
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_onboarding_target_row_from_options",
+        _target_from_options,
+    )
+    candidate = {
+        "instance_id": "external-cluster",
+        "cluster_id": "mk8scluster-external",
+        "access": "external",
+        "soperator_onboarding": {
+            "storage_mode": "keep-existing-storage",
+            "compute_mode": "keep-existing-compute",
+            "source_version": "1.22.3",
+            "node_template_upgrade": {"target_k8s_version": "1.34"},
+            "compute_migration": {
+                "mode": "in-place",
+                "slurm_scheduling_pause": True,
+                "node_group_rollout": {
+                    "strategy": "zero-surge",
+                    "worker": {
+                        "max_unavailable": "all",
+                        "drain_timeout": "10m",
+                        "max_parallel_groups": 8,
+                    },
+                },
+            },
+        },
+    }
+
+    _REAL_REOBSERVE_EXTERNAL_SOPERATOR_ONBOARDING_TARGET(
+        payload={},
+        candidate_target=candidate,
+        source_version=None,
+    )
+
+    assert captured["compute_migration_mode"] == "in-place"
+    assert captured["slurm_scheduling_pause"] is True
+    assert captured["node_group_strategy"] == "zero-surge"
+    assert captured["zero_surge_max_unavailable"] == "all"
+    assert captured["worker_drain_timeout"] == "10m"
+    assert captured["max_parallel_worker_groups"] == 8
+    assert captured["blue_green_worker_bootstrap"] == ()
+    assert captured["interactive"] is False
 
 
 def test_soperator_onboard_interactive_defaults_to_highest_reachable_campaign_target(
@@ -13460,12 +13676,13 @@ def test_soperator_onboard_interactive_defaults_to_highest_reachable_campaign_ta
             "unset_on_skip": False,
         },
     )
-    assert prompt_calls[1][0] == (
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause"
+    assert prompt_calls[1][0] == ("deploy.targets[].soperator_onboarding.compute_migration.mode")
+    assert prompt_calls[2][0] == (
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause"
     )
-    assert prompt_calls[1][1] == "true"
-    assert prompt_calls[1][2]["type_hint"] == "boolean"
-    assert prompt_calls[1][2]["required"] is True
+    assert prompt_calls[2][1] == "true"
+    assert prompt_calls[2][2]["type_hint"] == "boolean"
+    assert prompt_calls[2][2]["required"] is True
     onboarding = row["soperator_onboarding"]
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
     assert "Detected Kubernetes version: 1.32" in "\n".join(printed)
@@ -13521,7 +13738,12 @@ def test_soperator_onboard_interactive_accepts_full_locked_k8s_path_at_prompt(
 
     assert prompt_labels == [
         "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause",
+        "deploy.targets[].soperator_onboarding.compute_migration.mode",
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.strategy",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_unavailable",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.drain_timeout",
+        "deploy.targets[].soperator_onboarding.compute_migration.node_group_rollout.worker.max_parallel_groups",
     ]
     onboarding = row["soperator_onboarding"]
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
@@ -13593,7 +13815,7 @@ def test_soperator_onboard_invalid_k8s_target_warns_and_reprompts(
     assert row["soperator_onboarding"]["node_template_upgrade"]["target_k8s_version"] == "1.33"
 
 
-def test_soperator_onboard_pause_default_skips_worker_rollout_prompts(
+def test_soperator_onboard_in_place_defaults_show_every_rollout_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prompt_labels: list[str] = []
@@ -13639,14 +13861,20 @@ def test_soperator_onboard_pause_default_skips_worker_rollout_prompts(
     )
 
     assert (
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause"
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause"
         in prompt_labels
     )
-    assert not any(".rollout." in label for label in prompt_labels)
-    assert row["soperator_onboarding"]["node_template_upgrade"]["slurm_scheduling_pause"] is True
+    assert any(".node_group_rollout." in label for label in prompt_labels)
+    compute_migration = row["soperator_onboarding"]["compute_migration"]
+    assert compute_migration["slurm_scheduling_pause"] is True
+    assert compute_migration["node_group_rollout"]["worker"] == {
+        "max_unavailable": "all",
+        "drain_timeout": "10m",
+        "max_parallel_groups": 8,
+    }
 
 
-def test_soperator_onboard_non_paused_has_no_rollout_prompts(
+def test_soperator_onboard_non_paused_still_shows_rollout_prompts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     printed: list[str] = []
@@ -13655,9 +13883,7 @@ def test_soperator_onboard_non_paused_has_no_rollout_prompts(
         soperator_version="1.23.3",
         current_k8s_version="1.32",
     )
-    pause_label = (
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause"
-    )
+    pause_label = "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause"
 
     class FakeConsole:
         is_terminal = False
@@ -13705,8 +13931,8 @@ def test_soperator_onboard_non_paused_has_no_rollout_prompts(
     )
 
     assert pause_label in prompt_labels
-    assert not any(".rollout." in label for label in prompt_labels)
-    assert row["soperator_onboarding"]["node_template_upgrade"]["slurm_scheduling_pause"] is False
+    assert any(".node_group_rollout." in label for label in prompt_labels)
+    assert row["soperator_onboarding"]["compute_migration"]["slurm_scheduling_pause"] is False
 
 
 def test_soperator_onboard_rejects_discovered_k8s_newer_than_supported_target() -> None:
@@ -13802,6 +14028,7 @@ def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
             kube_context="training-context",
             storage_mode=None,
             compute_mode="legacy-compute",
+            compute_migration_mode="in-place",
         )
 
 
@@ -13876,6 +14103,7 @@ def test_soperator_onboard_option_path_allows_explicit_keep_existing_storage(
         cluster_id="mk8scluster-training",
         kube_context="training-context",
         storage_mode="keep-existing-storage",
+        compute_migration_mode="in-place",
         to_k8s_version="1.34",
     )
 
@@ -14090,6 +14318,8 @@ def test_soperator_onboard_explicit_context_fails_closed_on_unbound_cluster_iden
             "training-context",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -14135,6 +14365,7 @@ def test_soperator_onboard_option_path_defaults_to_aligned_sfs_when_storage_miss
         cluster_id="mk8scluster-training",
         kube_context="training-context",
         storage_mode=None,
+        compute_migration_mode="in-place",
         to_k8s_version="1.34",
     )
 
@@ -14231,6 +14462,7 @@ def test_soperator_onboard_option_path_honors_explicit_aligned_modes_for_compati
         kube_context="training-context",
         storage_mode="create-aligned-sfs",
         compute_mode="create-aligned-node-groups",
+        compute_migration_mode="in-place",
         to_k8s_version="1.32",
     )
 
@@ -14292,21 +14524,6 @@ def test_soperator_onboard_internal_path_rejects_chart_override(
             compute_mode="keep-existing-compute",
             to_chart_version="1.22.5",
             to_k8s_version="1.33",
-            validate_sources=False,
-        )
-
-
-def test_soperator_onboard_internal_path_rejects_support_override() -> None:
-    with pytest.raises(RuntimeError, match="does not support a support-policy override"):
-        cli_module._soperator_onboarding_target_row_from_options(
-            payload=_v3_onboarding_payload(),
-            target_id="legacy-cluster",
-            cluster_id="mk8scluster-legacy",
-            kube_context="legacy-context",
-            storage_mode="keep-existing-storage",
-            compute_mode="keep-existing-compute",
-            to_k8s_version="1.33",
-            allow_unsupported_soperator_upgrade_path=True,
             validate_sources=False,
         )
 
@@ -14485,7 +14702,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Compute mode: create-aligned-node-groups" in result.output
     assert "External upgrade required: yes" in result.output
     assert "Storage migrate work required: yes" in result.output
-    assert "Blue/green compute replacement required: yes" in result.output
+    assert "Compute migration mode: in-place" in result.output
+    assert "Compute migration required: yes" in result.output
     assert "Storage upgrade work required" not in result.output
     assert "Compute upgrade work required" not in result.output
     assert "Soperator upgrade required: yes" in result.output
@@ -14532,7 +14750,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert (
         "[Soperator Upgrade] rolling-compute-migration: planned - "
         f"Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
-        "blue/green target compute replacement" in result.output
+        "in-place node-group rollout" in result.output
     )
     assert "final-control-plane-cutover" in result.output
     assert (
@@ -14543,14 +14761,12 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Execution contracts:" in result.output
     assert "Live executor contract:" in result.output
     assert "External MK8s contract:" in result.output
-    assert "source node groups are immutable" in result.output
+    assert "compute changes follow the fingerprinted in-place or blue-green mode" in result.output
     assert "Compute quota contract:" in result.output
-    assert "full blue/green replacement capacity" in result.output
+    assert "accepted mode-specific capacity or replacement-capacity reacquisition" in result.output
     assert "Control plane: upgraded first" in result.output
     assert "source service and worker node groups remain untouched" in result.output
-    assert "rolling-compute-migration creates and validates blue/green target groups" in (
-        result.output
-    )
+    assert "rolling-compute-migration updates accepted fixed-size groups in place" in result.output
     assert "one accepted Kubernetes minor hop per upgrade run" in result.output
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
@@ -14827,7 +15043,7 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     assert (
         "[Soperator Upgrade] rolling-compute-migration: planned - "
         f"Soperator hop 1.22.3 -> {_soperator_test_chart_version()}: "
-        "blue/green target compute replacement"
+        "in-place node-group rollout"
     ) in result.output
     assert "Remaining segments: Kubernetes 1.32 -> 1.33, Kubernetes 1.33 -> 1.34" in (result.output)
     assert "ext-soperator onboard" not in result.output
@@ -14860,7 +15076,7 @@ def test_ext_soperator_upgrade_dry_run_rejects_malformed_v3_journal_without_writ
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "recovery-required" in normalized_output
-    assert "strict v4 contract" in normalized_output
+    assert "strict v5 contract" in normalized_output
     assert "missing required field" in normalized_output
     assert config_path.read_bytes() == config_before
     assert checkpoint_path.read_bytes() == checkpoint_before
@@ -15046,7 +15262,7 @@ def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v4 campaign" in normalized_output
+    assert "requires a locked v5 campaign" in normalized_output
     assert "journal is never an upgrade-path authority" in normalized_output
     assert "ext-soperator onboard" in normalized_output
 
@@ -15720,7 +15936,7 @@ def test_ext_soperator_upgrade_rejects_edited_locked_path_fingerprint(
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "does not have a current accepted" in normalized_output
-    assert "requires a locked v4 campaign" in normalized_output
+    assert "requires a locked v5 campaign" in normalized_output
 
 
 def test_ext_soperator_upgrade_dry_run_uses_discovery_spinner(
@@ -15801,7 +16017,7 @@ def test_ext_soperator_upgrade_dry_run_omits_k8s_hop_without_node_template_actio
     assert (
         "[Soperator Upgrade] rolling-compute-migration: planned - "
         f"Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
-        "blue/green target compute replacement" in result.output
+        "in-place node-group rollout" in result.output
     )
     assert (
         "[Soperator Upgrade] final-control-plane-cutover: planned - "
@@ -15826,7 +16042,6 @@ def test_ext_soperator_upgrade_execute_requires_locked_path_before_policy_check(
     onboarding = target["soperator_onboarding"]
     onboarding["source_version"] = "1.22.4"
     onboarding["target_version"] = "1.22.5"
-    onboarding["support_override_used"] = True
     onboarding["node_template_upgrade"]["target_k8s_version"] = "1.33"
     onboarding.pop("upgrade_path", None)
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
@@ -15865,7 +16080,7 @@ def test_ext_soperator_upgrade_execute_requires_locked_path_before_policy_check(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v4 campaign" in normalized_output
+    assert "requires a locked v5 campaign" in normalized_output
     assert "deploy.targets[].soperator_onboarding.upgrade_path" in normalized_output
     assert "ext-soperator onboard" in normalized_output
 
@@ -15910,6 +16125,12 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
     assert "[bold yellow]External upgrade required:[/bold yellow]" in required_line
     assert "[bold yellow]yes[/bold yellow]" in required_line
 
+    compute_line = cli_module._style_soperator_migration_plan_line(
+        "Compute migration required: yes"
+    )
+    assert "[bold yellow]Compute migration required:[/bold yellow]" in compute_line
+    assert "[bold yellow]yes[/bold yellow]" in compute_line
+
     mode_line = cli_module._style_soperator_migration_plan_line(
         "Execution mode: dry-run; no cluster changes were made."
     )
@@ -15926,6 +16147,37 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
         "Config: /tmp/[customer]/config.yaml"
     )
     assert r"/tmp/\[customer]/config.yaml" in path_line
+
+
+def test_pause_false_defaults_to_interactive_job_tui_in_prompt_capable_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "_is_tty_session", lambda: True)
+
+    assert (
+        cli_module._external_soperator_upgrade_job_policy(  # noqa: SLF001
+            policy=None,
+            interactive=True,
+            slurm_scheduling_pause=False,
+        )
+        == "interactive"
+    )
+    assert (
+        cli_module._external_soperator_upgrade_job_policy(  # noqa: SLF001
+            policy=None,
+            interactive=True,
+            slurm_scheduling_pause=True,
+        )
+        == "preserve"
+    )
+    assert (
+        cli_module._external_soperator_upgrade_job_policy(  # noqa: SLF001
+            policy="preserve",
+            interactive=True,
+            slurm_scheduling_pause=False,
+        )
+        == "preserve"
+    )
 
 
 @pytest.mark.parametrize(
@@ -16074,13 +16326,17 @@ def test_soperator_migration_phase_display_title_is_path_aware(
             target_k8s_version="",
             source_soperator_version="",
             target_soperator_version="",
+            compute_migration_mode=cli_module.COMPUTE_MIGRATION_MODE_BLUE_GREEN,
         )
         == expected
     )
 
 
 def test_k8s_only_upgrade_keeps_blue_green_compute_phase() -> None:
-    onboarding = {"actions": [cli_module.ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE]}
+    onboarding = {
+        "actions": [cli_module.ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE],
+        "compute_migration": {"mode": cli_module.COMPUTE_MIGRATION_MODE_BLUE_GREEN},
+    }
     flags = cli_module._soperator_migration_action_flags(onboarding)
 
     assert cli_module._soperator_upgrade_phase_allowed_by_actions(
@@ -16094,13 +16350,60 @@ def test_k8s_only_upgrade_keeps_blue_green_compute_phase() -> None:
     assert rolling_phase["title"] == ("Kubernetes target-version blue/green compute replacement")
 
 
+def test_in_place_upgrade_phase_and_plan_text_are_mode_aware() -> None:
+    onboarding = {
+        "actions": [cli_module.ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE],
+        "compute_migration": {"mode": cli_module.COMPUTE_MIGRATION_MODE_IN_PLACE},
+    }
+    phases = cli_module._soperator_migration_output_phases(  # noqa: SLF001
+        phases=[],
+        onboarding=onboarding,
+    )
+    rolling_phase = next(phase for phase in phases if phase["id"] == "rolling-compute-migration")
+
+    assert rolling_phase["title"] == "Kubernetes target-version in-place node-group rollout"
+    assert (
+        cli_module._soperator_migration_phase_display_title(  # noqa: SLF001
+            phase_id="rolling-compute-migration",
+            title=str(rolling_phase["title"]),
+            flags={"external_node_template_upgrade_required": True},
+            current_segment={"current_k8s_version": "1.31", "target_k8s_version": "1.32"},
+            current_k8s_version="",
+            target_k8s_version="",
+            source_soperator_version="",
+            target_soperator_version="",
+            compute_migration_mode=cli_module.COMPUTE_MIGRATION_MODE_IN_PLACE,
+        )
+        == "Kubernetes hop 1.31 -> 1.32: in-place node-group rollout"
+    )
+
+
+def test_in_place_upgrade_plan_places_jail_slot_b_before_compute() -> None:
+    onboarding = {
+        "actions": [cli_module.ONBOARDING_ACTION_UPGRADE_SOPERATOR],
+        "compute_migration": {"mode": cli_module.COMPUTE_MIGRATION_MODE_IN_PLACE},
+    }
+
+    phases = cli_module._soperator_migration_output_phases(  # noqa: SLF001
+        phases=[],
+        onboarding=onboarding,
+    )
+    phase_ids = [str(phase["id"]) for phase in phases]
+
+    assert phase_ids.index(cli_module.POPULATE_JAIL_REFRESH_PHASE_ID) < phase_ids.index(
+        "rolling-compute-migration"
+    )
+
+
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:
     styled = cli_module._style_soperator_migration_status_message(
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
         "[MK8s control-plane-only upgrade] (degraded): MK8s Node Groups degraded: "
         "Provider node groups (source=Nebius API, groups=4)\n"
-        "total=8 upgraded=7 upgrading=1 remaining=1 ready/current=7/8\n"
-        "group       state         k8s   total  upgraded  upgrading  remaining  ready/current  event\n"
+        "total=8 provider-current=7 provider-updating=1 provider-outdated=1 "
+        "ready/current=7/8\n"
+        "group       state         k8s   total  provider-current  provider-updating  "
+        "provider-outdated  ready/current  event\n"
         "gpu-pool    PROVISIONING  1.32  4      3         1          1          3/4            "
         "WaitingForNodeRef\n"
         "login       RUNNING       1.32  2      2         0          0          2/2            - | "
@@ -16116,9 +16419,9 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold cyan]Provider node groups[/bold cyan]" in styled
     assert "[dim]source=Nebius API[/dim]" in styled
     assert "[bold cyan]total[/bold cyan]=8" in styled
-    assert "[bold cyan]upgraded[/bold cyan]=7" in styled
-    assert "[bold yellow]upgrading[/bold yellow]=1" in styled
-    assert "[bold cyan]remaining[/bold cyan]=1" in styled
+    assert "[bold cyan]provider-current[/bold cyan]=7" in styled
+    assert "[bold yellow]provider-updating[/bold yellow]=1" in styled
+    assert "[bold cyan]provider-outdated[/bold cyan]=1" in styled
     assert "[bold cyan]ready/current[/bold cyan]=7/8" in styled
     assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]  1.32" in styled
     assert "login       [green]RUNNING[/green]       1.32" in styled
@@ -16140,7 +16443,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     class FakeConsole:
         is_terminal = True
 
-        def status(self, message: str, *, spinner: str) -> FakeStatus:
+        def status(self, message: str, *, spinner: str, refresh_per_second: float) -> FakeStatus:
+            assert refresh_per_second == 1.0
             initial_messages.append(f"{spinner}:{message}")
             return FakeStatus()
 
@@ -16154,8 +16458,10 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
             "[MK8s control-plane-only upgrade] (degraded): MK8s Node Groups degraded: "
             "Provider node groups (source=Nebius API, groups=1)\n"
-            "total=4 upgraded=3 upgrading=1 remaining=1 ready/current=3/4\n"
-            "group     state         k8s   total  upgraded  upgrading  remaining  ready/current  event\n"
+            "total=4 provider-current=3 provider-updating=1 provider-outdated=1 "
+            "ready/current=3/4\n"
+            "group     state         k8s   total  provider-current  provider-updating  "
+            "provider-outdated  ready/current  event\n"
             "gpu-pool  PROVISIONING  1.32  4      3         1          1          3/4            "
             "WaitingForNodeRef"
         )
@@ -16169,9 +16475,9 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "MK8s control-plane-only upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
     assert "[bold cyan]Provider node groups[/bold cyan]" in updates[0]
-    assert "[bold cyan]upgraded[/bold cyan]=3" in updates[0]
-    assert "[bold yellow]upgrading[/bold yellow]=1" in updates[0]
-    assert "[bold cyan]remaining[/bold cyan]=1" in updates[0]
+    assert "[bold cyan]provider-current[/bold cyan]=3" in updates[0]
+    assert "[bold yellow]provider-updating[/bold yellow]=1" in updates[0]
+    assert "[bold cyan]provider-outdated[/bold cyan]=1" in updates[0]
     assert "[bold yellow]PROVISIONING[/bold yellow]" in updates[0]
 
 
@@ -16237,8 +16543,8 @@ def test_soperator_migration_status_spinner_suppresses_stray_enter_echo(
     class FakeConsole:
         is_terminal = True
 
-        def status(self, message: str, *, spinner: str) -> FakeStatus:
-            events.append(("status", message, spinner))
+        def status(self, message: str, *, spinner: str, refresh_per_second: float) -> FakeStatus:
+            events.append(("status", message, spinner, refresh_per_second))
             return FakeStatus()
 
         def print(self, *_args: object, **_kwargs: object) -> None:
@@ -16454,7 +16760,7 @@ def test_ext_soperator_upgrade_dry_run_rejects_campaignless_gpu_reconciliation_r
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v4 campaign" in normalized_output
+    assert "requires a locked v5 campaign" in normalized_output
     assert "ext-soperator onboard" in normalized_output
     assert "External Soperator upgrade plan:" not in normalized_output
 
@@ -16547,7 +16853,8 @@ def test_ext_soperator_upgrade_dry_run_respects_storage_compute_mode_matrix(
     assert f"Compute mode: {expected_compute_mode}" in result.output
     expected_storage_work = "no" if storage_mode == "keep-existing-storage" else "yes"
     assert f"Storage migrate work required: {expected_storage_work}" in result.output
-    assert "Blue/green compute replacement required: yes" in result.output
+    assert "Compute migration mode: in-place" in result.output
+    assert "Compute migration required: yes" in result.output
     for phase_id in present:
         assert phase_id in result.output
     for phase_id in absent:
@@ -16846,6 +17153,99 @@ def test_external_soperator_resume_scope_bootstraps_only_active_target_handoff()
     )
 
 
+def test_external_soperator_resume_scope_bootstraps_passive_slot_target_handoff() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    checkpoint["pending_phase"] = "populate-jail-refresh"
+    checkpoint["phase_state"] = {
+        "populate-jail-refresh": {
+            "refresh_attempt_started_at": "2026-07-14T16:54:27Z",
+            "helm_login_session_gates": {"passive-slot-preparation": {"status": "deferred"}},
+        },
+        "rolling-compute-migration": {},
+    }
+
+    scope = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+
+    assert scope is not None
+    assert scope["mode"] == "target-handoff"
+    assert scope["phase_id"] == "populate-jail-refresh"
+    assert scope["source"]["uid"] == "source-uid"
+    assert scope["target"] == {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "",
+    }
+    assert scope["allow_target_uid_bootstrap"] is True
+
+
+def test_external_soperator_resume_scope_reuses_bound_passive_target_during_phase_rewind() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    checkpoint["pending_phase"] = "controller-ha-bridge"
+    source = checkpoint["source_slurmcluster_ref"]
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(source, dict)
+    assert isinstance(rolling, dict)
+    rolling.pop("target_values_apply_started_at")
+    rolling["slurmcluster_handoff_binding"] = {
+        "source": copy.deepcopy(source),
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+    rolling["slurmcluster_handoff_binding_origin"] = {
+        "phase_id": "populate-jail-refresh",
+        "bound_at": "2026-07-14T17:35:46Z",
+    }
+
+    scope = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+
+    assert scope is not None
+    assert scope["mode"] == "target-handoff"
+    assert scope["phase_id"] == "populate-jail-refresh"
+    assert scope["target"]["uid"] == "target-uid"
+    assert scope["allow_target_uid_bootstrap"] is False
+
+
+def test_external_soperator_resume_scope_keeps_bound_passive_origin_after_apply_starts() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    checkpoint["pending_phase"] = "populate-jail-refresh"
+    source = checkpoint["source_slurmcluster_ref"]
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(source, dict)
+    assert isinstance(rolling, dict)
+    rolling["slurmcluster_handoff_binding"] = {
+        "source": copy.deepcopy(source),
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+    rolling["slurmcluster_handoff_binding_origin"] = {
+        "phase_id": "populate-jail-refresh",
+        "bound_at": "2026-07-14T17:35:46Z",
+    }
+
+    scope = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+
+    assert scope is not None
+    assert scope["mode"] == "target-handoff"
+    assert scope["phase_id"] == "populate-jail-refresh"
+    assert scope["target"]["uid"] == "target-uid"
+    assert scope["allow_target_uid_bootstrap"] is False
+
+
 def test_external_soperator_resume_scope_keeps_pre_helm_session_gate_source_only() -> None:
     checkpoint = _active_dual_cr_resume_checkpoint()
     rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
@@ -16890,6 +17290,10 @@ def test_external_soperator_resume_scope_tracks_cleanup_crash_windows() -> None:
             "name": "target-cluster",
             "uid": "target-uid",
         },
+    }
+    rolling["slurmcluster_handoff_binding_origin"] = {
+        "phase_id": "rolling-compute-migration",
+        "bound_at": "2026-07-12T00:00:30Z",
     }
     rolling["source_cleanup_started_at"] = "2026-07-12T00:01:00Z"
     rolling["source_cleanup_binding"] = copy.deepcopy(source)
@@ -16968,6 +17372,10 @@ def test_external_soperator_resume_scope_rejects_missing_saved_target_or_cleanup
         "source": copy.deepcopy(source),
         "target": {"name": "target-cluster", "uid": "target-uid"},
     }
+    rolling["slurmcluster_handoff_binding_origin"] = {
+        "phase_id": "rolling-compute-migration",
+        "bound_at": "2026-07-12T00:00:30Z",
+    }
 
     with pytest.raises(RuntimeError, match="target SlurmCluster binding is incomplete"):
         cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
@@ -17000,6 +17408,10 @@ def test_external_soperator_resume_scope_rejects_incomplete_cleanup_binding() ->
                     "name": "target-cluster",
                     "uid": "",
                 },
+            },
+            "slurmcluster_handoff_binding_origin": {
+                "phase_id": "rolling-compute-migration",
+                "bound_at": "2026-07-12T00:00:30Z",
             },
             "source_cleanup_started_at": "2026-07-12T00:01:00Z",
             "source_cleanup_binding": copy.deepcopy(source),
@@ -17138,6 +17550,10 @@ def test_external_soperator_execute_snapshot_collector_reloads_cleanup_scope(
             "name": "target-cluster",
             "uid": "target-uid",
         },
+    }
+    rolling["slurmcluster_handoff_binding_origin"] = {
+        "phase_id": "rolling-compute-migration",
+        "bound_at": "2026-07-12T00:00:30Z",
     }
     rolling["source_cleanup_started_at"] = "2026-07-12T00:01:00Z"
     rolling["source_cleanup_binding"] = copy.deepcopy(source)
@@ -19453,6 +19869,8 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
             "create-aligned-sfs",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -19476,7 +19894,7 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
     assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
-def test_soperator_onboard_interactive_cluster_id_prompts_pause_without_rollout_settings(
+def test_soperator_onboard_interactive_cluster_id_prompts_complete_in_place_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19594,18 +20012,18 @@ def test_soperator_onboard_interactive_cluster_id_prompts_pause_without_rollout_
         in prompt_labels
     )
     assert (
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause"
+        "deploy.targets[].soperator_onboarding.compute_migration.slurm_scheduling_pause"
         in prompt_labels
     )
     assert "deploy.targets[].soperator_onboarding.storage_mode" in prompt_labels
     assert "deploy.targets[].soperator_onboarding.compute_mode" in prompt_labels
-    assert not any(".rollout." in label for label in prompt_labels)
+    assert any(".node_group_rollout." in label for label in prompt_labels)
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert "upgrade-external-node-template" in onboarding["actions"]
-    assert onboarding["node_template_upgrade"]["slurm_scheduling_pause"] is False
-    assert "rollout" not in onboarding["node_template_upgrade"]
+    assert onboarding["compute_migration"]["slurm_scheduling_pause"] is False
+    assert onboarding["compute_migration"]["node_group_rollout"]["strategy"] == "zero-surge"
 
     manifest = json.loads(
         _soperator_discovery_manifest_path(config_path, "legacy-cluster").read_text(
@@ -19615,8 +20033,9 @@ def test_soperator_onboard_interactive_cluster_id_prompts_pause_without_rollout_
     command = manifest["command"]
     assert command[command.index("--storage-mode") + 1] == "keep-existing-storage"
     assert command[command.index("--compute-mode") + 1] == "keep-existing-compute"
-    assert not any("rollout" in arg or "wave" in arg for arg in command)
-    assert not any(arg.startswith("--strategy-") for arg in command)
+    assert command[command.index("--compute-migration-mode") + 1] == "in-place"
+    assert "--no-slurm-scheduling-pause" in command
+    assert command[command.index("--node-group-strategy") + 1] == "zero-surge"
 
 
 def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
@@ -19725,6 +20144,8 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
             "keep-existing-compute",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -19856,6 +20277,8 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
             "create-aligned-node-groups",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -19867,11 +20290,12 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "placements: target-compatible" in result.output
     assert "mk8s-node-template: target-compatible" in result.output
     assert "Storage layout decision: create aligned SFS" in result.output
-    assert "Compute layout decision: require blue/green replacement migration" in result.output
+    assert "Compute layout decision: normalize aligned node-group definitions" in result.output
     assert "Soperator upgrade path: status=supported" in result.output
-    assert "Source templates remain immutable" in normalized_output
-    assert "Source node groups below are immutable inventory/template locks" in normalized_output
-    assert "replacement template from source node group" in normalized_output
+    assert "separately accepted in-place or blue-green migration mode" in normalized_output
+    assert "In-place worker rollout: scheduling pause=true" in normalized_output
+    assert "Impact: this campaign permits up to" in normalized_output
+    assert "in-place target template for node group" in normalized_output
     assert "Selected onboarding actions:" not in result.output
     assert "External upgrade phases:" not in result.output
 
@@ -19973,6 +20397,8 @@ def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(
             "create-aligned-sfs",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -20078,6 +20504,8 @@ def test_soperator_onboard_heterogeneous_gpu_inventory_adds_network_operator(
             "create-aligned-node-groups",
             "--to-k8s-version",
             "1.32",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -20149,6 +20577,8 @@ def test_soperator_onboard_rejects_managed_mk8s_target_ref(
             "mk8s",
             "--kube-context",
             "managed-context",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -20238,6 +20668,8 @@ def test_soperator_onboard_rejects_campaignless_target_without_conversion(
             "external-context",
             "--to-k8s-version",
             "1.34",
+            "--compute-migration-mode",
+            "in-place",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -20246,7 +20678,7 @@ def test_soperator_onboard_rejects_campaignless_target_without_conversion(
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "recovery-required" in normalized_output
-    assert "has no v4 campaign" in normalized_output
+    assert "has no v5 campaign" in normalized_output
     assert "conversion is not supported" in normalized_output
     assert config_path.read_bytes() == original_config
 
@@ -20277,7 +20709,7 @@ def test_onboard_reconciliation_rejects_any_campaignless_external_target_before_
 
     with pytest.raises(
         RuntimeError,
-        match=r"existing external Soperator target 'legacy-target' has no v4 campaign",
+        match=r"existing external Soperator target 'legacy-target' has no v5 campaign",
     ):
         cli_module._reconcile_external_soperator_onboarding_campaign(
             config_path=tmp_path / "config.yaml",
@@ -22910,8 +23342,17 @@ def test_runtime_validation_rejects_non_boolean_slurm_scheduling_pause() -> None
                     "kube_context": "external-context",
                     "soperator_onboarding": {
                         "actions": [],
-                        "node_template_upgrade": {
+                        "compute_migration": {
+                            "mode": "in-place",
                             "slurm_scheduling_pause": "true",
+                            "node_group_rollout": {
+                                "strategy": "zero-surge",
+                                "worker": {
+                                    "max_unavailable": "all",
+                                    "drain_timeout": "10m",
+                                    "max_parallel_groups": 8,
+                                },
+                            },
                         },
                     },
                 }
@@ -22924,7 +23365,7 @@ def test_runtime_validation_rejects_non_boolean_slurm_scheduling_pause() -> None
     with pytest.raises(
         ValueError,
         match=(
-            r"deploy\.targets\[0\]\.soperator_onboarding\.node_template_upgrade"
+            r"deploy\.targets\[0\]\.soperator_onboarding\.compute_migration"
             r"\.slurm_scheduling_pause must be true or false"
         ),
     ):

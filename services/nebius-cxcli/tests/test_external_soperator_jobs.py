@@ -226,6 +226,44 @@ def test_checkpoint_writer_merges_concurrent_tui_action_under_lock(tmp_path: Pat
     assert (path.parent / "checkpoint.json.lock").stat().st_mode & 0o777 == 0o600
 
 
+def test_managed_checkpoint_writer_merges_concurrent_jobs_action(tmp_path: Path) -> None:
+    base = new_slurm_action_journal()
+    local_checkpoint: dict[str, Any] = {
+        "schema": cli.SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA,
+        "slurm": {"action_journal": copy.deepcopy(base)},
+    }
+    disk_checkpoint: dict[str, Any] = {
+        "schema": cli.SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA,
+        "slurm": {"action_journal": copy.deepcopy(base)},
+    }
+    binding = migration._slurm_action_binding_from_observation(_observation())
+    enqueue_slurm_action(
+        local_checkpoint["slurm"]["action_journal"],
+        kind="cancel",
+        binding=binding,
+        intended_postcondition={"terminal_or_absent": True},
+        action_id="managed-upgrade-writer",
+    )
+    enqueue_slurm_action(
+        disk_checkpoint["slurm"]["action_journal"],
+        kind="refresh",
+        binding=binding,
+        intended_postcondition={"controller_observed": True},
+        action_id="managed-tui-writer",
+    )
+    path = tmp_path / "checkpoint.json"
+    path.write_text(json.dumps(disk_checkpoint), encoding="utf-8")
+
+    cli._write_soperator_upgrade_checkpoint(path, local_checkpoint)  # noqa: SLF001
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    action_ids = [action["action_id"] for action in written["slurm"]["action_journal"]["actions"]]
+    assert action_ids == ["managed-tui-writer", "managed-upgrade-writer"]
+    assert [
+        action["action_id"] for action in local_checkpoint["slurm"]["action_journal"]["actions"]
+    ] == action_ids
+
+
 def test_checkpoint_writer_preserves_concurrent_login_exit_acknowledgement(
     tmp_path: Path,
 ) -> None:
@@ -534,7 +572,7 @@ def test_jobs_screen_reconnect_drains_queued_action_once(
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (None, "requires an active v4 upgrade checkpoint"),
+        (None, "requires an active v5 upgrade checkpoint"),
         ("{not-json", "checkpoint is invalid JSON"),
         (
             json.dumps({"schema": "nebius-cxcli-ext-soperator-upgrade-journal/v3"}),
@@ -542,7 +580,7 @@ def test_jobs_screen_reconnect_drains_queued_action_once(
         ),
     ],
 )
-def test_jobs_checkpoint_rejects_missing_invalid_or_non_v4(
+def test_jobs_checkpoint_rejects_missing_invalid_or_non_v5(
     tmp_path: Path,
     content: str | None,
     message: str,
@@ -655,6 +693,41 @@ def test_jobs_command_records_only_current_fingerprint_bound_login_exit(
         )
 
 
+def test_jobs_command_acknowledgement_exits_without_opening_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    fingerprint = "a" * 64
+    monkeypatch.setattr(
+        migration,
+        "soperator_migration_checkpoint_path",
+        lambda *_args, **_kwargs: checkpoint_path,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_acknowledge_external_upgrade_login_exits",
+        lambda **_kwargs: (
+            {
+                "socket_fingerprint": fingerprint,
+                "absence_observed_at": "2026-07-12T10:02:00Z",
+                "acknowledged_at": "2026-07-12T10:03:00Z",
+                "acknowledged_by": "ext-soperator-jobs-cli",
+            },
+        ),
+    )
+
+    result = migration.run_external_soperator_upgrade_jobs(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        acknowledge_login_exit_fingerprints=(fingerprint,),
+        prompt_runner=lambda *_args, **_kwargs: pytest.fail("prompt must not open"),
+    )
+
+    assert result == checkpoint_path
+
+
 def test_ext_soperator_jobs_help_exposes_canonical_command() -> None:
     result = CliRunner().invoke(cli.app, ["ext-soperator", "jobs", "--help"])
 
@@ -713,3 +786,64 @@ def test_ext_soperator_jobs_uses_temporary_cluster_handoff_payload(
     assert captured["context_input"] == (source_payload, "external-cluster")
     assert captured["jobs_kwargs"]["payload"] is execution_payload
     assert captured["jobs_kwargs"]["target_ref"] == "external-cluster"
+
+
+def test_managed_soperator_jobs_help_exposes_shared_journal_contract() -> None:
+    result = CliRunner().invoke(cli.app, ["soperator", "jobs", "--help"])
+
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    assert "soperator jobs [OPTIONS] CONFIG_YAML" in normalized
+    assert "--target" in normalized
+    assert "--acknowledge-login-exit" in normalized
+    assert "controller authority epoch" in normalized
+
+
+def test_managed_soperator_jobs_uses_managed_checkpoint_and_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_payload = {"apps": {"charts": []}}
+    checkpoint_path = tmp_path / "checkpoint.json"
+    captured: dict[str, Any] = {}
+    target = cli._HelmChartUpgradeTarget(  # noqa: SLF001
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_prompt_soperator_upgrade_target_if_needed",
+        lambda **_kwargs: target,
+    )
+    monkeypatch.setattr(
+        cli, "_soperator_upgrade_checkpoint_path", lambda *_args, **_kwargs: checkpoint_path
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (object(), object(), {"deploy": {"targets": []}}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_manifest_kube_context_for_target",
+        lambda _manifest, _target_ref: "managed-context",
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_external_soperator_upgrade_jobs",
+        lambda **kwargs: captured.update(kwargs) or checkpoint_path,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["soperator", "jobs", str(tmp_path / "config.yaml"), "--target", "mk8s"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["checkpoint_path_override"] == checkpoint_path
+    assert captured["kube_context_override"] == "managed-context"
+    assert captured["command_origin"] == "soperator-jobs-tui"
+    assert callable(captured["checkpoint_loader"])

@@ -13,7 +13,7 @@ import pytest
 
 from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.soperator_controller_bridge import (
-    BridgeNodeGroupPlan,
+    BridgePlacementDomain,
     BridgePlan,
     BridgeSourceBinding,
     new_bridge_journal,
@@ -85,9 +85,7 @@ class _JwtRunner:
                 args=command,
                 returncode=97 if token_smoke and self.fail_token_smoke else 0,
                 stdout=(
-                    ""
-                    if token_smoke and self.fail_token_smoke
-                    else f"{self.live_key_sha256}\n"
+                    "" if token_smoke and self.fail_token_smoke else f"{self.live_key_sha256}\n"
                 ),
             )
         else:  # pragma: no cover - a new command is a contract change
@@ -124,9 +122,7 @@ def _target_pod(*, gated: bool = True) -> dict[str, Any]:
             "ownerReferences": [{"uid": "target-controller-workload-uid"}],
         },
         "spec": {
-            "volumes": [
-                {"name": "material", "secret": {"secretName": _MATERIAL_NAME}}
-            ],
+            "volumes": [{"name": "material", "secret": {"secretName": _MATERIAL_NAME}}],
             "containers": [
                 {
                     "name": "slurmctld",
@@ -145,9 +141,7 @@ def _target_pod(*, gated: bool = True) -> dict[str, Any]:
         },
     }
     if gated:
-        gate = migration.target_controller_gate_values({})["slurmNodes"]["controller"][
-            "slurmctld"
-        ]
+        gate = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
         container = pod["spec"]["containers"][0]
         container["command"] = copy.deepcopy(gate["command"])
         container["args"] = copy.deepcopy(gate["args"])
@@ -159,9 +153,7 @@ def _target_workload(pod: dict[str, Any], *, gated: bool) -> dict[str, Any]:
     pod_spec["containers"][0].pop("command", None)
     pod_spec["containers"][0].pop("args", None)
     if gated:
-        gate = migration.target_controller_gate_values({})["slurmNodes"]["controller"][
-            "slurmctld"
-        ]
+        gate = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
         pod_spec["containers"][0]["command"] = copy.deepcopy(gate["command"])
         pod_spec["containers"][0]["args"] = copy.deepcopy(gate["args"])
     return {
@@ -225,9 +217,13 @@ def _journal_and_source() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any
             "existing_filesystem": {"id": "filesystem-jail"},
             "mount_tag": "jail-rootfs",
         },
-        node_groups=(
-            BridgeNodeGroupPlan(name="bridge-a", template={"fixed_node_count": 1}),
-            BridgeNodeGroupPlan(name="bridge-b", template={"fixed_node_count": 1}),
+        placement_domains=(
+            BridgePlacementDomain.external(
+                name="bridge-a", role="external-a", template={"fixed_node_count": 1}
+            ),
+            BridgePlacementDomain.external(
+                name="bridge-b", role="external-b", template={"fixed_node_count": 1}
+            ),
         ),
     )
     journal = new_bridge_journal(
@@ -256,9 +252,7 @@ def _journal_and_source() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any
             "controller_workload_uid": "target-controller-workload-uid",
         }
     )
-    journal["authority"].update(
-        {"epoch": "bridge-target-epoch", "owner": "bridge-target"}
-    )
+    journal["authority"].update({"epoch": "bridge-target-epoch", "owner": "bridge-target"})
     journal["stage"] = migration.BridgeStage.TARGET_HA_ACTIVE.value
     return journal, source, material
 
@@ -276,9 +270,7 @@ def _preflight(journal: dict[str, Any], runner: _JwtRunner) -> None:
 
 def _activate_target(journal: dict[str, Any], runner: _JwtRunner) -> None:
     journal["stage"] = migration.BridgeStage.PLANNED.value
-    journal["authority"].update(
-        {"epoch": "target-singleton-epoch", "owner": "target-singleton"}
-    )
+    journal["authority"].update({"epoch": "target-singleton-epoch", "owner": "target-singleton"})
     runner.pod = _target_pod(gated=False)
     runner.workload = _target_workload(runner.pod, gated=False)
 
@@ -312,9 +304,7 @@ def test_target_singleton_jwt_material_is_bound_without_secret_bytes() -> None:
     assert journal["target_singleton_takeover"]["jwt_material_proof"]["status"] == "verified"
     assert writes == ["write", "write"]
     probe_scripts = [
-        call[call.index("-ec") + 1]
-        for call in runner.calls
-        if "cxcli-jwt-proof" in call
+        call[call.index("-ec") + 1] for call in runner.calls if "cxcli-jwt-proof" in call
     ]
     assert len(probe_scripts) == 2
     for script in probe_scripts:
@@ -441,9 +431,7 @@ def test_jwt_preflight_cannot_be_rewritten_after_bridge_fencing() -> None:
     journal, _source, material = _journal_and_source()
     runner = _JwtRunner(pod=_target_pod(), material=material)
     _preflight(journal, runner)
-    frozen = copy.deepcopy(
-        journal["target_singleton_takeover"]["jwt_material_preflight"]
-    )
+    frozen = copy.deepcopy(journal["target_singleton_takeover"]["jwt_material_preflight"])
     journal["stage"] = migration.BridgeStage.BRIDGE_FENCED.value
     runner.workload = _target_workload(runner.pod, gated=False)
 
@@ -514,9 +502,7 @@ def test_target_jwt_preflight_rejects_secret_mount_bytes_that_do_not_match() -> 
 def test_target_jwt_preflight_binds_upstream_secret_and_entrypoint_paths() -> None:
     journal, _source, material = _journal_and_source()
     pod = _target_pod()
-    pod["spec"]["volumes"][0]["secret"]["items"] = [
-        {"key": _MATERIAL_KEY, "path": "rest_jwt.key"}
-    ]
+    pod["spec"]["volumes"][0]["secret"]["items"] = [{"key": _MATERIAL_KEY, "path": "rest_jwt.key"}]
     pod["spec"]["volumes"].append({"name": "spool", "emptyDir": {}})
     pod["spec"]["containers"][0]["volumeMounts"] = [
         {"name": "material", "mountPath": "/mnt/rest-jwt-key", "readOnly": True},
@@ -546,9 +532,7 @@ def test_target_jwt_preflight_binds_upstream_secret_and_entrypoint_paths() -> No
     assert proof["jwt_secret_file_path"] == "/mnt/rest-jwt-key/rest_jwt.key"
     assert proof["jwt_key_path"] == "/var/spool/slurmctld/jwt_hs256.key"
     journal["stage"] = migration.BridgeStage.PLANNED.value
-    journal["authority"].update(
-        {"epoch": "target-singleton-epoch", "owner": "target-singleton"}
-    )
+    journal["authority"].update({"epoch": "target-singleton-epoch", "owner": "target-singleton"})
     active_pod = copy.deepcopy(pod)
     active_container = active_pod["spec"]["containers"][0]
     active_container.pop("command", None)
@@ -567,17 +551,18 @@ def test_target_jwt_preflight_binds_upstream_secret_and_entrypoint_paths() -> No
     )
 
     active_probe = next(
-        call[call.index("-ec") + 1]
-        for call in reversed(runner.calls)
-        if "cxcli-jwt-proof" in call
+        call[call.index("-ec") + 1] for call in reversed(runner.calls) if "cxcli-jwt-proof" in call
     )
     assert "/proc/self/mountinfo" in active_probe
 
 
 def test_jwt_key_path_supports_schedmd_fallback_and_rejects_jwks_only() -> None:
-    assert migration._controller_jwt_key_path(  # noqa: SLF001
-        "AuthAltTypes=auth/jwt\nStateSaveLocation=/var/spool/slurmctld\n"
-    ) == "/var/spool/slurmctld/jwt_hs256.key"
+    assert (
+        migration._controller_jwt_key_path(  # noqa: SLF001
+            "AuthAltTypes=auth/jwt\nStateSaveLocation=/var/spool/slurmctld\n"
+        )
+        == "/var/spool/slurmctld/jwt_hs256.key"
+    )
 
     with pytest.raises(RuntimeError, match="JWKS-only"):
         migration._controller_jwt_key_path(  # noqa: SLF001
@@ -616,9 +601,7 @@ def test_gated_target_replica_is_explicitly_ungated_before_startup_proof() -> No
     ungate_branch = source.index("if ungate_required:", gate_observation)
     helm_ungate = source.index("_helm_upgrade_target_soperator", ungate_branch)
     wait_old_uid = source.index("_wait_for_kubernetes_resource_uid_absent", helm_ungate)
-    reject_live_gate = source.index(
-        "_is_exact_target_controller_command_gate", wait_old_uid
-    )
+    reject_live_gate = source.index("_is_exact_target_controller_command_gate", wait_old_uid)
     startup_proof = source.index("scontrol ping", reject_live_gate)
     assert gate_observation < ungate_branch < helm_ungate < wait_old_uid
     assert wait_old_uid < reject_live_gate < startup_proof

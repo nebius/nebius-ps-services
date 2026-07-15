@@ -64,7 +64,7 @@ bash scripts/agent-nebius-auth.sh ensure \
 Useful optional flags:
 
 - `--service-account-name <name>`: default `codex-agent-sa`
-- `--role <role>`: default `editor`
+- `--role <role>`: default `admin`
 - `--repair`: allow replacement of a broken credential after backup
 - `--dry-run`: show the planned setup actions without changing IAM or local auth
 
@@ -76,6 +76,12 @@ credential paths. Passing both fails fast.
 The setup path may create or repair Nebius IAM resources. Do not run it against
 production or customer environments unless the operator explicitly asked for
 that target and understands the credential and IAM changes.
+
+The default permit grants the custom group project-level `admin`, which is a
+broad authorization. Confirm the target project before running setup and use an
+explicit narrower `--role` when full project administration is unnecessary.
+Re-running setup with a valid human/admin profile adds the `admin` permit when
+it is missing; it does not remove unrelated existing permits.
 
 ## Hook Install
 
@@ -198,6 +204,8 @@ nebius iam get-access-token --profile codex-agent-<project_id> >/dev/null
 - OpenAI Codex Hooks: <https://developers.openai.com/codex/hooks>
 - Nebius access tokens:
   <https://docs.nebius.com/iam/authorization/access-tokens>
+- Nebius roles for groups:
+  <https://docs.nebius.com/iam/authorization/roles>
 - Nebius `get-access-token` CLI reference:
   <https://docs.nebius.com/cli/reference/iam/get-access-token>
 - Nebius authorized-key CLI reference:

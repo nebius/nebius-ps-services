@@ -48,19 +48,12 @@ GPU_JAIL_POST_POPULATION_SCRIPT = (
           || fail "PopulateJail image must run on the locked linux/amd64 platform"
 
         readonly jail_lib_dir="${jail}/usr/lib/${arch}-linux-gnu"
+        readonly jail_bin_dir="${jail}/usr/bin"
         readonly jail_nvidia_smi="${jail}/usr/bin/nvidia-smi"
         readonly marker_dir="${jail}/etc/nebius-cxcli"
         readonly marker="${marker_dir}/gpu-driver-jail.env"
 
         [ -d "${jail}/usr" ] || fail "passive rootfs is not populated"
-        jail_nvidia_smi_source="$(readlink -m -- "${jail_nvidia_smi}")" \
-          || fail "passive-rootfs nvidia-smi path could not be resolved"
-        case "${jail_nvidia_smi_source}" in
-          "${jail}"/*) ;;
-          *) fail "passive-rootfs nvidia-smi resolves outside the passive rootfs" ;;
-        esac
-        [ -f "${jail_nvidia_smi_source}" ] && [ -x "${jail_nvidia_smi_source}" ] \
-          || fail "passive-rootfs nvidia-smi is missing or not executable"
         runtime_nvidia_smi_source="$(readlink -f -- "$(command -v nvidia-smi)")" \
           || fail "runtime-injected nvidia-smi is missing or has a broken link"
         case "${runtime_nvidia_smi_source}" in
@@ -73,6 +66,16 @@ GPU_JAIL_POST_POPULATION_SCRIPT = (
           ''|*[!0-9a-f]*) fail "could not hash runtime-injected nvidia-smi" ;;
         esac
         [ "${#runtime_nvidia_smi_hash}" -eq 64 ] || fail "invalid runtime nvidia-smi hash"
+        if [ -e "${jail_nvidia_smi}" ] || [ -L "${jail_nvidia_smi}" ]; then
+          jail_nvidia_smi_source="$(readlink -m -- "${jail_nvidia_smi}")" \
+            || fail "passive-rootfs nvidia-smi path could not be resolved"
+          case "${jail_nvidia_smi_source}" in
+            "${jail}"/*) ;;
+            *) fail "passive-rootfs nvidia-smi resolves outside the passive rootfs" ;;
+          esac
+          [ -f "${jail_nvidia_smi_source}" ] \
+            || fail "passive-rootfs nvidia-smi is not a regular file"
+        fi
 
         if ! driver_versions="$(env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
           nvidia-smi \
@@ -137,8 +140,9 @@ GPU_JAIL_POST_POPULATION_SCRIPT = (
         }
 
         assert_path_inside_jail "${jail_lib_dir}"
+        assert_path_inside_jail "${jail_bin_dir}"
         assert_path_inside_jail "${marker_dir}"
-        mkdir -p -- "${jail_lib_dir}" "${marker_dir}"
+        mkdir -p -- "${jail_lib_dir}" "${jail_bin_dir}" "${marker_dir}"
         exec 9<"${marker_dir}"
         flock -x 9
 
@@ -186,9 +190,13 @@ EOF
         fi
 
         staging="$(mktemp -d "${jail_lib_dir}/.cxcli-gpu-driver.XXXXXX")"
+        nvidia_smi_tmp=""
         marker_tmp=""
         cleanup() {
           rm -rf -- "${staging}"
+          if [ -n "${nvidia_smi_tmp}" ]; then
+            rm -f -- "${nvidia_smi_tmp}"
+          fi
           if [ -n "${marker_tmp}" ]; then
             rm -f -- "${marker_tmp}"
           fi
@@ -210,6 +218,18 @@ EOF
         stage_library "${nvml_source}" "${nvml_base}" "${nvml_hash}"
         mv -f -- "${staging}/${cuda_base}" "${jail_lib_dir}/${cuda_base}"
         mv -f -- "${staging}/${nvml_base}" "${jail_lib_dir}/${nvml_base}"
+
+        nvidia_smi_tmp="$(mktemp "${jail_bin_dir}/.cxcli-nvidia-smi.XXXXXX")"
+        cp -- "${runtime_nvidia_smi_source}" "${nvidia_smi_tmp}"
+        chmod 0755 -- "${nvidia_smi_tmp}"
+        [ "$(sha256sum -- "${nvidia_smi_tmp}" | awk '{print $1}')" = "${runtime_nvidia_smi_hash}" ] \
+          || fail "staged nvidia-smi hash mismatch"
+        mv -f -- "${nvidia_smi_tmp}" "${jail_nvidia_smi}"
+        nvidia_smi_tmp=""
+        jail_nvidia_smi_source="$(readlink -m -- "${jail_nvidia_smi}")" \
+          || fail "installed passive-rootfs nvidia-smi path could not be resolved"
+        [ -f "${jail_nvidia_smi_source}" ] && [ -x "${jail_nvidia_smi_source}" ] \
+          || fail "installed passive-rootfs nvidia-smi is missing or not executable"
 
         atomic_symlink() {
           local target="$1"
@@ -343,28 +363,26 @@ def build_jail_gpu_post_population_resources(
     *,
     namespace: str,
     target_ref: str,
-    populate_jail_image: str,
+    runner_image: str,
     passive_pvc: str,
     scheduling: Mapping[str, Any] | None = None,
 ) -> JailGpuPostPopulationResources:
     """Build a deterministic Job that validates GPU libraries in a passive rootfs.
 
-    The image value is copied byte-for-byte from the caller's resolved upstream
-    PopulateJail image. The generated shell script receives no caller-controlled
+    The image value is copied byte-for-byte from the caller's resolved target
+    controller image. The generated shell script receives no caller-controlled
     text and all Kubernetes object references are validated separately.
     """
 
     namespace = _require_dns_subdomain(namespace, field="namespace")
     passive_pvc = _require_dns_subdomain(passive_pvc, field="passive_pvc")
-    if not isinstance(populate_jail_image, str):
-        raise ValueError("populate_jail_image must be the exact non-empty upstream image.")
-    image = populate_jail_image
+    if not isinstance(runner_image, str):
+        raise ValueError("runner_image must be the exact non-empty target controller image.")
+    image = runner_image
     if not image or image != image.strip():
-        raise ValueError("populate_jail_image must be the exact non-empty upstream image.")
+        raise ValueError("runner_image must be the exact non-empty target controller image.")
     if not re.fullmatch(r"[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}", image):
-        raise ValueError(
-            "populate_jail_image must be an immutable upstream repository@sha256 digest."
-        )
+        raise ValueError("runner_image must be an immutable target repository@sha256 digest.")
     target = str(target_ref or "").strip()
     if not target:
         raise ValueError("target_ref must be non-empty.")
@@ -389,6 +407,7 @@ def build_jail_gpu_post_population_resources(
     }
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
+        "runtimeClassName": "nvidia",
         "automountServiceAccountToken": False,
         "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
         "containers": [
@@ -396,11 +415,18 @@ def build_jail_gpu_post_population_resources(
                 "name": "gpu-jail-post-population",
                 "image": image,
                 "imagePullPolicy": "IfNotPresent",
+                "env": [
+                    {"name": "NVIDIA_VISIBLE_DEVICES", "value": "all"},
+                    {"name": "NVIDIA_DRIVER_CAPABILITIES", "value": "compute,utility"},
+                ],
                 "command": [
                     "/bin/bash",
                     f"{GPU_JAIL_POST_POPULATION_SCRIPT_MOUNT}/{GPU_JAIL_POST_POPULATION_SCRIPT_KEY}",
                 ],
-                "resources": {"limits": {"nvidia.com/gpu": 1}},
+                # Deliberately request no Kubernetes GPU resource. The NVIDIA runtime
+                # exposes devices read-only for validation without preempting the
+                # Slurm worker Pod that owns the node's allocatable GPUs.
+                "resources": {},
                 "securityContext": {
                     "allowPrivilegeEscalation": False,
                     "readOnlyRootFilesystem": True,
@@ -441,7 +467,9 @@ def build_jail_gpu_post_population_resources(
             },
         ],
     }
-    pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
+    safe_scheduling = active_passive_pod_scheduling_fields(scheduling)
+    safe_scheduling.pop("priorityClassName", None)
+    pod_spec.update(safe_scheduling)
     job = {
         "apiVersion": "batch/v1",
         "kind": "Job",

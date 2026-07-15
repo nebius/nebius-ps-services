@@ -162,8 +162,9 @@ if args[:3] == ["iam", "access-permit", "list"]:
     print_json(
         {
             "items": [
-                {"spec": {"resource_id": project_id, "role": "editor"}}
+                {"spec": {"resource_id": project_id, "role": role}}
                 for project_id in state["project_ids"]
+                for role in state["access_permit_roles"]
             ]
         }
     )
@@ -171,6 +172,11 @@ if args[:3] == ["iam", "access-permit", "list"]:
 
 if args[:3] == ["iam", "access-permit", "create"]:
     require_human()
+    role = option_value("--role")
+    state["access_permit_create_roles"].append(role)
+    if role not in state["access_permit_roles"]:
+        state["access_permit_roles"].append(role)
+    save()
     raise SystemExit(0)
 
 if args[:3] == ["iam", "group-membership", "list-members"]:
@@ -241,11 +247,16 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self,
         *,
         active: str = HUMAN_PROFILE,
+        access_permit_roles: list[str] | None = None,
         profiles: list[str] | None = None,
         broken_profiles: list[str] | None = None,
     ) -> None:
         value = {
             "active": active,
+            "access_permit_create_roles": [],
+            "access_permit_roles": (
+                ["admin"] if access_permit_roles is None else access_permit_roles
+            ),
             "agent_iam_attempts": 0,
             "broken_profiles": broken_profiles or [],
             "group_get_by_name_calls": 0,
@@ -373,6 +384,53 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             self.default_project_file().read_text(encoding="utf-8").strip(),
             PROJECT,
         )
+
+    def test_default_role_adds_admin_permit_to_editor_only_group(self) -> None:
+        self.write_state(access_permit_roles=["editor"])
+        self.write_credential()
+
+        self.assert_setup_succeeds()
+        state = self.read_state()
+
+        self.assertEqual(state["access_permit_create_roles"], ["admin"])
+        self.assertEqual(state["access_permit_roles"], ["editor", "admin"])
+
+        self.assert_setup_succeeds()
+        state = self.read_state()
+
+        self.assertEqual(state["access_permit_create_roles"], ["admin"])
+        self.assertEqual(state["access_permit_roles"], ["editor", "admin"])
+
+    def test_explicit_role_override_remains_available(self) -> None:
+        self.write_state(access_permit_roles=[])
+        self.write_credential()
+
+        result = subprocess.run(
+            [*self.setup_command(), "--role", "editor"],
+            cwd=str(SCRIPT.parent.parent),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.read_state()
+
+        self.assertEqual(state["access_permit_create_roles"], ["editor"])
+        self.assertEqual(state["access_permit_roles"], ["editor"])
+
+    def test_help_reports_admin_as_default_role(self) -> None:
+        result = subprocess.run(
+            ["bash", str(SCRIPT), "--help"],
+            cwd=str(SCRIPT.parent.parent),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("project role 'admin'", result.stderr)
 
     def test_unsupported_install_hook_flag_fails_fast(self) -> None:
         self.write_state()

@@ -64,12 +64,12 @@ def write_fake_scontrol(bin_dir: Path, *, nodes: str = "worker-0") -> None:
     scontrol = bin_dir / "scontrol"
     scontrol.write_text(
         "#!/usr/bin/env bash\n"
-        "job_id=\"${3:-}\"\n"
+        'job_id="${3:-}"\n'
         "printf '%s\\n' \"JobId=${job_id} JobName=sop-gpu-job-test-01 "
         "UserId=root(0) JobState=RUNNING Partition=main "
         f"NodeList={nodes} "
         "Priority=100 Reason=None Requeue=1 Restarts=0 TimeLimit=00:35:00 "
-        "SubmitTime=2026-07-04T05:09:00 StartTime=2026-07-04T05:09:24\"\n",
+        'SubmitTime=2026-07-04T05:09:00 StartTime=2026-07-04T05:09:24"\n',
         encoding="utf-8",
     )
     scontrol.chmod(0o755)
@@ -209,9 +209,7 @@ def test_login_shell_stages_without_submitting_jobs() -> None:
     assert len(lines) == 3
     shell_command = shlex.split(lines[2])
     assert shell_command[:3] == ["ssh", "-t", "root@203.0.113.10"]
-    assert shell_command[3] == (
-        'cd /root/private-job-test && exec "${SHELL:-/bin/bash}" -i'
-    )
+    assert shell_command[3] == ('cd /root/private-job-test && exec "${SHELL:-/bin/bash}" -i')
     assert "./submit-job-test.sh" not in shell_command[3]
 
 
@@ -224,9 +222,7 @@ def test_heartbeat_interval_is_exported_to_the_batch_job() -> None:
 
 def test_login_only_options_require_login() -> None:
     shell_result = run_submitter("--login-shell", "--dry-run")
-    remote_dir_result = run_submitter(
-        "--login-remote-dir", "/root/private-job-test", "--dry-run"
-    )
+    remote_dir_result = run_submitter("--login-remote-dir", "/root/private-job-test", "--dry-run")
 
     assert shell_result.returncode != 0
     assert "--login-shell requires --login" in shell_result.stderr
@@ -449,7 +445,7 @@ def test_watch_jobs_default_runs_until_observed_jobs_clear(tmp_path: Path) -> No
     )
     sacct.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ \"$*\" == *Elapsed* ]]; then\n"
+        'if [[ "$*" == *Elapsed* ]]; then\n'
         "  printf '%s\\n' '60|COMPLETED|0:0|00:30:04|2026-07-04T05:09:00|2026-07-04T05:09:24|2026-07-04T05:39:28|worker-0|0'\n"
         "else\n"
         "  printf '%s\\n' '60|COMPLETED|0:0|2026-07-04T05:09:00|2026-07-04T05:09:24|worker-0|0'\n"
@@ -511,7 +507,7 @@ def test_watch_jobs_accepts_transient_accounting_visibility_gap(tmp_path: Path) 
         "count=$((count + 1))\n"
         'printf "%s\\n" "$count" >"$count_file"\n'
         "if ((count >= 3)); then\n"
-        "  if [[ \"$*\" == *Elapsed* ]]; then\n"
+        '  if [[ "$*" == *Elapsed* ]]; then\n'
         "    printf '%s\\n' '60|COMPLETED|0:0|00:30:04|2026-07-04T05:09:00|2026-07-04T05:09:24|2026-07-04T05:39:28|worker-0|0'\n"
         "  else\n"
         "    printf '%s\\n' '60|COMPLETED|0:0|2026-07-04T05:09:00|2026-07-04T05:09:24|worker-0|0'\n"
@@ -575,7 +571,7 @@ def test_watch_jobs_tolerates_transient_controller_rpc_gap_after_baseline(
         'count="$(cat "$count_file" 2>/dev/null || printf \'0\')"\n'
         "if ((count < 3)); then\n"
         "  printf '%s\\n' '60|RUNNING|0:0|2026-07-04T05:09:00|2026-07-04T05:09:24|worker-0|0'\n"
-        "elif [[ \"$*\" == *Elapsed* ]]; then\n"
+        'elif [[ "$*" == *Elapsed* ]]; then\n'
         "  printf '%s\\n' '60|COMPLETED|0:0|00:30:04|2026-07-04T05:09:00|2026-07-04T05:09:24|2026-07-04T05:39:28|worker-0|0'\n"
         "else\n"
         "  printf '%s\\n' '60|COMPLETED|0:0|2026-07-04T05:09:00|2026-07-04T05:09:24|worker-0|0'\n"
@@ -604,6 +600,65 @@ def test_watch_jobs_tolerates_transient_controller_rpc_gap_after_baseline(
     assert "Slurm job watch result: PASS" in result.stdout
 
 
+def test_watch_jobs_accepts_unallocated_pending_job_identity(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    scontrol = bin_dir / "scontrol"
+    sacct = bin_dir / "sacct"
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '60|PENDING|0:00|20:00|main||(Priority)|sop-gpu-job-test-01'\n",
+        encoding="utf-8",
+    )
+    scontrol.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' 'JobId=60 JobName=sop-gpu-job-test-01 UserId=root(0) "
+        "JobState=PENDING Partition=main NodeList=(null) Priority=100 Reason=Priority "
+        "Requeue=1 Restarts=0 TimeLimit=00:20:00 SubmitTime=2026-07-14T12:59:30 "
+        "StartTime=Unknown'\n",
+        encoding="utf-8",
+    )
+    sacct.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$*" == *Elapsed* ]]; then\n'
+        "  printf '%s\\n' '60|PENDING|0:0|00:00:00|2026-07-14T12:59:30|Unknown|Unknown|Unknown|0'\n"
+        "else\n"
+        "  printf '%s\\n' '60|PENDING|0:0|2026-07-14T12:59:30|Unknown|Unknown|0'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    for command in (squeue, scontrol, sacct):
+        command.chmod(0o755)
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SUBMITTER),
+            "--watch-jobs",
+            "--watch-once",
+            "--watch-job-ids",
+            "60",
+        ],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "job_id=60 state=PENDING" in result.stdout
+    assert (
+        "job_id=60 lineage_pending submit=2026-07-14T12:59:30 allocation=unassigned restarts=0"
+    ) in result.stdout
+    assert "lacks a complete JobID/submit/start/allocation/Restarts" not in result.stderr
+    assert "Slurm job watch result: PASS" in result.stdout
+
+
 def test_watch_jobs_fails_when_visible_job_allocation_changes(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -627,7 +682,7 @@ def test_watch_jobs_fails_when_visible_job_allocation_changes(tmp_path: Path) ->
         "printf '%s\\n' \"JobId=60 JobName=sop-gpu-job-test-01 UserId=root(0) "
         "JobState=RUNNING Partition=main NodeList=${nodes} Priority=100 Reason=None "
         "Requeue=1 Restarts=0 TimeLimit=00:35:00 SubmitTime=2026-07-04T05:09:00 "
-        "StartTime=2026-07-04T05:09:24\"\n",
+        'StartTime=2026-07-04T05:09:24"\n',
         encoding="utf-8",
     )
     sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")

@@ -42,6 +42,8 @@ def test_cleanup_delete_transport_is_narrowly_allowlisted() -> None:
         "cxcli-controller-bridge-state",
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/"
         "cxcli-controller-bridge-jail",
+        "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/pods/cxcli-controller-bridge-canary-0",
+        "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/pods/cxcli-controller-bridge-canary-1",
         "/apis/rbac.authorization.k8s.io/v1/namespaces/soperator/rolebindings/"
         "cxcli-controller-bridge-power-manager",
     )
@@ -58,6 +60,9 @@ def test_cleanup_delete_transport_is_narrowly_allowlisted() -> None:
     )
     assert not migration._uid_preconditioned_delete_api_path_is_supported(  # noqa: SLF001
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/customer"
+    )
+    assert not migration._uid_preconditioned_delete_api_path_is_supported(  # noqa: SLF001
+        "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/pods/customer"
     )
 
 
@@ -105,7 +110,9 @@ def test_exact_pvc_delete_reconciles_lost_response_from_same_uid_termination(
         lambda **kwargs: waits.append(str(kwargs["uid"])),
     )
 
-    def no_second_delete(_args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+    def no_second_delete(
+        _args: Sequence[str], **_kwargs: Any
+    ) -> migration.SoperatorMigrationCommandResult:
         pytest.fail("same-UID terminating PVC was blindly deleted a second time")
 
     migration._controller_bridge_delete_exact_kubernetes_resource(  # noqa: SLF001
@@ -244,6 +251,7 @@ def test_final_singleton_proof_rejects_pending_second_slurmctld_pod(
             "target_image": f"registry.example/slurm@sha256:{digest}",
         },
         "state_manifest": {"stable_path": "/mnt/controller-spool/current"},
+        "source_configuration": {"config_key": "slurm.conf"},
     }
 
     with pytest.raises(migration.SoperatorMigrationPhasePending, match="second nonterminal"):
@@ -320,7 +328,10 @@ def _cleanup_resume_journal(*, stage: str) -> dict[str, Any]:
         },
         "namespace": "cxcli-soperator-upgrade-bridge",
         "kubernetes_resources": [namespace, pv, pvc, jail_pv, jail_pvc],
-        "node_groups": [{"id": "bridge-a"}, {"id": "bridge-b"}],
+        "node_groups": [
+            {"id": "bridge-a", "cleanup_policy": "delete-domain"},
+            {"id": "bridge-b", "cleanup_policy": "delete-domain"},
+        ],
         "cleanup": {
             "intent_at": "2026-07-12T10:00:00Z",
             "bridge_storage_verified_at": "2026-07-12T10:01:00Z",
@@ -576,7 +587,9 @@ def test_cleanup_deletes_both_pvcs_before_namespace_then_both_pvs(
         "_controller_bridge_delete_node_groups",
         lambda **_kwargs: ["bridge-a", "bridge-b"],
     )
-    monkeypatch.setattr(migration, "_controller_bridge_cleanup_prove_absent", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration, "_controller_bridge_cleanup_prove_absent", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         migration,
         "advance_bridge_stage",

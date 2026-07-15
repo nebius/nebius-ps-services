@@ -1,6 +1,6 @@
 interface:
   display_name: "Task Implementer"
-  short_description: "Steer private prompts through planned brownfield tasks"
-  default_prompt: "Use $task-implementer workspace init [project-folder] once, then $task-implementer run <prompt-path-or-unique-filename> in each fresh session. Reuse the same edited prompt for steering, keep IDs private, reconcile managed requirements and just-in-time design, claim exactly one dependency-ready task from a clean worktree, lock its plan and exact file allowlist before product edits, validate/review/commit/checkpoint once, hand off, and stop the session."
+  short_description: "Coordinate private prompts through isolated dependency waves"
+  default_prompt: "Use $task-implementer workspace init [project-folder] once, then $task-implementer run <prompt-path-or-unique-filename>. Keep the two-command public surface and IDs private; plan deterministic dependency waves from complete write claims and conflict domains; use isolated full-repository worktrees and one reviewed direct-child commit per worker; integrate in stable order; validate and review the combined result; reconcile steering; promote only by ff-only merge; and clean up verified reachable resources without force."
 policy:
   allow_implicit_invocation: false

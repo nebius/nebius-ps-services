@@ -27,11 +27,22 @@ def _result(
 def _old_controller_pod_spec() -> dict[str, Any]:
     return {
         "serviceAccountName": "slurm-controller",
+        "readinessGates": [
+            {"conditionType": "InPlaceUpdateReady"},
+            {"conditionType": "KruisePodReady"},
+        ],
         "initContainers": [
             {
                 "name": "ensure-jail-mounted",
                 "image": "registry.example/slurmctld:24.11.6",
-                "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}],
+                "volumeMounts": [
+                    {"name": "jail", "mountPath": "/mnt/jail"},
+                    {
+                        "name": "kube-api-access-old",
+                        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                        "readOnly": True,
+                    },
+                ],
             }
         ],
         "containers": [
@@ -41,15 +52,18 @@ def _old_controller_pod_spec() -> dict[str, Any]:
                 "volumeMounts": [
                     {"name": "controller-spool", "mountPath": "/var/spool/slurmctld"},
                     {"name": "jail", "mountPath": "/mnt/jail"},
+                    {
+                        "name": "kube-api-access-old",
+                        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                        "readOnly": True,
+                    },
                 ],
             }
         ],
         "volumes": [
             {
                 "name": "controller-spool",
-                "persistentVolumeClaim": {
-                    "claimName": "controller-spool-controller-0"
-                },
+                "persistentVolumeClaim": {"claimName": "controller-spool-controller-0"},
             },
             {"name": "jail", "persistentVolumeClaim": {"claimName": "jail-pvc"}},
             {
@@ -63,12 +77,10 @@ def _old_controller_pod_spec() -> dict[str, Any]:
 def test_old_controller_pod_retargets_jail_without_changing_runtime_mounts() -> None:
     source = _old_controller_pod_spec()
 
-    rewritten, state_volume_name = (
-        migration._controller_bridge_pod_spec_with_bridge_storage(  # noqa: SLF001
-            pod_spec=source,
-            source_state_pvc="controller-spool-controller-0",
-            source_jail_pvc="jail-pvc",
-        )
+    rewritten, state_volume_name = migration._controller_bridge_pod_spec_with_bridge_storage(  # noqa: SLF001
+        pod_spec=source,
+        source_state_pvc="controller-spool-controller-0",
+        source_jail_pvc="jail-pvc",
     )
 
     assert state_volume_name == "controller-spool"
@@ -78,9 +90,7 @@ def test_old_controller_pod_retargets_jail_without_changing_runtime_mounts() -> 
     assert volumes["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
         "controller-spool-controller-0"
     )
-    assert volumes["jail"]["persistentVolumeClaim"]["claimName"] == (
-        CONTROLLER_BRIDGE_JAIL_PVC
-    )
+    assert volumes["jail"]["persistentVolumeClaim"]["claimName"] == (CONTROLLER_BRIDGE_JAIL_PVC)
     assert rewritten["initContainers"][0]["volumeMounts"] == [
         {"name": "jail", "mountPath": "/mnt/jail"}
     ]
@@ -88,6 +98,7 @@ def test_old_controller_pod_retargets_jail_without_changing_runtime_mounts() -> 
         {"name": "controller-spool", "mountPath": "/var/spool/slurmctld"},
         {"name": "jail", "mountPath": "/mnt/jail"},
     ]
+    assert "readinessGates" not in rewritten
 
 
 def test_old_controller_pod_rejects_unmapped_third_pvc() -> None:

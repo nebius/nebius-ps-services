@@ -28,7 +28,7 @@ Defaults:
 - default project selector: `~/.nebius/codex-agent-default-project-id`
 - CLI profile: `codex-agent-<project_id>`
 - group: `codex-agent-<project-name-slug>`, resolved from the project metadata
-- role: `editor`
+- role: `admin`
 - permission scope: project-level access permit on `<project_id>`
 
 ## Run
@@ -54,9 +54,13 @@ bash scripts/agent-nebius-auth.sh ensure \
 Optional flags:
 
 - `--service-account-name <name>`: default `codex-agent-sa`
-- `--role <role>`: default `editor`
+- `--role <role>`: default `admin`
 - `--repair`: allow replacement of a broken credential file after backing it up
 - `--dry-run`: print the planned actions without modifying IAM or local files
+
+Project-level `admin` is intentionally broad. Before running live setup,
+confirm that the selected project is the intended authorization boundary. Use
+an explicit narrower `--role` when full project administration is unnecessary.
 
 When the operator explicitly asks to install or refresh the runtime hook, run
 the root installer from the skills repo root:
@@ -124,7 +128,8 @@ When the credential file does not exist, the script:
 1. Verifies the current human/default Nebius session.
 2. Creates or finds service account `codex-agent-sa` in the project.
 3. Creates or finds group `codex-agent-<project-name-slug>` under the tenant.
-4. Ensures the group has a project-level access permit with the configured role.
+4. Ensures the group has a project-level access permit with the configured
+   role, `admin` by default.
 5. Ensures the service account is a member of the group.
 6. Generates `~/.nebius/codex-agent-authkey.<project_id>.json`.
 7. Creates the `codex-agent-<project_id>` CLI profile.

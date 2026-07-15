@@ -1,138 +1,123 @@
 # Task Implementer
 
-`task-implementer` is an explicit-only brownfield implementation coordinator
-with private file-first intake. Users initialize a project folder once, edit
-durable Markdown asks outside Git, and repeatedly run the same prompt. Internal
-revisions, steering dispositions, queues, IDs, retries, and handoffs remain
-private. Lightweight requirements and task designs are committed in managed
-project-document regions.
+`task-implementer` is an explicit-only brownfield implementation coordinator.
+It keeps prompts, revisions, steering, orchestration state, assignments,
+results, and Git worktrees outside the repository while product changes remain
+normal reviewed commits.
 
 ## Two-Command Workflow
 
-From the project folder:
-
 ```text
-$task-implementer workspace init
-```
-
-Or provide the same folder explicitly:
-
-```text
-$task-implementer workspace init /path/to/project-folder
-```
-
-Initialization creates or verifies the private `CODE` + `PROMPTS` workspace,
-creates one starter prompt only when none exists, opens VS Code when available,
-and prints workspace paths plus prompts newest-first by accepted submission.
-It is idempotent and never deletes, duplicates, renames, rewrites, or touches
-existing prompts or run history.
-
-Edit the starter in VS Code, copy its path from Explorer, and run:
-
-```text
+$task-implementer workspace init [project-folder]
 $task-implementer run <prompt-path-or-unique-filename>
 ```
 
-The first invocation snapshots the prompt, extracts stable `TI-REQ-nnn`
-requirements, and constructs the internal `task-1..task-n` queue. The Skill
-then claims exactly `task-1` in a private
-execution plane, completes and locks its plan before product edits, implements
-its just-in-time `TI-DES-nnn` design and managed specification updates through
-validation, `code-review`, scoped fixes, and `$commit`, verifies the checkpoint
-and next-session handoff, and stops. Each fresh session repeats the same command
-to claim, plan, and implement exactly one next task.
+Initialization creates or verifies the private `CODE` + `PROMPTS` workspace
+and one starter prompt when needed. Edit that prompt, then invoke `run` once.
+The run continues every dependency wave until completion or a precise blocker;
+users never supply run, wave, task, branch, or worktree IDs.
 
-The execution plane persists exclusive task ownership after the filesystem
-transition lock is released. It records only hashes of runtime-provided
-`CODEX_THREAD_ID`, binds the clean claim-time worktree plus authorized plan and
-queue, and verifies exact changed-path/commit evidence at checkpoint. Every
-session that participated in a task is retired from all other tasks in the
-scope. The fingerprint is a cooperative correlation guard, not a cryptographic
-identity. Each task gets exactly one post-claim commit and an immutable stopped
-checkpoint digest; a new session always begins the next task back in planning.
+Steer active work by editing the same prompt and repeating `run`. Steering
+received after a wave starts remains queued until the next safe boundary. An
+unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
+prompt starts a new run.
 
-To steer work, edit the same prompt—prefer its optional `## Steering`
-section—and repeat the same command. There is no public `steer` action and no
-user-supplied ID. A same-session clean planning task can replan immediately;
-another owner's planning task or any implementation task keeps its locked plane
-unchanged and returns `STEERING_QUEUED_AFTER_TASK`. A fresh session reconciles
-ordered pending revisions after the checkpoint. Contradictory or ambiguous
-edits stop before repository changes. An unchanged completed prompt returns
-`ALREADY_COMPLETE`; an edited completed prompt starts a new internal run.
+## Dependency Waves
 
-After authorization, the Skill creates or incrementally updates only marked
-regions in `<project>/docs/requirements.md` and `<project>/docs/design.md`.
-Existing content outside the markers is byte-preserved. Agentic SDLC ownership,
-malformed markers, unsafe paths, invalid IDs/mappings, or envelope drift fail
-closed before product edits. Specification updates share the affected task's
-single commit; there is no extra spec commit.
+Before implementation, the coordinator inspects source and locks stable tasks
+with dependencies, exact or directory-prefix write claims, keyed conflict
+domains, validation, and done criteria. It builds deterministic earliest-fit
+waves in stable task order.
 
-## Prompt Ordering
+Tasks may share a wave only when dependencies are already satisfied and their
+ownership is completely disjoint. Shared interfaces, schemas, migration
+chains, dependency files, abstractions, Kubernetes/Terraform identities,
+exclusive test resources, external mutations, and architecture decisions
+serialize. Unknown ownership forces a singleton wave.
 
-Prompt filenames stay stable. The filename date is creation metadata, and the
-workflow never renames or deliberately touches a prompt to reorder it. Every
-validated, lock-acquired run records private `last_invoked_at` activity. Both
-commands display prompts newest-first by that activity, with creation time and
-path as deterministic fallbacks. VS Code Explorer keeps its normal filename
-ordering.
+Logical waves may exceed runtime agent capacity. They dispatch in stable
+capacity-sized batches without changing the dependency wave.
 
-Output contains only last invocation, status, title, and path. It never prints
-prompt bodies or requires users to copy internal prompt IDs, run IDs, revisions,
-manifests, or handoff paths.
+## Worktrees And Workers
 
-## Editor Convenience
+Every parallel-capable task receives a unique branch and full-repository linked
+worktree under:
 
-The generated workspace lists `CODE` first and `PROMPTS` second. Its manual
-`Task Implementer: New Prompt` task creates additional managed prompts. It does
-not start Codex or submit content. There is no public workspace-creation action
-beyond initialization.
+```text
+${CODEX_HOME:-$HOME/.codex}/task-implementer/worktrees/
+<project>/<scope>/<run>/wave-001/{integration,task-1,task-2}
+```
 
-## Private Storage
+For a monorepo scope such as `services/nebius-cxcli`, the worker cwd is
+`<task-worktree>/services/nebius-cxcli`. Worktrees share Git objects, refs,
+configuration, and hooks but have separate indexes and working files.
 
-Workspaces live under
-`${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/`, keyed by canonical Git
-root and exact project scope. They are never stored in the repository, even as
-ignored files.
+The main thread is coordinator-only. It dispatches native workers up to
+capacity, or fresh sequential `codex exec` workers when native subagents are
+unavailable. Each worker verifies its immutable assignment, implements exactly
+one task inside locked claims, validates, runs `code-review`, fixes scoped
+findings, and creates exactly one direct-child commit through `$commit`.
 
-On POSIX systems, managed directories are `0700` and files are `0600`. SHA-256
-detects drift but does not encrypt content. Prompt files must not contain
-credentials, secrets, customer data, or confidential copied material.
+Workers never edit the shared handoff, managed specs, common docs, other refs
+or worktrees, or the primary checkout. An undeclared path requirement stops
+with `REPLAN_REQUIRED` before edit or commit.
+
+## Integration And Promotion
+
+The coordinator verifies worker Git evidence independently, then merges task
+branches into a temporary integration branch in stable task-ID order with
+`git merge --no-ff --no-edit`. Shared managed specs, README/design docs, and
+changelog remain coordinator-owned.
+
+After combined validation, integration `code-review`, and steering
+reconciliation, the unchanged clean primary branch advances atomically with
+`git merge --ff-only <verified-integration-SHA>` after the integration branch
+is verified at that SHA. This fast-forward promotion is the only point where
+tasks become done.
+
+Clean reachable worktrees are then removed without force and ancestry-proven
+branches are deleted with `git branch -d`. Failures preserve exact resources
+for recovery. The workflow never runs broad prune/gc, cherry-picks, rebases,
+squashes, pushes, or force-removes.
+
+## Private State And Recovery
+
+Coordinator, wave, mutable task-plane, immutable assignment/result, and journal records live with the run
+under the private prompt workspace. Every Git mutation is journaled before
+execution and re-observed afterward. A repeated `run` resumes durable v2 truth
+without recreating branches, worktrees, assignments, commits, or merges.
+
+Unfinished execution-plane-v1 runs are inert and return
+`WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. There is no
+compatibility execution path or migration command.
+
+Prompt filenames stay stable. Submission order comes from private
+`last_invoked_at`, not filenames or mtimes. Output never prints prompt bodies,
+secrets, or internal IDs.
 
 ## Files
 
-- `SKILL.md`: explicit two-action routing and one-task implementation loop.
-- `agents/openai.yaml`: UI metadata and explicit-only invocation policy.
-- `references/prompt-workspace.md`: storage, validation, activity, routing,
-  retry, failure, and sandbox contracts.
-- `references/implementation-loop.md`: queue, reconciliation, interruption,
-  per-task gates, handoff, and fresh-session behavior.
-- `assets/prompt-template.md`: one-ask Markdown template.
-- `assets/handoff-template.md`: private queue and checkpoint template.
-- `assets/*-managed-region.md`: compact committed specification templates.
-- `scripts/prompt_workspace.py`: internal mechanical CLI and redacted output.
-- `scripts/prompt_workspace_core.py`: workspace and prompt validation core.
-- `scripts/prompt_workspace_intake.py`: two-command run routing and activity
-  transition ownership.
-- `scripts/prompt_workspace_execution.py`: task claim, planning authorization,
-  checkpoint, recovery, and fresh-session enforcement.
-- `scripts/prompt_workspace_specs.py`: steering dispositions plus managed
-  specification marker, ID, mapping, ownership, and envelope validation.
-- `scripts/prompt_workspace_runs.py`: snapshots, manifests, handoffs, locks,
-  verification, and prompt metadata.
-- `scripts/test-prompt-workspace.py`: disposable functional tests.
-- `scripts/test-task-execution.py`: execution-plane and session-boundary tests.
-- `scripts/test-task-specs.py`: steering-ledger and managed-document tests.
-- `scripts/test-task-implementer-contract.py`: cross-file contract smoke.
-- `evals/trigger-prompts.md`: explicit trigger and non-trigger examples.
+- `SKILL.md`: explicit two-command coordinator contract.
+- `agents/openai.yaml`: UI metadata and explicit-only policy.
+- `references/prompt-workspace.md`: private storage, routing, v2 state, errors,
+  and sandbox behavior.
+- `references/implementation-loop.md`: task analysis, wave lifecycle, worker,
+  integration, promotion, cleanup, and recovery rules.
+- `assets/handoff-template.md`: coordinator-owned queue and wave evidence.
+- `scripts/prompt_workspace_execution.py`: parsing and deterministic scheduler.
+- `scripts/prompt_workspace_waves.py`: journaled worktree lifecycle.
+- `scripts/prompt_workspace_intake.py`: two-command routing and steering.
+- `scripts/prompt_workspace_specs.py`: managed specification validation.
+- `scripts/test-task-execution.py`: scheduler and v1-boundary tests.
+- `scripts/test-task-waves.py`: disposable real-Git lifecycle tests.
+- `scripts/test-prompt-workspace.py`, `test-task-specs.py`, and
+  `test-task-implementer-contract.py`: storage, spec, and contract tests.
 
 ## Boundaries
 
-- The helper creates and routes private state, claims dependency-ready tasks,
-  locks plans, and validates checkpoints, but never decomposes tasks, starts
-  Codex, edits product code, or prints prompt bodies.
-- Only the two Skill actions above are public; helper transitions and IDs are
-  private implementation details.
-- The Skill is for complex sequential brownfield work, not ordinary one-shot
-  implementation or Agentic SDLC.
-- Do not run parallel write-capable sessions in one scope.
-- Use `$align` after the final task and `$sdlc-start` for Agentic SDLC.
+- Explicit invocation only; generic parallel requests do not trigger it.
+- Public surface remains exactly `workspace init` and `run`.
+- External database, Kubernetes, Terraform, migration, and publication actions
+  remain singleton and need separate explicit authority.
+- Use `$align` after the final promoted wave; use `$sdlc-start` for Agentic
+  SDLC.

@@ -86,7 +86,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Initialize one private prompt workspace, steer the same prompt, maintain managed requirements/design records, and run one planned task per fresh session through locked authorization, checkpoint, and handoff. |
+| `task-implementer` | Explicit only | Initialize one private prompt workspace, then coordinate a durable request through dependency waves, isolated full-repository worktrees, ordered integration, validated fast-forward promotion, and safe cleanup. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
@@ -343,9 +343,8 @@ needs, and open questions instead of treating principles as universal laws.
 
 ### `task-implementer`
 
-`task-implementer` coordinates complex brownfield implementation requests that
-are bigger than one coherent task and need ordered execution across fresh Codex
-contexts. It keeps many private prompts under
+`task-implementer` coordinates complex brownfield requests through deterministic dependency waves.
+It keeps durable prompts and orchestration evidence under
 `${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/`, outside Git, with one
 editable Markdown file per independent ask. A generated VS Code workspace puts
 `CODE` first and `PROMPTS` second so source and historical asks are visible
@@ -354,52 +353,45 @@ together without making Codex depend on multi-root behavior.
 `workspace init [project-folder]` defaults to the exact current directory. It
 creates or verifies the private workspace, creates one starter prompt only when
 none exists, opens VS Code when available, and is safe to repeat without
-changing prompts or history. `run <prompt-path-or-unique-filename>` validates
-and snapshots exact prompt bytes, creates or reconciles the internal
-`task-1` through `task-n` handoff queue, and implements exactly one
-dependency-ready task per fresh session through context gathering,
-`brainstorm` and `design` when needed, a mechanically required and locked plan,
-focused and end-to-end validation, `code-review`, scoped fixes, and `$commit`.
+changing prompts or history. One `run <prompt-path-or-unique-filename>` validates
+and snapshots exact prompt bytes, creates or reconciles the internal task queue,
+locks dependencies, exact/prefix write claims, conflict domains, validation,
+and done criteria, then coordinates every wave until completion or a blocker.
 
 Users steer the workflow by editing the same prompt—preferably appending to its
 optional `## Steering` section—and running the same command. There is no public
-`steer` command or user-supplied ID. Same-owner clean planning can replan before
-authorization; steering submitted during another owner's planning or any
-implementation phase is stored once and returns
-`STEERING_QUEUED_AFTER_TASK` without changing the active plane. The next fresh
-session reconciles ordered pending revisions before claiming another task.
+`steer` command or user-supplied ID. Steering may safely recompute a merely
+planned wave. Once worktrees or assignments exist, it queues without changing
+the immutable active wave and is reconciled before promotion or at the next
+wave boundary.
 
 Requirements are normalized before tasks into stable `TI-REQ-nnn` records, and
-each selected task receives a just-in-time `TI-DES-nnn` design. After plan
-authorization, the Skill creates or updates only marked regions in project
+each selected task receives a `TI-DES-nnn` design. The coordinator creates or
+updates only marked regions in project
 `docs/requirements.md` and `docs/design.md`, byte-preserving generic content
 outside them. Agentic SDLC ownership or malformed/unsafe managed state fails
-closed. These documents share the affected task's single commit.
+closed. Workers never edit these shared specifications concurrently.
 
-Before product edits, a private execution plane claims the dependency-ready
-task for the runtime Codex session, requires a clean Git baseline, and
-authorizes implementation only after all plan fields and the exact file
-allowlist are populated. Checkpointing verifies the locked plan/queue,
-requirement/design mappings, managed-region digests and envelopes, exact
-changed paths, commit message, next task, and stop instruction. Every session
-that participated in the task is retired from all other tasks in the scope; a
-task gets exactly one post-claim commit and a reconciliation-safe stopped
-checkpoint digest. A fresh session repeats the same `run` command and starts
-again in planning.
+Parallel-capable tasks receive unique branches and full-repository linked
+worktrees under the private task-implementer root. For monorepo scopes, workers
+operate from the scope path inside those full checkouts. Native workers dispatch
+up to capacity; fresh sequential `codex exec` workers provide the same isolation
+when native subagents are unavailable. Each worker implements one locked task,
+validates, runs `code-review`, and creates exactly one direct-child `$commit`.
 
-Users repeat the same `run` command after each checkpoint. Prompt IDs, run IDs,
-revisions, and handoff paths remain private. Filenames stay stable; accepted
-run invocations update private activity used for newest-first command output,
-not filename dates or filesystem mtime. An unchanged completed prompt returns
-`ALREADY_COMPLETE`, while an edited completed prompt starts a new internal run.
-The handoff remains the execution truth; there are no separate task files or
-prompt-to-task 1:1 mapping.
+The coordinator verifies worker commits and changed paths, merges task branches
+into a temporary integration branch in stable task-ID order, runs combined
+validation and review, reconciles steering, and advances the unchanged primary
+branch only with `git merge --ff-only`. Tasks become done after promotion.
+Clean reachable worktrees and branches are removed without force; any failure
+retains exact recovery resources and leaves the project branch unchanged.
 
 The helper uses only the Python standard library, applies private POSIX modes,
-rejects path and symlink escapes, and never starts Codex or prints prompt
-bodies. The Skill is explicit-only. Use `global-context-management` for general
-context hygiene, `$sdlc-start` for Agentic SDLC, and `align` for final
-changed-surface alignment.
+rejects path and symlink escapes, journals Git mutations, and never prints
+prompt bodies. Unfinished v1 execution state fails with
+`WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. The Skill
+is explicit-only. Use `global-context-management` for general context hygiene,
+`$sdlc-start` for Agentic SDLC, and `align` for final alignment.
 
 ### `agentic-sdlc-test`
 
@@ -415,13 +407,13 @@ installed skills, hooks, hook trust, or agent configuration.
 
 `agent-nebius-auth` is a setup-only skill for bootstrapping or repairing local
 Codex Agent Nebius authentication. It uses a service account, tenant group,
-project-level access permit, authorized-key credential file, CLI profile, and a
-Codex `PreToolUse` hook that injects short-lived Nebius token environment
-variables into matching Bash commands without returning token material as model
-context. The hook also exports the agent credential file path and wires a Bash
-`nebius_refresh_token` helper through a restricted temporary `BASH_ENV` file
-for long-running raw API scripts. Install or refresh the hook through the root
-installer, for example
+project-level `admin` access permit by default, authorized-key credential file,
+CLI profile, and a Codex `PreToolUse` hook that injects short-lived Nebius token
+environment variables into matching Bash commands without returning token
+material as model context. The hook also exports the agent credential file path
+and wires a Bash `nebius_refresh_token` helper through a restricted temporary
+`BASH_ENV` file for long-running raw API scripts. Install or refresh the hook
+through the root installer, for example
 `./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
 the setup script does not patch `$CODEX_HOME/config.toml` and instead records
 the selected project under `~/.nebius` for the hook to read locally.

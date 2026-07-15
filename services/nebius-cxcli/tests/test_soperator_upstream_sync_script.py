@@ -18,18 +18,10 @@ SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EVIDENCE_PRODUCER_WORKFLOW = ".github/workflows/nebius-cxcli-ci.yml"
 SOURCE_UPSTREAM_RELEASE = "1.22.3"
 SOURCE_CHART_VERSION = "1.22.3"
-SOURCE_TARBALL_SHA256 = (
-    "41504a06e0867abfc6d626f05e31c6304e8f6ead7383739f6717c4f7145293fc"
-)
-SOURCE_CONTRACT_FINGERPRINT = (
-    "9253ffb3f7893bdb1fa52593773a56838cf3ffc5a1a2df63a816bf0827ee54d4"
-)
-SOURCE_RUNTIME_IMAGES_SHA256 = (
-    "c3151dc5430e1d12ceb1685f42cb497ecf1960cee5d84d5e46bd1c827b43fe3c"
-)
-SOURCE_PROFILE_FILE = (
-    "services/nebius-cxcli/src/nebius_cxcli/soperator_migration_profiles.yaml"
-)
+SOURCE_TARBALL_SHA256 = "41504a06e0867abfc6d626f05e31c6304e8f6ead7383739f6717c4f7145293fc"
+SOURCE_CONTRACT_FINGERPRINT = "9253ffb3f7893bdb1fa52593773a56838cf3ffc5a1a2df63a816bf0827ee54d4"
+SOURCE_RUNTIME_IMAGES_SHA256 = "c3151dc5430e1d12ceb1685f42cb497ecf1960cee5d84d5e46bd1c827b43fe3c"
+SOURCE_PROFILE_FILE = "services/nebius-cxcli/src/nebius_cxcli/soperator_migration_profiles.yaml"
 
 
 def _write_live_upgrade_evidence(
@@ -68,7 +60,7 @@ def _write_live_upgrade_evidence(
                     "candidate_manifest_sha256": "e" * 64,
                 },
                 "campaign": {
-                    "schema": "nebius-cxcli-ext-soperator-upgrade-campaign/v4",
+                    "schema": "nebius-cxcli-ext-soperator-upgrade-campaign/v5",
                     "status": "complete",
                     "pending_phase": "none",
                     "id": "campaign-test",
@@ -259,9 +251,7 @@ def test_check_latest_reports_lock_behind_highest_semver_release(tmp_path: Path)
     result = _run_check_latest(tmp_path, locked_release="3.0.7")
 
     assert result.returncode == 1
-    assert "Highest Soperator release is '4.0.2', but lock is pinned to '3.0.7'." in (
-        result.stderr
-    )
+    assert "Highest Soperator release is '4.0.2', but lock is pinned to '3.0.7'." in (result.stderr)
 
 
 def test_check_latest_continues_after_prerelease_only_page(tmp_path: Path) -> None:
@@ -373,7 +363,7 @@ def test_ci_preview_keeps_checkout_unchanged_when_staged_candidate_changes(
     )
     before = values_file.read_bytes()
 
-    harness = r'''
+    harness = r"""
 set -euo pipefail
 source <(sed '$d' "$1")
 fixture_root="$2"
@@ -394,7 +384,7 @@ promote_staged_sync() {
   return 97
 }
 main --sync --ci-preview-no-branch --scope all --report
-'''
+"""
     result = subprocess.run(
         ["bash", "-c", harness, "bash", str(SCRIPT), str(repository)],
         cwd=REPO_ROOT,
@@ -420,7 +410,7 @@ main --sync --ci-preview-no-branch --scope all --report
 
 
 def test_image_scope_main_exits_without_all_scope_validation_workspace() -> None:
-    harness = r'''
+    harness = r"""
 set -euo pipefail
 source <(sed '$d' "$1")
 fixture_root="$2"
@@ -432,7 +422,7 @@ resolve_tag_commit() { printf '%s\n' '7f1c4e817cab67e7b5d563bc11db2bff8c661189';
 fetch_release() { mkdir -p "$3/source"; }
 verify_imports() { :; }
 main --scope images --report
-'''
+"""
     result = subprocess.run(
         ["bash", "-c", harness, "bash", str(SCRIPT), str(REPO_ROOT)],
         cwd=REPO_ROOT,
@@ -535,7 +525,7 @@ def test_live_upgrade_evidence_must_match_target_release(tmp_path: Path) -> None
     )
 
     assert result.returncode == 1
-    assert "evidence.target.upstream_release must be \"4.0.2\"" in result.stderr
+    assert 'evidence.target.upstream_release must be "4.0.2"' in result.stderr
     assert "Invalid disposable live upgrade evidence" in result.stderr
 
 
@@ -593,9 +583,7 @@ def test_live_upgrade_evidence_must_match_locked_source_contract(
 
 def test_live_evidence_fixture_references_existing_non_verifier_workflow() -> None:
     assert (REPO_ROOT / EVIDENCE_PRODUCER_WORKFLOW).is_file()
-    assert EVIDENCE_PRODUCER_WORKFLOW != (
-        ".github/workflows/soperator-upstream-verifier.yml"
-    )
+    assert EVIDENCE_PRODUCER_WORKFLOW != (".github/workflows/soperator-upstream-verifier.yml")
 
 
 def test_upstream_verifier_cannot_produce_its_own_live_evidence(
@@ -669,7 +657,7 @@ def test_live_upgrade_evidence_must_match_exact_target_chart(tmp_path: Path) -> 
     )
 
     assert result.returncode == 1
-    assert "evidence.target.chart_version must be \"4.0.2-ps.4\"" in result.stderr
+    assert 'evidence.target.chart_version must be "4.0.2-ps.4"' in result.stderr
 
 
 def test_live_upgrade_evidence_rejects_non_allowlisted_producer(tmp_path: Path) -> None:
@@ -753,9 +741,7 @@ def test_production_lock_has_no_trusted_evidence_producer(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 1
-    assert "No trusted disposable-campaign evidence producer is configured" in (
-        result.stderr
-    )
+    assert "No trusted disposable-campaign evidence producer is configured" in (result.stderr)
 
 
 @pytest.mark.parametrize(
@@ -844,9 +830,7 @@ def test_candidate_manifest_changes_with_runtime_platform_digest(tmp_path: Path)
         str(candidate_root),
         str(candidate_lock),
     )
-    lock["imports"]["runtime_images"][0]["platform_digests"]["linux/amd64"] = (
-        "sha256:" + "0" * 64
-    )
+    lock["imports"]["runtime_images"][0]["platform_digests"]["linux/amd64"] = "sha256:" + "0" * 64
     candidate_lock.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
     changed = _run_sourced_script_function(
         "candidate_manifest_sha256",
@@ -871,9 +855,7 @@ def test_candidate_manifest_changes_with_runtime_command_contract(tmp_path: Path
         str(candidate_lock),
     )
     login_image = next(
-        image
-        for image in lock["imports"]["runtime_images"]
-        if image["name"] == "Slurm login SSH"
+        image for image in lock["imports"]["runtime_images"] if image["name"] == "Slurm login SSH"
     )
     login_image["required_commands"].remove("ssh-keyscan")
     candidate_lock.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
@@ -1060,24 +1042,14 @@ def test_runtime_image_lock_pins_reference_index_and_platform_digests() -> None:
         platform_digests = image["platform_digests"]
         assert required_platforms
         assert set(platform_digests) == set(required_platforms)
-        assert all(
-            SHA256_DIGEST.fullmatch(digest)
-            for digest in platform_digests.values()
-        )
+        assert all(SHA256_DIGEST.fullmatch(digest) for digest in platform_digests.values())
 
     # This multi-platform index proves the platform digest is a distinct lock
     # boundary rather than an alias for the image-list digest.
-    populate_jail = next(
-        image for image in runtime_images if image["name"] == "PopulateJail"
-    )
-    assert (
-        populate_jail["platform_digests"]["linux/amd64"]
-        != populate_jail["digest"]
-    )
+    populate_jail = next(image for image in runtime_images if image["name"] == "PopulateJail")
+    assert populate_jail["platform_digests"]["linux/amd64"] != populate_jail["digest"]
 
-    login_image = next(
-        image for image in runtime_images if image["name"] == "Slurm login SSH"
-    )
+    login_image = next(image for image in runtime_images if image["name"] == "Slurm login SSH")
     assert login_image["reference"] == (
         "cr.eu-north1.nebius.cloud/soperator/login_sshd:4.0.2-slurm25.11.3"
     )
@@ -1133,9 +1105,7 @@ def _write_runtime_command_verifier_fixture(
                             "name": "Slurm login SSH",
                             "local_file": "helm-charts/soperator/values.yaml",
                             "image_path": ["images", "sshd"],
-                            "reference": (
-                                "registry.example/soperator/login_sshd:4.0.2"
-                            ),
+                            "reference": ("registry.example/soperator/login_sshd:4.0.2"),
                             "digest": index_digest,
                             "required_platforms": ["linux/amd64"],
                             "platform_digests": {
@@ -1221,14 +1191,12 @@ def _run_runtime_command_verifier_fixture(
     hang_runtime: bool = False,
     flood_runtime: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
-    fixture_root, lock_file, upstream_root, docker_log = (
-        _write_runtime_command_verifier_fixture(tmp_path)
+    fixture_root, lock_file, upstream_root, docker_log = _write_runtime_command_verifier_fixture(
+        tmp_path
     )
     if remove_locked_command:
         lock = yaml.safe_load(lock_file.read_text(encoding="utf-8"))
-        lock["imports"]["runtime_images"][0]["required_commands"].remove(
-            remove_locked_command
-        )
+        lock["imports"]["runtime_images"][0]["required_commands"].remove(remove_locked_command)
         lock_file.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
     if locked_commands is not None:
         lock = yaml.safe_load(lock_file.read_text(encoding="utf-8"))
@@ -1273,13 +1241,10 @@ def test_runtime_command_verifier_runs_immutable_platform_image(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert (
-        "commands=awk,cat,readlink,sha256sum,sort,ssh-keygen,ssh-keyscan,sshd,tr"
-        in result.stdout
+        "commands=awk,cat,readlink,sha256sum,sort,ssh-keygen,ssh-keyscan,sshd,tr" in result.stdout
     )
     docker_calls = docker_log.read_text(encoding="utf-8")
-    assert (
-        "registry.example/soperator/login_sshd@sha256:" + "b" * 64
-    ) in docker_calls
+    assert ("registry.example/soperator/login_sshd@sha256:" + "b" * 64) in docker_calls
     assert "--platform linux/amd64" in docker_calls
     assert "--network none --read-only --cap-drop ALL" in docker_calls
     assert "--security-opt no-new-privileges" in docker_calls
@@ -1370,12 +1335,8 @@ def test_cxcli_conformance_is_rendered_and_singleton() -> None:
     lock = yaml.safe_load(LOCK.read_text(encoding="utf-8"))
     contract = lock["conformance"]["cxcli_values"]
 
-    assert contract["render_template"] == (
-        "templates/slurm-cluster/slurm-cluster-cr.yaml"
-    )
-    assert ["spec", "slurmNodes", "controller"] in contract[
-        "rendered_required_paths"
-    ]
+    assert contract["render_template"] == ("templates/slurm-cluster/slurm-cluster-cr.yaml")
+    assert ["spec", "slurmNodes", "controller"] in contract["rendered_required_paths"]
     forbidden = {
         "ha",
         "highAvailability",
@@ -1385,17 +1346,11 @@ def test_cxcli_conformance_is_rendered_and_singleton() -> None:
     }
     assert set(contract["forbidden_controller_fields"]) == forbidden
 
-    values = yaml.safe_load(
-        (REPO_ROOT / contract["values_file"]).read_text(encoding="utf-8")
-    )
-    schema = json.loads(
-        (REPO_ROOT / contract["schema_file"]).read_text(encoding="utf-8")
-    )
+    values = yaml.safe_load((REPO_ROOT / contract["values_file"]).read_text(encoding="utf-8"))
+    schema = json.loads((REPO_ROOT / contract["schema_file"]).read_text(encoding="utf-8"))
     assert forbidden.isdisjoint(values["slurmNodes"]["controller"])
     assert forbidden.isdisjoint(
-        schema["properties"]["slurmNodes"]["properties"]["controller"][
-            "properties"
-        ]
+        schema["properties"]["slurmNodes"]["properties"]["controller"]["properties"]
     )
 
     script = SCRIPT.read_text(encoding="utf-8")

@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 import prompt_workspace_intake as intake
+import prompt_workspace_core as core
 
 
 SCRIPT = Path(__file__).resolve().with_name("prompt_workspace.py")
@@ -126,9 +127,10 @@ class PromptWorkspaceTest(unittest.TestCase):
         bound_revision: str | None = None,
         last_invoked_at: datetime | None = None,
     ) -> None:
-        run_dir = Path(
-            json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"]
-        ) / run_id
+        run_dir = (
+            Path(json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"])
+            / run_id
+        )
         manifest_path = run_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if bound_revision is None:
@@ -141,29 +143,28 @@ class PromptWorkspaceTest(unittest.TestCase):
             )
         handoff = run_dir / "handoff.md"
         run_lines = [
-                    "# Task Implementer Handoff",
-                    "",
-                    "## Run",
-                    "",
-                    f"- Run ID: {run_id}",
-                    f"- Run manifest: {manifest_path}",
-                    f"- Prompt ID: {manifest['prompt_id']}",
-                    f"- Bound revision: {bound['revision']}",
-                    f"- Bound SHA-256: {bound['sha256']}",
+            "# Task Implementer Handoff",
+            "",
+            "## Run",
+            "",
+            f"- Run ID: {run_id}",
+            f"- Run manifest: {manifest_path}",
+            f"- Prompt ID: {manifest['prompt_id']}",
+            f"- Bound revision: {bound['revision']}",
+            f"- Bound SHA-256: {bound['sha256']}",
         ]
         if last_invoked_at is not None:
             run_lines.append(
-                "- Last invoked at: "
-                f"{last_invoked_at.isoformat(timespec='seconds')}"
+                f"- Last invoked at: {last_invoked_at.isoformat(timespec='seconds')}"
             )
         run_lines.extend(
             [
-                    f"- Overall status: {status}",
-                    "",
-                    "## Checkpoints",
-                    "",
-                    f"- Bound revision: {bound['revision']}",
-                    "",
+                f"- Overall status: {status}",
+                "",
+                "## Checkpoints",
+                "",
+                f"- Bound revision: {bound['revision']}",
+                "",
             ]
         )
         handoff.write_text(
@@ -185,9 +186,7 @@ class PromptWorkspaceTest(unittest.TestCase):
             json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"]
         )
         run_dir = runs_root / run_id
-        manifest = json.loads(
-            (run_dir / "manifest.json").read_text(encoding="utf-8")
-        )
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
         pw.resolve_steering_revision(
             run_dir,
             manifest["revisions"],
@@ -196,7 +195,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC + timedelta(minutes=1),
         )
 
-    def assert_error(self, code: str, function: object, *args: object, **kwargs: object) -> None:
+    def assert_error(
+        self, code: str, function: object, *args: object, **kwargs: object
+    ) -> None:
         with self.assertRaises(pw.PromptWorkspaceError) as context:
             function(*args, **kwargs)
         self.assertEqual(context.exception.code, code)
@@ -536,6 +537,9 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertNotIn("security.workspace.trust", json.dumps(value))
         self.assertEqual(tasks["inputs"][0]["type"], "promptString")
         self.assertRegex(self.workspace_result["scope_id"], r"-[0-9a-f]{8}$")
+        with mock.patch.object(core.sys, "executable", "/bin/sh"):
+            verified = pw.verify_workspace(self.workspace)
+        self.assertEqual(verified["scope"], "services/example")
 
     def test_slug_rules(self) -> None:
         self.assertEqual(
@@ -590,9 +594,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         text = prompt.read_text(encoding="utf-8")
         self.assertIn(ask, text)
         self.assertFalse((self.root / "pipes").exists())
-        self.assert_error(
-            "PROMPT_INPUT_INVALID", self.new_prompt, ask="first\nsecond"
-        )
+        self.assert_error("PROMPT_INPUT_INVALID", self.new_prompt, ask="first\nsecond")
         self.assert_error(
             "PROMPT_INPUT_INVALID", self.new_prompt, ask="first\u2028second"
         )
@@ -1467,9 +1469,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         snapshot_r1 = Path(first["snapshot"])
         self.assertEqual(snapshot_r1.read_bytes(), source_r1)
-        self.assertEqual(
-            first["sha256"], hashlib.sha256(source_r1).hexdigest()
-        )
+        self.assertEqual(first["sha256"], hashlib.sha256(source_r1).hexdigest())
         manifest = json.loads(Path(first["manifest"]).read_text(encoding="utf-8"))
         self.assertNotIn("status", manifest)
         self.assertEqual(manifest["revisions"][0]["revision"], "r0001")
@@ -1508,9 +1508,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         self.assertEqual(second["revision"], "r0002")
         self.assertEqual(snapshot_r1.read_bytes(), source_r1)
-        self.write_handoff(
-            first["run_id"], status="prepared", bound_revision="r0002"
-        )
+        self.write_handoff(first["run_id"], status="prepared", bound_revision="r0002")
         pw.verify_command(self.workspace, prompt, first["run_id"])
 
         prompt.write_text(
@@ -1726,9 +1724,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         manifest = json.loads(Path(first["manifest"]).read_text(encoding="utf-8"))
         self.assertEqual(len(manifest["revisions"]), 2)
 
-        self.write_handoff(
-            first["run_id"], status="prepared", bound_revision="r0002"
-        )
+        self.write_handoff(first["run_id"], status="prepared", bound_revision="r0002")
         settled = pw.verify_command(self.workspace, None, first["run_id"])
         self.assertFalse(settled["run"]["reconciliation_pending"])
 
@@ -1802,9 +1798,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         run_dir = Path(snapshot["manifest"]).parent
         external_handoff = self.root / "external-handoff.md"
-        external_handoff.write_text(
-            "- Overall status: prepared\n", encoding="utf-8"
-        )
+        external_handoff.write_text("- Overall status: prepared\n", encoding="utf-8")
         (run_dir / "handoff.md").symlink_to(external_handoff)
         prompt.write_text(
             prompt.read_text(encoding="utf-8").replace(
@@ -1868,9 +1862,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         rows = pw.prompt_rows(self.workspace, "workspace", "2026-07-12")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "snapshot_only")
-        self.assertEqual(
-            rows[0]["last_invoked_at"], "2026-07-12T14:30:00+00:00"
-        )
+        self.assertEqual(rows[0]["last_invoked_at"], "2026-07-12T14:30:00+00:00")
         self.assertNotIn("prompt_id", rows[0])
         self.assertNotIn("latest_run_id", rows[0])
         self.assertNotIn(sentinel, json.dumps(rows))

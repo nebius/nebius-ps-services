@@ -6,6 +6,262 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Unified managed and external Soperator upgrade execution around the canonical
+  controller-authority and Slurm action journals. Managed execution now uses
+  the fixed controller/system placement domains, stages the target singleton at
+  zero, crosses source bridge, target bridge, singleton handoff, partition
+  restore, and bridge cleanup before completion, and preserves provider-owned
+  domains and mount substrate during cleanup. Both modes retain scheduling and
+  ActiveChecks fencing after the first bridge write until roll-forward recovery
+  reaches the final gates.
+- Made both in-place adapters execute service domains in the exact order
+  `login -> accounting -> controller -> system` before workers. Accounting now
+  binds writer, PVC, catalog, registration, and history continuity; controller
+  and system rolls require healthy authority in the opposite fixed domain and
+  rebind only the replaced domain's Node UIDs. Managed workers are dispatched
+  in clear batches of at most eight, resolve zero-surge `all` to each group's
+  exact fixed size, acquire an exact cxcli-owned per-group Slurm drain before
+  provider dispatch, and leave job-bearing groups pending and untouched. Drain
+  acquisition and restoration persist the exact preimage before mutation;
+  interrupted intents adopt only a proven live postcondition and never resend
+  an uncertain Slurm RPC.
+  Exact held-job compensation now completes before scheduling, ActiveChecks,
+  or bridge cleanup can be restored.
+- Changed managed `soperator upgrade` to require exactly one of `--dry-run` or
+  `--execute`; mutation requires `--execute --approve`. Removed the managed
+  node-group scope, timeout-based login-session policies, and unsupported-path
+  override. The end-to-end worker policy now uses
+  `--node-group-strategy`, `--zero-surge-max-unavailable`,
+  `--strategy-max-surge-count`, `--worker-drain-timeout`, and
+  `--max-parallel-worker-groups` (maximum eight). Standalone
+  `upgrade node-template` keeps its existing interface.
+- Added `soperator jobs` alongside `ext-soperator jobs` for the shared durable,
+  authority-aware Slurm action journal and exact
+  `--acknowledge-login-exit` workflow. Managed and external upgrades now protect
+  established SSH sessions indefinitely until voluntary exit is observed and
+  acknowledged; neither exposes a force/timeout compatibility path.
+- Made managed `soperator upgrade --dry-run` refresh live discovery into a
+  temporary bundle and validate exact cluster identity plus the fixed bridge
+  substrate without creating a campaign checkpoint or mutation. Managed
+  controller/system provider rolls now require a post-terminal live Node UID
+  rebind for only the journaled domain while preserving its group and storage
+  identities.
+- Added the canonical managed Soperator continuity substrate. Production
+  profiles now keep controller at two fixed nodes and system at three, disable
+  autoscaling for both, attach Jail and controller-spool storage to both, and
+  label them as distinct node-group scheduling domains. Managed upgrade
+  discovery records stable group IDs and Ready Node UIDs and fails before
+  mutation when the live cluster has not been reconciled; it never falls back
+  to creating provider bridge capacity. The shared bridge model now has
+  explicit managed-existing and external-temporary placement-domain adapters,
+  managed Kubernetes-only cleanup policy, and one authority configuration
+  composer that preserves customer config outside cxcli's documented overlay.
+- Added managed upgrade checkpoint schema v2 with a durable controller-authority
+  journal, first-write roll-forward boundary, placement/storage/configuration
+  fingerprints, continuity evidence, provider-roll domain, Jail population
+  state, and explicit lifecycle stages. Incompatible unfinished checkpoints
+  fail with source-restore versus roll-forward remediation instead of using a
+  compatibility shim.
+- Added a fail-closed active/passive populate-jail monitor. The upgrade wait now
+  binds the exact Job and controller-owned Pod UIDs, checkpoints Pod/container
+  state, warning Events, bounded log digests, and structured file/byte counters,
+  and anchors its aggregate timeout to the immutable Job timestamp across CLI
+  restarts. The TUI exposes that checkpointed substage. Transient observation
+  failures retry the same Job, while identity drift, terminal failure, and
+  timeout or a bounded non-progressing `stalled` state leave the Job and passive
+  PVC untouched instead of restarting a potentially partial rootfs writer. The
+  Job also receives the contract's Kubernetes `activeDeadlineSeconds`.
+- Fixed controller command-gate resume after a checkpointed Jail Helm values
+  transition. The bridge now seals only the canonical `slurmctld` command,
+  args, and disabled probes that it owns instead of the entire values document.
+  Existing full-values seals migrate only when they still match the current
+  values or the exact verified target Helm apply intent and proof; unproven
+  drift and any command-gate contract change remain recovery-required.
+- Fixed interrupted first-adoption Jail resume across sequential released
+  login holds. A captured login Pod may now be corroborated by the latest exact
+  zero-session release or by an earlier verified replacement transition ending
+  at its current Pod UID under the unchanged StatefulSet UID. Unjournaled or
+  further UID changes still fail before Jail write or source retirement.
+- Allowed the legacy-rootfs zero-writer bridge to recognize the exact
+  checkpointed controller-recovery payload produced while restoring late held
+  jobs. All non-`slurm.conf` files must remain source-legacy-safe, while the
+  replacement config digest, source preimage, job/partition semantics, and two
+  Ready recovery controllers must agree across the jailed-config repair and
+  job-state recovery journals. Old-client pre-health is deferred only until
+  the canonical rewrite, and full post-write Slurm health remains mandatory.
+- Prevented late queued or held Slurm jobs from disappearing during an external
+  controller major-version handoff. Immediately before the cold stop, cxcli now
+  captures every live job and later verifies its identity, partition, and
+  restart lineage. Target bridge configuration retains source-only partitions
+  as non-default `DOWN` compatibility partitions, so target `slurmctld` can
+  restore queued state even when the target chart renamed its active partition.
+  Resume revalidates an exact recovered epoch and the recovered job semantics
+  without incorrectly requiring the live, controller-written `job_state` file
+  to remain byte-identical to its immutable recovery seed.
+- Aligned external-upgrade progress with the durable handoff journal. Jail
+  status now names the active immutable-child substage, and the interactive
+  spinner refresh is limited to one frame per second to avoid excessive PTY
+  redraw output while preserving live status updates.
+- Made external-upgrade Kubernetes Lease renewal resilient to bounded transient
+  MK8s exec-credential, API timeout, TLS, connection, and rate-limit failures.
+  Renewal retries remain inside the 120-second lease window, while holder-test
+  failures and conflicts still fail immediately so lost ownership is never
+  concealed.
+- Minimized and made explicit the required Slurm controller RPC gap during an
+  external bridge major-version transition. The expensive all-node controller
+  process census now completes while the source bridge remains 2/2 Ready; the
+  cold interval retains only exact bridge-node runtime fences, API absence, and
+  Node-identity revalidation. Resume reuses the complete checkpointed partition
+  pause before any live inventory, worker, or job-control call while that cold
+  gap is active, including the Jail ownership handoff's continuous scheduling
+  guard. Target authority transfer and writer scale reuse the pre-stop host
+  census with fresh Node-identity, API-workload-absence, and exact two-node
+  runtime fences instead of launching two more all-node host censuses after
+  controllers stop. Status no longer issues doomed Slurm probes or
+  treats stale cold-stop timestamps as a current outage after an exact source
+  bridge recovery. The TUI explains that running jobs continue while direct
+  submit/cancel/requeue/hold RPCs are briefly unavailable and durable actions
+  remain queued. Cold-backup creation now also rejects a symlinked backup path
+  and creates the missing directory before writing its preimage manifest.
+- Fixed first-adoption target controller validation when the coexisting target
+  SlurmCluster intentionally has a different `ClusterName` from the immutable
+  source. The bridge now validates the generated name against the exact target
+  Helm values, checkpoints both source and target names before target write,
+  and still rejects an unrecognized third name or resume drift.
+- Fixed target bridge material staging, singleton takeover, failed-takeover
+  recovery, final verification, and cleanup to use only the exact
+  checkpoint-bound `slurm.conf` ConfigMap key. A legitimate sibling such as
+  `custom_slurm.conf` is preserved instead of being misclassified as a second
+  complete Slurm configuration, while a missing or changed bound key still
+  fails closed.
+- Fixed repeated pre-target controller recovery after a safely restored source
+  bridge has written new state. Each consumed backup restore now derives a
+  fresh immutable epoch, while an unaccepted in-progress copy reuses its exact
+  operation token. A failure before target material/write automatically
+  restores the source-image bridge 2/2 and proves `bridge-0` primary instead of
+  leaving every controller stopped.
+- Renamed external-upgrade MK8s TUI generation counters from the ambiguous
+  `upgraded/upgrading/remaining` labels to
+  `provider-current/provider-updating/provider-outdated`. The table now makes
+  clear that a ready provider generation can still run an older Kubernetes
+  version than the locked campaign target.
+- Made the Jail GPU post-population gate non-preempting and self-contained. It
+  now runs from the immutable target controller image through the NVIDIA
+  RuntimeClass without a GPU request or worker PriorityClass, atomically
+  installs and hashes `nvidia-smi` plus the matching driver libraries in the
+  passive rootfs, and supports UID-bound replacement of an exact failed
+  pre-switch contract without accepting unrelated drift.
+- Split GPU pre-activation fleet evidence from post-activation workload
+  lineage. Every accepted Ready GPU Node is now checked by a node-pinned,
+  non-preempting NVIDIA RuntimeClass probe without a GPU request; target
+  NodeSet, AdvancedStatefulSet, and Pod UID lineage is enforced only after the
+  active-slot handoff can legitimately establish it.
+- Fixed active/passive Jail maintenance Jobs to use a PriorityClass only when
+  accepted Soperator values explicitly configure one. cxcli no longer invents
+  a target chart-owned PriorityClass name before that chart has created it, so
+  first-adoption capacity probes and passive-slot population can run on old
+  Soperator clusters without weakening their node-affinity contract.
+- Kept the legacy-rootfs Slurm client compatibility override active during the
+  passive-slot preparation Helm apply. Target `MetricsType` and plugin-path
+  directives can no longer reach old login, worker, or temporary bridge clients
+  before slot-B consumers have been populated and verified.
+- Install and reverify the UID-bound source reconciliation admission fence
+  around the earlier in-place passive-slot Helm apply. This prevents the new
+  manager from recreating a fenced source controller or adding the target
+  JailedConfig aggregation boundary to legacy source writers before handoff.
+- Allow discovery resume from the passive-slot target-creation crash window
+  only when the operation journal has a completed login gate, the immutable
+  source binding matches, and the second SlurmCluster has exact target Helm
+  ownership. Unbound, third, or UID-drifted identities still fail closed.
+
+- Fix external Soperator controller recovery census probes to use the dedicated
+  network-denied privileged inspector boundary required for complete host PID
+  visibility, recognize only the exact same-cgroup Slurm `slurmscriptd` child
+  contract without treating it as a second controller, and stop waiting
+  immediately when a census Pod fails.
+
+- Fixed controller bridge client propagation for source configurations whose
+  primary `SlurmctldHost` includes an address alias. The before-fence proof now
+  uses the exact accepted ordered host contract instead of reconstructing a
+  lossy synthetic host list, so execution still fails closed before authority
+  transfer without rejecting a valid aliased primary.
+- Made controller bridge client propagation non-mutating. The proof now uses
+  exact jailed-config reads plus direct `scontrol ping` and `show config` RPCs;
+  it no longer sends `scontrol reconfigure` from every client, which could
+  reopen paused partitions. Immediately before source fencing, cxcli also
+  compare-and-set revalidates and reasserts every checkpoint-owned DOWN record.
+- Added narrow recovery for an interrupted source fence that an operator rolls
+  back before any bridge process or first bridge write. When only the source
+  Pod UID changes on the same immutable workload, storage, configuration, and
+  credentials, cxcli proves the replacement is the sole live controller. It
+  then removes only the checkpoint-owned stale pre-copy or promoted snapshot,
+  rebinds the replacement source Pod, and regenerates every dependent fence
+  proof. Promoted-snapshot cleanup uses a durable dispatch intent. The manifest
+  census recognizes only the exact inert campaign stager, bridge-mount helper,
+  and legacy controller placeholder contracts, while the host process census
+  still rejects any additional `slurmctld` authority.
+- Fixed runtime controller-fence evidence collection on clusters that rapidly
+  garbage-collect successful bare Pods. Inspectors now expose a file-backed
+  readiness marker and remain `Running/Ready` long enough for cxcli to bind the
+  exact Pod UID, Node identity, and logs before checkpointing the fence proof.
+- Made controller-bridge discovery resumable after the source scale-to-zero is
+  durably `dispatching`. Only that exact pre-bridge-write journal window may use
+  the validated checkpointed source binding; execution still proves the same
+  live workload UID at replicas zero before accepting the source fence.
+- Fixed controller-spool pre-copy resume after interruption. When the immutable
+  destination is still absent, cxcli now rejects a symlinked staging path, removes
+  only the transfer-token-owned incomplete incoming tree and transient manifest
+  sidecars, and extracts the already hash-verified archive from scratch. It no
+  longer compares a newly completed archive against a stale partial extraction,
+  and it does not use GNU tar's timestamp-precision-sensitive compare on the shared
+  filesystem. Archive/source hashes, successful metadata-preserving extraction,
+  deterministic tree manifests, and atomic destination promotion remain mandatory.
+- Fixed controller-bridge source configuration to resolve exactly one active
+  `JailedConfig` `/etc/slurm/slurm.conf` mapping and preserve the source
+  `SlurmctldHost` token, including hostname/address aliases. Source reconfigure now
+  waits for the controller to read the exact intended jailed file, requires the
+  primary controller to remain UP, and revalidates the checkpointed
+  partition pause, immediately reasserting an exact UP reset to DOWN while rejecting
+  any unowned drift. An exact two-copy rollback before authority transfer is journaled
+  and regenerated from corrected intent; partial and post-authority rollback fail closed.
+- Replaced the unsupported controller-bridge availability-zone gate with the
+  provider surface's enforceable isolation contract: two distinct immutable Nebius
+  node-group IDs, exact live Kubernetes Node UIDs, and revalidated group membership.
+  Reports and documentation now describe this as scheduling/process isolation rather
+  than claiming separate physical availability zones.
+- Fixed external Soperator in-place quota preflight so zero-surge no longer requests
+  blue/green replacement capacity for the existing worker and service-role groups;
+  safe-surge continues to check only its configured temporary worker surge.
+
+- Added external Soperator upgrade campaign and execution-journal schema v5
+  with explicit `compute_migration.mode: in-place|blue-green` and no v4
+  conversion path. Interactive onboarding now confirms every applicable
+  migration setting even when CLI values preselect defaults; non-interactive
+  onboarding requires `--compute-migration-mode`. In-place defaults to paused
+  Slurm scheduling, zero surge, full-group `max_unavailable: all`, a `10m`
+  worker drain timeout, and eight parallel clear groups. It uses exact
+  per-group Slurm drains and a final job/epilog/identity proof before CAS
+  provider updates, displays the aggregate prepared-batch unavailable-node
+  impact before dispatch, keeps those drains held until replacement Nodes, `slurmd`,
+  slot-B consumers, persistent mounts, and GPU runtime checks pass, restores
+  only cxcli-owned drains and provider strategies, and records operator
+  cancellations separately from provider disruption.
+  Pause-false prompt-capable execution defaults to the durable job-action TUI
+  and reclassifies groups after each accepted action; explicit preserve and
+  non-interactive execution leave jobs untouched.
+  Blue-green remains available with per-worker bootstrap counts. Both modes
+  retain the controller bridge, login gateway, protected SSH sessions, and
+  active/passive Jail slot-switch gates; serial service-role replacement now
+  revalidates the accepted active-slot consumers, controller aliases, persistent
+  mounts, bridge authority, and login gateway continuity after every group, with
+  controllers last. The compute gate proves the checkpointed passive slot became
+  active and the prior slot remains the rollback target instead of hard-coding slot B.
+- Fixed pre-selection external onboarding findings and compute-layout choices to
+  describe the separately accepted in-place or blue-green migration mode instead
+  of incorrectly presenting blue-green as mandatory.
+- Fixed post-acceptance live reobservation to preserve the complete accepted compute
+  migration settings instead of incorrectly failing the interactive v5 campaign as
+  though `--compute-migration-mode` had been omitted.
 - Fixed the during-upgrade Slurm TUI refresh key so `r` performs a fresh live
   all-job poll and displays jobs submitted after the screen opened. Refresh no
   longer records a durable pseudo-action against only the stale displayed IDs;
@@ -13,8 +269,10 @@ All notable changes to this project are tracked here. This changelog follows
   checkpoint now also opens the journal in dispatch-enabled mode while the
   connected source singleton remains authoritative; accept-only remains limited
   to actual controller handoff gaps. Deliberately closing the full-screen TUI
-  now returns without falling through to a stale Rich snapshot or accepting a
-  second action. Concurrent writers cannot persist two nonterminal mutations
+  with its visible `Esc` binding now returns without changing jobs, falling
+  through to a stale Rich snapshot, or accepting a second action; exit is
+  refused while a job action is in flight. Concurrent writers cannot persist
+  two nonterminal mutations
   for one immutable job binding, and a reused JobID no longer displays an action
   result from the previous job lineage.
 - Fixed controller-bridge quota preflight for current Nebius node-group payloads
@@ -51,6 +309,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Made the public Slurm job-test helper pass `sbatch --no-requeue` by default
   so preservation jobs do not inherit a cluster-level `JobRequeue=1` setting.
   `--requeue` remains the explicit opt-in for disposable requeue probes.
+- Fixed the public Slurm job watcher treating a valid unallocated pending job as
+  an interrupted lineage. Pending jobs now retain exact JobID, submit-time, and
+  restart identity until their start time and node allocation become available.
 - Fixed protected-login SSH identity capture for adopted Soperator clusters
   whose running sshd uses a non-default configuration path. The fail-closed
   probe now resolves the single listener's exact `-f` configuration, reads its
@@ -101,15 +362,15 @@ All notable changes to this project are tracked here. This changelog follows
   destructive bridge cleanup.
 - Hardened temporary controller-bridge substrate ordering. cxcli now re-fetches
   both fixed node groups to verify their exact controller-spool SFS attachment,
-  proves distinct immutable Nodes and provider zones with a bidirectional
+  proves distinct immutable Nodes and node-group scheduling domains with a bidirectional
   PV/PVC-bound mount canary, and checkpoints that proof before advancing to
   `substrate-ready`. Canary failure leaves the source singleton authoritative
   and unfenced; source configuration, reconciliation suspension, fencing, and
   cold promotion fail closed without the durable proof. After online pre-copy,
-  cxcli reruns the exact canary and provider attachment, Node UID, and zone
+  cxcli reruns the exact canary and provider attachment, Node UID, and scheduling-domain
   proof while the source still has one replica, then binds that fresh result to
   the source authority epoch and fence intent before accept-only mode or
-  scale-to-zero. Stale proof, Node recreation, attachment loss, or zone drift
+  scale-to-zero. Stale proof, Node recreation, attachment loss, or scheduling-domain drift
   leaves the source singleton running and unfenced.
 - Made the old-controller bridge scheduling contract deterministic. Temporary
   node templates no longer inherit source-role taints; they carry one
@@ -149,18 +410,10 @@ All notable changes to this project are tracked here. This changelog follows
   completion requires the result Pod `imageID` to equal that locked digest.
   OCI blob redirects drop registry credentials and the source `Host` header
   before following cross-origin signed storage URLs.
-- Replaced external in-place node-group updates with one canonical blue/green
-  compute-migration contract. External campaign segments update only the MK8s
-  control plane, keep source node-group templates immutable, create target
-  replacements, retain busy workers through job and epilog completion, and
-  retain protected source login sessions until a ready target Pod is bound to
-  the exact target login workload UID, replacement node-group identity, target
-  Kubernetes/image evidence, and preserved Service endpoint, and each disappeared
-  socket has an explicit fingerprint-bound voluntary-exit acknowledgement. Socket
-  disappearance alone remains `Indeterminate`. Removed the
-  external strategy, wave, surge, unavailable, and provider drain-timeout CLI,
-  config, campaign, checkpoint, and wizard surfaces without compatibility
-  aliases. Scheduling pause remains enabled by default.
+- Superseded the earlier blue-green-only external compute contract with schema
+  v5's explicit in-place or blue-green choice. Existing v4 campaigns and
+  journals fail closed and must be freshly onboarded; there is no compatibility
+  alias or conversion shim.
 - Replaced the fresh target-Helm hard stop with a fail-closed cxcli-owned source
   reconciliation fence. After bridge authority and source-manager shutdown,
   cxcli journals exact source object UIDs and allowlisted labels, installs a
@@ -668,6 +921,12 @@ All notable changes to this project are tracked here. This changelog follows
   across managed discovery guidance, external discovery/onboarding plans, and
   managed/external upgrade reports while keeping the durable
   `populate-jail-refresh` checkpoint id.
+- Hardened Jail Upgrade interruption recovery by checkpointing phase execution
+  at `populate-jail-refresh` entry, persisting the API-confirmed passive Job UID
+  immediately after binding, and recording a `job-bound` monitor state before
+  Pod/log polling begins. Resume also backfills monitor evidence for older
+  checkpoints that already prove the exact Job complete, and validates exact
+  namespace-scoped SlurmCluster identities independently of broad CRD discovery.
 - Added single-SFS active/passive Soperator jail rootfs refresh. Managed
   installs now use `slot-a`/`slot-b` rootfs PVCs plus generic
   `jailPersistentMounts` from day one, with two login replicas by default.
@@ -734,6 +993,13 @@ All notable changes to this project are tracked here. This changelog follows
   old-client `sinfo` probes that can fail DNS SRV config discovery, and Slurm
   partition restore/resume falls back to the controller container when login
   pods are temporarily unavailable during handoff.
+- Fixed approved external Soperator pre-mutation retries to validate and reuse
+  the incomplete campaign checkpoint's existing restore-capable archive instead
+  of creating a duplicate archive and replacing the checkpoint backup binding.
+- Fixed external controller-HA bridge planning for onboarding-generated configs
+  whose Soperator values contain only overrides. The bridge now resolves the
+  exact controller image from an explicit `images.slurmctld` override or the
+  committed target release profile before locking its OCI digest.
 - Documented the Soperator jail upgrade process, active/passive rootfs
   switch-over semantics, same-SFS shared persistent mounts, the one-time
   rootfs-to-shared migration flow, absent-source persistent mount behavior for

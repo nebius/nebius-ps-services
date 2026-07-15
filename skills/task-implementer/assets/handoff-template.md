@@ -18,30 +18,14 @@
 - Created:
 - Last invoked at:
 - Last updated:
-- Current task: none
-- Last completed task: none
-- Last commit: none
+- Active wave: none
+- Last promoted wave: none
+- Last promoted commit: none
 - Overall status: prepared | running | blocked | done | superseded | abandoned
-
-## Execution Plane
-
-- Task: none
-- Phase: unclaimed | planning | implementation | stopped
-- Bound revision: none
-- Plan SHA-256: none
-- Queue SHA-256: none
-- Checkpoint SHA-256: none
-- Worktree baseline SHA-256: none
-- Claimed at: none
-- Authorized at: none
-- Completed at: none
-- Recovery count: 0
-- Stop required: yes
-- Next session required: no
 
 ## Reconciliation
 
-- State: none | proposed | applied
+- State: none | proposed | queued_after_wave | applied | blocked
 - Previous bound revision: none
 - Current bound revision:
 - Reconciled at: none
@@ -50,7 +34,7 @@
 - Preserved pending task IDs: none
 - Superseded pending task IDs: none
 - Appended task IDs: none
-- Next-task overrides: none
+- Next-wave overrides: none
 
 ## Specification State
 
@@ -75,18 +59,47 @@ body, secrets, raw logs, or private material.
 - Relevant tests:
 - Relevant docs/config:
 - Important repo instructions:
-- Worktree state:
+- Primary checkout state:
 - Current assumptions:
 - Source context:
 - Brainstorm/context result:
 - Vertical slice or layers:
 - End-to-end validation target:
 
+## Dependency Waves
+
+### wave-001
+
+- Status: planned | preparing | running | integrating | promotion_pending | promoted | cleanup | done | blocked
+- Base commit:
+- Contract commit:
+- Logical task order: task-1, task-2
+- Dispatch batches: task-1, task-2
+- Integration validation:
+- Integration code-review:
+- Steering reconciled: no
+- Promoted commit: none
+- Cleanup retained: none
+
+### wave-002
+
+- Status: planned
+- Base commit: pending prior promotion
+- Contract commit: none
+- Logical task order: task-3
+- Dispatch batches: task-3
+- Integration validation:
+- Integration code-review:
+- Steering reconciled: no
+- Promoted commit: none
+- Cleanup retained: none
+
 ## Task Queue
 
 ### task-1
 
-- Status: pending | in_progress | done | blocked | superseded
+- Status: pending | in_progress | committed | done | blocked | superseded
+- Wave: wave-001
 - Source revision:
 - Source prompt sections:
 - Requirement IDs:
@@ -96,7 +109,7 @@ body, secrets, raw logs, or private material.
 - Requirements envelope SHA-256:
 - Design envelope SHA-256:
 - Priority:
-- Depends on:
+- Depends on: none
 - Goal:
 - Rationale:
 - Brainstorm/context needed: yes | no
@@ -105,108 +118,129 @@ body, secrets, raw logs, or private material.
 - Design notes:
 - Vertical slice or layers:
 - Plan:
-- Likely files: <!-- Exact repo-relative paths, one per line. -->
+- Write claims: <!-- `exact: repo/path` or `prefix: repo/directory`, one per line. -->
+- Conflict domains: <!-- `class:stable-key`, one per line; use `unknown` to force singleton. -->
 - Implementation steps:
 - Validation:
 - End-to-end validation:
-- Code-review:
-- Review fixes:
-- Commit:
 - Done criteria:
 - Rollback notes:
 - Stop conditions:
+- Worker assignment: private immutable record
+- Worker result: private immutable record
+- Commit:
 - Changed files:
 - Evidence:
 - Blocker:
 
 ### task-2
 
-- Status: pending | in_progress | done | blocked | superseded
+- Status: pending | in_progress | committed | done | blocked | superseded
+- Wave: wave-001
 - Source revision:
 - Source prompt sections:
 - Requirement IDs:
 - Design ID:
-- Requirements proposal:
-- Design record:
-- Requirements envelope SHA-256:
-- Design envelope SHA-256:
 - Priority:
-- Depends on:
+- Depends on: none
 - Goal:
 - Rationale:
-- Brainstorm/context needed: yes | no
-- Brainstorm/context result:
-- Design needed: yes | no
-- Design notes:
-- Vertical slice or layers:
 - Plan:
-- Likely files: <!-- Exact repo-relative paths, one per line. -->
+- Write claims:
+- Conflict domains:
 - Implementation steps:
 - Validation:
 - End-to-end validation:
-- Code-review:
-- Review fixes:
-- Commit:
 - Done criteria:
 - Rollback notes:
 - Stop conditions:
+- Worker assignment: private immutable record
+- Worker result: private immutable record
+- Commit:
 - Changed files:
 - Evidence:
 - Blocker:
 
-## Checkpoints
+### task-3
 
-### checkpoint-1
-
-- Completed task:
-- Bound revision:
-- Summary:
-- Brainstorm/context result:
-- Design result:
-- Plan followed:
-- Vertical slice or layers:
-- Files changed: <!-- Exact repo-relative paths from the commit, one per line. -->
+- Status: pending | in_progress | committed | done | blocked | superseded
+- Wave: wave-002
+- Source revision:
+- Source prompt sections:
+- Requirement IDs:
+- Design ID:
+- Priority:
+- Depends on: task-1, task-2
+- Goal:
+- Rationale:
+- Plan:
+- Write claims:
+- Conflict domains:
+- Implementation steps:
 - Validation:
 - End-to-end validation:
-- Code-review:
+- Done criteria:
+- Rollback notes:
+- Stop conditions:
+- Worker assignment: private immutable record
+- Worker result: private immutable record
+- Commit:
+- Changed files:
+- Evidence:
+- Blocker:
+
+## Wave Checkpoints
+
+Tasks become done only after verified fast-forward promotion.
+
+### checkpoint-wave-001
+
+- Completed wave:
+- Bound revision:
+- Task commits:
+- Ordered merge commits:
+- Shared-file integration commit: none
+- Combined validation:
+- Integration code-review:
 - Review fixes:
-- Commit hash:
-- Commit message:
+- Promoted commit:
 - Requirements SHA-256:
 - Design SHA-256:
 - Spec validation:
 - Open risks:
-- Next task:
+- Next wave:
 
 ## Failure Log
 
-- Task:
+- Wave/task:
 - Classification:
 - Evidence:
+- Project branch unchanged: yes | no | not_applicable
+- Retained worktrees/branches:
 - Decision:
 - Next action:
 
-## Session Handoff
+## Coordinator Handoff
 
-- Current session action: stop after saving this handoff
-- Next session mechanism: new Codex session | `/new` | new `codex exec` process
-- Handoff context path:
-- Next task:
-- Do not continue in current session: yes
+- Current action: resume recorded v2 transition
+- Coordinator state path:
+- Active wave:
+- Dispatch batch:
+- Retained inventory: none
+- Worker mechanism: native subagents | fresh sequential codex exec
 
-## Next Session Prompt
+## Next Run Prompt
 
 ```text
 Use $task-implementer run <same-prompt-path-or-unique-filename>.
 
-Read the run manifest, exact bound snapshot, and complete handoff first. Verify
-the repository, scope, digest, handoff status, current git state, and relevant
-source files. Claim exactly the dependency-ready task in a private execution
-plane, complete its plan, and authorize that locked plan before product edits.
-Do not use the editable prompt as execution input and do not run parallel write
-agents. Gather task-specific context, use brainstorm when source-ranked context
-or assumption checks are useful, route non-trivial design or contract choices
-through design, run focused and end-to-end validation, use code-review, fix
-scoped findings, commit through $commit, checkpoint the task and next-session
-handoff, and stop this session.
+Read the run manifest, exact bound snapshot, complete coordinator-owned handoff,
+v2 coordinator/wave state, immutable assignments/results, and wave journal.
+Re-observe the primary checkout and every managed worktree/ref before choosing a
+transition. Resume the active dependency wave idempotently. Keep shared specs
+and documentation coordinator-owned; require each worker to use its assigned
+absolute scope cwd, locked write claims, code-review, exactly one $commit, and a
+private result. Integrate in stable task order, run combined validation and
+integration review, reconcile steering, promote only by verified ff-only merge,
+then clean up without force. Do not expose internal IDs to the user.
 ```

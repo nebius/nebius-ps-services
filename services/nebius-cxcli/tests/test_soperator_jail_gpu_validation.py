@@ -65,7 +65,7 @@ def test_build_jail_gpu_post_population_resources_uses_exact_upstream_image() ->
     resources = build_jail_gpu_post_population_resources(
         namespace="soperator",
         target_ref="training",
-        populate_jail_image=image,
+        runner_image=image,
         passive_pvc="jail-rootfs-slot-b-pvc",
         scheduling=scheduling,
     )
@@ -84,10 +84,15 @@ def test_build_jail_gpu_post_population_resources_uses_exact_upstream_image() ->
         "/bin/bash",
         "/opt/nebius-cxcli/post-populate-gpu-jail.sh",
     ]
-    assert container["resources"] == {"limits": {"nvidia.com/gpu": 1}}
+    assert container["resources"] == {}
+    assert container["env"] == [
+        {"name": "NVIDIA_VISIBLE_DEVICES", "value": "all"},
+        {"name": "NVIDIA_DRIVER_CAPABILITIES", "value": "compute,utility"},
+    ]
+    assert pod_spec["runtimeClassName"] == "nvidia"
     assert pod_spec["nodeSelector"] == scheduling["nodeSelector"]
     assert pod_spec["tolerations"] == scheduling["tolerations"]
-    assert pod_spec["priorityClassName"] == "soperator-slurm-populate-jail"
+    assert "priorityClassName" not in pod_spec
     assert resources.as_manifest_list()["items"] == [resources.config_map, resources.job]
 
 
@@ -95,9 +100,7 @@ def test_gpu_post_population_job_is_deterministic_and_security_scoped() -> None:
     kwargs = {
         "namespace": "soperator",
         "target_ref": "training",
-        "populate_jail_image": (
-            "registry.example.invalid/populate-jail@sha256:" + "b" * 64
-        ),
+        "runner_image": ("registry.example.invalid/populate-jail@sha256:" + "b" * 64),
         "passive_pvc": "jail-rootfs-slot-b-pvc",
     }
 
@@ -139,7 +142,7 @@ def test_gpu_post_population_script_is_atomic_idempotent_and_fail_closed() -> No
     assert "mixed host GPU driver versions are not allowed" in script
     assert "mixed runtime GPU driver libraries:" in script
     assert 'exec 9<"${marker_dir}"' in script
-    assert 'flock -x 9' in script
+    assert "flock -x 9" in script
     assert "gpu-driver-jail.lock" not in script
     assert "env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin" in script
     assert "chroot" not in script
@@ -152,6 +155,11 @@ def test_gpu_post_population_script_is_atomic_idempotent_and_fail_closed() -> No
     assert "libcuda_sha256=${cuda_hash}" in script
     assert "libnvidia_ml_sha256=${nvml_hash}" in script
     assert "nvidia_smi_sha256=${runtime_nvidia_smi_hash}" in script
+    assert 'nvidia_smi_tmp="$(mktemp "${jail_bin_dir}/.cxcli-nvidia-smi.XXXXXX")"' in script
+    assert 'cp -- "${runtime_nvidia_smi_source}" "${nvidia_smi_tmp}"' in script
+    assert 'chmod 0755 -- "${nvidia_smi_tmp}"' in script
+    assert 'mv -f -- "${nvidia_smi_tmp}" "${jail_nvidia_smi}"' in script
+    assert "staged nvidia-smi hash mismatch" in script
     assert "existing passive-rootfs GPU driver evidence does not match" in script
     assert 'staging="$(mktemp -d "${jail_lib_dir}/.cxcli-gpu-driver.XXXXXX")"' in script
     assert 'mv -Tf -- "${staged_link}" "${jail_lib_dir}/${name}"' in script
@@ -176,8 +184,8 @@ def test_gpu_post_population_script_is_atomic_idempotent_and_fail_closed() -> No
         ("namespace", "Soperator", "namespace must be"),
         ("passive_pvc", "bad/pvc", "passive_pvc must be"),
         ("target_ref", "", "target_ref must be non-empty"),
-        ("populate_jail_image", " image:tag", "exact non-empty upstream image"),
-        ("populate_jail_image", "image:tag", "immutable upstream"),
+        ("runner_image", " image:tag", "exact non-empty target controller image"),
+        ("runner_image", "image:tag", "immutable target"),
     ],
 )
 def test_build_jail_gpu_post_population_resources_rejects_invalid_inputs(
@@ -188,9 +196,7 @@ def test_build_jail_gpu_post_population_resources_rejects_invalid_inputs(
     kwargs = {
         "namespace": "soperator",
         "target_ref": "training",
-        "populate_jail_image": (
-            "registry.example.invalid/populate-jail@sha256:" + "a" * 64
-        ),
+        "runner_image": ("registry.example.invalid/controller_slurmctld@sha256:" + "a" * 64),
         "passive_pvc": "jail-rootfs-slot-b-pvc",
     }
     kwargs[field] = value
