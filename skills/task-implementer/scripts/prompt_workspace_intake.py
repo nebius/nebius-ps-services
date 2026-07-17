@@ -19,6 +19,7 @@ from prompt_workspace_core import (
     verify_workspace,
 )
 from prompt_workspace_execution import load_coordinator_state
+from prompt_workspace_interop import load_interop, managed
 from prompt_workspace_runs import (
     _snapshot_prompt_unlocked,
     load_prompt_activity,
@@ -309,8 +310,18 @@ def route_project_prompt(
                     internal = _existing_route_result(
                         latest_dir, latest_manifest, verified
                     )
-                    action = "done"
-                    status = "done"
+                    interop = load_interop(latest_dir, required=False)
+                    if (
+                        interop is not None
+                        and managed(interop)
+                        and interop["released"] is False
+                    ):
+                        action = "finalize"
+                        status = "finalization_pending"
+                        outcome = "TASK_LEASE_RELEASE_REQUIRED"
+                    else:
+                        action = "done"
+                        status = "done"
                     invoked_at_text = record_prompt_invocation(
                         runs_root.parent,
                         document.prompt_id,

@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; use when one ready Agentic SDLC feature from `docs/design.md` needs a locked local execution plan before tests or implementation. Plans are private local artifacts, should preserve vertical end-to-end feature slices when applicable, and must not be committed."
+description: "Use only as part of the Agentic SDLC workflow; use when one ready Agentic SDLC feature from `docs/design.md` needs a locked local execution plan and dependency-safe `TASK-*` graph before execution preparation, tests, or implementation. Plans are private local artifacts and must not be committed."
 ---
 
 # Create Plan
@@ -8,6 +8,8 @@ description: "Use only as part of the Agentic SDLC workflow; use when one ready 
 ## Purpose
 
 Create a local, locked execution plan for exactly one feature.
+Preserve vertical end-to-end feature slices while expressing implementation as
+a dependency-safe task graph.
 
 ## When To Use
 
@@ -51,6 +53,15 @@ Create a local, locked execution plan for exactly one feature.
   validation, and evaluation steps by behavior across layers rather than by
   isolated layers. Use foundation-only steps only when they are true blockers.
 - Define test-first, implementation, validation, evaluation, rollback, and stop-condition steps.
+- Replace flat implementation steps with stable `TASK-*` records. Each task
+  must name requirements, dependencies, exact/prefix write claims, conflict
+  domains, focused validation, done criteria, and rollback/stop conditions.
+- Serialize tasks that share files, path prefixes, APIs, schemas, migrations,
+  dependency manifests, shared abstractions, infrastructure identities,
+  exclusive test resources, or external mutations. Mark uncertain ownership
+  `unknown`; never infer parallel safety from missing data.
+- Record planned dependency waves for human review. Treat them as informative:
+  `sdlc-prepare-execution` recomputes and verifies the graph before mutation.
 - Lock the plan.
 
 ## Idempotency
@@ -58,6 +69,10 @@ Create a local, locked execution plan for exactly one feature.
 - If design and context fingerprints are unchanged, reuse the existing locked plan.
 - If design or context changed, create a new plan version.
 - Never modify an existing locked plan.
+- If execution already exists, mark the old coordinator `REPLAN_REQUIRED` and
+  create a new locked plan version. Preserve started assignments, results,
+  commits, and worktrees until the coordinator can prove a safe reconciliation;
+  never reset or silently reuse them against a new plan digest.
 
 ## Failure Handling
 
@@ -76,6 +91,9 @@ Create a local, locked execution plan for exactly one feature.
 
 - Local plan exists and is locked.
 - Plan contains test, implementation, validation, and evaluation steps.
+- Every implementation unit has a stable, complete `TASK-*` assignment record.
+- Dependencies are acyclic and parallel candidates have disjoint write claims
+  and conflict domains.
 - Plan identifies the end-to-end slice or records why no vertical slice applies.
 - Plan references exact feature and requirement IDs.
 

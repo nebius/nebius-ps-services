@@ -64,6 +64,9 @@ after feature evaluation or UAT.
 
 ## Process
 
+- Resolve and verify the registered integration worktree before editing project
+  documentation. Keep the original project checkout unchanged until final
+  promotion, and record the resulting integration HEAD in document evidence.
 - Reload active run state and evidence before editing any documentation.
 - Determine whether the scope is `feature` or `run`: feature scope runs after
   evaluation; run scope runs after UAT or before PR creation.

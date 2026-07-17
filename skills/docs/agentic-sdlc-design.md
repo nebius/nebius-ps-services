@@ -8,6 +8,7 @@
   - [Agent-selected phases](#agent-selected-phases)
   - [Committed product truth](#committed-product-truth)
   - [Private local run state](#private-local-run-state)
+  - [Feature execution plane](#feature-execution-plane)
   - [Hooks as guardrails](#hooks-as-guardrails)
   - [MCP servers and external capabilities](#mcp-servers-and-external-capabilities)
 - [Requirements And Design Templates](#requirements-and-design-templates)
@@ -25,6 +26,7 @@
   - [`sdlc-create-design`](#sdlc-create-design)
   - [`sdlc-auto-steering`](#sdlc-auto-steering)
   - [`sdlc-create-plan`](#sdlc-create-plan)
+  - [`sdlc-prepare-execution`](#sdlc-prepare-execution)
   - [`sdlc-tdd`](#sdlc-tdd)
   - [`sdlc-implement-plan`](#sdlc-implement-plan)
   - [`sdlc-validate-codes`](#sdlc-validate-codes)
@@ -64,11 +66,14 @@ The workflow uses the Codex agent as the runtime decision maker. Skills are
 phase contracts, instructions, templates, and validation rules that the agent
 loads at the right point in the lifecycle; they are not long-running services.
 
-The parent agent owns final decisions, file edits, state updates, validation,
-and the final report. Optional bounded helper agents can be used for
-read-heavy side work when a separate context-management policy authorizes
-delegation, but helpers do not own SDLC phase selection or committed output.
-MCP servers are tools the agent can call through the selected phase skill.
+The parent agent is the feature coordinator: it owns phase decisions, shared
+execution state, integration, combined validation, promotion, and the final
+report. During implementation, every safe `TASK-*` uses one fresh task agent
+with its own branch and private Git worktree. A task agent owns only its
+immutable assignment, declared write claims, focused evidence, review, and one
+direct-child commit. Task agents never select SDLC phases or mutate shared
+coordinator state directly. MCP servers are tools an agent can call through the
+selected phase skill.
 
 ### Agent-selected phases
 
@@ -79,14 +84,16 @@ next recommended skill.
 
 All `sdlc-*` skills set `allow_implicit_invocation: false` in
 `agents/openai.yaml`. Operators and continuation prompts enter the workflow
-explicitly through `$sdlc-start`, and the coordinator records the next
+explicitly through `$sdlc-start run <prompt-path-or-unique-filename>`, and the coordinator records the next
 recommended phase skill in local state. This keeps workflow phases from being
 selected by ordinary prompt matching outside an active Agentic SDLC run.
 
 Every phase skill owns a narrow responsibility. For example,
 `sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
-owns `docs/design.md`, `sdlc-create-plan` owns a locked private plan, and
-`sdlc-commit` owns a local feature-scoped commit after evidence passes.
+owns `docs/design.md`, `sdlc-create-plan` owns a locked private task graph, and
+`sdlc-prepare-execution` owns the persistent integration resource.
+`sdlc-implement-plan` owns task waves and ordered integration, while
+`sdlc-commit` owns final sealing and exact local promotion after evidence passes.
 
 ### Committed product truth
 
@@ -108,13 +115,28 @@ Ownership is strict:
 
 ### Private local run state
 
-Execution state lives under:
+Users first create a durable private prompt workspace and then run the workflow
+through exactly two public coordinator actions:
+
+```text
+$sdlc-start workspace init [project-folder]
+$sdlc-start run <prompt-path-or-unique-filename>
+```
+
+Managed prompts use `agentic-sdlc/prompt-v1`. Editing the same prompt and
+repeating `run` is the only steering path; there is no bare `$sdlc-start`
+resume action. The generated editor workspace provides private new-prompt and
+metadata-only history tasks; these do not expand the public interface. Exact
+manual renames preserve identity and update the run mirror, while rename plus
+content edits and stale/duplicate prompt copies fail closed. Execution state
+lives under:
 
 ```text
 ~/.codex/sdlc-runs/<project-id>/<run-id>/
 ```
 
-The project-level SDLC state also has an `active-run.json` pointer and an
+The project-level SDLC state also has `workspace.json`, `activity.json`, a
+private prompt lock, managed prompt files, an `active-run.json` pointer, and an
 `active.lock` lock file under `~/.codex/sdlc-runs/<project-id>/`. The active
 run directory stores the active feature, run metadata, checkpoints, feature
 queue, fingerprints, steering, context packs, locked plans, evidence,
@@ -123,6 +145,9 @@ files. It is the recovery source when conversation context is lost.
 
 Important files include:
 
+- `prompts/*.md`: editable durable prompts outside Git.
+- `<run-id>/prompt.json` and `inputs/rNNNN/prompt.md`: one run binding and its
+  immutable accepted revisions.
 - `run.json`: active run metadata and run-level status.
 - `current-state.json`: current feature, phase, status, retry counts, and next
   recommended skill.
@@ -137,13 +162,22 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
+- `execution/FEAT-*/coordinator.json`: schema-v3 feature execution identity,
+  exact base/integration SHAs, wave pointers, and promotion state.
+- `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `results/`, and
+  `journals/`: separate records so parallel task agents never share a mutable
+  result file.
+- `execution/interop.json`: optional run-level managed-outer-worktree lease
+  identity, promoted head, and release state.
+- `worktrees/FEAT-*/integration/` and `worktrees/FEAT-*/waves/`: persistent
+  integration and per-task worker checkouts under the private run root.
 - `evidence/`: validation, test, evaluation, documentation, UAT, PR, review,
   merge, and commit evidence.
 - `evidence/FEAT-*/documents.md` and `evidence/uat/documents.md`:
   documentation update evidence.
 - `history/iteration-*.md`: append-only state-transition history.
-- `permissions/`: short-lived authorization files for guarded commit, PR, and
-  merge actions.
+- `permissions/`: short-lived authorization files for guarded commit, PR,
+  merge, and action-scoped raw execution Git operations.
 
 `sdlc-start` resumes from the latest checkpoint and current state. It does not
 depend on conversation memory to know the current phase, feature, retry count,
@@ -155,6 +189,40 @@ human-readable inbox and ledger; `steering/auto-steering.json` keeps the
 machine-readable dispositions and compact active reminders. Entries that
 change requirements or design still route through `sdlc-create-requirements`
 or `sdlc-create-design` before they become implementation truth.
+
+### Feature execution plane
+
+One active feature has one persistent integration branch/worktree from
+pre-TDD preparation through final promotion. The original named project branch
+stays clean and fixed at its recorded base SHA during TDD, implementation,
+validation, tests, evaluation, documentation, and spec alignment.
+
+The locked plan contains stable `TASK-*` records with requirement IDs,
+dependencies, exact/prefix write claims, conflict domains, focused validation,
+done criteria, and rollback/stop conditions. `sdlc-prepare-execution`
+recomputes deterministic earliest-fit dependency waves. Tasks share a wave only
+when their dependencies are satisfied and their write claims and conflict
+domains are pairwise disjoint. Unknown ownership, shared interfaces or schemas,
+migrations, dependency manifests, infrastructure identities, exclusive test
+resources, and external mutations serialize.
+
+For each current-wave task, the coordinator creates one branch, one locked
+private worktree, and one immutable assignment, then dispatches one fresh task
+agent. Workers produce one direct-child commit after focused validation and
+task-scoped review. The coordinator verifies digests, paths, Git identity, and
+ancestry, merges tasks in stable task order with retained worker commits and
+explicit `--no-ff` merge commits, runs combined evidence at the exact
+integration tip, and non-force-cleans only clean reachable worker resources.
+
+After all downstream evidence passes, `sdlc-commit` seals at most one final
+integration commit, verifies the original project checkout is unchanged, and
+fast-forwards it to the exact sealed integration SHA. Only then does it
+non-force-clean the integration worktree and branch. UAT and PR work run from
+the promoted project checkout.
+
+The private transition helper is not a workflow CLI: it performs narrow,
+idempotent state transitions selected by the phase skills. It never chooses the
+next phase or replaces the prompt-bound `sdlc-start run` coordinator action.
 
 ### Hooks as guardrails
 
@@ -176,11 +244,11 @@ The bundle contains:
 Hooks are guardrails, not the workflow engine. Phase selection remains owned by
 `sdlc-start`.
 
-The Stop hook can route an active run back through explicit `$sdlc-start`
-invocation with a continuation prompt. It stops instead of continuing when the
+The Stop hook can route an active run back through the explicit prompt-bound
+`sdlc-start run` command. It stops instead of continuing when the
 run is complete, paused, blocked, waiting on human input, over the iteration or
 retry budget, or making no progress after repeated continuation attempts. It
-can continue to `$sdlc-start` when local state recommends another phase,
+can continue to the bound `sdlc-start run` command when local state recommends another phase,
 steering needs to be refreshed by `sdlc-auto-steering`, all features are
 committed and UAT still needs to run, or UAT failed with an addressable
 classification. It never auto-continues into `sdlc-merge-pr`; merge requires
@@ -192,10 +260,17 @@ files, credential directories, Codex runtime files, global `AGENTS.md`, locked
 SDLC plans, and private SDLC state when the operator needs that flexibility.
 The hook can still deny unsafe content or action shapes such as secret-bearing
 shell, patch, or MCP payloads, destructive shell commands, destructive Git
-commands, protected-branch commit or push attempts, force pushes, branch
-deletion, and guarded Git or GitHub actions without valid short-lived
-authorization. Ordinary outbound network commands are not restricted by the
-hook unless they match those unsafe content or action checks.
+commands, protected-branch commit or push attempts, force pushes, force
+cleanup, and guarded Git or GitHub actions without valid short-lived
+authorization. Registered integration and worker worktrees remain inside the
+active run even though they live outside the original checkout. For sensitive
+Git operations the hook verifies their Git root/common directory, branch,
+recorded HEAD, and action-scoped authorization. Ordinary outbound network
+commands are not restricted by the hook unless they match those unsafe content
+or action checks.
+
+Ordinary outbound network commands remain allowed unless another guarded
+content or action rule applies.
 
 The hook bundle is source code in the skills repository. Installed copies under
 `$CODEX_HOME/hooks` are runtime artifacts and can drift. Hook fixes should be
@@ -271,7 +346,10 @@ The design template also records:
 The high-level workflow is:
 
 ```text
-User prompt
+workspace init -> managed prompt
+  |
+  v
+sdlc-start run <prompt-path-or-unique-filename>
   |
   v
 sdlc-create-requirements
@@ -301,10 +379,19 @@ Feature loop
 sdlc-create-plan, local and locked
   |
   v
+sdlc-prepare-execution
+  |
+  v
+private integration worktree
+  |
+  v
 sdlc-tdd
   |
   v
-sdlc-implement-plan
+sdlc-implement-plan dependency waves
+  |
+  +--> TASK-001 fresh agent + branch + worktree --+
+  +--> TASK-002 fresh agent + branch + worktree --+--> ordered integration
   |
   v
 sdlc-validate-codes
@@ -329,6 +416,9 @@ sdlc-align-specs
   |
   v
 sdlc-commit
+  |
+  v
+ff-only project-branch promotion and integration cleanup
   |
   v
 next feature
@@ -356,18 +446,19 @@ The implementation state schema uses this phase order:
 3. design
 4. sdlc-auto-steering
 5. plan
-6. sdlc-tdd
-7. implementation
-8. validation
-9. test
-10. evaluation
-11. sdlc-update-documents
-12. sdlc-align-specs
-13. sdlc-commit
-14. uat
-15. create-pr
-16. review-pr
-17. sdlc-merge-pr, only after explicit user request
+6. execution preparation
+7. sdlc-tdd in the integration worktree
+8. implementation dependency waves
+9. validation at the recorded integration HEAD
+10. test at the recorded integration HEAD
+11. evaluation at the recorded integration HEAD
+12. sdlc-update-documents in the integration worktree
+13. sdlc-align-specs in the integration worktree
+14. sdlc-commit final seal, ff-only promotion, and cleanup
+15. uat from the promoted project checkout
+16. create-pr
+17. review-pr
+18. sdlc-merge-pr, only after explicit user request
 
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
@@ -390,8 +481,9 @@ write a verification report to `~/.codex/sdlc-verification/report.md`.
 
 ### Verification principles
 
-The design document is the workflow contract. The verifier must compare the
-installed SDLC skills, hook configuration, disposable run state, and report
+The design document is the workflow contract. The verifier must compare source
+and installed SDLC skills, hook configuration and payload parity, disposable
+run state, deterministic capability results, and validated private live
 evidence back to this document instead of relying on conversation memory or
 stale prior reports.
 
@@ -410,6 +502,14 @@ The verifier writes only verification-owned state under:
 ```text
 ~/.codex/sdlc-verification/
 ```
+
+That root must be a dedicated non-symlinked directory outside the source
+repository. The canonical root may be adopted in place; a custom root must be
+new or already carry the verifier's private ownership marker. The verifier
+must reject broad or unowned roots before chmod or writes. Its disposable Git
+repository must have no remote and must carry the exact public fixture marker;
+only an exact clean legacy flat fixture with the expected tracked tree may be
+migrated once.
 
 ### Quick preflight test
 
@@ -432,21 +532,57 @@ The preflight must verify and record:
   `agents/openai.yaml` invocation policy
 - `sdlc-auto-steering` and `sdlc-update-documents` discovery, metadata, and
   placement in the workflow contract
+- `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
+  deterministic scheduler plus real-Git lifecycle tests
+- installed `worktree` availability and source-installed parity for every
+  required SDLC skill, `worktree`, and `agentic-sdlc-test`
+- named regression capabilities for prompt workspace/history/exact manual
+  rename/lifecycle; execution scope, sessions, `task-recover`, resource-free
+  `replan-future`, secret gates, and sequential fallback; Task Implementer
+  interoperability; and prompt-bound steering continuation
+- a composed real-Git test that selects a nested folder in a managed outer
+  worktree, runs schema-v3 execution through promotion, proves the v2 outer
+  lease blocks publication, releases after final evidence, and then acquires
+  the create-PR reservation
 - duplicate SDLC skill-name detection
-- configured PreToolUse and Stop hooks
+- optional PreToolUse and Stop registration; absence is WARN/PARTIAL, while
+  malformed configuration, a non-canonical configured entrypoint, source/
+  payload mismatch, or unsafe behavior is FAIL
 - preservation of non-SDLC hook boundaries such as `SessionStart` and
   `UserPromptSubmit`
 - PreToolUse allow and deny fixture cases
+- registered integration/worker worktree detection, identity-drift denial, and
+  exact action-scoped execution authorization
 - Stop terminal cases: no active run, complete, paused, blocked, human input,
   max iteration, retry budget, no progress, and merge without explicit request
 - Stop continuation cases through `sdlc-start`
 - disposable-project creation and private-state staging checks
+- private `verification-context.json` creation for the exact nested selected
+  project and optional `agentic-sdlc/verification-live-results-v1` ingestion;
+  the preserved context owns the baseline identity, and committed changes must
+  remain inside the selected project without private SDLC state
+- private `0700` verification-root permissions and ownership, a remote-free
+  marked disposable Git root, exact clean one-time migration from the canonical
+  flat fixture, fail-closed preservation of unknown content, and timeout-to-FAIL
+  reporting
 - report generation at `~/.codex/sdlc-verification/report.md`
 
 A successful quick preflight may still return `PARTIAL` when the full
 agent-driven golden path has not been completed. That status is expected until
 the disposable workflow run, idempotency run, change-request run, failure-loop
 run, and steering checks have evidence.
+
+The verifier may ingest an optional private manifest with
+`--live-evidence PATH`, defaulting to
+`~/.codex/sdlc-verification/live-results.json`. It validates the verification
+identity, exact selected-project path, clean baseline/final Git ancestry, seven
+named live lanes, lane-specific private evidence under `evidence/<lane>/`, a
+real selected-scope golden-path commit, every committed path across the full
+baseline-to-final history, and schema shape. It rejects symlink redirects,
+invalid UTF-8, an unchanged synthetic golden path, transient private or
+out-of-scope commits that disappear from the final tree, and report paths
+outside the private verification root. It never reads evidence bodies into the
+report and never turns missing live execution into synthetic PASS.
 
 ### Full workflow test
 
@@ -479,11 +615,16 @@ Required happy-path evidence:
 - `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
-- `sdlc-create-plan` writes a private locked plan version.
-- `sdlc-tdd` records test intent before implementation, including planned
+- `sdlc-create-plan` writes a private locked task graph with dependencies,
+  write claims, conflict domains, validation, done, and stop conditions.
+- `sdlc-prepare-execution` recomputes waves and prepares the persistent private
+  integration branch/worktree from the exact clean project base.
+- `sdlc-tdd` records test intent in the integration worktree before
+  implementation, including planned
   slice contracts and cross-layer validation targets when present.
-- `sdlc-implement-plan` changes only the disposable project for the current
-  feature.
+- `sdlc-implement-plan` uses one fresh agent, branch, and worktree per safe task,
+  preserves worker commits, creates ordered merge commits, runs combined
+  evidence, and non-force-cleans worker resources.
 - `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
   evidence or route failures for classification, including slice boundary
   checks, slice coverage, and end-to-end slice observation when the locked plan
@@ -493,8 +634,9 @@ Required happy-path evidence:
   Multi-layer behavior docs are backed by evaluated slice evidence.
 - `sdlc-align-specs` confirms requirements, design, plan, implementation,
   documentation, slice evidence, and other evidence agree.
-- `sdlc-commit` creates one local feature-scoped commit only after evidence
-  passes.
+- `sdlc-commit` seals final integration changes, verifies all evidence, and
+  fast-forwards the unchanged project branch to the exact integration tip only
+  after evidence passes, then non-force-cleans the integration resource.
 - `sdlc-uat-tests` records product-level UAT evidence after all features are
   committed.
 - private SDLC state, plans, screenshots, transcripts, and evidence stay out
@@ -504,16 +646,19 @@ After the happy path, verify these recovery behaviors:
 
 - rerun with no product change and confirm no duplicate requirements, design
   features, plans, tests, commits, or evidence
+- repeat `run` with the unchanged managed prompt and confirm the same run and
+  revision resume; edit the completed prompt and confirm a new run retains old
+  history, while an unchanged completed prompt returns `ALREADY_COMPLETE`
 - apply the change request `Allow underscores when explicitly configured` and
   confirm stable IDs, a new plan version only when needed, scoped code and test
   changes, refreshed evidence, and a new local feature commit
 - inject one controlled validation, test, bad-test, design, spec-gap, or
   environment failure at a time, then confirm `sdlc-classify-failure` routes to
   the earliest responsible phase before retry
-- add `Pause after the current feature. Do not create a PR.` to `STEERING.md`
-  and confirm `sdlc-start` and Stop continuation honor it
-- submit a mid-run prompt that changes requirements, design, and docs in turn,
-  then confirm `sdlc-auto-steering` records each prompt and routes product-truth
+- add `Pause after the current feature. Do not create a PR.` to the bound
+  prompt, repeat `run`, and confirm `sdlc-start` and Stop continuation honor it
+- edit the same prompt with requirements, design, and docs changes in turn,
+  then confirm `sdlc-auto-steering` records each immutable revision and routes product-truth
   changes to the owning skill before implementation treats them as true
 - confirm clearing steering allows resume
 - run optional GUI or TUI smoke checks only against harmless local disposable
@@ -527,14 +672,14 @@ unless the user explicitly requests a separate merge exercise.
 
 The report status means:
 
-- `PASS`: required static, hook, golden-path, idempotency, change-request,
-  failure-loop, steering, and continuation checks passed; optional GUI or TUI
+- `PASS`: all required deterministic capabilities and the seven live lanes
+  (golden path, idempotency, change request, failure routing, auto-steering,
+  documentation update, and steering continuation) passed; optional GUI or TUI
   smoke checks may be `NOT APPLICABLE`.
-- `PARTIAL`: the automated preflight passed, or a non-critical optional check
-  is unavailable, but one or more full workflow checks still need disposable
-  evidence.
-- `FAIL`: safety hooks, Stop continuation, state persistence, private-state
-  protection, or the disposable golden-path workflow failed.
+- `PARTIAL`: no required check failed, but optional hook registration or one or
+  more live lanes are missing or partial.
+- `FAIL`: any required deterministic check, configured hook safety/parity
+  check, supplied live lane, or live-evidence integrity check failed.
 
 `PARTIAL` is not a production-readiness result. It means the workflow is safe
 enough to continue disposable verification, not that it is proven for real
@@ -569,7 +714,12 @@ guessing.
 
 ### `sdlc-start`
 
-Coordinates the active SDLC run. It reads `docs/requirements.md`,
+Owns exactly `$sdlc-start workspace init [project-folder]` and the prompt-bound
+`$sdlc-start run` action. Initialization preserves prompt history and
+creates one starter only when empty. `run` binds one managed prompt to one
+active run, snapshots each changed digest once, returns `ALREADY_COMPLETE` for
+an unchanged completed prompt, and routes changed active revisions to
+`sdlc-auto-steering`. It then coordinates the active SDLC run and reads `docs/requirements.md`,
 `docs/design.md`, `active-run.json`, `current-state.json`, feature queue,
 fingerprints, latest checkpoint, `STEERING.md`,
 `steering/auto-steering.json`, and evidence. It selects the highest-priority
@@ -577,7 +727,10 @@ incomplete feature whose dependencies are satisfied, routes stale or unresolved
 steering to `sdlc-auto-steering`, writes a checkpoint, and returns exactly one
 next recommended skill. At the beginning of a run, it encourages the user to
 provide a non-production or disposable live experiment environment and routes
-any provided details through `sdlc-create-requirements`.
+any provided details through `sdlc-create-requirements`. It keeps one active
+feature, routes `plan_locked` to `sdlc-prepare-execution`, routes all post-prepare
+feature phases through the integration checkout, and routes UAT only after
+exact promotion succeeds.
 
 ### `sdlc-gather-context`
 
@@ -599,8 +752,9 @@ evaluation, rollback, and done criteria.
 
 ### `sdlc-auto-steering`
 
-Refreshes private runtime steering for the active run. It records every mid-run
-user prompt in `STEERING.md` or a redacted summary when raw content is unsafe,
+Refreshes private runtime steering for the active run. It records every accepted
+same-prompt revision in `STEERING.md`, linked by prompt ID, revision, digest,
+and snapshot, with only a compact redacted summary and never raw prompt text,
 keeps `steering/auto-steering.json` as the machine-readable disposition state,
 and derives compact reminders from requirements, design, context, locked plan,
 fingerprints, steering, and recent evidence. It classifies entries with exact
@@ -615,24 +769,44 @@ Creates a private, locked execution plan for exactly one ready feature. Plans
 live under the local run directory, not in the repository. Existing locked
 plans are never edited in place; changed design or context creates a new plan
 version. For serial multi-layer features, the plan preserves the end-to-end
-slice and groups steps by behavior across layers rather than by isolated layer.
+slice and expresses implementation as stable `TASK-*` records. Dependencies,
+write claims, and conflict domains define which tasks can safely share a wave.
+
+### `sdlc-prepare-execution`
+
+Runs after plan lock and before TDD. It requires a clean named non-default
+project branch, validates the locked task graph, creates deterministic waves,
+and prepares or resumes the feature integration branch/worktree at the exact
+project base SHA. The exact folder selected by `workspace init` is enforced as
+the claim, worker-cwd, and changed-path boundary even in a monorepo. It records
+schema-v3 private execution state, supports confirmed interrupted-worker
+transfer and resource-free future-wave replanning, and acquires an
+`agentic-sdlc` v2 lease when nested in a managed outer worktree. It never
+implements behavior, promotes, or force-cleans resources.
 
 ### `sdlc-tdd`
 
 Defines success before implementation. It writes or maps tests from
 requirements, feature design, the locked plan, and any planned end-to-end slice,
-then records expected red or already-green evidence. When a slice is present,
+inside the registered integration worktree, then records expected red or
+already-green evidence. When a slice is present,
 tests cover the smallest useful layer contracts or cross-layer validation
 target that would fail if planned behavior is missing. It does not implement
 production behavior or weaken acceptance criteria.
 
 ### `sdlc-implement-plan`
 
-Implements production code for the current feature only. It rereads the locked
-plan, feature design, context pack, source files, and tests, then makes the
-smallest coherent implementation inside the plan boundaries. When the locked
-plan defines a vertical slice, implementation follows that slice and routes
-plan or design defects backward instead of widening scope.
+Coordinates the current feature's dependency waves. It seals the TDD base,
+creates immutable task assignments, and dispatches one fresh task agent per
+safe task with its own branch and private worktree. Native agents are preferred;
+when unavailable, one fresh sequential `codex exec` process runs with exact
+scope cwd, `workspace-write`, `--ephemeral`, stdin assignment, and structured
+output. Each task validates and reviews inside declared ownership. The
+coordinator screens staged content and evidence for obvious secrets/private
+endpoints, then produces one direct-child commit with normal Git hooks. The
+coordinator verifies results, merges in stable order with explicit merge
+commits, runs combined evidence, and performs non-force worker cleanup before
+advancing. Plan or design defects route backward instead of widening scope.
 
 ### `sdlc-validate-codes`
 
@@ -714,10 +888,11 @@ to the responsible SDLC skill.
 
 ### `sdlc-commit`
 
-Creates a local feature-scoped Git commit after validation, tests, and
-evaluation pass. It writes short-lived commit authorization immediately before
-the guarded commit action, verifies private run state is not staged, records
-commit evidence, and never pushes.
+Seals at most one final integration commit after validation, tests, evaluation,
+documentation, and alignment pass. It then verifies the original project
+checkout is still clean at the recorded base, fast-forwards it to the exact
+sealed integration SHA, and non-force-cleans the integration worktree/branch.
+It records worker, merge, final, promoted, and cleanup evidence and never pushes.
 
 ### `sdlc-uat-tests`
 
@@ -725,14 +900,17 @@ Runs product-level UAT after all feature commits are complete. It builds a UAT
 matrix from requirements, validates cross-feature user journeys and negative
 criteria, may use the confirmed safe Live Experiment Environment within its
 recorded allowed operations and reset rules, records evidence, and marks the
-product ready for `create-pr` only on pass.
+product ready for `create-pr` only on pass. For a managed outer worktree, final
+alignment, UAT, and documentation evidence plus a clean exact promoted head and
+zero internal resources release the Agentic SDLC lease before PR publication.
 
 ### `create-pr`
 
 Reuses the existing PR creation skill as the SDLC PR handoff. In an SDLC run,
 it creates or reuses a PR only after UAT evidence says the product is ready,
 unless the user explicitly requests an early draft PR. It records PR evidence
-when local run state is available.
+when local run state is available. Managed worktrees acquire the normal
+`create-pr` publication reservation only after the Agentic SDLC lease releases.
 
 ### `review-pr`
 
@@ -762,8 +940,16 @@ Typical routes are:
 - missing or conflicting context -> `sdlc-gather-context`
 - design defects -> `sdlc-create-design`
 - plan defects -> `sdlc-create-plan`
+- preparation or scheduler defects -> `sdlc-prepare-execution` or
+  `sdlc-create-plan`
+- worktree identity drift -> the owning execution phase with resources retained
+- undeclared task ownership or changed plan digest -> `REPLAN_REQUIRED`
 - wrong or missing tests -> `sdlc-tdd`
 - implementation defects -> `sdlc-implement-plan`
+- ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
+- unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
+- moved project/integration state -> `PROMOTION_BLOCKED`
+- unfinished execution coordinator schema v1/v2 -> `WORKFLOW_UPGRADE_REQUIRED`
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
 - documentation drift -> `sdlc-update-documents`
@@ -777,7 +963,10 @@ retry budget is exceeded, the run stops instead of guessing.
 
 Git actions are intentionally split:
 
-- `sdlc-commit` creates local feature commits and never pushes.
+- Task agents create one scoped worker commit through the private transition
+  helper; the coordinator creates ordered merge commits.
+- `sdlc-commit` seals final integration changes, performs exact ff-only local
+  promotion, and never pushes.
 - `create-pr` pushes and opens or reuses a PR after UAT is ready.
 - `review-pr` reviews and may safely fix a writable PR branch.
 - `sdlc-merge-pr` merges only with explicit user instruction.
@@ -786,17 +975,23 @@ The optional PreToolUse hook can require short-lived local authorization files
 under the active run's `permissions/` directory:
 
 - `commit-authorization.json`
+- `execution/<action-id>.json`
 - `pr-authorization.json`
 - `merge-authorization.json`
 
 These files are written immediately before the guarded action, scoped to the
 branch or PR, include an expiry, and are removed or allowed to expire after the
-attempt.
+attempt. Raw execution authorization also binds action, canonical worktree, Git
+common directory, branch, expected HEAD, and exact target/command. Normal
+execution-plane mutations use the private helper, which revalidates the same
+identity before and after each transition.
 
 ## Resume And Idempotency
 
 The workflow is designed to survive conversation loss and repeated resumes.
-`sdlc-start` reads the latest checkpoint and current state before selecting a
+Stop continuation repeats `$sdlc-start run <bound-unique-filename>` and never
+requires a prompt ID or run ID. `sdlc-start` accepts the immutable prompt
+revision, then reads the latest checkpoint and current state before selecting a
 phase. If nothing changed, it returns the same feature and next recommended
 skill without duplicating history. If partial writes occur, it repairs state
 from the newest complete checkpoint that matches evidence.
@@ -807,13 +1002,29 @@ Stable IDs are part of the design:
 - `FEAT-*` IDs are stable and are not renumbered.
 - Locked plan files are immutable; new information creates a new plan version.
 - Evidence is refreshed or appended rather than silently erased.
+- Task assignments and results are immutable digest-bound records; one file per
+  task prevents parallel agents from sharing mutable JSON.
+- Intent is journaled before Git mutation, and recovery re-observes refs,
+  worktree registration, branch, SHA, cleanliness, and ancestry before deciding
+  whether to resume, retain, or block.
+- Worker and merge commits are retained. No rebase, squash, amend, reset,
+  cherry-pick, or force cleanup is used by the execution plane.
+- Unfinished schema v1 execution is not migrated. It fails closed with
+  `WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable.
+- An unfinished pre-prompt run also fails with `WORKFLOW_UPGRADE_REQUIRED`;
+  completed unbound history remains readable without an adoption shim.
 
 ## Boundaries
 
 The workflow intentionally does not:
 
-- create a workflow CLI
+- create a public phase-orchestration workflow CLI; the private prompt helper
+  performs only deterministic workspace, snapshot, intake, and disposition
+  transitions
 - let hooks choose phases or implement workflow logic
+- treat worktree separation as an operating-system security boundary
+- run two parallel tasks with overlapping write claims or conflict domains
+- rewrite worker/merge history or force-clean unverified Git resources
 - use conversation memory as authoritative run state
 - commit local SDLC run state, screenshots, transcripts, or plans
 - merge without explicit user instruction

@@ -82,6 +82,10 @@ and feature designs in `docs/design.md`.
 - Same requirements and context must not duplicate features.
 - Requirement changes update affected feature blocks only.
 - Existing feature IDs remain stable.
+- When execution is already prepared, update design only in the registered
+  integration worktree, supersede the old locked plan through coordinator
+  routing, and preserve started assignments/commits/resources. Never rewrite
+  or reset the active execution history.
 
 ## Failure Handling
 

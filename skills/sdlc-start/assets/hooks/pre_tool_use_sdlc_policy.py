@@ -47,7 +47,9 @@ def _command_starts_with_write(command: str) -> bool:
     return first in WRITE_COMMANDS or ">" in command or ">>" in command
 
 
-def _log_event(payload: dict[str, Any], decision: dict[str, Any], reason: str | None) -> None:
+def _log_event(
+    payload: dict[str, Any], decision: dict[str, Any], reason: str | None
+) -> None:
     cwd = payload.get("cwd") or "."
     try:
         active, _, _, _ = load_active_state(cwd)
@@ -76,7 +78,9 @@ def _deny(payload: dict[str, Any], reason: str) -> dict[str, Any]:
     return decision
 
 
-def _allow(payload: dict[str, Any], decision: dict[str, Any] | None = None) -> dict[str, Any]:
+def _allow(
+    payload: dict[str, Any], decision: dict[str, Any] | None = None
+) -> dict[str, Any]:
     result = decision if decision is not None else allow()
     _log_event(payload, result, None)
     return result
@@ -94,7 +98,10 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         active, _, current_state, _ = load_active_state(cwd)
     except json.JSONDecodeError:
-        return _deny(payload, "Blocked: active SDLC state is corrupt and must be repaired before mutating actions.")
+        return _deny(
+            payload,
+            "Blocked: active SDLC state is corrupt and must be repaired before mutating actions.",
+        )
 
     project_root = active.project_root if active else resolve_project_root(cwd)
 
@@ -117,15 +124,25 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
 
     if tool_name == "apply_patch":
         targets = extract_apply_patch_targets(command, cwd)
-        target_reason = validate_write_targets(targets, project_root, active, allow_global_agents=True)
+        target_reason = validate_write_targets(
+            targets, project_root, active, allow_global_agents=True
+        )
         if target_reason:
             return _deny(payload, target_reason)
         if contains_secret(command):
             return _deny(payload, "Blocked: patch appears to contain a secret.")
-        spec_decision = spec_warning_or_denial(command, targets, project_root, current_state)
+        spec_decision = spec_warning_or_denial(
+            command, targets, project_root, current_state
+        )
         if spec_decision:
-            if spec_decision.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
-                return _deny(payload, spec_decision["hookSpecificOutput"]["permissionDecisionReason"])
+            if (
+                spec_decision.get("hookSpecificOutput", {}).get("permissionDecision")
+                == "deny"
+            ):
+                return _deny(
+                    payload,
+                    spec_decision["hookSpecificOutput"]["permissionDecisionReason"],
+                )
             return _allow(payload, spec_decision)
         return _allow(payload)
 

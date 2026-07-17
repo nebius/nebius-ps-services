@@ -373,6 +373,44 @@ def test_source_role_uid_and_rules_are_written_to_the_bridge_journal() -> None:
     assert observed == contract
 
 
+def test_mirrored_material_excludes_kubernetes_owned_root_ca() -> None:
+    def runner(
+        args: Sequence[str],
+        **_kwargs: Any,
+    ) -> migration.SoperatorMigrationCommandResult:
+        assert "kube-root-ca.crt" not in args
+        assert "controller-material" in args
+        return _result(
+            args,
+            stdout=json.dumps(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"uid": "source-config-uid"},
+                    "data": {"slurm.conf": "ClusterName=old-cluster\n"},
+                }
+            ),
+        )
+
+    objects = migration._controller_bridge_mirrored_objects(  # noqa: SLF001
+        source={
+            "configuration": {
+                "config_map_names": ["controller-material", "kube-root-ca.crt"]
+            },
+            "munge": {},
+            "jwt": {},
+        },
+        source_pod_spec={},
+        namespace="cxcli-soperator-upgrade-bridge",
+        kube_context="context",
+        command_runner=runner,
+    )
+
+    assert [(item["kind"], item["metadata"]["name"]) for item in objects] == [
+        ("ConfigMap", "controller-material")
+    ]
+
+
 def _writer_boundary_fixture() -> tuple[
     dict[str, Any],
     dict[str, Any],

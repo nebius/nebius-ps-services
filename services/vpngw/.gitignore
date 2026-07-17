@@ -71,6 +71,11 @@ id_ed25519.pub
 *.local.yaml
 *.override.yaml
 
+# Public example configs contain placeholders only and are intentionally tracked
+!examples/
+!examples/static-example.config.yaml
+!examples/bgp-example.config.yaml
+
 # Generated resolved configs / state snapshots (agent)
 config-resolved.yaml
 last-applied.json

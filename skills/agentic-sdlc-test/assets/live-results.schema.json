@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentic-sdlc/verification-live-results-v1",
+  "title": "Agentic SDLC private live verification results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "verification_id",
+    "project_root",
+    "baseline_head",
+    "final_head",
+    "lanes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "agentic-sdlc/verification-live-results-v1"
+    },
+    "verification_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "project_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseline_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "final_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "golden-path": {
+          "$ref": "#/$defs/golden-path-lane"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/idempotency-lane"
+        },
+        "change-request": {
+          "$ref": "#/$defs/change-request-lane"
+        },
+        "failure-routing": {
+          "$ref": "#/$defs/failure-routing-lane"
+        },
+        "auto-steering": {
+          "$ref": "#/$defs/auto-steering-lane"
+        },
+        "documentation-update": {
+          "$ref": "#/$defs/documentation-update-lane"
+        },
+        "steering-continuation": {
+          "$ref": "#/$defs/steering-continuation-lane"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "PARTIAL"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "golden-path-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/golden\\-path/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "idempotency-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/idempotency/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "change-request-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/change\\-request/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "failure-routing-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/failure\\-routing/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "auto-steering-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/auto\\-steering/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "documentation-update-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/documentation\\-update/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    },
+    "steering-continuation-lane": {
+      "$ref": "#/$defs/lane",
+      "properties": {
+        "evidence": {
+          "items": {
+            "pattern": "^evidence/steering\\-continuation/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*$"
+          }
+        }
+      }
+    }
+  }
+}

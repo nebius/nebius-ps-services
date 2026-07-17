@@ -1,0 +1,76 @@
+# Minimal static-routing example. Replace placeholders before use.
+---
+version: 1
+
+tenant_id: "${TENANT_ID}"
+project_id: "${PROJECT_ID}"
+region_id: "${REGION_ID}"
+
+gateway_group:
+  name: "nebius-vpn-gw"
+  instance_count: 1
+  external_ips: []
+  subnet:
+    name: "vpngw-subnet"
+    cidr: null
+    prefix_length: 24
+  vm_spec:
+    platform: "cpu-d3"
+    preset: "4vcpu-16gb"
+    disk_boot_image: "ubuntu24.04-driverless"
+    disk_gb: 100
+    disk_type: "network_ssd"
+    disk_block_bytes: 4096
+    num_nics: 1
+    ssh_public_key: "${SSH_PUBLIC_KEY}"
+    ssh_private_key_path: "~/.ssh/id_ed25519"
+
+gateway:
+  local_asn: 65010
+  local_prefixes:
+    - "10.10.0.0/16"
+
+defaults:
+  crypto:
+    ike_proposals:
+      - "aes256-sha256-modp2048"
+    ike_lifetime_seconds: 28800
+    esp_proposals:
+      - "aes256-sha256-modp2048"
+    esp_lifetime_seconds: 3600
+    dh_groups:
+      - 14
+  dpd:
+    interval_seconds: 5
+    timeout_seconds: 15
+  ha_mode: "active-passive"
+  routing:
+    mode: "static"
+
+connections:
+  - name: "onprem-static"
+    vendor: "generic"
+    routing_mode: "static"
+    remote_prefixes:
+      - "192.168.0.0/16"
+    bgp:
+      enabled: false
+    tunnels:
+      - name: "onprem-static-tunnel-1"
+        gateway_instance_index: 0
+        local_public_ip_index: 0
+        ha_role: "active"
+        remote_public_ip: "198.51.100.10"
+        psk: "${STATIC_TUNNEL_1_PSK}"
+        inner_cidr: "169.254.10.0/30"
+        inner_local_ip: "169.254.10.1"
+        inner_remote_ip: "169.254.10.2"
+      - name: "onprem-static-tunnel-2"
+        gateway_instance_index: 0
+        local_public_ip_index: 0
+        ha_role: "passive"
+        remote_public_ip: "198.51.100.11"
+        psk: "${STATIC_TUNNEL_2_PSK}"
+        inner_cidr: "169.254.11.0/30"
+        inner_local_ip: "169.254.11.1"
+        inner_remote_ip: "169.254.11.2"

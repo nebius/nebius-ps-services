@@ -1,6 +1,6 @@
 ---
 name: agentic-sdlc-test
-description: "Use outside the Agentic SDLC workflow to safely verify the whole Agentic SDLC system against docs/agentic-sdlc-design.md: discover global sdlc-* skills, inspect hook configuration, run disposable PreToolUse and Stop hook fixture tests, orchestrate a disposable golden-path SDLC run, check idempotency/failure/steering behavior, and write ~/.codex/sdlc-verification/report.md without changing real projects, installed skills, hooks, or agent configuration."
+description: "Use only when explicitly asked, outside the Agentic SDLC workflow, to safely verify the whole Agentic SDLC system against docs/agentic-sdlc-design.md: check source-installed skill parity, deterministic prompt/execution/worktree/hook capabilities, optional private live-run evidence, and readiness reporting without changing real projects, installed skills, hooks, or agent configuration."
 ---
 
 # Agentic SDLC Test
@@ -34,13 +34,18 @@ the SDLC system itself.
 ## Inputs
 
 - `docs/agentic-sdlc-design.md`.
-- Optional user-specified verification root, report path, global skills path,
-  or design path.
+- Optional user-specified dedicated verification root, report path under that
+  private verification root, global skills path, or design path. A new custom
+  root is initialized with an ownership marker; an existing custom root must
+  already contain that valid marker.
 - Existing global `sdlc-*` skills under `~/.agents/skills`.
 - Existing Codex hook configuration under `~/.codex/hooks.json` or
   `~/.codex/config.toml`.
 - Optional prior verification report and disposable state under
   `~/.codex/sdlc-verification/`.
+- Optional private live-results manifest passed with `--live-evidence PATH`.
+  The default is `~/.codex/sdlc-verification/live-results.json`; its contract
+  is `assets/live-results.schema.json`.
 
 The default report path is:
 
@@ -66,6 +71,7 @@ The default report path is:
 
 - `docs/agentic-sdlc-design.md`.
 - `references/verification-checklist.md`.
+- `assets/live-results.schema.json` when producing or ingesting live evidence.
 - The `SKILL.md` files for all `sdlc-*` skills being verified.
 - The SDLC hook README, PreToolUse hook, Stop hook, and hook unit tests from
   the `sdlc-start` skill's hook bundle when hook verification is in scope.
@@ -81,6 +87,14 @@ Allowed writes:
   `~/.codex/sdlc-verification/disposable-project/`.
 - Disposable local state for the verification project only.
 - `~/.codex/sdlc-verification/report.md`.
+- An explicitly selected report path only when it remains under the private
+  verification root and has no symlinked component.
+- `~/.codex/sdlc-verification/verification-context.json` and optional
+  `live-results.json` plus referenced evidence artifacts, all private local
+  files outside the disposable Git root.
+- A private verification-root ownership marker and a committed public fixture
+  marker that prevent custom roots or clean unknown Git repositories from
+  being mistaken for verifier-owned state.
 
 Do not write to real project source trees, installed skill folders, hook
 configuration, credential directories, external systems, or non-disposable Git
@@ -99,41 +113,59 @@ remotes.
    python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
    ```
 
-   This script performs read-only discovery of global `sdlc-*` skills,
-   explicit-only `agents/openai.yaml` invocation policy, key source-template
-   and downstream vertical-slice contract terms, and hook configuration,
-   creates a disposable verification root, runs hook fixture tests against
-   disposable `CODEX_HOME` state, and writes a report. It does not edit
-   installed skills or hooks.
+   This script checks source-installed parity for all required SDLC skills and
+   `worktree`, explicit-only invocation policy, prompt workspace/history/
+   rename/lifecycle regressions, execution scope/recovery/replan/secret gates,
+   sequential fallback, Task Implementer interoperability, the composed
+   managed outer-worktree lease lifecycle, verifier self-tests, and hook
+   fixtures. The disposable fixture is a nested selected folder in a local
+   monorepo-shaped Git repository. A clean canonical flat fixture with the
+   exact expected tracked tree and no remote is migrated once. Unknown,
+   unowned, dirty, remote-backed, or non-canonical directories and repositories
+   fail closed without mutation. The script does not edit installed skills or
+   hooks.
 3. Review the preflight report.
-   If skill discovery, hook configuration, PreToolUse safety, or Stop
-   continuation checks fail, record the issue and stop before the golden path
-   unless the failure is unrelated to workflow safety.
+   Any deterministic FAIL makes the report FAIL. Missing optional hook
+   registration is WARN/PARTIAL; a configured payload mismatch or unsafe hook
+   behavior is FAIL. Missing live evidence is PARTIAL, not synthetic PASS.
 4. Run the disposable golden-path workflow when full verification is requested.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
-   `sdlc-create-design`, `sdlc-auto-steering`, `sdlc-create-plan`, `sdlc-tdd`,
+   `sdlc-create-design`, `sdlc-auto-steering`, `sdlc-create-plan`,
+   `sdlc-prepare-execution`, `sdlc-tdd`,
    `sdlc-implement-plan`, `sdlc-validate-codes`, `sdlc-unit-tests`,
    `sdlc-evaluate`, `sdlc-update-documents`, `sdlc-align-specs`,
    `sdlc-commit`, and `sdlc-uat-tests`. Run `sdlc-update-documents` again
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.
 5. Verify rerun and change-request behavior.
-   Rerun `sdlc-start` with no product changes, then apply the safe change
+   Repeat `$sdlc-start run <prompt-path-or-unique-filename>` with no prompt
+   changes, then edit the same prompt with the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,
    scoped changes, refreshed evidence, and no duplicate commits.
 6. Verify failure routing and steering behavior.
    Inject one controlled failure at a time in the disposable project, verify
    `sdlc-classify-failure` routes to the earliest responsible phase, then
-   repair and rerun. Test `STEERING.md` with the pause/no-PR instruction.
+   repair and rerun. Add the pause/no-PR instruction to the same prompt and
+   repeat `run`.
 7. Verify continuation and optional harness smoke checks.
    Exercise Stop continuation with fake state and, where available, run safe
    GUI and TUI smoke checks against local disposable targets only.
-8. Update the report.
-   Keep the report concise and evidence-backed. Include PASS, PARTIAL, or FAIL
-   and the top issues/fixes. Do not paste raw hook logs or secret-bearing
-   output.
+8. Persist and ingest live results.
+   Use the identity in `verification-context.json`. Write only the v1 manifest
+   and relative evidence paths defined by `assets/live-results.schema.json`.
+   Evidence must stay under `evidence/<lane>/` within the verification root,
+   use private permissions, match the exact preserved baseline/final Git
+   identity, include a real selected-scope golden-path commit, keep every commit
+   in the live history inside the selected nested project, exclude private SDLC
+   state, and never contain prompt bodies or secrets. Rerun the verifier with
+   `--live-evidence PATH`.
+9. Update the report.
+   Keep the report concise and evidence-backed. Include capability-level PASS,
+   PARTIAL, or FAIL, validation commands, skipped live checks, and the low-risk
+   repository recommendation. Do not paste raw evidence bodies, hook logs, or
+   secret-bearing output.
 
 ## Idempotency
 
@@ -148,14 +180,31 @@ remotes.
 
 ## Failure Handling
 
-- If required global skills or hook configuration are missing, write a FAIL or
-  PARTIAL report and stop before the golden-path run.
+- If required global skills, `worktree`, or installed parity are missing, write
+  FAIL. Missing optional hook registration is PARTIAL; configured source/
+  installed hook drift is FAIL.
 - If hook fixture tests fail, keep all fixture state under the verification
   root and report the failing checks without mutating installed hooks.
+- If a deterministic subprocess times out or cannot start, record a concise
+  FAIL result and still write the report.
+- If execution-plane scheduler or real-Git lifecycle tests fail, stop before
+  the golden path; do not attempt worker dispatch or promotion.
 - If the disposable project is dirty from a prior verification run, inspect and
   reuse or supersede only verification-owned files; do not delete unknown files.
+- If the verification root, disposable project, canonical fixture paths,
+  installed skill roots, configured hook payloads, or requested report path
+  contain symlinks, fail closed before following or mutating them.
+- If an existing custom verification root lacks its ownership marker, or an
+  existing disposable directory is non-empty and not an exact marked verifier
+  Git fixture or canonical flat migration source, fail closed without chmod,
+  file writes, or commits. Any disposable Git remote is also a failure.
+- If hook configuration is malformed or an SDLC hook command does not target
+  the canonical payload under `$CODEX_HOME/hooks`, report FAIL rather than
+  treating registration as missing or comparing an unrelated canonical file.
 - If the golden-path SDLC run fails, route through `sdlc-classify-failure` and
   record the earliest responsible phase in the report.
+- If live evidence is absent, stale, dirty, symlinked, overly permissive,
+  outside the verification root, or schema-invalid, never infer success.
 - If a check requires unavailable optional tooling such as a GUI harness, mark
   it NOT APPLICABLE or PARTIAL instead of failing the core workflow.
 - If any command would push, publish, merge, edit installed hooks, or touch a
@@ -168,6 +217,13 @@ Git operations inside the disposable verification project, and hook execution
 with a disposable `CODEX_HOME`. Full workflow verification may create local
 commits only inside the disposable project. It must never push, open real PRs,
 merge, publish, alter credentials, or mutate installed hooks or skills.
+
+The verification root must be a dedicated, verifier-owned directory outside
+the source repository. It uses private `0700` permissions on POSIX; the root
+marker, context, manifest, report, and referenced evidence files require
+private modes. The disposable Git root must have no remote and must carry the
+exact public fixture marker. The root, fixture components, and report path must
+be real local directories and files, never symlink redirects.
 
 When executing hook source fixtures, disable Python bytecode writes so
 verification does not create `__pycache__` artifacts in skill source folders.
@@ -189,9 +245,16 @@ URLs, customer data, raw logs, or one-off local state.
 - `~/.codex/sdlc-verification/report.md` exists.
 - Static skill discovery and hook configuration checks are recorded.
 - PreToolUse and Stop hook fixture results are recorded.
-- Full verification either records the disposable golden-path, idempotency,
-  change-request, failure-loop, steering, and continuation results or clearly
-  marks them as pending with a PARTIAL status.
+- Prompt workspace initialization, revision, steering, terminal, and legacy
+  lifecycle results are recorded.
+- The deterministic capability matrix records prompt, execution, fallback,
+  outer lease, Task Implementer interop, steering, hook, and verifier results.
+- Full verification records the golden-path, idempotency, change-request,
+  failure-routing, auto-steering, documentation-update, and
+  steering-continuation lanes through validated private evidence; missing lanes
+  remain PARTIAL.
+- Any required deterministic or supplied live FAIL makes final status FAIL;
+  PASS requires all required deterministic and live lanes to pass.
 - The report states PASS, PARTIAL, or FAIL and lists top issues and fixes.
 - No installed skills, hook configuration, credentials, real repositories, or
   external services were modified.

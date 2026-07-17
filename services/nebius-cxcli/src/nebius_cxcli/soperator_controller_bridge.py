@@ -2383,7 +2383,14 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         or isinstance(preservation_verifications, (str, bytes, bytearray))
     ):
         raise ValueError("Controller bridge preservation_jobs records are invalid.")
-    if preservation_records and not str(preservation_jobs.get("captured_at", "") or "").strip():
+    capture_state = str(preservation_jobs.get("capture_state", "") or "")
+    if capture_state not in {"", "dispatching", "complete"}:
+        raise ValueError("Controller bridge preservation_jobs capture state is invalid.")
+    if (preservation_records or completed_during_capture) and capture_state == "":
+        raise ValueError("Controller bridge preservation_jobs records lack capture intent.")
+    if capture_state == "complete" and not str(
+        preservation_jobs.get("captured_at", "") or ""
+    ).strip():
         raise ValueError("Controller bridge preservation_jobs lacks captured_at.")
     verification_stages: set[str] = set()
     for job_id, record in preservation_records.items():
@@ -3227,6 +3234,12 @@ def bridge_kubernetes_objects(
 
     pod_spec = copy.deepcopy(dict(controller_pod_spec))
     pod_spec.pop("nodeName", None)
+    # Pod priority and preemption policy are admission-owned whenever a
+    # PriorityClass is selected. Mirrored live Pod specs contain values
+    # computed from their original class; carrying those values across to the
+    # bridge's class makes Kubernetes reject the Pod when the classes differ.
+    pod_spec.pop("priority", None)
+    pod_spec.pop("preemptionPolicy", None)
     pod_spec.setdefault("automountServiceAccountToken", False)
     managed_adapter = all(
         domain.ownership == "managed-existing" for domain in plan.placement_domains

@@ -33,6 +33,7 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │       ├── handoff.md
 │       └── orchestration/
 │           ├── coordinator.json
+│           ├── interop.json
 │           ├── waves/wave-001.json
 │           ├── tasks/wave-001/task-1.json
 │           ├── assignments/wave-001/task-1.json
@@ -67,7 +68,8 @@ new prompt only; it does not invoke Codex.
 ## Intake And Steering
 
 Private `intake` resolves a managed absolute prompt path or unique filename and
-returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`, or `done`.
+returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
+`finalize`, or `done`.
 
 - Acquire the scope lock before mutable private-state changes.
 - One unfinished prompt owns a scope.
@@ -81,6 +83,8 @@ returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`, or `done`.
   `STEERING_QUEUED_AFTER_WAVE` or `HUMAN_INPUT_REQUIRED`.
 - An unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
   prompt starts a new run.
+- A terminal handoff whose managed outer lease was not released returns private
+  `finalize`/`TASK_LEASE_RELEASE_REQUIRED` and resumes the same run.
 
 Every validated, lock-acquired invocation updates private activity and the
 handoff `Last invoked at`, including no-op and blocked outcomes. Rejected and
@@ -99,6 +103,13 @@ promotion proof, and cleanup inventory.
 
 Each mutable task plane records `planned -> assigned -> running -> committed -> merged|failed`,
 the worker session fingerprint, assignment digest, result digest, and commit.
+
+`interop.json` is strict private run state. For a `worktree`-managed outer
+checkout it binds the run to the exact outer name, branch, path, outer/task
+scope, v2 `task-implementer` owner lease identity, promoted head, and release
+status. For an unmanaged
+checkout it records only the unmanaged mode. Any malformed or mismatched state
+fails closed.
 
 Assignments are immutable and bind:
 
@@ -131,6 +142,7 @@ prompt_workspace.py task-finish --workspace <manifest> --run-id <id> --task-id <
 prompt_workspace.py wave-integrate --workspace <manifest> --run-id <id>
 prompt_workspace.py wave-promote --workspace <manifest> --run-id <id> --evidence <private-json>
 prompt_workspace.py wave-cleanup --workspace <manifest> --run-id <id>
+prompt_workspace.py run-finalize --workspace <manifest> --run-id <id> --alignment <summary>
 ```
 
 These names and arguments are not public workflow commands. Human output stays
@@ -140,6 +152,20 @@ redacted; internal JSON may carry assignment paths to the coordinator.
 transfers only declared dirty state or one direct-child commit to a fresh
 session. Blocked resources remain retained for operator-directed recovery;
 they are never silently discarded.
+
+`wave-plan` acquires the managed outer task lease before task resources exist.
+Each integration/worker identity is recorded before creation and marked absent
+only after real Git and filesystem removal. `run-finalize` requires all waves
+done, no retained cleanup resources, a clean project branch at the final
+promoted head, and non-empty final `$align` evidence before lease release.
+An interrupted release is retried idempotently. Unfinished pre-interop runs in
+a managed outer checkout return `WORKFLOW_UPGRADE_REQUIRED`; there is no
+migration, stale timeout, PID recovery, or force-clear path.
+
+Completed private prompt/run history may be archived only after the outer
+worktree lifecycle has also been removed. Archive is history retention, not a
+workspace identity migration; never rebind it to a primary or different linked
+checkout.
 
 ## Legacy Boundary
 

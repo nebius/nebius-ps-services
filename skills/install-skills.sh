@@ -1400,11 +1400,25 @@ preflight_register_hooks_manifest() {
 
 HOOK_STATUS_REVIEW_NEEDED=0
 
+format_updated_label() {
+  local count="$1"
+
+  if [[ "${count}" -gt 0 ]]; then
+    printf '%b' "${S_GREEN}${S_BOLD}updated${S_RESET}"
+  else
+    printf '%s' "updated"
+  fi
+}
+
 format_two_counts() {
   local first_label="$1"
   local first_count="$2"
   local second_label="$3"
   local second_count="$4"
+
+  if [[ "${first_label}" == "updated" ]]; then
+    first_label="$(format_updated_label "${first_count}")"
+  fi
 
   if [[ "${first_count}" -gt 0 && "${second_count}" -gt 0 ]]; then
     printf '%s %s, %s %s\n' "${first_label}" "${first_count}" "${second_label}" "${second_count}"
@@ -1541,10 +1555,10 @@ print_combined_hook_status() {
     if [[ -n "${reg_line}" ]]; then
       IFS=$'\t' read -r total_reg_added total_reg_unchanged total_reg_selected reg_changed <<< "${reg_line}"
     fi
-    printf '%b\n' "Summary: files updated ${total_file_updated}, unchanged ${total_file_unchanged}; registrations $(format_registration_counts "${total_reg_added}" "${total_reg_unchanged}" "${total_reg_selected}")"
+    printf '%b\n' "Summary: files $(format_updated_label "${total_file_updated}") ${total_file_updated}, unchanged ${total_file_unchanged}; registrations $(format_registration_counts "${total_reg_added}" "${total_reg_unchanged}" "${total_reg_selected}")"
     print_registration_messages "${registration_status_file}"
   else
-    printf '%b\n' "Summary: files updated ${total_file_updated}, unchanged ${total_file_unchanged}; registrations not requested"
+    printf '%b\n' "Summary: files $(format_updated_label "${total_file_updated}") ${total_file_updated}, unchanged ${total_file_unchanged}; registrations not requested"
   fi
 
   if [[ "${total_file_updated}" -gt 0 || "${total_reg_added}" -gt 0 || "${total_reg_selected}" -gt 0 || "${reg_changed}" -gt 0 ]]; then

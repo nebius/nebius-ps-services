@@ -194,6 +194,64 @@ def test_natural_successful_completion_uses_exact_accounting_lineage(
     assert preservation["verifications"][0]["jobs"]["42"]["status"] == "completed-preserved"
 
 
+def test_later_bridge_stage_reuses_durable_natural_completion_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, journal = _capture(monkeypatch)
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_slurm_job_control_observation",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job left scontrol")),
+    )
+    accounting = {
+        "job_id": "42",
+        "submit_time": "2026-07-12T10:00:00",
+        "start_time": "2026-07-12T10:01:00",
+        "node_list": "worker-1",
+        "restarts": "0",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_slurm_preservation_sacct_observation",
+        lambda **_kwargs: accounting,
+    )
+
+    migration._verify_controller_bridge_preservation_jobs(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        proof_stage="source-version-bridge-active",
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+        checkpoint_writer=lambda: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_slurm_preservation_sacct_observation",
+        lambda **_kwargs: pytest.fail("completed job accounting must not be requeried"),
+    )
+
+    migration._verify_controller_bridge_preservation_jobs(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        proof_stage="target-version-bridge-active",
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner was not expected"),
+        checkpoint_writer=lambda: None,
+    )
+
+    preservation = journal["preservation_jobs"]
+    assert isinstance(preservation, dict)
+    source_proof, target_proof = preservation["verifications"]
+    assert target_proof["jobs"]["42"] == {
+        "status": "completed-preserved",
+        "accounting_sha256": source_proof["jobs"]["42"]["accounting_sha256"],
+        "reused_from_stage": "source-version-bridge-active",
+        "verified_at": target_proof["jobs"]["42"]["verified_at"],
+    }
+
+
 def test_natural_completion_during_capture_is_journaled_and_resumable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

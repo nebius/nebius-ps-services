@@ -1,13 +1,13 @@
 ---
 name: sdlc-commit
-description: "Use only as part of the Agentic SDLC workflow; use after a single Agentic SDLC feature has passed validation, tests, and evaluation to create a local feature-scoped Git commit. This skill does not push and does not replace the general `commit` or `commit-push` skills."
+description: "Use only as part of the Agentic SDLC workflow; use after one feature's dependency waves and downstream evidence pass to seal final integration changes, fast-forward the unchanged project branch to the exact integration tip, and non-force-clean the integration resource. It never pushes."
 ---
 
 # SDLC Commit
 
 ## Purpose
 
-Create a local commit for one completed feature as a durable checkpoint without pushing.
+Seal and promote one completed feature locally without pushing.
 
 ## When To Use
 
@@ -28,6 +28,8 @@ Create a local commit for one completed feature as a durable checkpoint without 
 - Validation, test, and evaluation evidence.
 - Changed files.
 - Current branch.
+- Execution coordinator, integration branch/worktree, base SHA, recorded
+  integration SHA, wave results, and cleanup inventory.
 
 ## Required Reads
 
@@ -35,10 +37,14 @@ Create a local commit for one completed feature as a durable checkpoint without 
 - Feature design and requirement IDs.
 - Evidence files.
 - PreToolUse policy expectations.
+- The execution-plane reference owned by `sdlc-prepare-execution` and current Git
+  worktree/ref/ancestry state.
 
 ## Writes
 
-- Local Git commit.
+- One final integration commit when validation/docs/alignment left changes.
+- Fast-forward-only promotion of the named project feature branch.
+- Non-force removal of the verified integration worktree and branch.
 - `evidence/FEAT-*/commit.md`.
 - `permissions/commit-authorization.json`, immediately before the commit, with
   a short expiry and branch scope.
@@ -47,24 +53,38 @@ Create a local commit for one completed feature as a durable checkpoint without 
 ## Process
 
 - Use `assets/templates/commit.md.template` for commit evidence.
-- Verify current branch is not the default branch.
-- Verify validation, tests, and evaluation passed.
-- Verify changed files match feature scope.
-- Verify private state under `~/.codex/sdlc-runs/` is not staged.
-- Stage appropriate project files only.
-- Write `permissions/commit-authorization.json` in the active run directory
-  only after evidence passes. Include `allowed: true`, feature ID, requirement
-  IDs, branch, expiry, and validation/test/evaluation pass status.
-- Create a concise commit message referencing `FEAT-*` and `REQ-*`.
-- Remove or expire `permissions/commit-authorization.json` after the commit
-  attempt.
-- Record commit hash locally.
+
+1. Verify every wave is done, worker commits and ordered merge commits are
+   reachable, no worker cleanup is retained, and validation, tests, evaluation,
+   documentation, and spec-alignment evidence all refer to the current
+   integration lineage.
+2. Verify the integration worktree identity and that its HEAD equals the
+   coordinator's recorded tip. Verify private run state is outside the repo and
+   no secret is staged.
+3. Run the private helper `seal-feature` with final evidence and a concise
+   `FEAT-*`/`REQ-*` message. It creates at most one final integration commit and
+   records the new exact tip. Do not squash, amend, or rewrite worker/merge
+   history.
+4. Verify the original project checkout still has the recorded non-default
+   base branch, exact base HEAD, and a clean status.
+5. Run the private helper `promote`. It uses `git merge --ff-only` to move the
+   project branch to the exact sealed tip, verifies equality, then unlocks and
+   removes only the clean registered integration worktree and deletes its
+   reachable branch with non-force `git branch -d`.
+6. Record the promoted SHA and cleanup result in commit evidence. Move state to
+   `committed` only after promotion and cleanup both complete.
+
+`permissions/commit-authorization.json` remains the guard for an explicitly
+operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use
+the private transition helper and action-scoped execution state.
 
 ## Idempotency
 
-- If the feature already has a matching commit and no new changes, do not create another commit.
-- If additional fixes exist, create a follow-up commit only after evidence reruns.
-- Do not amend previous commits by default.
+- If the feature is already sealed or promoted at the recorded SHA, verify and
+  resume without creating another commit or promotion.
+- If new fixes are required after sealing, route back to the responsible phase
+  and require a new plan/execution decision; do not amend or widen the sealed tip.
+- Do not amend previous commits.
 
 ## Failure Handling
 
@@ -73,6 +93,9 @@ Create a local commit for one completed feature as a durable checkpoint without 
 - Missing evidence maps to workflow blocker.
 - Hook denial maps to `POLICY_BLOCK`.
 - Missing or expired `commit-authorization.json` maps to `POLICY_BLOCK`.
+- Moved/dirty project or integration state maps to `PROMOTION_BLOCKED`;
+  non-fast-forward ancestry maps to `PROMOTION_FAILED`; unsafe retained
+  resources map to `CLEANUP_BLOCKED` without force removal.
 
 ## Must Not
 
@@ -83,12 +106,13 @@ Create a local commit for one completed feature as a durable checkpoint without 
 - Commit secrets.
 - Commit from default branch.
 - Commit incomplete features.
+- Rebase, squash, amend, cherry-pick, force-delete, or promote a different SHA.
 
 ## Completion Criteria
 
-- Local commit exists or no-op is justified.
+- Final integration commit exists or a clean no-op is justified.
 - Commit message references feature and requirement IDs.
-- Commit evidence records commit hash.
+- Commit evidence records worker, merge, final, and promoted hashes plus cleanup.
 - Feature state is `committed`.
 
 ## SDLC Invariants

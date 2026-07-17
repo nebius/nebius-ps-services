@@ -55,7 +55,7 @@ Use `system-design-rules` for checklist-style design review.
 Run the Agentic SDLC workflow and update docs/design.md for FEAT-123.
 ```
 
-Use the explicit Agentic SDLC workflow, normally starting with `$sdlc-start`.
+Use the explicit Agentic SDLC workflow through `$sdlc-start run <managed-prompt>`.
 
 ```text
 Implement the selected design now.

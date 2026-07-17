@@ -17,13 +17,17 @@ local Codex home.
 
 - Hooks are runtime guardrails, not skills. They must not make workflow phase
   decisions that belong to `sdlc-start`.
-- The Stop hook must route continuation through explicit `$sdlc-start`
-  invocation and use canonical `sdlc-*` skill names in prompts. Short phase
+- The Stop hook must route continuation through the explicit prompt-bound
+  `sdlc-start run` action and use canonical `sdlc-*` skill names in prompts. Short phase
   aliases may be accepted as input, but they must not be emitted as the next
   recommended skill.
 - `STEERING.md` pause and PR-control text, including `Pause after the current
   feature. Do not create a PR.`, must trigger a continuation through
-  `sdlc-start` so the coordinator can persist the paused or no-PR decision.
+  the prompt-bound `sdlc-start run` command so the coordinator can persist the
+  paused or no-PR decision.
+- An unfinished active run without a valid prompt binding stops with
+  `WORKFLOW_UPGRADE_REQUIRED`; the hook must not synthesize a prompt or emit a
+  bare resume command.
 - The PreToolUse hook does not block file targets by path. Repo files,
   outside-repo files, credential directories, Codex runtime files, global
   `AGENTS.md`, locked SDLC plans, `$CODEX_HOME/task-state`, and private SDLC
@@ -31,6 +35,13 @@ local Codex home.
 - The PreToolUse hook must still block secret-bearing payloads, dangerous shell
   patterns, and guarded Git/GitHub actions. Ordinary outbound network commands
   are not restricted by the hook unless they match one of those unsafe checks.
+- An active run also covers coordinator-registered integration and worker
+  worktrees outside the original checkout. The hook verifies canonical Git
+  root/common directory, branch, and recorded HEAD before sensitive Git actions.
+- Raw worker commits, integration merges, non-force resource cleanup, and
+  ff-only feature promotion require short-lived action-scoped authorization
+  matching the worktree, branch, common directory, expected HEAD, expiry, and
+  exact command/target. Force cleanup and identity drift remain denied.
 
 ## Validate
 

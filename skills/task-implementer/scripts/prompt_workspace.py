@@ -35,6 +35,7 @@ from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
     cleanup_wave,
     dispatch_wave,
+    finalize_run,
     integrate_wave,
     plan_waves,
     prepare_wave,
@@ -74,6 +75,7 @@ __all__ = [
     "main",
     "project_workspace_manifest",
     "dispatch_wave",
+    "finalize_run",
     "integrate_wave",
     "plan_waves",
     "prepare_wave",
@@ -260,6 +262,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_workspace(wave_cleanup)
     wave_cleanup.add_argument("--run-id", required=True)
 
+    run_finalize = subparsers.add_parser(
+        "run-finalize", help="Internal: seal final alignment and release outer lease."
+    )
+    add_common_workspace(run_finalize)
+    run_finalize.add_argument("--run-id", required=True)
+    run_finalize.add_argument("--alignment", required=True)
+
     steering_parser = subparsers.add_parser(
         "steering-resolve", help="Internal: record one steering disposition."
     )
@@ -398,6 +407,8 @@ def main(argv: list[str]) -> int:
             result = promote_wave(args.workspace, args.run_id, args.evidence)
         elif args.command == "wave-cleanup":
             result = cleanup_wave(args.workspace, args.run_id)
+        elif args.command == "run-finalize":
+            result = finalize_run(args.workspace, args.run_id, args.alignment)
         elif args.command == "steering-resolve":
             workspace = verify_workspace(args.workspace)
             runs_root = Path(str(workspace["runs_root"]))

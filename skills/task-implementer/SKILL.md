@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Requires explicit invocation to initialize a private prompt workspace or run one durable brownfield implementation through dependency waves, isolated full-repository Git worktrees, worker review/commit evidence, ordered integration, and fast-forward promotion. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
+description: "Requires explicit invocation to initialize a private prompt workspace or run one durable brownfield implementation through dependency waves, internal full-repository Git worktrees, worker review/commit evidence, ordered integration, and fast-forward promotion, including safe nesting under a worktree-managed outer branch. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
 ---
 
 # Task Implementer
@@ -56,6 +56,9 @@ $task-implementer run <prompt-path-or-unique-filename>
 - One explicit public action.
 - The canonical project checkout, current named branch, repo instructions, and
   immutable prompt snapshot.
+- When the checkout is owned by `worktree`, its exact managed outer identity,
+  recorded scope, and current `HEAD`; that outer branch is the sole promotion
+  target for the full task run.
 - Complete task dependencies, exact or directory-prefix write claims, keyed
   conflict domains, validation, and done criteria.
 
@@ -90,6 +93,7 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │       ├── handoff.md
 │       └── orchestration/
 │           ├── coordinator.json
+│           ├── interop.json
 │           ├── waves/wave-001.json
 │           ├── tasks/wave-001/task-1.json
 │           ├── assignments/wave-001/task-1.json
@@ -130,16 +134,24 @@ workers write only their locked product scope and private result record.
    validation, and done criteria in stable task order.
 3. Combine overlapping work before IDs lock when it is one coherent result.
    Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
-   cycles or malformed ownership.
+   cycles or malformed ownership. If the project checkout is a `worktree`
+   managed linked worktree, acquire its private v2 lease with owner kind
+   `task-implementer` at the exact current
+   outer `HEAD` before creating task resources. Reject any worker or
+   coordinator write claim that escapes the managed task scope; never clip it.
 4. Coordinate every recorded wave through the lifecycle below. A logical wave
    may dispatch in capacity-sized batches, but batching never changes its wave.
 5. Reconcile queued steering only at a safe wave boundary. Contradictory
    steering preserves work and stops before promotion. Before preparation,
    private `wave-replan` may replace a resource-free planned wave; it never
    replaces a blocked wave.
-6. Continue with the next wave from the newly promoted project `HEAD`. An
-   unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
-   prompt starts a new internal run.
+6. Continue with the next wave from the newly promoted project `HEAD`. After
+   the last cleanup, run final changed-surface `$align`, then invoke private
+   `run-finalize` with its concise evidence. Only that transition marks the
+   handoff done and releases a managed outer lease. An unchanged completed
+   prompt returns `ALREADY_COMPLETE`; an interrupted lease release returns a
+   private finalization-pending outcome and repeats the same final transition.
+   Edited completed content starts a new internal run only after release.
 
 ## Dependency-Wave Contract
 
@@ -169,8 +181,9 @@ Task states are
 For each wave:
 
 1. Require a clean named project branch and record its exact `HEAD`.
-2. Journal intent, create and lock an integration worktree/branch from that
-   exact commit, then re-observe Git state.
+2. Register resource intent in the managed outer lease when present, journal
+   intent, create and lock an integration worktree/branch from that exact
+   commit, then re-observe Git state.
 3. Preallocate coordinator-owned requirement/design records. Commit the locked
    contract only if tracked coordinator files changed; that commit is every
    worker base.
@@ -208,7 +221,9 @@ For each wave:
 11. Mark tasks done only after promotion. Invoke private `wave-cleanup`; unlock
     and non-force-remove clean reachable worktrees, then ancestry-proven
     branches with `git branch -d`. Cleanup uses `git worktree remove` without
-    force. Never run broad prune or gc.
+    force and records each absent resource in the outer lease. Never run broad
+    prune or gc. All worker and integration resources stay internal: they are
+    never pushed, published, or merged anywhere except the outer project branch.
 
 ## Idempotency
 
@@ -220,6 +235,10 @@ For each wave:
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.
+- A managed outer lease spans every wave and final `$align`. While held it
+  blocks outer inspect, push, PR creation, and removal. It releases only from a
+  clean outer branch at the final promoted head with every internal resource
+  absent. Missing or malformed coordination state fails closed.
 - Unfinished `execution-plane-v1` runs are inert and return
   `WORKFLOW_UPGRADE_REQUIRED`. Completed v1 history remains readable. Do not
   add an execution shim or migration path.
@@ -241,6 +260,10 @@ For each wave:
   never widen permissions to make a worker pass.
 - Preflight private-root and shared Git-common-directory access. Linked
   worktrees share objects, refs, config, and hooks despite separate indexes.
+- An unfinished pre-interop run detected inside a managed outer worktree
+  returns `WORKFLOW_UPGRADE_REQUIRED`; do not infer, migrate, or adopt its
+  resources. There is no TTL, PID-based recovery, force-clear, or compatibility
+  path for task leases.
 
 ## Must Not
 
@@ -251,6 +274,8 @@ For each wave:
   assumptions.
 - Do not let workers touch the primary checkout, other refs/worktrees, shared
   handoff/spec/docs, Git maintenance, external systems, or undeclared paths.
+- Do not push or publish internal task branches, target `origin/main`, or let
+  outer `worktree` push/create-pr/remove run while the task lease is active.
 - Do not force-remove worktrees, force-delete branches, copy local state,
   initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,
   or perform live external writes without separate authorization.
@@ -265,7 +290,8 @@ For each wave:
 - The project branch advances only by verified fast-forward promotion.
 - Successful cleanup leaves no managed temporary refs or worktrees; retained
   resources are reported exactly.
-- Final changed-surface `$align` passes or the run stops with a precise blocker.
+- Final changed-surface `$align` passes and the private finalizer releases any
+  outer task lease, or the run stops with a precise blocker.
 
 ## Output Contract
 

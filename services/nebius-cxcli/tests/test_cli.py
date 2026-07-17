@@ -11042,6 +11042,51 @@ def test_soperator_onboard_pending_campaign_reports_mixed_live_hop_without_repla
     assert config_path.read_bytes() == before
 
 
+def test_soperator_onboard_rejects_invalid_existing_config_before_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["deploy"]["targets"][0]["soperator_onboarding"][
+        "support_override_used"
+    ] = False
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "_report_active_external_soperator_onboard_rerun",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid config must fail before active-campaign discovery")
+        ),
+    )
+    before = config_path.read_bytes()
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--target-id",
+            "external-cluster",
+            "--compute-migration-mode",
+            "in-place",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 1
+    normalized_output = " ".join(result.output.split())
+    assert "unsupported field(s): support_override_used" in normalized_output
+    assert config_path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "sidecar_kind",
     ("legacy-migration", "old-target-scoped", "retired-cluster", "non-v4-campaign"),
@@ -17040,6 +17085,53 @@ def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
     assert "approve_service_role_downtime" not in observed
     assert "Pending phase: validation-and-rollback-hold" in result.output
     assert "Pending reason: Slurm NCCL benchmark failed" in result.output
+
+
+def test_ext_soperator_upgrade_forwards_stop_after_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    observed: dict[str, object] = {}
+
+    def _execute(**kwargs):
+        observed.update(kwargs)
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=tmp_path / "checkpoint.json",
+            completed_phases=("discovery-and-plan", "customer-approval"),
+            pending_phase="populate-jail-refresh",
+            pending_reason="execution ceiling",
+            live_source_version="3.0.5",
+            target_version=_soperator_test_chart_version(),
+            mutation_performed=True,
+            lines=("Pending phase: populate-jail-refresh",),
+        )
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context, **_kwargs: _old_soperator_snapshot_with_provider(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+            "--stop-after-phase",
+            "validation-and-rollback-hold",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert observed["stop_after_phase_id"] == "validation-and-rollback-hold"
 
 
 def test_external_soperator_execute_snapshot_collector_uses_cluster_id_inventory(

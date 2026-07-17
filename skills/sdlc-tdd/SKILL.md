@@ -1,6 +1,6 @@
 ---
 name: sdlc-tdd
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-create-plan` when an Agentic SDLC feature needs tests written before implementation. Converts acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests."
+description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-prepare-execution` in the registered feature integration worktree when an Agentic SDLC feature needs tests written before dependency-wave implementation."
 ---
 
 # SDLC TDD
@@ -11,7 +11,8 @@ Define success before implementation by creating tests that prove the current fe
 
 ## When To Use
 
-- A locked feature plan exists and tests must be written before implementation.
+- A locked feature plan and verified `execution_prepared` state exist, and tests
+  must be written in the registered integration worktree before implementation.
 - Acceptance criteria need unit, integration, component, contract, or regression coverage.
 - Existing tests must be mapped to SDLC acceptance criteria.
 
@@ -27,12 +28,16 @@ Define success before implementation by creating tests that prove the current fe
 - Feature design.
 - Requirement acceptance criteria.
 - Existing test conventions.
+- Verified integration worktree, branch, base SHA, plan digest, and Git common
+  directory from private execution state.
 
 ## Required Reads
 
 - Locked plan.
 - Feature and requirement blocks.
 - Existing tests and test framework configuration.
+- The execution-plane reference owned by `sdlc-prepare-execution` and the
+  active coordinator record.
 
 ## Writes
 
@@ -43,14 +48,20 @@ Define success before implementation by creating tests that prove the current fe
 ## Process
 
 - Identify acceptance criteria that can be tested.
+- Change cwd to the recorded integration worktree and re-observe its Git root,
+  common directory, branch, exact recorded HEAD, and cleanliness. Fail with
+  `WORKTREE_CONFLICT` on drift; never write tests in the project checkout.
 - Choose the smallest useful test level first.
-- When the locked plan defines an end-to-end slice, map tests to the slice's
-  layer contracts and cross-layer validation target. Prefer the smallest useful
+- When the locked plan defines a planned end-to-end slice, map tests to its
+  behavior, layer contracts, and cross-layer validation target. Prefer the
+  smallest useful
   unit, contract, component, or integration coverage that would fail if one
   planned layer or boundary is missing.
 - Write tests that fail for missing behavior when implementation is absent.
 - Avoid over-mocking real behavior.
 - Run focused tests and record evidence.
+- Leave the integration changes uncommitted. `sdlc-implement-plan` seals the
+  TDD base exactly once before it creates worker branches.
 
 ## Idempotency
 
@@ -80,6 +91,7 @@ Define success before implementation by creating tests that prove the current fe
   classified.
 - Test run evidence exists.
 - Expected red or already-green state is recorded.
+- Project checkout remains clean and unchanged at the prepared base.
 
 ## SDLC Invariants
 

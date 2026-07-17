@@ -52,7 +52,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
-| `agentic-sdlc-test` | Explicit only | Verify the Agentic SDLC system from outside the workflow with disposable hook fixture tests, golden-path guidance, and a safe local report. |
+| `agentic-sdlc-test` | Explicit only | Verify Agentic SDLC source-installed parity, deterministic capabilities, hook fixtures, and private live-run evidence with a safe local report. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
@@ -70,6 +70,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
 | `review-pr` | Explicit only | Review a GitHub pull request by number, URL, or current branch, fix safe issues when possible, and report merge readiness or blockers. |
+| `worktree` | Explicit only | Create and manage one project-scoped full-repository worktree from `origin/main`, with serialized publication, nested task ownership, and proof-gated cleanup. |
 
 ### Project Engineering
 
@@ -86,29 +87,31 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Initialize one private prompt workspace, then coordinate a durable request through dependency waves, isolated full-repository worktrees, ordered integration, validated fast-forward promotion, and safe cleanup. |
+| `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
 
 All `sdlc-*` skills are explicit-only and should run through the Agentic SDLC
-workflow, normally starting with `$sdlc-start`.
+workflow, starting with `$sdlc-start workspace init [project-folder]` and then
+`$sdlc-start run <prompt-path-or-unique-filename>`.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence for consistency. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
 | `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
-| `sdlc-commit` | Explicit only | Create a local feature-scoped SDLC commit after validation, tests, and evaluation pass; never pushes. |
+| `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
 | `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs, vertical feature flow, and implementation-ready design boundaries. |
-| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation, preserving the end-to-end slice when applicable. |
+| `sdlc-create-plan` | Explicit only | Create a locked private local task graph for one ready feature, including dependencies, write claims, conflict domains, and validation boundaries. |
 | `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
 | `sdlc-evaluate` | Explicit only | Evaluate whether the current feature and any planned end-to-end slice solve the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
 | `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
-| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries and the planned vertical slice when present. |
+| `sdlc-implement-plan` | Explicit only | Coordinate dependency waves with one fresh agent, branch, and private worktree per safe task, ordered integration, combined evidence, and non-force cleanup. |
 | `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
-| `sdlc-start` | Explicit only | Start, resume, or continue the Agentic SDLC workflow, encourage safe live environment capture when useful, and choose the next phase from local run state. |
+| `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
+| `sdlc-start` | Explicit only | Initialize a private prompt workspace, then start, resume, or steer a prompt-bound Agentic SDLC run and choose its next phase. |
 | `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
 | `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
@@ -151,6 +154,12 @@ $create-pr Create a PR for the current local work, using a new prep branch if I 
 
 $create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
 
+$worktree Create an isolated worktree from origin/main for the current monorepo project to fix trigger validation.
+
+$worktree create-pr Open or reuse the PR for this managed worktree, then leave cleanup for a separate remove action after merge.
+
+$worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact PR head was merged.
+
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
@@ -160,6 +169,10 @@ $merge-pr Merge PR #110 with squash after verifying checks, reviews, mergeabilit
 $publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/example-app prep, PR, merge, tag, wait for CI, verify the image digest, and report the published artifact.
 
 $agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+
+$sdlc-start workspace init services/example-app
+
+$sdlc-start run <prompt-path-or-unique-filename>
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
@@ -198,16 +211,17 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 
 These prompts should work when the skill is installed and the local environment
 matches the task. For Git-backed flows such as `commit`, `commit-push`,
-`create-pr`, `merge-pr`, and `review-pr`, that means the current directory is
-inside a Git repository. For remote-backed flows such as `commit-push`,
-`create-pr`, `merge-pr`, `review-pr`, and the `publish-*` complete flows, that
+`create-pr`, `merge-pr`, `review-pr`, and `worktree`, that means the current
+directory is inside a Git repository. For remote-backed flows such as
+`commit-push`, `create-pr`, `merge-pr`, `review-pr`, `worktree`, and the
+`publish-*` complete flows, that
 also means:
 
 - the repository has an `origin` remote
 - the branch state allows the requested operation
 
-For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`, and
-the `publish-*` complete flows, that also means:
+For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`,
+`worktree remove`, and the `publish-*` complete flows, that also means:
 
 - `gh` is authenticated for the target repository
 
@@ -386,22 +400,33 @@ branch only with `git merge --ff-only`. Tasks become done after promotion.
 Clean reachable worktrees and branches are removed without force; any failure
 retains exact recovery resources and leaves the project branch unchanged.
 
+When the project checkout is itself managed by `worktree`, the exact outer
+branch `HEAD` is the task base and sole promotion target. A private lease keeps
+all worker and integration branches internal, blocks outer push/PR/removal,
+and remains through per-wave cleanup plus final changed-surface `align`. Only a
+clean final promoted head with no internal resources can release it.
+
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
 prompt bodies. Unfinished v1 execution state fails with
 `WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. The Skill
 is explicit-only. Use `global-context-management` for general context hygiene,
-`$sdlc-start` for Agentic SDLC, and `align` for final alignment.
+`$sdlc-start run <prompt-path-or-unique-filename>` for Agentic SDLC, and
+`align` for final alignment.
 
 ### `agentic-sdlc-test`
 
 `agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
-workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
-discovery, explicit-only SDLC invocation policy, hook configuration,
-disposable PreToolUse and Stop hook fixture behavior, idempotency, failure
-routing, steering, and disposable golden-path execution. It writes the report
-under `~/.codex/sdlc-verification/` and must not change real projects,
-installed skills, hooks, hook trust, or agent configuration.
+workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
+skill parity, explicit-only invocation policy, prompt/execution/worktree/
+steering regressions, composed managed-outer lease behavior, and disposable
+hook fixtures. Optional private live-results evidence covers the golden path,
+idempotency, change requests, failure routing, auto-steering, documentation,
+and continuation. Live PASS requires a real selected-scope commit,
+lane-specific private evidence, and clean in-scope paths across every commit in
+the supplied history. It writes under `~/.codex/sdlc-verification/` and must
+not change real projects, installed skills, hooks, hook trust, or agent
+configuration.
 
 ### `agent-nebius-auth`
 
@@ -412,7 +437,11 @@ CLI profile, and a Codex `PreToolUse` hook that injects short-lived Nebius token
 environment variables into matching Bash commands without returning token
 material as model context. The hook also exports the agent credential file path
 and wires a Bash `nebius_refresh_token` helper through a restricted temporary
-`BASH_ENV` file for long-running raw API scripts. Install or refresh the hook
+`BASH_ENV` file for long-running raw API scripts. Its disclosure guard allows
+ordinary status/log labels and non-secret shell setup while still denying token
+output, environment dumps, tracing, and executable token-mint commands. A local
+hook denial is policy feedback, not proof of expired cloud credentials, and
+must never trigger browser login automatically. Install or refresh the hook
 through the root installer, for example
 `./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
 the setup script does not patch `$CODEX_HOME/config.toml` and instead records
@@ -427,14 +456,27 @@ and explicit final merge.
 Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 `sdlc-start`, so tool discovery does not confuse workflow phases such as
 `sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
-All `sdlc-*` skills set `allow_implicit_invocation: false`; start or resume the
-workflow explicitly with `$sdlc-start`, then let the coordinator record the next
-recommended phase in local run state.
+All `sdlc-*` skills set `allow_implicit_invocation: false`. Initialize and run
+the workflow through exactly `$sdlc-start workspace init [project-folder]` and
+`$sdlc-start run <prompt-path-or-unique-filename>`, then let the coordinator
+record the next recommended phase in local run state. Editing the same managed
+prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a
+resume interface.
 The committed product truth is `docs/requirements.md` and `docs/design.md`;
 private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-`STEERING.md` is the active-run inbox and steering ledger for mid-run user
-prompts, while `steering/auto-steering.json` stores machine-readable
+Each active feature also has schema-v3 execution state and private worktrees
+there. After plan lock, `sdlc-prepare-execution` creates a persistent
+integration branch/worktree and enforces the initialized monorepo folder as the
+claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in dependency
+waves using one fresh native agent or sequential ephemeral `codex exec` fallback per task, retains worker and ordered
+merge commits, and cleans only proven reachable resources without force. The
+project branch stays unchanged until `sdlc-commit` seals the final integration
+tip and promotes it with `git merge --ff-only`.
+Project-level managed prompts and immutable run revisions also remain under
+`~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
+steering ledger for accepted prompt revisions, while
+`steering/auto-steering.json` stores machine-readable
 dispositions and compact reminders. Requirements or design changes captured in
 steering still route through the owning product-truth skills before
 implementation treats them as true.
@@ -442,11 +484,14 @@ implementation treats them as true.
 so later evaluation and UAT can use a confirmed non-production or disposable
 target with safe connection, allowed-action, reset, and evidence rules.
 Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
-local state. The Stop hook routes continuation through explicit `$sdlc-start`
-invocation rather than directly into phase skills. Sensitive Git actions use
+local state. The Stop hook repeats the prompt-bound `sdlc-start run` command
+rather than routing directly into phase skills.
+Sensitive Git actions use
 short-lived local authorization files under the active run's `permissions/`
 directory; the skills create those files only immediately before the guarded
-action.
+action. Registered integration and worker worktrees remain inside hook policy
+even outside the original checkout, with exact Git identity and action-scoped
+authorization checks for sensitive raw Git operations.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
@@ -462,10 +507,11 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
   prompts, tickets, approved change requests, and optional safe live experiment
   environment details while preserving stable `REQ-*` IDs.
-- `sdlc-start`: coordinates the active SDLC run, reads steering and local
-  checkpoints, selects the highest-priority incomplete feature, and chooses one
-  next skill without duplicating history on unchanged resumes. At run start, it
-  encourages safe live experiment environment capture through requirements.
+- `sdlc-start`: initializes the private prompt workspace, accepts immutable
+  prompt revisions, coordinates the active SDLC run, reads steering and local
+  checkpoints, and chooses one next skill without duplicating history. At run
+  start, it encourages safe live experiment environment capture through
+  requirements.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
   internal sources, code, tests, and layer-boundary evidence when a vertical
   slice may apply.
@@ -478,11 +524,16 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   and routes requirements, design, docs, or human-input changes back through
   `sdlc-start`.
 - `sdlc-create-plan`: creates locked private local execution plans for one feature,
-  preserving the end-to-end slice when applicable.
-- `sdlc-tdd`: writes or maps tests before implementation, including planned
-  slice contracts and cross-layer validation targets when present.
-- `sdlc-implement-plan`: implements production code for the current locked feature
-  plan only, following the planned vertical slice when present.
+  preserving the end-to-end slice and defining stable dependency-safe task
+  records.
+- `sdlc-prepare-execution`: validates the task graph and prepares the persistent
+  feature integration worktree and deterministic waves before TDD.
+- `sdlc-tdd`: writes or maps tests in the integration worktree before
+  implementation, including planned slice contracts and cross-layer validation
+  targets when present.
+- `sdlc-implement-plan`: dispatches one fresh task agent per safe task, verifies
+  scoped worker commits, integrates in stable order, runs combined evidence,
+  and non-force-cleans worker resources.
 - `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency,
   build, and locked-slice boundary checks where configured, then uses
   `code-review` in review-only mode to catch blocking implementation-quality
@@ -506,9 +557,9 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   accessibility snapshots when available.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
-- `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
-  and evaluation pass; it never pushes and does not replace the general
-  `commit` or `commit-push` skills.
+- `sdlc-commit`: seals final integration changes, ff-only promotes the exact
+  verified tip, non-force-cleans integration resources, and never pushes or
+  replaces the general `commit` or `commit-push` skills.
 - `sdlc-uat-tests`: runs product-level user acceptance testing before PR
   creation, using a confirmed safe live experiment environment only within
   recorded allowed operations and reset rules.
@@ -565,6 +616,24 @@ branch before PR creation without rewriting history, reuse the current
 non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
+
+### `worktree`
+
+`worktree` isolates one selected monorepo project in a sibling
+`<repo-name>-worktrees/` directory while retaining a full-repository checkout.
+`add` is the default action and always starts a generated `worktree/<name>`
+branch at the freshly fetched `origin/main`; dirty or branch-divergent work in
+the selected project blocks creation, while unrelated primary-checkout changes
+are preserved. `push` and `create-pr` acquire action-bound private publication
+reservations, verify managed identity and project-scope containment, then reuse
+`commit-push` and `create-pr`. Nested `task-implementer` and Agentic SDLC runs
+use owner-bound v2 leases on the outer branch until internal cleanup and final
+alignment. `remove` runs from the
+primary checkout with an exact generated name and requires durable ownership
+state plus a clean worktree and exact merged-PR/head proof, or an unused
+never-published branch. It never force-removes a worktree, atomically deletes
+the local ref only at its verified SHA, and deletes a surviving remote branch
+only when an exact expected-SHA lease still matches.
 
 ### `merge-pr`
 

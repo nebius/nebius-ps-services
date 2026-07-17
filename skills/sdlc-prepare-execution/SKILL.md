@@ -1,0 +1,120 @@
+---
+name: sdlc-prepare-execution
+description: "Use only as part of the Agentic SDLC workflow; use after one feature plan is locked and before `sdlc-tdd` to create or resume the feature's private integration branch/worktree, deterministic task waves, and recoverable execution state."
+---
+
+# Prepare SDLC Execution
+
+## Purpose
+
+Prepare one locked feature for isolated TDD and dependency-wave implementation.
+
+## When To Use
+
+- The active feature has a locked plan with stable `TASK-*` records.
+- `sdlc-start` selects the execution-preparation phase before TDD.
+- An interrupted preparation needs exact-state recovery.
+
+## When Not To Use
+
+- Do not use before the feature plan is locked.
+- Do not implement production code, write tests, validate, commit the final
+  feature, push, open a PR, or merge a PR.
+- Do not use the general `worktree` or `task-implementer` public workflows for
+  internal SDLC task resources.
+
+## Inputs
+
+- Active run directory, current `FEAT-*`, and locked plan.
+- Canonical project checkout, named feature branch, exact `HEAD`, and Git common
+  directory, plus the exact initialized project folder and repo-relative scope.
+- Current requirements, design, context, steering, and checkpoint state.
+
+## Required Reads
+
+- Reload `current-state.json`, the latest checkpoint, and active feature state.
+- Read the locked plan and the state-schema reference owned by `sdlc-start`.
+- Read `references/execution-plane.md` before preparing or recovering resources.
+- Inspect Git branch, status, `HEAD`, worktree registry, and plan fingerprint.
+
+## Writes
+
+- Private execution state under
+  `~/.codex/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
+- A persistent feature integration branch/worktree under the private run root.
+- A scoped contract commit on the named project branch only when committed
+  product-truth files are the complete repo-root staged diff.
+- State transition to `execution_prepared` and checkpoint evidence.
+
+## Process
+
+1. Require a named non-default branch. Reject unrelated dirt or private state
+   inside the repository.
+2. If current requirements/design changes are the only tracked changes, stage
+   from the repository root with `git add -A`, create one authorized contract
+   commit, then require a clean checkout. Never make a partial mixed commit.
+3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
+   records, validates dependencies/claims/domains, builds deterministic logical
+   waves, records intent, and creates the integration branch/worktree from the
+   exact contract `HEAD`. Git operations use the repository root, but every
+   claim and worker `scope_cwd` must remain inside the initialized folder.
+   Acquire the Agentic SDLC owner lease first when the checkout is managed by
+   `worktree`; register integration and worker resource intent before creation.
+4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
+   cleanliness, plan digest, and private state before recording completion.
+5. Return the integration cwd and route the next phase to `sdlc-tdd` there.
+
+## Idempotency
+
+- Repeated preparation returns the same verified integration identity.
+- Never recreate a recorded branch, worktree, wave, task, or contract commit.
+- Foreign collisions, moved refs, malformed state, or changed locked plans fail
+  closed. Unfinished execution coordinator schema v1 or v2 returns
+  `WORKFLOW_UPGRADE_REQUIRED`.
+
+## Failure Handling
+
+- Use `PLAN_INVALID` for malformed tasks, unknown dependencies, or cycles.
+- Use `WORKTREE_CONFLICT` for dirty, moved, foreign, or colliding Git resources.
+- Use `REPLAN_REQUIRED` when the locked plan changes after preparation.
+- Use private `task-recover --confirmed-stopped` only with a fresh worker
+  session and an exactly re-observed clean, claimed-dirty, or one-direct-child
+  worktree. Use `replan-future` only for resource-free planned waves.
+- Retain every observed partial resource in recovery state; never force-delete it.
+
+## Must Not
+
+- Do not create workers, edit code/tests, promote, push, publish, or clean
+  unverified resources.
+- Do not use force flags, reset, rebase, squash, cherry-pick, prune, or gc.
+- Do not copy ignored files, credentials, dotenv files, caches, hooks, or local
+  tool state into worktrees.
+- Do not treat agent/worktree separation as an operating-system security boundary.
+
+## Completion Criteria
+
+- The integration worktree is clean, locked, registered, and bound to the exact
+  plan digest and project base.
+- Every task belongs to one deterministic logical wave.
+- Current state and checkpoint point to the integration cwd and
+  `sdlc-tdd` as the next skill.
+
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
+
+## Output Contract
+
+Return the feature, plan digest, project base, integration branch/cwd, logical
+wave summary, private state written, recovery inventory, and next skill. Do not
+print private prompt content, secrets, or raw journals.
+
+## References
+
+- Read `references/execution-plane.md` for task schemas, resource ownership,
+  state transitions, and recovery rules.

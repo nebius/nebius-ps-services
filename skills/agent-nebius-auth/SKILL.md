@@ -187,15 +187,42 @@ running process.
 
 Do not return tokens through `additionalContext`, stderr, stdout, task state,
 docs, or final responses. The rewritten command contains only the token-minting
-command substitution, not the token value. The hook must fail closed for direct
-token-minting commands, nested token-minting commands, shell tracing, and
-obvious environment-printing commands such as `echo`, `printf`, `printenv`,
-`env`, `export`, or `set`, including common nested shell or Python environment
-dump forms, when token injection would be active.
+command substitution, not the token value. The wrapper routes the project ID
+and credential-file path through non-sensitive local variables before exporting
+the documented Nebius environment names so conservative sibling policy hooks do
+not mistake public metadata or file paths for token values.
+
+The hook must fail closed for executable direct or nested token-minting
+commands, shell tracing, full environment or shell-variable dumps, and output
+commands that reference `TOKEN` or `NEBIUS_IAM_TOKEN`, including common nested
+shell or Python forms, when token injection would be active. It must allow
+ordinary status and log labels through `echo` or `printf`, strict-mode setup,
+non-secret exports, named non-secret `printenv` reads, and `env VAR=value
+command` wrappers. Literal or quoted documentation/search text that merely
+mentions the token-minting command is not an executable token request. The only
+manual token-mint exception is one exact agent-profile verification command
+whose sole stdout destination is `/dev/null`.
 
 Do not inject Nebius credentials into every Terraform command globally. Treat
 Terraform as Nebius-sensitive only when the command or nearby Terraform files
 indicate Nebius usage.
+
+## Failure Triage
+
+A `PreToolUse hook (blocked)` result is a local policy classification, not
+evidence that the Nebius credential expired, the CLI profile failed, or cluster
+access is unavailable. Do not start interactive or browser authentication from
+that signal.
+
+First identify which hook produced the message. For an auth-hook disclosure
+denial, confirm whether the command actually prints token variables, enables
+shell tracing, or dumps the environment; safe status and log output should not
+require a workaround. For a separate policy hook, inspect that hook's reason
+independently because current Codex runs matching command hooks concurrently.
+Only when token minting, the agent CLI profile, the credential file, or a basic
+project-access check actually fails should the operator explicitly invoke
+`$agent-nebius-auth` to verify or repair setup. Never replace the agent profile
+with browser login as an automatic fallback.
 
 ## Verification
 

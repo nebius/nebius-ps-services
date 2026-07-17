@@ -427,6 +427,37 @@ def test_bridge_journal_starts_with_required_v4_sections() -> None:
     validate_bridge_journal(journal)
 
 
+def test_bridge_journal_allows_checkpointed_partial_preservation_capture() -> None:
+    journal = new_bridge_journal(
+        source=_source(),
+        plan=_plan(),
+        authority_epoch="source-epoch-1",
+    )
+    preservation = journal["preservation_jobs"]
+    preservation.update(
+        {
+            "capture_state": "dispatching",
+            "capture_job_ids": ["4", "5"],
+            "capture_intent_at": "2026-07-12T10:01:00Z",
+            "jobs": {
+                "4": {
+                    "schema": "nebius-cxcli-slurm-preservation-jobs/v1",
+                    "binding": {},
+                    "observation": {},
+                    "allocation": {},
+                    "captured_at": "2026-07-12T10:01:01Z",
+                }
+            },
+        }
+    )
+
+    validate_bridge_journal(journal)
+
+    preservation["capture_state"] = "complete"
+    with pytest.raises(ValueError, match="lacks captured_at"):
+        validate_bridge_journal(journal)
+
+
 def test_bridge_login_handoff_requires_distinct_exact_source_and_target_identities() -> None:
     journal = new_bridge_journal(
         source=_source(),
@@ -878,6 +909,8 @@ def test_managed_bridge_reuses_controller_and_system_domains_without_provider_pa
     objects = bridge_kubernetes_objects(
         plan,
         controller_pod_spec={
+            "priority": 1000001,
+            "preemptionPolicy": "PreemptLowerPriority",
             "containers": [{"name": "slurmctld", "image": plan.source_slurm_image}],
         },
         state_volume_name="state",
@@ -913,6 +946,8 @@ def test_managed_bridge_reuses_controller_and_system_domains_without_provider_pa
     pod_spec = statefulset["spec"]["template"]["spec"]
     assert "nodeSelector" not in pod_spec
     assert pod_spec["priorityClassName"] == "cxcli-soperator-upgrade-bridge"
+    assert "priority" not in pod_spec
+    assert "preemptionPolicy" not in pod_spec
     assert pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
         "nodeSelectorTerms"
     ][0]["matchExpressions"][0] == {

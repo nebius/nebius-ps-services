@@ -38,7 +38,7 @@ Use an implementation or project-specific skill.
 Run the full Agentic SDLC workflow for this feature.
 ```
 
-Use the explicit SDLC workflow, normally starting with `$sdlc-start`.
+Use the explicit SDLC workflow through `$sdlc-start run <managed-prompt>`.
 
 ```text
 Review this pull request and fix safe issues.

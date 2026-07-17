@@ -45,6 +45,9 @@ evidence tell one consistent story.
 
 ## Process
 
+- Resolve the registered integration worktree and verify its branch, Git common
+  directory, and recorded HEAD before alignment. Review code, tests, and docs
+  from that checkout; do not use the stale project checkout as feature truth.
 - Map `REQ-*` to `FEAT-*`, plans, tests, implementation, documentation, and
   evidence.
 - For features with a vertical flow or layer map, check that `docs/design.md`,

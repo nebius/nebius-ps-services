@@ -6,6 +6,150 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed target Soperator reconciliation when the retired source leaves the
+  globally named inert `controller-placeholder` DaemonSet with its immutable
+  source selector. After exact source retirement, cxcli now requires the
+  checkpointed DaemonSet UID, ownerless source selector, fully Ready inert Pod
+  set, and allowlisted sleep-only legacy or target placeholder spec; it records
+  a durable UID/resourceVersion/spec delete intent, deletes with `Foreground`
+  propagation, and accepts only the target-owned inert replacement with the
+  exact target selector. Arbitrary controller workloads remain fail-closed.
+- Fixed legacy-rootfs Slurm health verification after immutable login child
+  replacement. Once the handoff journal binds the new target StatefulSet UID,
+  owner, selector, and creation boundary, cxcli uses the exact Ready
+  target-owned login backend instead of continuing to require the retired
+  source workload UID; an unjournaled third UID still fails closed.
+- Fixed target login startup on a freshly populated GPU Jail slot when the
+  target image still waits for the legacy empty `gpu_libs_installed.flag`.
+  After the stronger driver-version, library-hash, linker-cache, and jailed
+  `nvidia-smi` evidence passes, cxcli now runs a checkpoint-bound exact-PVC Job
+  that creates only that zero-length compatibility marker. Existing nonempty,
+  symlinked, or otherwise unsafe markers fail closed; GPU libraries are not
+  copied or rewritten by this compatibility step.
+- Fixed target-compatibility resume after its manager pause/config pulse/writer
+  zero/manager restore cycle had completed but the final login digest had not
+  yet checkpointed the stage active. cxcli now reuses only an exact bounded
+  pause-to-restore generation chain with matching manager spec fingerprints and
+  completed config/writer proofs instead of trying to pause the restored
+  manager a second time.
+- Reduced external in-place upgrade pre-fence latency without weakening mutation
+  proofs. One execute attempt now reuses only checkpoint-proven read-only Slurm
+  routes, the `preserve` policy reuses its first post-pause all-job snapshot,
+  status-only Slurm RPCs defer during the immutable Jail mutation boundary, and
+  rootfs consumers share one Kubernetes snapshot. Mutating Slurm commands,
+  lease checks, and final writer/readiness proofs remain fresh.
+- Fixed retired-source accounting takeover when the globally named Deployment
+  still has the immutable source selector. After both writers are command-fenced
+  and source retirement is durable, cxcli checkpoints an exact
+  UID/resourceVersion delete intent, orphan-preserves the old ReplicaSet/Pod/PVC,
+  waits for the target-owned fenced replacement, and completes this selector
+  handoff before target schema bootstrap. Resume accepts only the exact
+  checkpointed target UID/selector after the writer and retirement gates have
+  advanced from the deleted source Deployment.
+- Fixed accounting schema bootstrap after later cxcli-owned Helm reconciliation.
+  Bootstrap now reads and fingerprint-verifies the checkpointed historical Helm
+  revision that proved the target image/spec, while requiring the deployed
+  release revision not to regress and separately revalidating the live target
+  CR, image, command fence, Deployment, Pod, and runtime image identity.
+- Fixed fresh empty accounting database initialization. The SlurmDBD update
+  check must return `1` only for a freshly observed zero-table database and `0`
+  for every nonempty accepted schema; the isolated bootstrap rechecks that exact
+  expected code before starting target SlurmDBD. Any nonempty schema requiring
+  conversion remains fail-closed.
+- Fixed isolated accounting schema bootstrap startup by preserving the
+  target-rendered `DbdHost` identity. The temporary daemon now changes only its
+  loopback bind address, private port, PID file, and log file; substituting
+  `localhost` for the container's valid SlurmDBD host identity made the daemon
+  exit before local readiness.
+- Fixed isolated SlurmDBD JWT initialization while the production accounting
+  command is fenced. The bootstrap creates an ephemeral owner-only HS256 key in
+  its private temporary directory and rewrites only `AuthAltParameters` to that
+  key; cleanup removes it with the other transient bootstrap files.
+- Fixed login-session protection reinstallation after immutable-child manager
+  restoration. Exact ownerless login Pods remain admissible after the journal's
+  monotonic `children-prepared` to `manager-restored` transition only when their
+  captured UID, target selector, handoff token, readiness, and sshd identity
+  still match. The protected socket/host-key revalidation path now carries that
+  same checkpoint authority instead of independently requiring a live workload
+  ownerReference.
+- Fixed the deletion fence for those exact ownerless login Pods. OpenKruise
+  `PodUnavailableBudget` protects controller-owned Pods only, so cxcli now adds
+  a campaign-scoped `ValidatingAdmissionPolicy` bound to the checkpointed
+  namespace, Pod name, UID, and hold label. Upgrade proceeds only after CEL
+  type-checking is clean and server dry-run attributes the denial to that exact
+  policy; release removes the Pod label before precondition-deleting the binding
+  and policy. Source-retirement gates now forward the durable checkpoint writer,
+  and a missing writer fails before any PUB, Pod-metadata, or policy cleanup.
+  Jail resume now accepts the exact zero-session `release-intent` crash boundary
+  while retaining held-Pod identity and zero-restart checks; intermediate Helm
+  and pre-ownership gates no longer require already-removed hold metadata.
+- Fixed in-place login-surge resume when the active SSH session moves to a
+  different original login Pod after an earlier hold was released. Protected
+  UID rotation now accepts only exact release identities from the canonical
+  hold's current or archived release journal instead of treating archived proof
+  as an unproven Pod loss.
+- Added `ext-soperator upgrade --stop-after-phase <phase-id>` for a deliberate,
+  checkpointed maintenance pause after a planned execution phase without
+  changing the accepted campaign or entering the next phase.
+- Fixed accounting/Jail ordering after target writer enable. Interrupted
+  `target-enabling` resumes finish the idempotent writer restore, while
+  registration/history verification at `target-enabled` remains deferred until
+  the target SConfig compatibility pulse has materialized and verified the
+  active rootfs slot. The completed selector handoff now revalidates the exact
+  target Deployment UID, owner, selector, `Recreate` strategy, and enabled
+  writer instead of requiring the earlier disabled-writer state. The
+  already-retired source cleanup boundary now reuses its
+  exact UID/resourceVersion proof instead of requiring premature registration
+  verification.
+- Fixed the prepared SConfig zero-writer fence after target-manager restore.
+  The one expected cxcli Helm reconciliation may advance the target
+  `SlurmCluster` generation and normalize its spec; cxcli now rebinds only after
+  a fresh deployed-release, live-CRD-default, chart/app, desired values plus
+  only the exact legacy-client OpenMetrics and zero-size writer-fence gates,
+  source retirement,
+  zero-writer, target UID, and login-mount proof. Arbitrary spec
+  drift remains blocked.
+- Fixed false accounting network-probe cleanup failures when a terminated
+  listener remains briefly as an unreaped zombie under the container init
+  process. Cleanup still binds a live process to the exact operation marker,
+  but treats zombie/dead states as stopped and separately proves the bootstrap
+  port is no longer listening.
+- Fixed deny-ingress NetworkPolicy resume when the Kubernetes API omits the
+  serialized empty `ingress` list. Missing and empty ingress are normalized
+  only for the exact `policyTypes: [Ingress]` policy and exact Pod selector;
+  match expressions, additional policy types, and ingress allow rules still
+  fail closed.
+- Fixed external first-adoption Jail Upgrade image selection. Passive-slot
+  population now uses the immutable active campaign segment's exact target
+  rootfs image and never silently reuses the discovered legacy populate-jail
+  image.
+- Fixed external target-Helm source-fence resume after the target chart creates
+  its worker `NodeSet`. The fence now checkpoints the source `NodeSet` UID set
+  at initial capture and reuses that immutable set on every resume, so mixed
+  source/target discovery cannot misclassify new target children as source
+  closure drift.
+
+- Strip the admission-computed Pod priority and preemption policy from mirrored
+  controller specs before assigning the temporary bridge PriorityClass,
+  preventing live bridge writer Pods from being rejected when the source and
+  bridge class values differ.
+
+- Exclude Kubernetes-managed service-account projection material such as
+  `kube-root-ca.crt` from controller-bridge mirroring, so a newly created bridge
+  namespace can retain its system-managed trust bundle without failing campaign
+  ownership checks or changing the accepted source fingerprint.
+
+- Made `ext-soperator onboard` validate an existing `config.yaml` against the
+  current runtime schema before live discovery or campaign acceptance. This
+  prevents onboarding from writing a new campaign beside an invalid stale
+  target that `ext-soperator upgrade` cannot reload under the shared lease.
+- Fixed external controller-bridge job capture so each partial, durable
+  preservation record remains a valid resumable journal while the remaining
+  active-job lineages are still being captured. The aggregate `captured_at`
+  proof remains mandatory when capture becomes complete.
+- Applied Kubernetes Namespace objects before their dependent namespaced
+  resources in multi-object upgrade manifests. Fresh controller-bridge
+  substrate creation no longer fails partway with `Namespace NotFound`.
 - Unified managed and external Soperator upgrade execution around the canonical
   controller-authority and Slurm action journals. Managed execution now uses
   the fixed controller/system placement domains, stages the target singleton at
@@ -79,9 +223,10 @@ All notable changes to this project are tracked here. This changelog follows
   drift and any command-gate contract change remain recovery-required.
 - Fixed interrupted first-adoption Jail resume across sequential released
   login holds. A captured login Pod may now be corroborated by the latest exact
-  zero-session release or by an earlier verified replacement transition ending
-  at its current Pod UID under the unchanged StatefulSet UID. Unjournaled or
-  further UID changes still fail before Jail write or source retirement.
+  zero-session release, a complete archived zero-session release for the exact
+  Pod UID, or by an earlier verified replacement transition ending at its
+  current Pod UID under the unchanged StatefulSet UID. Unjournaled or further
+  UID changes still fail before Jail write or source retirement.
 - Allowed the legacy-rootfs zero-writer bridge to recognize the exact
   checkpointed controller-recovery payload produced while restoring late held
   jobs. All non-`slurm.conf` files must remain source-legacy-safe, while the
@@ -200,6 +345,12 @@ All notable changes to this project are tracked here. This changelog follows
   census recognizes only the exact inert campaign stager, bridge-mount helper,
   and legacy controller placeholder contracts, while the host process census
   still rejects any additional `slurmctld` authority.
+- Fixed that exact legacy placeholder census for the two operator-emitted
+  layouts encountered during supported upgrades: the munge/wait-helper layout
+  and the older two-container layout. Both require the exact restartable inert
+  munge sidecar and `sleep infinity` regular containers. Unknown init
+  containers, extra regular containers, changed commands, and any host
+  `slurmctld` process still fail closed before bridge authority starts.
 - Fixed runtime controller-fence evidence collection on clusters that rapidly
   garbage-collect successful bare Pods. Inspectors now expose a file-backed
   readiness marker and remain `Running/Ready` long enough for cxcli to bind the

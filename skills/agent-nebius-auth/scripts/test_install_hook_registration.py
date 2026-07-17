@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
-import json
+import errno
 import hashlib
+import json
 import os
 from pathlib import Path
+import pty
 import subprocess
 import sys
 import tempfile
@@ -151,6 +153,49 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def run_custom_hook_installer_interactive(
+        self,
+        hook_source: Path,
+        *extra_args: str,
+    ) -> tuple[int, str]:
+        master_fd, slave_fd = pty.openpty()
+        env = self.env.copy()
+        env["TERM"] = "xterm-256color"
+        env.pop("NO_COLOR", None)
+        process = subprocess.Popen(
+            [
+                "bash",
+                str(self.installer),
+                "--install-hooks",
+                str(hook_source),
+                *extra_args,
+            ],
+            cwd=str(self.repo_root),
+            env=env,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        chunks: list[bytes] = []
+        try:
+            while True:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            os.close(master_fd)
+
+        return process.wait(), b"".join(chunks).decode(errors="replace").replace(
+            "\r\n", "\n"
         )
 
     def run_installer_replace_hooks(self) -> subprocess.CompletedProcess[str]:
@@ -451,6 +496,23 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(entry["target_sha"], self.file_sha256(target))
         self.assertIn("files: updated 1", second.stdout)
 
+    def test_updated_file_count_is_bold_green_in_interactive_output(self) -> None:
+        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
+        first = self.run_custom_hook_installer(hook_source)
+        (hook_source / "demo.py").write_text("print('v2')\n", encoding="utf-8")
+
+        returncode, output = self.run_custom_hook_installer_interactive(hook_source)
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(returncode, 0, output)
+        styled_updated = "\x1b[32m\x1b[1mupdated\x1b[0m"
+        self.assertIn(f"files: {styled_updated} 1", output)
+        self.assertIn(
+            f"Summary: files {styled_updated} 1, unchanged 0; "
+            "registrations not requested",
+            output,
+        )
+
     def test_local_hook_edit_overwrites_after_provenance(self) -> None:
         hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
         first = self.run_custom_hook_installer(hook_source)
@@ -669,11 +731,39 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("mktemp", updated_command)
         self.assertIn('if [ -n "${BASH_VERSION:-}" ]; then', updated_command)
         self.assertIn("export -f nebius_refresh_token", updated_command)
-        self.assertIn("export NEBIUS_AUTH_CREDENTIALS_FILE=", updated_command)
+        self.assertIn(
+            'export NEBIUS_AUTH_CREDENTIALS_FILE="$CREDENTIALS_FILE_VALUE"',
+            updated_command,
+        )
         self.assertNotIn("fake-token", hook_result.stdout)
         self.assertNotIn("fake-token", hook_result.stderr)
         self.assertNotIn("fake-token", updated_command)
         self.assertFalse(call_log.exists())
+
+        sdlc_hook_dir = self.repo_root / "sdlc-start" / "assets" / "hooks"
+        scanner_result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; "
+                    f"sys.path.insert(0, {str(sdlc_hook_dir)!r}); "
+                    "from lib.sdlc_policy import contains_secret; "
+                    "raise SystemExit(1 if contains_secret(sys.stdin.read()) else 0)"
+                ),
+            ],
+            input=updated_command,
+            cwd=str(self.repo_root),
+            env=exec_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            scanner_result.returncode,
+            0,
+            "generated auth wrapper must not resemble a literal secret assignment",
+        )
 
         command_result = subprocess.run(
             ["bash", "-c", updated_command],

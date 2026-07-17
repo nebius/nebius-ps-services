@@ -45,6 +45,15 @@ from prompt_workspace_execution import (
     parse_task_plans,
     sha256_json,
 )
+from prompt_workspace_interop import (
+    acquire_interop,
+    inspect_anchor,
+    load_interop,
+    managed,
+    record_promotion,
+    record_resource,
+    release_interop,
+)
 from prompt_workspace_runs import (
     read_handoff_text,
     scope_lock,
@@ -411,7 +420,9 @@ def _task_record(task: TaskPlan) -> dict[str, object]:
     }
 
 
-def _coordinator_claims(workspace: dict[str, object]) -> list[dict[str, str]]:
+def _coordinator_claims(
+    workspace: dict[str, object], *, managed_outer: bool
+) -> list[dict[str, str]]:
     scope = required_string(workspace, "scope", "workspace manifest")
     prefix = "" if scope == "." else f"{scope}/"
     claims = [
@@ -419,7 +430,7 @@ def _coordinator_claims(workspace: dict[str, object]) -> list[dict[str, str]]:
         {"kind": "exact", "path": f"{prefix}README.md"},
         {"kind": "exact", "path": f"{prefix}CHANGELOG.md"},
     ]
-    if scope != ".":
+    if scope != "." and not managed_outer:
         claims.extend(
             (
                 {"kind": "exact", "path": "README.md"},
@@ -427,6 +438,45 @@ def _coordinator_claims(workspace: dict[str, object]) -> list[dict[str, str]]:
             )
         )
     return claims
+
+
+def _validate_managed_claims(tasks: list[TaskPlan], interop: dict[str, object]) -> None:
+    if not managed(interop):
+        return
+    task_scope = str(interop["task_scope"])
+    scope_path = PurePosixPath(task_scope)
+    for task in tasks:
+        for claim in task.write_claims:
+            claim_path = PurePosixPath(claim.path)
+            if task_scope != "." and not (
+                claim_path == scope_path or scope_path in claim_path.parents
+            ):
+                raise PromptWorkspaceError(
+                    "REPLAN_REQUIRED",
+                    f"{task.task_id} write claim escapes the managed outer scope",
+                )
+
+
+def _existing_run_interop(
+    manifest_path: Path,
+    workspace: dict[str, object],
+    run_dir: Path,
+    coordinator: dict[str, object],
+) -> dict[str, object]:
+    state = load_interop(run_dir, required=False)
+    if state is not None:
+        return state
+    if inspect_anchor(workspace).get("status") != "unmanaged":
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "unfinished managed-outer runs without interop state are unsupported",
+        )
+    return acquire_interop(
+        workspace,
+        run_dir,
+        manifest_path,
+        str(coordinator["initial_head"]),
+    )
 
 
 def _validated_assignment(path: Path) -> dict[str, object]:
@@ -546,6 +596,7 @@ def plan_waves(
         assert_no_unfinished_v1(run_dir)
         existing = load_coordinator_state(run_dir)
         if existing is not None:
+            _existing_run_interop(manifest_path, workspace, run_dir, existing)
             return existing
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         _common_dir(repo)
@@ -568,6 +619,8 @@ def plan_waves(
                 "EXECUTION_STATE_INVALID", "no pending tasks can be planned"
             )
         plan = [[_task_record(task) for task in wave] for wave in waves]
+        interop = acquire_interop(workspace, run_dir, manifest_path, base)
+        _validate_managed_claims(tasks, interop)
         created = _utc(clock)
         wave_ids = [f"wave-{index:03d}" for index in range(1, len(waves) + 1)]
         root = _worktree_root(manifest_path, workspace, run_id)
@@ -582,7 +635,9 @@ def plan_waves(
                 "base_commit": None,
                 "contract_commit": None,
                 "integrated_head": None,
-                "coordinator_write_claims": _coordinator_claims(workspace),
+                "coordinator_write_claims": _coordinator_claims(
+                    workspace, managed_outer=managed(interop)
+                ),
                 "integration_branch": None,
                 "integration_worktree": str(wave_root / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
@@ -652,6 +707,7 @@ def replan_waves(
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
         run_dir, coordinator, active = _coordinator_and_wave(workspace, run_id)
+        interop = _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
         if active["status"] != "planned":
             raise PromptWorkspaceError(
@@ -690,6 +746,7 @@ def replan_waves(
         if text is None:
             raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
         tasks = parse_task_plans(text)
+        _validate_managed_claims(tasks, interop)
         waves = build_dependency_waves(tasks)
         if not waves:
             raise PromptWorkspaceError(
@@ -720,7 +777,9 @@ def replan_waves(
                 "base_commit": None,
                 "contract_commit": None,
                 "integrated_head": None,
-                "coordinator_write_claims": _coordinator_claims(workspace),
+                "coordinator_write_claims": _coordinator_claims(
+                    workspace, managed_outer=managed(interop)
+                ),
                 "integration_branch": None,
                 "integration_worktree": str(root / wave_id / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
@@ -1011,6 +1070,14 @@ def prepare_wave(
         wave["integration_branch"] = branch
         _save_wave(run_dir, wave)
         path = Path(str(wave["integration_worktree"]))
+        record_resource(
+            workspace,
+            run_dir,
+            kind="integration",
+            path=path,
+            branch=branch,
+            state="planned",
+        )
         _ensure_worktree(
             repo,
             path,
@@ -1019,6 +1086,14 @@ def prepare_wave(
             _journal_path(run_dir, str(wave["wave_id"])),
             clock,
             allow_descendant=True,
+        )
+        record_resource(
+            workspace,
+            run_dir,
+            kind="integration",
+            path=path,
+            branch=branch,
+            state="present",
         )
         return wave
 
@@ -1146,6 +1221,14 @@ def dispatch_wave(
             task_id = str(task["task_id"])
             branch = _temporary_branch(workspace, run_id, str(wave["wave_id"]), task_id)
             worktree = wave_root / task_id
+            record_resource(
+                workspace,
+                run_dir,
+                kind="worker",
+                path=worktree,
+                branch=branch,
+                state="planned",
+            )
             _ensure_worktree(
                 repo,
                 worktree,
@@ -1153,6 +1236,14 @@ def dispatch_wave(
                 contract_commit,
                 _journal_path(run_dir, str(wave["wave_id"])),
                 clock,
+            )
+            record_resource(
+                workspace,
+                run_dir,
+                kind="worker",
+                path=worktree,
+                branch=branch,
+                state="present",
             )
             scope_cwd = worktree if scope == "." else worktree / scope
             if not scope_cwd.is_dir():
@@ -1930,6 +2021,7 @@ def promote_wave(
                 "PROMOTION_FAILED",
                 "promotion reached the verified tip but a hook dirtied the checkout",
             )
+        record_promotion(workspace, run_dir, observed)
         handoff = read_handoff_text(run_dir)
         if handoff is None:
             raise PromptWorkspaceError(
@@ -1996,7 +2088,7 @@ def cleanup_wave(
         wave["updated_at"] = _utc(clock)
         retained: list[str] = []
         _save_wave(run_dir, wave)
-        resources: list[tuple[Path, str, str]] = []
+        resources: list[tuple[str, Path, str, str]] = []
         for task_id in wave["task_ids"]:
             assignment = _validated_assignment(
                 _assignment_path(run_dir, str(wave["wave_id"]), str(task_id))
@@ -2012,6 +2104,7 @@ def cleanup_wave(
             plane = _load_task_plane(run_dir, str(wave["wave_id"]), str(task_id))
             resources.append(
                 (
+                    "worker",
                     Path(str(assignment["worktree"])),
                     str(assignment["branch"]),
                     str(plane["commit"]),
@@ -2019,12 +2112,13 @@ def cleanup_wave(
             )
         resources.append(
             (
+                "integration",
                 Path(str(wave["integration_worktree"])),
                 str(wave["integration_branch"]),
                 promoted,
             )
         )
-        for worktree, branch, expected_tip in resources:
+        for kind, worktree, branch, expected_tip in resources:
             worktrees = _registered_worktrees(repo)
             registration = worktrees.get(worktree.resolve())
             registered = registration is not None
@@ -2036,6 +2130,14 @@ def cleanup_wave(
             )
             if branch_result.returncode != 0:
                 if not registered and not worktree.exists():
+                    record_resource(
+                        workspace,
+                        run_dir,
+                        kind=kind,
+                        path=worktree,
+                        branch=branch,
+                        state="absent",
+                    )
                     continue
                 retained.append(f"{worktree} ({branch})")
                 continue
@@ -2098,6 +2200,28 @@ def cleanup_wave(
             )
             if deletion.returncode != 0:
                 retained.append(f"{worktree} ({branch})")
+                continue
+            if (
+                worktree.exists()
+                or worktree.resolve() in _registered_worktrees(repo)
+                or _git(
+                    repo,
+                    ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                    "verify cleanup branch removal",
+                    check=False,
+                ).returncode
+                == 0
+            ):
+                retained.append(f"{worktree} ({branch})")
+                continue
+            record_resource(
+                workspace,
+                run_dir,
+                kind=kind,
+                path=worktree,
+                branch=branch,
+                state="absent",
+            )
         wave["cleanup_retained"] = retained
         wave["updated_at"] = _utc(clock)
         if retained:
@@ -2107,3 +2231,91 @@ def cleanup_wave(
         _save_wave(run_dir, wave)
         _finalize_cleaned_wave(run_dir, coordinator, wave, clock)
         return wave
+
+
+def finalize_run(
+    manifest_path: Path,
+    run_id: str,
+    alignment: str,
+    *,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    """Seal terminal handoff evidence and release a managed outer lease."""
+
+    if not alignment.strip():
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "final alignment evidence is required"
+        )
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir = _run_dir(workspace, run_id)
+        coordinator = load_coordinator_state(run_dir)
+        if coordinator is None or coordinator.get("status") != "done":
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "all waves must be cleaned before finalization",
+            )
+        waves = [
+            _load_wave(run_dir, str(item["wave_id"])) for item in coordinator["waves"]
+        ]
+        if not waves or any(
+            wave["status"] != "done" or wave["cleanup_retained"] for wave in waves
+        ):
+            raise PromptWorkspaceError(
+                "CLEANUP_BLOCKED", "internal task resources are not fully cleaned"
+            )
+        promoted_head = waves[-1].get("promoted_head")
+        if (
+            not isinstance(promoted_head, str)
+            or SHA_RE.fullmatch(promoted_head) is None
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "the final promoted head is missing"
+            )
+        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
+        if (
+            _branch(repo) != coordinator["base_branch"]
+            or _head(repo) != promoted_head
+            or not _clean(repo)
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT",
+                "project checkout must be clean at the final promoted head",
+            )
+        handoff = read_handoff_text(run_dir)
+        if handoff is None:
+            raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
+        handoff, count = re.subn(
+            r"(?m)^- Overall status:\s*[a-z_]+\s*$",
+            "- Overall status: done",
+            handoff,
+            count=1,
+        )
+        if count != 1:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "handoff has no unique overall status"
+            )
+        final_section = (
+            "## Final Alignment\n\n"
+            f"- Completed at: {_utc(clock)}\n"
+            f"- Promoted commit: {promoted_head}\n"
+            f"- Evidence: {alignment.strip()}\n"
+        )
+        if re.search(r"(?m)^## Final Alignment\s*$", handoff):
+            handoff = re.sub(
+                r"(?ms)^## Final Alignment\s*\n.*?(?=^## |\Z)",
+                final_section,
+                handoff,
+                count=1,
+            )
+        else:
+            handoff = handoff.rstrip() + "\n\n" + final_section
+        write_atomic(run_dir / "handoff.md", handoff.encode("utf-8"))
+        result = release_interop(workspace, run_dir, promoted_head)
+        return {
+            "status": "done",
+            "run_id": run_id,
+            "promoted_head": promoted_head,
+            "interop": result,
+        }

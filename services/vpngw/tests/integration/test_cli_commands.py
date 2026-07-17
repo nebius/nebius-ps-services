@@ -33,6 +33,33 @@ def test_validate_config_smoke_passes_for_sample_config(
     assert "Configuration is valid" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "config_name",
+    ["static-example.config.yaml", "bgp-example.config.yaml"],
+)
+def test_published_example_config_validates(
+    monkeypatch: pytest.MonkeyPatch, config_name: str
+) -> None:
+    example_path = Path(__file__).resolve().parents[2] / "examples" / config_name
+    placeholder_values = {
+        "TENANT_ID": "tenant-example",
+        "PROJECT_ID": "project-example",
+        "REGION_ID": "eu-north1",
+        "SSH_PUBLIC_KEY": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleOnlyPublicKey",
+        "STATIC_TUNNEL_1_PSK": "replace-with-a-secure-static-tunnel-1-psk",
+        "STATIC_TUNNEL_2_PSK": "replace-with-a-secure-static-tunnel-2-psk",
+        "BGP_TUNNEL_1_PSK": "replace-with-a-secure-bgp-tunnel-1-psk",
+        "BGP_TUNNEL_2_PSK": "replace-with-a-secure-bgp-tunnel-2-psk",
+    }
+    for name, value in placeholder_values.items():
+        monkeypatch.setenv(name, value)
+
+    result = CliRunner().invoke(app, ["validate-config", str(example_path)])
+
+    assert result.exit_code == 0
+    assert "Configuration is valid" in result.stdout
+
+
 def test_validate_config_rejects_duplicate_external_ips(
     tmp_path: Path, sample_config: dict
 ) -> None:

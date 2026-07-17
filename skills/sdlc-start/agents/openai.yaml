@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Start"
-  short_description: "Coordinate SDLC run state"
-  default_prompt: "Use $sdlc-start to coordinate the Agentic SDLC loop by reading specs, steering input, and local state, refreshing auto-steering when needed, encouraging a safe live experiment environment when useful, selecting the next feature, and choosing exactly one next skill."
+  short_description: "Run prompt-bound Agentic SDLC"
+  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-path-or-unique-filename> to start, resume, or steer the prompt-bound Agentic SDLC workflow."
 policy:
   allow_implicit_invocation: false

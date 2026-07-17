@@ -43,7 +43,7 @@ Implement the quota-aware preflight.
 Use the implementation or domain-specific skill instead.
 
 ```text
-Run $sdlc-start for this feature.
+Run $sdlc-start run feature-prompt.md for this feature.
 ```
 
 Use the explicit Agentic SDLC workflow.

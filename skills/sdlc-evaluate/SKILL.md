@@ -47,6 +47,9 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 ## Process
 
+- Run from the registered integration worktree and verify its branch, Git common
+  directory, exact recorded HEAD, and cleanliness before evaluation. Bind
+  evidence to that SHA; do not evaluate a worker or the stale project checkout.
 - Use `assets/templates/evaluate.md.template` for evidence.
 - Select the evaluation route: `sdlc-gui-test`, `sdlc-tui-test`, API/service checks, or manual review.
 - Use the Live Experiment Environment only when it is marked provided, has

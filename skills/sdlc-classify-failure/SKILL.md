@@ -1,6 +1,6 @@
 ---
 name: sdlc-classify-failure
-description: "Use only as part of the Agentic SDLC workflow; use when an Agentic SDLC phase fails and the loop must classify the failure before retrying. Routes failures to requirements, context, design, plan, TDD, implementation, validation, tests, evaluation, UAT, environment, policy, or human input."
+description: "Use only as part of the Agentic SDLC workflow; use when a phase fails and the loop must classify the root cause before retrying, including preparation, worktree identity, replan, wave integration, cleanup, and promotion failures."
 ---
 
 # Classify Failure
@@ -27,6 +27,8 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - Failure evidence.
 - Retry counts.
 - Latest validation, test, evaluation, UAT, or policy output.
+- Execution coordinator, wave/task/result records, Git identity, ancestry, and
+  cleanup inventory when the failure is after plan lock.
 
 ## Required Reads
 
@@ -48,6 +50,9 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - Map the failure to the earliest responsible SDLC phase.
 - Increment retry count for the responsible phase.
 - Stop when human input, policy block, environment block, or retry budget requires it.
+- Preserve every dirty, divergent, unreachable, malformed, or foreign Git
+  resource. Classification never authorizes reset, history rewrite, or force
+  cleanup.
 
 ## Idempotency
 

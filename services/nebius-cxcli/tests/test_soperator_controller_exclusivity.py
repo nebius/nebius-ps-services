@@ -346,12 +346,6 @@ def _inert_legacy_placeholder_pod() -> dict[str, Any]:
                     "args": ["infinity"],
                 },
                 {
-                    "name": "wait-for-accounting",
-                    "image": "registry.example/controller_slurmctld:legacy",
-                    "command": ["sleep"],
-                    "args": ["infinity"],
-                },
-                {
                     "name": "ensure-jail-virtiofs",
                     "image": "registry.example/controller_slurmctld:legacy",
                     "command": ["sleep"],

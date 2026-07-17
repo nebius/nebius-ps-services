@@ -22,6 +22,13 @@ received after a wave starts remains queued until the next safe boundary. An
 unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
 prompt starts a new run.
 
+When initialized inside a linked worktree created by the `worktree` skill, the
+entire task run is nested under that outer branch. The exact current outer
+`HEAD` becomes the worker base, all wave promotions return to that branch, and
+a private v2 lease with owner kind `task-implementer` blocks outer push, PR creation, and removal through final
+alignment. The task coordinator never bases workers on `origin/main` in this
+case.
+
 ## Dependency Waves
 
 Before implementation, the coordinator inspects source and locks stable tasks
@@ -80,12 +87,22 @@ branches are deleted with `git branch -d`. Failures preserve exact resources
 for recovery. The workflow never runs broad prune/gc, cherry-picks, rebases,
 squashes, pushes, or force-removes.
 
+After the last wave cleanup, final changed-surface `$align` evidence is sealed
+before a managed outer lease is released. An interruption after the handoff is
+marked done remains recoverable: repeating `run` finishes the same private
+release instead of starting a new task run.
+
 ## Private State And Recovery
 
 Coordinator, wave, mutable task-plane, immutable assignment/result, and journal records live with the run
 under the private prompt workspace. Every Git mutation is journaled before
 execution and re-observed afterward. A repeated `run` resumes durable v2 truth
 without recreating branches, worktrees, assignments, commits, or merges.
+
+`orchestration/interop.json` binds a nested run to the exact managed outer
+identity and its worktree-owned lease. Completed prompt history is archive-only
+after the outer worktree has itself been removed; it is never migrated to a
+different workspace identity.
 
 Unfinished execution-plane-v1 runs are inert and return
 `WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. There is no
@@ -106,10 +123,13 @@ secrets, or internal IDs.
 - `assets/handoff-template.md`: coordinator-owned queue and wave evidence.
 - `scripts/prompt_workspace_execution.py`: parsing and deterministic scheduler.
 - `scripts/prompt_workspace_waves.py`: journaled worktree lifecycle.
+- `scripts/prompt_workspace_interop.py`: optional managed-outer lease bridge.
 - `scripts/prompt_workspace_intake.py`: two-command routing and steering.
 - `scripts/prompt_workspace_specs.py`: managed specification validation.
 - `scripts/test-task-execution.py`: scheduler and v1-boundary tests.
 - `scripts/test-task-waves.py`: disposable real-Git lifecycle tests.
+- `scripts/test-worktree-interoperability.py`: composed outer-worktree lease,
+  promotion, cleanup, interruption, and remote-isolation tests.
 - `scripts/test-prompt-workspace.py`, `test-task-specs.py`, and
   `test-task-implementer-contract.py`: storage, spec, and contract tests.
 
@@ -119,5 +139,5 @@ secrets, or internal IDs.
 - Public surface remains exactly `workspace init` and `run`.
 - External database, Kubernetes, Terraform, migration, and publication actions
   remain singleton and need separate explicit authority.
-- Use `$align` after the final promoted wave; use `$sdlc-start` for Agentic
+- Use `$align` after the final promoted wave; use `$sdlc-start run <prompt>` for Agentic
   SDLC.

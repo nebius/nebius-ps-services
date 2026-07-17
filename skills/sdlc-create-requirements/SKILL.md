@@ -23,7 +23,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Inputs
 
-- User prompt or approved change request.
+- The exact immutable prompt revision accepted by `sdlc-start`, or an approved
+  change request routed from its steering disposition.
 - Existing `docs/requirements.md` when present.
 - Existing `docs/design.md` for impact awareness only.
 - Optional live experiment environment details, including safe connection and
@@ -36,6 +37,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Existing design file if present.
 - Project README or docs if available.
 - Active SDLC run state if the change happens during a run.
+- The bound run's `prompt.json` and accepted snapshot when prompt intake
+  initiated the change.
 
 ## Writes
 
@@ -61,9 +64,13 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Idempotency
 
-- Reapplying the same prompt must not duplicate requirements.
+- Reapplying the same prompt revision must not duplicate requirements.
 - If an existing requirement changes, update that `REQ-*` block and append a change-log entry.
 - If design must change, mark the affected requirements so `sdlc-create-design` can update related features.
+- When execution is already prepared, write product truth only in the registered
+  integration worktree, mark the active plan/execution `REPLAN_REQUIRED`, and
+  preserve every started assignment, commit, and worktree for coordinator-led
+  reconciliation. Do not reset execution history.
 
 ## Failure Handling
 

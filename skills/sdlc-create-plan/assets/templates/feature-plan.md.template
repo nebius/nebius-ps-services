@@ -31,9 +31,27 @@
 
 1. <test-first step>
 
-## Implementation Steps
+## Task Graph
 
-1. <implementation step>
+Use stable, contiguous `TASK-*` IDs. Every task must be independently
+assignable. Use `unknown` for incomplete ownership; preparation will serialize
+that task rather than guessing that it is parallel-safe.
+
+### TASK-001
+
+- Requirements: REQ-<id>
+- Goal: <one coherent implementation result>
+- Depends on: none
+- Write claims: exact: <repo-relative-file>; prefix: <repo-relative-directory>
+- Conflict domains: <class>:<identity>, or unknown
+- Validation: <focused command or evidence>
+- Done criteria: <observable completion condition>
+- Rollback or stop conditions: <fail-closed boundary>
+
+## Planned Dependency Waves
+
+- WAVE-001: TASK-001
+- <Informational only; sdlc-prepare-execution recomputes and verifies waves>
 
 ## Validation Commands
 

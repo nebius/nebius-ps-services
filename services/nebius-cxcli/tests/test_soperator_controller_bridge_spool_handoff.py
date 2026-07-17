@@ -1480,6 +1480,7 @@ def _run_target_writer_scale_transport_failure(
     *,
     observed_replicas: int,
     resume_dispatch: bool = False,
+    accepted_resume_config_drift: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     source_image = f"registry.example/slurmctld@sha256:{_DIGEST}"
     target_image = f"registry.example/slurmctld@sha256:{'b' * 64}"
@@ -1554,6 +1555,8 @@ def _run_target_writer_scale_transport_failure(
         "SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
     )
     target_config_sha256 = hashlib.sha256(target_config.encode()).hexdigest()
+    rendered_target_config = target_config + "# later operator render\n"
+    rendered_target_config_sha256 = hashlib.sha256(rendered_target_config.encode()).hexdigest()
     patched_statefulset = {
         "metadata": {"uid": "bridge-sts-uid", "resourceVersion": "11"},
         "spec": {
@@ -1568,7 +1571,39 @@ def _run_target_writer_scale_transport_failure(
     }
     scale_observation = copy.deepcopy(patched_statefulset)
     scale_observation["spec"]["replicas"] = observed_replicas
-    if resume_dispatch:
+    if accepted_resume_config_drift:
+        accepted_statefulset = copy.deepcopy(patched_statefulset)
+        accepted_statefulset["spec"]["replicas"] = 2
+        journal["authority"].update(
+            {
+                "epoch": f"bridge-target-{_DIGEST[:12]}",
+                "owner": "bridge-target",
+            }
+        )
+        journal["version_transition"].update(
+            {
+                "backup_sha256": "c" * 64,
+                "both_stopped_at": "2026-07-12T10:10:00Z",
+                # Reproduce a checkpoint written by the old resume path after it
+                # replaced the accepted hash with a later target ConfigMap render.
+                "target_config_sha256": rendered_target_config_sha256,
+                "target_material_staged_at": "2026-07-12T10:11:00Z",
+                "target_jailed_config": {
+                    "state": "accepted",
+                    "target_sha256": target_config_sha256,
+                    "accepted_at": "2026-07-12T10:12:00Z",
+                },
+                "target_writer_scale": {
+                    "state": "accepted",
+                    "statefulset_uid": "bridge-sts-uid",
+                    "accepted_at": "2026-07-12T10:13:00Z",
+                },
+                "target_write_at": "2026-07-12T10:13:00Z",
+                "downgrade_prohibited": True,
+            }
+        )
+        observations = iter((accepted_statefulset, accepted_statefulset, accepted_statefulset))
+    elif resume_dispatch:
         resume_statefulset = copy.deepcopy(patched_statefulset)
         resume_statefulset["spec"]["replicas"] = 2
         journal["version_transition"].update(
@@ -1594,7 +1629,10 @@ def _run_target_writer_scale_transport_failure(
     monkeypatch.setattr(
         migration,
         "_controller_bridge_target_config",
-        lambda **_kwargs: ("target-config", target_config),
+        lambda **_kwargs: (
+            "target-config",
+            rendered_target_config if accepted_resume_config_drift else target_config,
+        ),
     )
     monkeypatch.setattr(
         migration,
@@ -1783,6 +1821,34 @@ def test_target_scale_dispatch_resume_reconciles_live_writers_before_any_stop(
     assert transition["target_write_at"]
     assert transition["downgrade_prohibited"] is True
     assert journal["authority"]["owner"] == "bridge-target"
+
+
+def test_accepted_target_writer_resume_reuses_verified_jailed_config_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal, _checkpoint = _run_target_writer_scale_transport_failure(
+        monkeypatch,
+        observed_replicas=2,
+        accepted_resume_config_drift=True,
+    )
+
+    transition = journal["version_transition"]
+    accepted_sha256 = transition["target_jailed_config"]["target_sha256"]
+    rendered_sha256 = hashlib.sha256(
+        b"ClusterName=cluster\n"
+        b"SlurmctldHost=cxcli-slurm-controller-bridge-0\n"
+        b"SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
+        b"# later operator render\n"
+    ).hexdigest()
+    assert transition["target_config_sha256"] == accepted_sha256
+    assert transition["target_config_binding_recovery"] == {
+        "schema": "nebius-cxcli/controller-bridge-target-config-binding-recovery-v1",
+        "status": "verified",
+        "previous_sha256": rendered_sha256,
+        "accepted_sha256": accepted_sha256,
+        "rendered_target_sha256": rendered_sha256,
+        "verified_at": transition["target_config_binding_recovery"]["verified_at"],
+    }
 
 
 def _job_state_recovery_journal() -> dict[str, Any]:

@@ -49,6 +49,7 @@ def _fence_state() -> dict[str, Any]:
             "name": "source-cluster",
             "uid": "source-uid",
         },
+        "source_nodeset_uids": [],
         "manager_service_account": {
             "namespace": "soperator",
             "name": "soperator-manager",
@@ -357,6 +358,82 @@ def test_source_fence_install_is_checkpointed_and_resume_revalidates_without_rea
     assert canary_calls == 2
 
 
+def test_source_fence_resume_reuses_captured_source_nodesets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _fence_state()
+    checkpoint: dict[str, Any] = {
+        "source_slurmcluster_ref": copy.deepcopy(template["source"]),
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {"owner": "bridge-source"},
+        },
+    }
+    phase: dict[str, Any] = {}
+    observed_nodeset_uids: list[frozenset[str]] = []
+
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_source_reconciliation_fence_live_closure",
+        lambda **kwargs: (
+            observed_nodeset_uids.append(kwargs["source_nodeset_uids"])
+            or tuple(template["frozen_resources"])
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_source_cleanup_nodeset_uid_sets",
+        lambda **_kwargs: (frozenset({"source-nodeset-uid"}), frozenset()),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_source_reconciliation_fence_get_managed_resource",
+        lambda **_kwargs: (False, {}),
+    )
+
+    def stop_before_apply(*_args: Any, **_kwargs: Any) -> SoperatorMigrationCommandResult:
+        raise RuntimeError("stop before apply")
+
+    with pytest.raises(RuntimeError, match="stop before apply"):
+        migration._ensure_safe_fresh_target_helm_ordering(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            source_report={},
+            target_ref="target-cluster",
+            command_runner=stop_before_apply,
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "_source_cleanup_nodeset_uid_sets",
+        lambda **_kwargs: (
+            frozenset({"source-nodeset-uid", "late-target-nodeset-uid"}),
+            frozenset(),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="stop before apply"):
+        migration._ensure_safe_fresh_target_helm_ordering(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            source_report={},
+            target_ref="target-cluster",
+            command_runner=stop_before_apply,
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    assert phase["source_reconciliation_fence"]["source_nodeset_uids"] == [
+        "source-nodeset-uid"
+    ]
+    assert observed_nodeset_uids == [
+        frozenset({"source-nodeset-uid"}),
+        frozenset({"source-nodeset-uid"}),
+    ]
+
+
 def test_source_fence_reseals_changed_apply_intent_only_while_resources_are_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -588,8 +665,10 @@ def test_pre_target_helm_sconfig_writer_adopts_exact_deployed_recovery_zero(
         }
     }
     phase = {"source_reconciliation_fence": _fence_state()}
+    gets = {"slurmcluster": 0, "deployment": 0}
 
     def get_resource(*, resource_type: str, **_kwargs: Any) -> dict[str, Any]:
+        gets[resource_type] += 1
         return copy.deepcopy(source if resource_type == "slurmcluster" else deployment)
 
     monkeypatch.setattr(migration, "_immutable_child_get_namespaced_resource", get_resource)
@@ -619,6 +698,7 @@ def test_pre_target_helm_sconfig_writer_adopts_exact_deployed_recovery_zero(
         command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
         kube_context="context",
         checkpoint_writer=lambda: None,
+        initial_deployment=copy.deepcopy(deployment),
         timeout_seconds=0,
         poll_interval_seconds=0,
     )
@@ -627,6 +707,7 @@ def test_pre_target_helm_sconfig_writer_adopts_exact_deployed_recovery_zero(
     assert state["status"] == "verified"
     assert state["scale_mode"] == "adopted-deployed-target-recovery"
     assert state["zero_generation"] == 5
+    assert gets == {"slurmcluster": 1, "deployment": 1}
 
 
 def test_source_fence_reseals_only_writer_pods_removed_by_verified_zero_fence() -> None:

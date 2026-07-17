@@ -6,7 +6,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 ## What It Does
 
 Define success before implementation by creating tests that prove the current
-feature behavior and any planned end-to-end slice.
+feature behavior and any planned end-to-end slice in the registered integration
+worktree. The project checkout remains unchanged, and implementation seals the
+TDD base before creating workers.
 
 ## Main Boundaries
 

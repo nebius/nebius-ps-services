@@ -237,6 +237,7 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
             name = str(metadata["name"])
             kind = str(payload["kind"])
             metadata["uid"] = "cm-uid" if kind == "ConfigMap" else "job-uid"
+            metadata["resourceVersion"] = "resource-version"
             if kind == "Job":
                 payload["status"] = {
                     "conditions": [{"type": "Complete", "status": "True"}],
@@ -260,6 +261,11 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     )
 
     def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        if str(args[-1]).startswith("job/cxcli-gpu-jail-ready-"):
+            return _result(
+                args,
+                stdout="gpu-jail-legacy-ready-marker: status=passed driver=550.90.07\n",
+            )
         assert tuple(args[-2:]) == ("logs", f"job/{desired.job['metadata']['name']}")
         return _result(
             args,
@@ -313,6 +319,17 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     }
     assert len(gate["log_sha256"]) == 64
     assert gate["pod"]["pod_uid"] == "pod-uid"
+    assert gate["legacy_ready_marker"]["status"] == "verified"
+    marker_jobs = [
+        item
+        for key, item in resources.items()
+        if key.startswith("job/cxcli-gpu-jail-ready-")
+    ]
+    assert len(marker_jobs) == 1
+    marker_container = marker_jobs[0]["spec"]["template"]["spec"]["containers"][0]
+    assert marker_container["resources"] == {}
+    assert "etc/gpu_libs_installed.flag" in marker_container["command"][2]
+    assert "gpu-driver-jail.env" in marker_container["command"][2]
     applied_job = resources[f"job/{desired.job['metadata']['name']}"]
     applied_container = applied_job["spec"]["template"]["spec"]["containers"][0]
     assert applied_container["image"] == image
@@ -497,6 +514,7 @@ def test_external_jail_gpu_post_population_recovers_unbound_failed_populate_runn
             metadata = payload.setdefault("metadata", {})
             kind = str(payload["kind"])
             metadata["uid"] = "new-cm-uid" if kind == "ConfigMap" else "new-job-uid"
+            metadata["resourceVersion"] = "new-resource-version"
             if kind == "Job":
                 payload["status"] = {
                     "conditions": [{"type": "Complete", "status": "True"}],
@@ -550,9 +568,13 @@ def test_external_jail_gpu_post_population_recovers_unbound_failed_populate_runn
         }
     }
 
-    lines = migration._ensure_jail_gpu_post_population_gate(
-        phase=phase,
-        command_runner=lambda args, **_kwargs: _result(
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        if str(args[-1]).startswith("job/cxcli-gpu-jail-ready-"):
+            return _result(
+                args,
+                stdout="gpu-jail-legacy-ready-marker: status=passed driver=550.90.07\n",
+            )
+        return _result(
             args,
             stdout=(
                 "gpu-jail-post-population: driver=550.90.07 visible_gpus=8 status=passed\n"
@@ -562,7 +584,11 @@ def test_external_jail_gpu_post_population_recovers_unbound_failed_populate_runn
                 + "c" * 64
                 + "\n"
             ),
-        ),
+        )
+
+    lines = migration._ensure_jail_gpu_post_population_gate(
+        phase=phase,
+        command_runner=runner,
         kube_context="ctx",
         target_ref="training",
         values=_gpu_values(),
@@ -575,7 +601,7 @@ def test_external_jail_gpu_post_population_recovers_unbound_failed_populate_runn
             "pvc": "jail-rootfs-slot-b-pvc",
             "image": source_image,
         },
-        checkpoint_writer=None,
+        checkpoint_writer=lambda: None,
     )
 
     assert [uid for _path, uid in deleted] == ["old-job-uid", "old-cm-uid"]

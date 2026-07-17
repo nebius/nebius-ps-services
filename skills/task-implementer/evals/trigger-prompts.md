@@ -70,6 +70,23 @@ resources, do not dispatch new batch members after failure, and resume without
 duplicating branches, worktrees, assignments, commits, or merges.
 
 ```text
+$task-implementer run <managed-prompt-from-inside-a-$worktree-checkout>
+```
+
+Bind the run to the exact outer worktree branch and current `HEAD`. Keep every
+worker/integration branch private and temporary, promote only back to the outer
+branch, and block outer push, PR creation, and removal until final alignment
+and lease release. Never use `origin/main` as the nested worker base.
+
+```text
+$task-implementer run <same-completed-prompt-after-an-interrupted-final-release>
+```
+
+Resume the private finalizer and release the existing outer lease only after
+re-observing the final promoted head and absent internal resources. Do not
+start a new run, expire the lease, or force-clear state.
+
+```text
 $task-implementer run <same-prompt-after-an-integration-conflict>
 ```
 
@@ -133,5 +150,5 @@ Use `global-context-management` only. It must not trigger this workflow.
 Review this diff, commit it, open a PR, or start Agentic SDLC.
 ```
 
-Use the matching `code-review`, `$commit`, `create-pr`, or `$sdlc-start`
-workflow.
+Use the matching `code-review`, `$commit`, `create-pr`, or prompt-bound
+`$sdlc-start run` workflow.

@@ -13382,6 +13382,7 @@ def _external_soperator_upgrade_command_args(
     approve: bool,
     approve_remediation: bool,
     interactive: bool,
+    stop_after_phase: str | None = None,
 ) -> tuple[str, ...]:
     args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
     if backup_dir is not None:
@@ -13406,6 +13407,8 @@ def _external_soperator_upgrade_command_args(
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if _non_empty_text(stop_after_phase):
+        args.extend(["--stop-after-phase", str(stop_after_phase)])
     return tuple(args)
 
 
@@ -62986,6 +62989,12 @@ def soperator_onboard_command(
             app_entries=app_entries,
         )
         config_path = resolved_target.config_path
+        # Onboarding writes the complete runtime config, while execution reloads
+        # that same config under the shared cluster lease. Fail before discovery
+        # or campaign acceptance when any existing target is outside the current
+        # canonical schema so onboarding cannot create a campaign that execution
+        # is then unable to reload.
+        load_config(config_path, persist_normalized=False)
         payload = _load_config_payload(config_path)
         if _report_active_external_soperator_onboard_rerun(
             config_path=config_path,
@@ -66053,6 +66062,17 @@ def soperator_external_upgrade_command(
             help="Prompt for Slurm job decisions when --job-policy is interactive.",
         ),
     ] = True,
+    stop_after_phase: Annotated[
+        str | None,
+        typer.Option(
+            "--stop-after-phase",
+            help=(
+                "Stop cleanly after the named checkpointed execution phase and leave the "
+                "next phase pending. Use the exact phase id printed by the accepted plan; "
+                "rerun without this option to continue."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Plan or execute an accepted external Soperator upgrade."""
     lease_stack = ExitStack()
@@ -66585,6 +66605,7 @@ def soperator_external_upgrade_command(
                     approve=approve,
                     approve_remediation=approve_remediation,
                     interactive=interactive,
+                    stop_after_phase=stop_after_phase,
                 )
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
@@ -66743,6 +66764,7 @@ def soperator_external_upgrade_command(
                     populate_jail_refresh=resolved_populate_jail_refresh,
                     jail_persistent_mounts=tuple(jail_persistent_mount or ()),
                     jail_sfs_resize_handler=_external_jail_sfs_resize_handler,
+                    stop_after_phase_id=stop_after_phase,
                     cancel_job_ids=selected_cancel_jobs,
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,

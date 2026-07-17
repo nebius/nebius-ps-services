@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import shlex
 import sys
 from typing import Any
 
@@ -34,6 +36,7 @@ def _normalize_skill_name(value: str) -> str:
         "commit": "sdlc-commit",
         "create-design": "sdlc-create-design",
         "create-plan": "sdlc-create-plan",
+        "prepare-execution": "sdlc-prepare-execution",
         "create-requirements": "sdlc-create-requirements",
         "evaluate": "sdlc-evaluate",
         "gather-context": "sdlc-gather-context",
@@ -67,7 +70,16 @@ def _all_features_committed(feature_queue: dict[str, Any]) -> bool:
     features = _feature_items(feature_queue)
     if not features:
         return False
-    committed_states = {"committed", "uat", "pr-ready", "pr", "review", "merged", "complete", "completed"}
+    committed_states = {
+        "committed",
+        "uat",
+        "pr-ready",
+        "pr",
+        "review",
+        "merged",
+        "complete",
+        "completed",
+    }
     for feature in features:
         status = str(feature.get("status") or feature.get("phase") or "").lower()
         if not feature.get("committed") and status not in committed_states:
@@ -76,19 +88,34 @@ def _all_features_committed(feature_queue: dict[str, Any]) -> bool:
 
 
 def _uat_passed(feature_queue: dict[str, Any], current_state: dict[str, Any]) -> bool:
-    for source in (feature_queue.get("uat"), current_state.get("uat"), current_state.get("evidence")):
+    for source in (
+        feature_queue.get("uat"),
+        current_state.get("uat"),
+        current_state.get("evidence"),
+    ):
         if isinstance(source, dict):
-            status = str(source.get("status") or source.get("uat") or source.get("result") or "").lower()
+            status = str(
+                source.get("status") or source.get("uat") or source.get("result") or ""
+            ).lower()
             if status in {"pass", "passed", "success"}:
                 return True
-    return str(current_state.get("uat_status") or "").lower() in {"pass", "passed", "success"}
+    return str(current_state.get("uat_status") or "").lower() in {
+        "pass",
+        "passed",
+        "success",
+    }
 
 
 def _uat_failed_addressable(current_state: dict[str, Any]) -> bool:
     status = str(current_state.get("uat_status") or "").lower()
-    failure = str(current_state.get("failure_classification") or current_state.get("blocked_reason") or "").lower()
+    failure = str(
+        current_state.get("failure_classification")
+        or current_state.get("blocked_reason")
+        or ""
+    ).lower()
     return status in {"fail", "failed"} and any(
-        token in failure for token in ("design", "implementation", "test", "environment")
+        token in failure
+        for token in ("design", "implementation", "test", "environment")
     )
 
 
@@ -114,28 +141,64 @@ def _steering_reason(active) -> str | None:
     upper = text.upper()
     if any(token in upper for token in ("CRITICAL", "URGENT", "PRIORITY", "BLOCKER")):
         return "critical STEERING.md instructions are present"
-    if "PAUSE" in upper or "DO NOT CREATE A PR" in upper or "DO NOT CREATE PR" in upper or "NO PR" in upper:
+    if (
+        "PAUSE" in upper
+        or "DO NOT CREATE A PR" in upper
+        or "DO NOT CREATE PR" in upper
+        or "NO PR" in upper
+    ):
         return "STEERING.md contains pause or PR-control instructions"
     return None
 
 
 def _current_iteration(current_state: dict[str, Any]) -> int:
-    return int(current_state.get("iteration_count", current_state.get("iteration", 0)) or 0)
+    return int(
+        current_state.get("iteration_count", current_state.get("iteration", 0)) or 0
+    )
 
 
 def _max_iterations(current_state: dict[str, Any]) -> int:
     return int(current_state.get("max_iterations", 200) or 200)
 
 
-def _continuation_prompt(active, current_state: dict[str, Any], next_skill: str, reason: str) -> str:
+def _bound_prompt_filename(active, run_state: dict[str, Any]) -> str | None:
+    try:
+        binding = load_json(active.run_dir / "prompt.json") or {}
+    except (json.JSONDecodeError, OSError):
+        return None
+    if (
+        binding.get("schema") != "agentic-sdlc/prompt-binding-v1"
+        or binding.get("run_id") != active.run_id
+    ):
+        return None
+    filename = str(binding.get("prompt_filename") or "")
+    if (
+        not filename
+        or Path(filename).name != filename
+        or not filename.endswith(".md")
+        or len(filename) > 255
+        or any(ord(character) < 32 or ord(character) == 127 for character in filename)
+    ):
+        return None
+    mirrors: list[str] = []
+    prompt_value = run_state.get("prompt")
+    if isinstance(prompt_value, dict) and prompt_value.get("filename"):
+        mirrors.append(str(prompt_value["filename"]))
+    if run_state.get("prompt_filename"):
+        mirrors.append(str(run_state["prompt_filename"]))
+    if any(mirror != filename for mirror in mirrors):
+        return None
+    return filename
+
+
+def _continuation_prompt(
+    current_state: dict[str, Any], next_skill: str, reason: str, prompt_filename: str
+) -> str:
     return "\n".join(
         [
-            f"Use ${COORDINATOR_SKILL}.",
+            f"Use ${COORDINATOR_SKILL} run {shlex.quote(prompt_filename)}",
             "Continue the active SDLC run from local state.",
             "",
-            f"Project root: {active.project_root}",
-            f"Project ID: {active.project_id}",
-            f"Run ID: {active.run_id}",
             f"Current feature: {current_state.get('current_feature') or '<none>'}",
             f"Current phase: {current_state.get('current_phase') or '<unknown>'}",
             f"Next recommended skill: {_normalize_skill_name(next_skill)}",
@@ -170,11 +233,16 @@ def _state_digest(active, current_state: dict[str, Any]) -> str:
             active.fingerprints_path,
             active.evidence_dir,
         ],
-        extra=[git_head(active.project_root), str(current_state.get("next_recommended_skill") or "")],
+        extra=[
+            git_head(active.project_root),
+            str(current_state.get("next_recommended_skill") or ""),
+        ],
     )
 
 
-def _record_continuation(active, payload: dict[str, Any], digest: str, no_progress_count: int, reason: str) -> None:
+def _record_continuation(
+    active, payload: dict[str, Any], digest: str, no_progress_count: int, reason: str
+) -> None:
     value = {
         "last_state_digest": digest,
         "last_continuation_turn_id": payload.get("turn_id"),
@@ -226,16 +294,22 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     status = current_status or run_status
     if run_status in TERMINAL_STATUSES:
         status = run_status
-    blocked_reason = current_state.get("blocked_reason") or run_state.get("blocked_reason")
+    blocked_reason = current_state.get("blocked_reason") or run_state.get(
+        "blocked_reason"
+    )
     if status in TERMINAL_STATUSES:
         if status in {"complete", "completed"}:
             return stop("SDLC run complete.")
         if status == "paused":
             return stop("SDLC run paused.")
-        return stop(f"SDLC run is blocked: {blocked_reason or 'no blocker reason recorded'}")
+        return stop(
+            f"SDLC run is blocked: {blocked_reason or 'no blocker reason recorded'}"
+        )
 
     if current_state.get("needs_human") or run_state.get("needs_human"):
-        return stop(f"Human input required: {blocked_reason or 'state requested human input'}")
+        return stop(
+            f"Human input required: {blocked_reason or 'state requested human input'}"
+        )
 
     if _current_iteration(current_state) >= _max_iterations(current_state):
         return stop("Max SDLC iterations reached.")
@@ -250,31 +324,49 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         _record_continuation(active, payload, digest, no_progress, "NO_PROGRESS")
         return stop("No progress after Stop continuation.")
 
+    prompt_filename = _bound_prompt_filename(active, run_state)
+    if prompt_filename is None:
+        return stop(
+            "WORKFLOW_UPGRADE_REQUIRED: unfinished SDLC run has no valid managed prompt binding."
+        )
+
     steering_reason = _steering_reason(active)
     if steering_reason:
-        prompt = _continuation_prompt(active, current_state, COORDINATOR_SKILL, steering_reason)
+        prompt = _continuation_prompt(
+            current_state, COORDINATOR_SKILL, steering_reason, prompt_filename
+        )
         _record_continuation(active, payload, digest, no_progress, steering_reason)
         return continue_with(prompt)
 
-    if _all_features_committed(feature_queue) and not _uat_passed(feature_queue, current_state):
+    if _all_features_committed(feature_queue) and not _uat_passed(
+        feature_queue, current_state
+    ):
         reason = "all features are committed and UAT has not passed"
-        prompt = _continuation_prompt(active, current_state, "sdlc-uat-tests", reason)
+        prompt = _continuation_prompt(
+            current_state, "sdlc-uat-tests", reason, prompt_filename
+        )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
 
     if _uat_failed_addressable(current_state):
         reason = "UAT failed with an addressable classification"
-        prompt = _continuation_prompt(active, current_state, COORDINATOR_SKILL, reason)
+        prompt = _continuation_prompt(
+            current_state, COORDINATOR_SKILL, reason, prompt_filename
+        )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
 
     next_skill = str(current_state.get("next_recommended_skill") or "").strip()
     next_skill = _normalize_skill_name(next_skill)
     if next_skill == "sdlc-merge-pr":
-        return stop("Merge requires an explicit user request and will not be continued automatically.")
+        return stop(
+            "Merge requires an explicit user request and will not be continued automatically."
+        )
     if next_skill:
         reason = f"state recommends {next_skill}"
-        prompt = _continuation_prompt(active, current_state, next_skill, reason)
+        prompt = _continuation_prompt(
+            current_state, next_skill, reason, prompt_filename
+        )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
 

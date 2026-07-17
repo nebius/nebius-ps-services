@@ -229,6 +229,12 @@ Tasks become done only after verified fast-forward promotion.
 - Retained inventory: none
 - Worker mechanism: native subagents | fresh sequential codex exec
 
+## Final Alignment
+
+- Completed at: none
+- Promoted commit: none
+- Evidence: none
+
 ## Next Run Prompt
 
 ```text

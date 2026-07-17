@@ -27,6 +27,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 - Test files created or selected by `sdlc-tdd`.
 - Locked plan.
 - Project test tooling.
+- Active execution coordinator and exact integration HEAD.
 
 ## Required Reads
 
@@ -46,6 +47,9 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## Process
 
 - Use `assets/templates/tests.md.template` for evidence.
+- Run from the registered integration worktree after verifying its branch, Git
+  common directory, exact recorded HEAD, and cleanliness. Record that SHA in
+  evidence and reject stale results from worker or project checkouts.
 - Run focused feature tests first.
 - Run nearby regression tests.
 - Run integration or component tests required by design.
@@ -82,6 +86,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 - Evidence file exists.
 - Failures are classified if not passing.
 - State moves to `tested`.
+- Evidence is bound to the current coordinator integration SHA.
 
 ## SDLC Invariants
 

@@ -6,6 +6,26 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Completed the Agentic SDLC prompt and execution coordinator with private
+  editor-backed prompt creation/history, exact-rename repair, enforced
+  initialized-folder scope, hashed worker ownership and interrupted recovery,
+  resource-free future-wave replanning, staged secret/private-endpoint gates,
+  automatic sequential ephemeral `codex exec` fallback, and generic v2
+  Task Implementer/Agentic SDLC outer-worktree leases while preserving the
+  public two-command `$sdlc-start` interface.
+- Added the explicit-only `sdlc-prepare-execution` phase and private Agentic
+  SDLC execution engine for schema-v3 feature integration worktrees,
+  deterministic dependency waves, immutable task assignments/results, exact
+  Git identity checks, retained worker/merge commits, ff-only promotion,
+  non-force cleanup, and disposable real-Git lifecycle coverage.
+- Added the explicit-only `worktree` skill for project-scoped monorepo work in
+  sibling full-repository Git worktrees based on `origin/main`, with generated
+  collision-resistant branch names, preservation of unrelated primary-checkout
+  changes, `commit-push` and `create-pr` handoffs, exact merged-PR/head cleanup
+  proof, durable private ownership manifests, primary-checkout-only non-force
+  cleanup with immutable retry proof, bounded interrupted-setup recovery,
+  atomic expected-SHA local-ref deletion, exact-lease remote branch deletion,
+  and offline real-Git lifecycle tests.
 - Added hook file provenance to `install-skills.sh` hook payload sync so
   source and target hashes are recorded, and differing existing hook payloads
   are backed up before being refreshed under
@@ -21,7 +41,7 @@ All notable changes to the reusable Codex skills are tracked here.
   boundaries, MCP role, and skill-by-skill lifecycle.
 - Added the Agentic SDLC skill set: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
-  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-prepare-execution`, `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
   `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
   `sdlc-auto-steering`, `sdlc-gui-test`, `sdlc-tui-test`,
   `sdlc-update-documents`, `sdlc-commit`, `sdlc-uat-tests`,
@@ -144,6 +164,65 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Aligned the `worktree` contract with its implementation and current official
+  docs: ownership state now explicitly follows fetch preflight but precedes
+  managed branch/worktree creation, the Unix/Python and authenticated GitHub
+  CLI prerequisites and cooperative-lock boundary are documented, and cleanup
+  references the `gh pr list` command it actually uses. New generated names use
+  a constant public-safe prefix instead of copying a potentially confidential
+  repository-relative project scope into local and remote branch identities.
+- Aligned `agentic-sdlc-test` with the completed coordinator: deterministic
+  capability-level prompt/execution/worktree/hook regressions, required
+  source-installed parity, a composed nested managed-outer lease test,
+  verifier self-tests, private v1 live-evidence ingestion, and fail-closed
+  PASS/PARTIAL/FAIL readiness reporting. Hardened the verifier against
+  symlinked, broad, or unowned verification roots; unowned or remote-backed
+  disposable repositories; malformed or wrong-path hook registration;
+  misclassification of Codex-managed hook-state metadata;
+  installed-root, hook-payload, and report-path redirects; invalid UTF-8;
+  synthetic no-change live PASS; lane-path/schema drift; skipped or colorized
+  test-output false passes; and private or out-of-scope paths deleted before
+  the final evidence head.
+
+- Refactored Agentic SDLC entry and steering around two explicit public
+  `sdlc-start` actions: idempotent `workspace init [project-folder]` and
+  prompt-bound `run <prompt-path-or-unique-filename>`. Private managed prompts,
+  immutable revisions, exact-once steering linkage, prompt-bound Stop
+  continuation, terminal rerun semantics, non-Git greenfield identity, and
+  fail-closed unfinished legacy handling now preserve user prompt history
+  without adding a public workflow CLI or coupling to `task-implementer` state.
+- Refactored Agentic SDLC end to end around task-level parallelism: locked plans
+  now define stable `TASK-*` dependencies, write claims, and conflict domains;
+  TDD and downstream evidence use a persistent integration checkout;
+  `sdlc-implement-plan` dispatches one fresh agent/branch/worktree per safe task
+  and integrates waves in stable order; `sdlc-commit` seals and exactly
+  fast-forwards the unchanged project branch. Registered external worktrees now
+  remain under hook policy, unsafe resources are retained, unfinished schema v1
+  fails closed without a migration shim, and the verifier covers scheduler,
+  real-Git, registered-worktree, recovery, and golden-path behavior.
+- Composed `worktree` and `task-implementer` with fail-closed private lifecycle
+  coordination: nested task workers now base on and promote only to the exact
+  managed outer worktree branch, declare and clean internal resources per wave,
+  retain the outer lease through final alignment, and block outer publication
+  or removal until release. `worktree` push and PR handoffs now use resumable
+  action-bound reservations to close check-to-mutation races. Added strict
+  scope containment, interruption recovery, malformed-state blocking, and
+  composed offline real-Git coverage without adding public commands or legacy
+  migration/force-clear paths.
+
+- Changed hook installation status output to render nonzero `updated` file
+  labels in bold green on interactive terminals, including the per-source and
+  summary lines; non-interactive and `NO_COLOR` output remains plain text.
+- Hardened `agent-nebius-auth` runtime policy so authenticated status and log
+  commands can use ordinary `echo`/`printf`, strict-mode setup, non-secret
+  exports, and scoped `env` wrappers without false disclosure denials, while
+  executable token minting, token-variable output, tracing, and full
+  environment dumps remain fail-closed. Generated wrappers no longer resemble
+  literal Nebius secret assignments to sibling policy hooks, manual token
+  verification is restricted to one agent-profile command whose sole stdout
+  destination is `/dev/null`, and troubleshooting now distinguishes local hook
+  policy failures from actual credential or project-access failures before any
+  repair or browser-auth decision.
 - Changed `agent-nebius-auth` to grant its custom Codex Agent group the
   project-level Nebius `admin` role by default instead of `editor`; the
   existing `--role` override remains available for explicitly narrower setups.

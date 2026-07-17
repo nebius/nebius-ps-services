@@ -141,10 +141,19 @@ For direct `nebius` CLI commands without an explicit profile, the hook rewrites
 the command to use `--profile codex-agent-<project_id>`.
 
 The hook fails closed for direct token-minting commands unless they are plain
-manual verification commands that redirect stdout away from model-visible logs.
-It also fails closed for nested token-minting commands, shell tracing, and
-obvious environment-printing commands, including common nested shell or Python
-environment dump forms, when token injection would be active.
+manual agent-profile verification commands whose only stdout destination is
+`/dev/null`. It also fails closed for executable nested token-minting commands,
+shell tracing, full environment or shell-variable dumps, and output commands
+that reference `TOKEN` or `NEBIUS_IAM_TOKEN`, including common nested shell or
+Python forms, when token injection would be active.
+
+Ordinary `echo` or `printf` status and log labels, strict-mode setup,
+non-secret exports, named non-secret `printenv` reads, and `env VAR=value
+command` wrappers remain allowed. Quoted search or documentation text that only
+mentions the token-minting command is not treated as execution. The generated
+wrapper also avoids literal secret-scanner-shaped assignments for the public
+project selector and credential-file path so it can coexist with conservative
+sibling policy hooks.
 
 ## Verification
 
@@ -176,6 +185,18 @@ nebius iam get-access-token --profile codex-agent-<project_id> >/dev/null
 
 ## Troubleshooting
 
+- Treat `PreToolUse hook (blocked)` as a local policy result, not proof that a
+  credential expired or cluster access failed. Identify the hook and reason
+  first; do not launch interactive or browser authentication from a policy
+  denial. Current Codex runs matching command hooks concurrently, so separate
+  hook messages must be classified independently.
+- If the auth hook blocks a command that prints token variables, traces the
+  shell, or dumps the environment, keep that command blocked and use bounded
+  non-secret status output instead. Safe status and log labels should pass.
+- Explicitly invoke `$agent-nebius-auth` for setup verification or repair only
+  after token minting, the agent profile, the credential file, or a basic
+  project-access check actually fails. Do not replace the service-account path
+  with browser login as an automatic fallback.
 - `--install-hook` is no longer supported by the setup script. Use the root
   installer command in the Hook Install section.
 - Multiple credential files require either `CODEX_NEBIUS_PROJECT_ID` or

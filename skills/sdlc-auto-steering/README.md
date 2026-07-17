@@ -6,7 +6,7 @@ is run.
 
 ## What It Does
 
-Refreshes private active-run steering by recording mid-run user prompts,
+Refreshes private active-run steering by recording accepted same-prompt revisions,
 classifying them, and deriving compact reminders for the next SDLC phase.
 
 ## Main Boundaries
@@ -14,14 +14,15 @@ classifying them, and deriving compact reminders for the next SDLC phase.
 - Do not edit `docs/requirements.md` or `docs/design.md`.
 - Do not choose the next phase directly; return routing input to `sdlc-start`.
 - Do not use cron, daemons, or hooks as the authoritative steering engine.
-- Do not persist secrets, private endpoints, customer data, or raw logs.
+- Store only compact redacted prompt summaries; do not persist raw prompt text,
+  secrets, private endpoints, customer data, or raw logs.
 
 ## Primary Inputs
 
 - Active run state.
 - `STEERING.md`.
 - Requirements, design, context, locked plan, fingerprints, and evidence.
-- New user prompt or continuation prompt.
+- Accepted prompt ID, revision, digest, and immutable snapshot.
 
 ## Output
 

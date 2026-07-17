@@ -16,6 +16,7 @@ Use this checklist as the durable test plan for `agentic-sdlc-test`.
 - `sdlc-gui-test`
 - `sdlc-implement-plan`
 - `sdlc-merge-pr`
+- `sdlc-prepare-execution`
 - `sdlc-start`
 - `sdlc-tdd`
 - `sdlc-tui-test`
@@ -30,6 +31,7 @@ The report at `~/.codex/sdlc-verification/report.md` must include:
 
 - Summary
 - Environment checked
+- Capability regression results
 - Skill discovery results
 - Hook configuration results
 - PreToolUse safety test results
@@ -38,6 +40,10 @@ The report at `~/.codex/sdlc-verification/report.md` must include:
 - Idempotency results
 - Failure-loop results
 - Steering behavior results
+- Live workflow results
+- Validation commands
+- Skipped live or external checks
+- Low-risk real repository recommendation
 - Gaps found
 - Recommended fixes
 - Final readiness status: PASS, PARTIAL, or FAIL
@@ -53,6 +59,12 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Full workflow test`
 - `$agentic-sdlc-test`
 - `$sdlc-start`
+- `$sdlc-start workspace init [project-folder]`
+- `$sdlc-start run <prompt-path-or-unique-filename>`
+- `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
+  `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
+- schema-v3 execution, exact initialized-folder scope, `task-recover`,
+  `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
 - `sdlc-auto-steering`
@@ -80,17 +92,27 @@ Verify:
   `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
+- The installed `worktree` support skill exists.
+- Every required SDLC skill, `worktree`, and `agentic-sdlc-test` matches its
+  source copy, excluding installer provenance and bytecode artifacts.
 
 ## Hook Configuration
 
 Verify read-only:
 
-- `~/.codex/hooks.json` or inline hook configuration exists.
-- PreToolUse safety hook is configured.
-- Stop continuation hook is configured.
+- Missing optional hook registration is WARN/PARTIAL, not FAIL.
+- Malformed hook JSON or TOML is FAIL, not missing optional registration.
+- Codex-managed `[hooks.state]` TOML metadata is not treated as an inline hook
+  event.
+- When configured, PreToolUse and Stop hook entries point to the expected SDLC
+  payloads under the canonical `$CODEX_HOME/hooks` install location. A basename
+  match at another path is FAIL. Compare only validated canonical entrypoints
+  plus their shared runtime libraries against the source hook bundle; hook test
+  fixtures are not installed-runtime payloads.
 - Existing non-SDLC `SessionStart` and `UserPromptSubmit` hooks are preserved.
 - `UserPromptSubmit` does not perform SDLC routing.
-- Stop continuation routes through explicit `$sdlc-start` invocation.
+- Stop continuation routes through the explicit prompt-bound `sdlc-start run`
+  action.
 
 Do not install, trust, edit, delete, or rewrite hooks during verification.
 
@@ -124,6 +146,10 @@ Authorization handoff:
 - Commit, PR, and merge authorization files allow only the matching guarded
   action while valid.
 - Expired or removed authorization files must deny again.
+- Registered integration and worker worktrees outside the original checkout
+  remain inside the active SDLC policy boundary. Identity drift must deny
+  sensitive Git actions, and execution authorization must match action,
+  worktree, branch, Git common directory, expected HEAD, expiry, and target.
 
 ## Stop Continuation
 
@@ -143,10 +169,37 @@ Continuation cases:
 - Critical or pause/no-PR steering is present.
 - UAT failed with an addressable classification.
 
-Continuation prompts must say to use `$sdlc-start`, include project root,
-project ID, run ID, current feature, current phase, next recommended skill, and
-instructions to read local state first, avoid locked-plan edits, and persist
-evidence before stopping.
+Continuation prompts must say to use the prompt-bound `$sdlc-start run`
+action, include current feature, current phase, next
+recommended skill, and instructions to read local state first, avoid
+locked-plan edits, and persist evidence before stopping. They must not expose
+prompt IDs, run IDs, prompt bodies, or private snapshot paths. An unfinished
+unbound run must stop with `WORKFLOW_UPGRADE_REQUIRED`.
+
+## Prompt Workspace
+
+Verify:
+
+- `workspace init` works before Git initialization, leaves the project tree
+  unchanged, creates one starter only when empty, and preserves prompt bytes,
+  mtime, revisions, and completed history on rerun.
+- The generated editor workspace exposes private new-prompt and metadata-only
+  history tasks. History is ordered by monotonic accepted activity and never
+  exposes bodies, IDs, digests, snapshots, or private run paths.
+- Exact manual rename repairs the binding and run mirror. Rename-plus-edit,
+  stale copies, duplicate IDs, or crash-time mirror disagreement fail closed;
+  Stop continuation uses the repaired filename.
+- Initializing Git later does not change the private workspace identity.
+- New, unchanged active, edited active, unchanged completed, and edited
+  completed prompts produce the canonical new/resume/steering/
+  `ALREADY_COMPLETE`/new-run transitions.
+- Each changed digest creates one adjacent immutable revision and exactly one
+  steering entry; repeating an unchanged revision creates no duplicate.
+- One unfinished prompt owns an exact project scope; conflicts, traversal,
+  foreign paths, symlinks, unsafe modes, malformed UTF-8/frontmatter, oversize
+  prompts, obvious secret material, and snapshot tampering fail closed.
+- Unfinished unbound history returns `WORKFLOW_UPGRADE_REQUIRED`; completed
+  unbound history remains readable.
 
 ## Golden Path
 
@@ -159,15 +212,81 @@ Use a disposable Python project that validates a Nebius-style resource name:
 - tests and evaluation evidence
 
 Run the SDLC skills in order through local disposable state. Passing evidence
-requires committed requirements/design, locked local plan, tests before
-implementation, auto-steering evidence, validation evidence, test evidence,
-evaluation evidence, documentation update evidence when docs changed, UAT
-evidence, one local feature-scoped commit after evidence passes, and no private
-state committed.
+requires committed requirements/design, a locked local `TASK-*` graph,
+execution preparation, tests before dependency-wave implementation,
+one agent/branch/worktree per safe task, ordered merge commits, auto-steering
+evidence, validation evidence, test evidence,
+evaluation evidence, documentation update evidence when docs changed, exact
+ff-only project promotion after evidence passes, non-force resource cleanup,
+UAT evidence from the promoted checkout, and no private state committed.
+
+For a nested monorepo project, verify all claims, worker `scope_cwd`, staged
+paths, and committed paths remain inside the initialized folder. Exercise a
+confirmed interrupted-worker transfer, a resource-free future-wave replan, a
+rejected staged-secret attempt, and the fake-process sequential fallback. In a
+managed outer worktree, verify the `agentic-sdlc` v2 lease blocks publication,
+tracks all internal resources and promoted heads, releases only after final
+alignment/UAT/docs with a clean exact head, and allows the create-PR reservation
+only afterward. Keep live Codex execution `PARTIAL` when binary/auth/capacity is
+unavailable rather than treating deterministic fake-process proof as live proof.
+
+## Deterministic Capability Lanes
+
+The verifier must execute named regression tests and report independent stable
+capabilities for the public interface, prompt workspace/history/rename/
+lifecycle, exact execution scope, worker-session recovery, future replan,
+secret persistence gate, sequential fallback, managed outer lease, Task
+Implementer interoperability, steering continuation, and verifier self-tests.
+
+The composed managed-outer regression must start from the real `worktree`
+manager, select a nested project folder, run the execution coordinator through
+promotion, prove publication is blocked while the Agentic SDLC lease is active,
+release only after final alignment/UAT/docs evidence, and then acquire the
+publication reservation.
+
+## Private Live Evidence
+
+The optional manifest defaults to
+`~/.codex/sdlc-verification/live-results.json` and uses
+`agentic-sdlc/verification-live-results-v1` from
+`assets/live-results.schema.json`. It binds:
+
+- the verification ID emitted in private `verification-context.json`
+- the exact nested selected-project path
+- the preserved baseline and final Git heads with clean descendant proof
+- the seven lanes `golden-path`, `idempotency`, `change-request`,
+  `failure-routing`, `auto-steering`, `documentation-update`, and
+  `steering-continuation`
+- PASS, FAIL, or PARTIAL plus relative evidence paths for each supplied lane
+
+The manifest and referenced artifacts must be private regular files under the
+verification root. Reject symlinks, path escapes, stale identity, dirty Git
+state, permissive manifest modes, invalid fields, and PASS without evidence.
+Every supplied lane stores its evidence under its own `evidence/<lane>/`
+directory. Golden-path PASS
+requires a real descendant commit with a selected-scope change; an unchanged
+baseline/final pair or one generic artifact reused across lanes is invalid.
+Inspect every commit from baseline through final and reject any path ever
+touched outside the selected nested project or in private SDLC state, including
+paths deleted again before the final tree. Never copy evidence bodies into the
+report. The verification root itself is private `0700` on POSIX.
+
+A clean canonical flat fixture from an older verifier may migrate once to the
+nested shape only when its tracked tree is exact and it has no remote. Any
+unknown tracked, staged, or untracked content fails closed and is preserved.
+The verification root must be dedicated, outside the source repository,
+non-symlinked, and carry the private ownership marker before chmod or writes;
+the disposable Git root must carry the exact fixture marker. Symlinked fixture
+components,
+installed skill roots, configured hook payloads, or report paths fail closed
+before mutation. Invalid UTF-8 becomes a reported failure rather than a crash.
+A deterministic subprocess timeout becomes a named FAIL check; it must not
+prevent report generation. A custom report path must remain under the private
+verification root.
 
 ## Idempotency And Change Request
 
-Rerun with no product changes and verify no duplicate specs, plans, tests,
+Repeat `run` with no prompt changes and verify no duplicate revisions, specs, plans, tests,
 commits, or evidence.
 
 Then apply this change request:
@@ -178,7 +297,7 @@ Allow underscores when explicitly configured.
 
 Verify stable `REQ-*` and `FEAT-*` IDs, preserved old locked plan, a new plan
 version only when needed, scoped test/code changes, refreshed evidence, and a
-new local feature-scoped commit after evidence passes.
+new exactly sealed and promoted feature tip after evidence passes.
 
 ## Failure Loop
 
@@ -198,8 +317,8 @@ Pause after the current feature. Do not create a PR.
 Verify `sdlc-start` reads `STEERING.md`, Stop continuation respects the
 instruction, no PR is created, and clearing steering allows resume.
 
-Submit mid-run prompts that create a requirements change, design change, and
-docs update. Verify `sdlc-auto-steering` records each prompt in private
+Edit the same prompt with a requirements change, design change, and docs update,
+repeating `run` after each change. Verify `sdlc-auto-steering` records each revision in private
 steering state, redacts unsafe material, assigns a disposition, and routes
 product-truth changes to `sdlc-create-requirements` or `sdlc-create-design`
 before implementation treats them as true.
@@ -221,7 +340,9 @@ GUI and TUI checks are smoke tests only:
 
 ## Final Status Rules
 
-- PASS: all required checks pass; optional GUI/TUI may be NOT APPLICABLE.
-- PARTIAL: core flow works but non-critical gaps remain.
-- FAIL: safety hook, Stop continuation, state persistence, or golden-path SDLC
-  run fails.
+- PASS: every required deterministic capability and all seven live lanes pass;
+  optional GUI/TUI may be NOT APPLICABLE.
+- PARTIAL: no required check failed, but optional hooks or one or more live
+  lanes are missing or partial.
+- FAIL: any required deterministic check fails or any supplied live lane or
+  evidence-integrity check fails.

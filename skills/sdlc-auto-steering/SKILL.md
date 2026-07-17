@@ -1,6 +1,6 @@
 ---
 name: sdlc-auto-steering
-description: "Use only as part of the Agentic SDLC workflow; use when an active SDLC run needs private `STEERING.md` refreshed from mid-run user prompts, requirements, design, context, locked plans, fingerprints, or recent evidence before selecting the next phase."
+description: "Use only as part of the Agentic SDLC workflow; use when an active prompt-bound SDLC run needs private `STEERING.md` refreshed from an accepted same-prompt revision, requirements, design, context, locked plans, fingerprints, or recent evidence before selecting the next phase."
 ---
 
 # SDLC Auto Steering
@@ -12,7 +12,7 @@ changing committed product-truth documents directly.
 
 ## When To Use
 
-- `sdlc-start` detects new user instructions submitted during an active run.
+- `sdlc-start` accepts a changed revision of the run's bound managed prompt.
 - `STEERING.md` has pending, stale, or conflicting entries.
 - Requirements, design, context, locked plan, fingerprints, or evidence changed
   and the active feature needs compact reminders before the next phase.
@@ -30,7 +30,8 @@ changing committed product-truth documents directly.
 
 ## Inputs
 
-- Active user prompt or continuation prompt.
+- Accepted prompt ID, revision, digest, and immutable snapshot from
+  `sdlc-start` intake.
 - `docs/requirements.md`.
 - `docs/design.md` when present.
 - Active run state under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
@@ -44,6 +45,7 @@ changing committed product-truth documents directly.
 - `docs/design.md` when present.
 - `run.json`, `current-state.json`, `feature-queue.json`, `fingerprints.json`,
   `checkpoints/latest.json`, and the latest checkpoint.
+- `prompt.json` and the exact accepted immutable prompt snapshot.
 - `STEERING.md`.
 - Current feature context pack and locked plan when present.
 - Recent validation, test, evaluation, document-update, UAT, PR, review, or
@@ -63,9 +65,11 @@ changing committed product-truth documents directly.
 ## Process
 
 - Reload active state and existing steering before classifying anything.
-- Append each new mid-run user prompt to the steering inbox, using a redacted
-  summary when the prompt contains secrets, credentials, private endpoints,
-  customer data, raw logs, or other unsafe material.
+- Append each pending accepted prompt revision to the steering inbox exactly
+  once. Link its prompt ID, revision, digest, and snapshot pointer; store only a
+  compact redacted summary, never raw prompt text, and redact secrets,
+  credentials, private endpoints, customer data, raw logs, or other unsafe
+  material.
 - Classify every unresolved steering entry as one of:
   `runtime-only`, `requirements-change`, `design-change`, `docs-update`,
   `resolved`, `superseded`, `rejected`, or `needs-human`.
@@ -73,18 +77,24 @@ changing committed product-truth documents directly.
   `sdlc-start`; do not let them become implementation truth until the owning
   product-truth document has been updated by `sdlc-create-requirements` or
   `sdlc-create-design`.
+- If execution is prepared or running, include its plan digest, integration
+  identity, active wave, started assignments, and cleanup blockers in routing
+  reminders. A product-truth or plan change must request `REPLAN_REQUIRED` and
+  preserve existing resources; steering must never reset them.
 - Derive compact active reminders from requirements, design, current feature,
   locked plan, context, evidence, and unresolved steering entries.
 - Keep `STEERING.md` human-readable and keep `steering/auto-steering.json`
   machine-readable with the same pending disposition state.
+- After both ledgers are durably updated, invoke the private prompt helper's
+  `steering-resolve` transition with `applied`, `blocked`, or `no_effect`.
 - Return the requested routing signal for `sdlc-start` instead of invoking the
   next SDLC phase directly.
 
 ## Idempotency
 
-- Rerunning with unchanged prompts, specs, fingerprints, evidence, and steering
+- Rerunning with an unchanged accepted revision, specs, fingerprints, evidence, and steering
   must not duplicate inbox entries or reminders.
-- Preserve append-only prompt history unless an entry is redacted, superseded,
+- Preserve append-only revision history unless an entry is redacted, superseded,
   or explicitly marked resolved.
 - Replace compact active reminders with the newest derived set for the current
   feature instead of accumulating stale reminders.
@@ -117,7 +127,7 @@ changing committed product-truth documents directly.
 
 ## Completion Criteria
 
-- New user prompts are recorded or safely redacted in `STEERING.md`.
+- New accepted prompt revisions are linked or safely summarized in `STEERING.md`.
 - Every unresolved steering entry has a disposition.
 - Active reminders are compact, current, and tied to the active feature.
 - Machine-readable steering state agrees with `STEERING.md`.

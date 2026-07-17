@@ -37,6 +37,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - Changed files.
 - Project tooling.
 - Existing tests and design context needed for implementation review.
+- Active execution coordinator and exact integration HEAD.
 
 ## Required Reads
 
@@ -56,6 +57,10 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 ## Process
 
 - Use `assets/templates/validate.md.template` for evidence.
+- Run from the registered integration worktree after verifying its Git common
+  directory, branch, exact recorded HEAD, and cleanliness. Bind all commands,
+  review scope, and evidence to that SHA; do not validate the stale project
+  checkout.
 - Detect the project stack and reuse configured project commands.
 - Run the smallest reliable validation set first.
 - Include syntax, linting, type checking when configured, Python import checks when relevant, config validation, and feasible build checks.
@@ -111,6 +116,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - `code-review` decision is recorded.
 - State moves to `validated` only when mechanical validation passes and
   `code-review` does not request changes or owner review.
+- Evidence records the integration SHA and coordinator identity used.
 
 ## SDLC Invariants
 

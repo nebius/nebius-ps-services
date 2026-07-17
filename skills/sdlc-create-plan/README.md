@@ -7,7 +7,8 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 Create a local, locked execution plan for exactly one feature. When the feature
 spans serial application layers, the plan preserves one end-to-end slice and
-groups work by behavior across layers instead of by isolated layer.
+expresses work as stable `TASK-*` records with dependencies, exact/prefix write
+claims, conflict domains, focused validation, done criteria, and stop conditions.
 
 ## Main Boundaries
 
@@ -30,4 +31,5 @@ groups work by behavior across layers instead of by isolated layer.
 - Local plan exists and is locked.
 - Plan contains test, implementation, validation, and evaluation steps.
 - Plan identifies the end-to-end slice or records why no vertical slice applies.
+- Task dependencies are acyclic; parallel candidates have disjoint ownership.
 - Plan references exact feature and requirement IDs.

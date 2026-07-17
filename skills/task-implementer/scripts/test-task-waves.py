@@ -629,6 +629,21 @@ class WorktreeWaveTest(unittest.TestCase):
             pw.plan_waves(self.workspace, "../foreign", 2, clock=lambda: FIXED)
         self.assertEqual(run_error.exception.code, "RUN_STATE_INVALID")
 
+    def test_malformed_interop_state_blocks_resource_creation(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
+        interop_path = self.run_dir / "orchestration" / "interop.json"
+        interop = json.loads(interop_path.read_text(encoding="utf-8"))
+        interop["released"] = False
+        interop_path.write_text(
+            json.dumps(interop, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        interop_path.chmod(0o600)
+        with self.assertRaises(PromptWorkspaceError) as raised:
+            pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
+        worktrees = git("worktree", "list", "--porcelain", cwd=self.repo)
+        self.assertEqual(worktrees.count("worktree "), 1)
+
     def test_journal_completes_partial_writes_as_one_json_line(self) -> None:
         journal = self.run_dir / "orchestration" / "journals" / "partial.jsonl"
         real_write = os.write
