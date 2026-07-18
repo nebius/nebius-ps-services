@@ -713,7 +713,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "replan-future",
                 "git merge --no-ff --no-edit",
                 "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v3",
+                "agentic-sdlc/execution-coordinator-v4",
             ],
         ),
         "locked plan task graph": (
@@ -741,11 +741,11 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "workspace-write",
             ],
         ),
-        "workflow state v2 with execution coordinator v3": (
+        "workflow state v2 with execution coordinator v4": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v3",
+                "agentic-sdlc/execution-coordinator-v4",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "WORKFLOW_UPGRADE_REQUIRED",
@@ -1701,6 +1701,17 @@ def check_capability_regressions(ctx: Context) -> None:
             ],
             ctx.skills_root,
         ),
+        "three-tier": (
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "-v",
+                "agentic-sdlc-test/scripts/test_three_tier_prompt.py",
+                "agentic-sdlc-test/scripts/test_three_tier_lifecycle.py",
+            ],
+            ctx.skills_root,
+        ),
     }
     results: dict[
         str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]
@@ -1711,6 +1722,37 @@ def check_capability_regressions(ctx: Context) -> None:
         results[suite] = (result, passed, skipped)
 
     capabilities: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+        "three-tier.harness": (
+            "Three-tier prompt and lifecycle harness",
+            (
+                (
+                    "three-tier",
+                    "test_rendered_starter_is_accepted_as_a_new_managed_run",
+                ),
+                ("three-tier", "test_renderer_rejects_compose_identity_drift"),
+                (
+                    "three-tier",
+                    "test_prepare_public_images_uses_private_config_and_fixed_images",
+                ),
+                (
+                    "three-tier",
+                    "test_record_runtime_rejects_swapped_container_roles",
+                ),
+                (
+                    "three-tier",
+                    "test_uat_phase_failure_updates_computer_use_report_status",
+                ),
+                (
+                    "three-tier",
+                    "test_computer_use_jit_readiness_contract_is_mirrored",
+                ),
+                ("three-tier", "test_semantic_rejects_out_of_order_gui_steps"),
+                (
+                    "three-tier",
+                    "test_semantic_rejects_duplicate_test_evidence_content",
+                ),
+            ),
+        ),
         "public.interface": (
             "Public two-command contract",
             (
@@ -2591,6 +2633,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Task Implementer interoperability", "interop.task-implementer-compatibility"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),
+        ("Three-tier harness contract", "three-tier.harness"),
         ("Hook registration", "hooks.registration"),
         ("Hook payload parity", "hooks.payload-parity"),
         ("Live evidence integrity", "live.evidence-integrity"),

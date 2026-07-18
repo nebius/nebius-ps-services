@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from sdlc_execution_core import (
     ExecutionError,
+    advance_batch,
     complete_wave,
     describe_status,
     finish_task,
@@ -32,11 +34,39 @@ from sdlc_execution_interop import (
 PRIVATE_OUTPUT_KEYS = {
     "combined_evidence",
     "done_criteria",
+    "decisions",
     "final_evidence",
+    "goal",
+    "open_risks",
     "promotion_evidence",
     "review",
     "validation",
 }
+
+
+def runtime_session_identity() -> str:
+    value = os.environ.get("CODEX_THREAD_ID")
+    if not isinstance(value, str) or not value.strip():
+        raise ExecutionError(
+            "SESSION_ID_UNAVAILABLE", "CODEX_THREAD_ID is required for worker commands"
+        )
+    return value
+
+
+def string_list_json(value: str, label: str) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", f"{label} must be a JSON string array"
+        ) from exc
+    if not isinstance(parsed, list) or any(
+        not isinstance(item, str) or not item.strip() for item in parsed
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", f"{label} must be a JSON string array"
+        )
+    return parsed
 
 
 def public_result(value: Any) -> Any:
@@ -74,6 +104,11 @@ def parser() -> argparse.ArgumentParser:
     wave.add_argument("--feature", required=True)
     wave.add_argument("--wave", required=True)
 
+    batch = sub.add_parser("batch-advance")
+    batch.add_argument("--run-dir", type=Path, required=True)
+    batch.add_argument("--feature", required=True)
+    batch.add_argument("--wave", required=True)
+
     replan = sub.add_parser("replan-future")
     replan.add_argument("--run-dir", type=Path, required=True)
     replan.add_argument("--feature", required=True)
@@ -86,7 +121,6 @@ def parser() -> argparse.ArgumentParser:
     task_start.add_argument("--wave", required=True)
     task_start.add_argument("--task", required=True)
     task_start.add_argument("--assignment-digest", required=True)
-    task_start.add_argument("--session-id", required=True)
     task_start.add_argument("--scope-cwd", type=Path, required=True)
 
     task_recover = sub.add_parser("task-recover")
@@ -94,8 +128,8 @@ def parser() -> argparse.ArgumentParser:
     task_recover.add_argument("--feature", required=True)
     task_recover.add_argument("--wave", required=True)
     task_recover.add_argument("--task", required=True)
-    task_recover.add_argument("--session-id", required=True)
     task_recover.add_argument("--scope-cwd", type=Path, required=True)
+    task_recover.add_argument("--expected-attempt", type=int, required=True)
     task_recover.add_argument("--confirmed-stopped", action="store_true")
 
     task_finish = sub.add_parser("task-finish")
@@ -106,6 +140,9 @@ def parser() -> argparse.ArgumentParser:
     task_finish.add_argument("--validation", required=True)
     task_finish.add_argument("--review", required=True)
     task_finish.add_argument("--message", required=True)
+    task_finish.add_argument("--summary", required=True)
+    task_finish.add_argument("--decisions-json", required=True)
+    task_finish.add_argument("--open-risks-json", required=True)
 
     integrate = sub.add_parser("wave-integrate")
     integrate.add_argument("--run-dir", type=Path, required=True)
@@ -152,6 +189,8 @@ def execute(args: argparse.Namespace) -> Any:
         return seal_tdd_base(args.run_dir, args.feature, args.message)
     if args.command == "wave-prepare":
         return prepare_wave(args.run_dir, args.feature, args.wave)
+    if args.command == "batch-advance":
+        return advance_batch(args.run_dir, args.feature, args.wave)
     if args.command == "replan-future":
         return replan_future(args.run_dir, args.feature, args.plan, args.capacity)
     if args.command == "task-start":
@@ -161,7 +200,7 @@ def execute(args: argparse.Namespace) -> Any:
             args.wave,
             args.task,
             args.assignment_digest,
-            args.session_id,
+            runtime_session_identity(),
             args.scope_cwd,
         )
     if args.command == "task-recover":
@@ -170,8 +209,9 @@ def execute(args: argparse.Namespace) -> Any:
             args.feature,
             args.wave,
             args.task,
-            args.session_id,
+            runtime_session_identity(),
             args.scope_cwd,
+            expected_attempt=args.expected_attempt,
             confirmed_stopped=args.confirmed_stopped,
         )
     if args.command == "task-finish":
@@ -183,6 +223,9 @@ def execute(args: argparse.Namespace) -> Any:
             args.validation,
             args.review,
             args.message,
+            summary=args.summary,
+            decisions=string_list_json(args.decisions_json, "decisions-json"),
+            open_risks=string_list_json(args.open_risks_json, "open-risks-json"),
         )
     if args.command == "wave-integrate":
         return integrate_wave(args.run_dir, args.feature, args.wave)

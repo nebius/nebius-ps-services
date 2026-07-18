@@ -2268,7 +2268,8 @@ cluster remains outside Terraform ownership.
 
 Schema v5 supports two explicit compute migration modes:
 
-- `in-place` updates the accepted fixed-size node groups themselves. Before a
+- `in-place` updates the accepted fixed-capacity node groups themselves,
+  including Nebius autoscaling groups whose minimum and maximum are equal. Before a
   worker group is dispatched, cxcli requires exact Kubernetes-to-Slurm identity,
   no active allocation or epilog, every node IDLE with no reason, and then an
   exact cxcli-owned Slurm drain followed by a final re-read. Cancelling or
@@ -2375,7 +2376,7 @@ human access contract for operator sessions and manual smoke checks.
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register a new target, report its active campaign, or propose the next campaign after completion. | Read-only against live resources. An existing `config.yaml` must pass the current runtime schema before discovery or campaign acceptance, so onboarding cannot preserve invalid stale target fields that a later leased execution cannot reload. It locks a schema-v5 campaign with explicit `compute_migration.mode: in-place\|blue-green`. Interactive onboarding always confirms every applicable migration setting; supplied options preselect rather than hide prompts. Non-interactive runs require `--compute-migration-mode` and the exact final `--to-k8s-version`; other migration values use documented defaults. In-place defaults to paused Slurm scheduling, zero surge, `max_unavailable: all`, worker drain timeout `10m`, and eight parallel clear groups. Blue/green records one bootstrap count per worker group. An active campaign is never replaced, and accepted settings cannot be overridden by `upgrade`. |
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Reconcile live state and inspect the first unmet segment of the config-owned campaign. | Read-only. It validates immutable cluster identities, refreshes Nebius/Kubernetes/Soperator/Slurm observations, validates every live provider capability needed by the selected hop, and derives `planned`, `executing`, `segment-pending`, `blocked`, `recovery-required`, or `complete` from config, live state, and the v5 operation journal. `config.yaml` is the only desired-path authority; non-v5 campaigns, non-v5 journals, and any journal-carried desired path fail without conversion or fallback. `--dry-run` and `--execute` are mutually exclusive and one is required. Normal command exit immediately expires the shared Kubernetes Lease with an API-valid `MicroTime`; its 120-second natural expiry remains the fallback only when best-effort release itself is unavailable. |
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute or reconcile at most one approved campaign segment, then stop. | Acquires the shared cluster lease, reloads and revalidates the v5 campaign, and dispatches the accepted mode. Lease renewal retries bounded transient MK8s credential and API connectivity failures inside the lease duration, but holder-test failure still aborts immediately. In-place updates the same fixed-size node groups only after exact Slurm-clear proof and a cxcli-owned per-group Slurm drain; `max_unavailable: all` is an allowed-unavailability bound, not a provider concurrency guarantee. Blue/green creates accepted bootstrap groups and preserves source workers until their job and epilog gates clear. Both modes use the controller bridge, login gateway, slot-B Jail preparation, operation IDs, CAS resource versions, and a v5 journal. Unknown or mixed provider outcomes are roll-forward `recovery-required`; accepted onboarding choices cannot be changed by this command. |
-| `nebius-cxcli ext-soperator jobs <config.yaml> --target <target> [--acknowledge-login-exit <fingerprint>]` | Control Slurm jobs and resolve a confirmed protected-session exit through the active v5 upgrade journal. | For a Nebius target registered only by `cluster_id`, the command creates the same non-persisted temporary kubeconfig handoff as `ext-soperator upgrade`; onboarding does not need a durable `kube_context`. The TUI shows every current active or pending job; `r` performs a fresh live all-job poll, including jobs submitted after the screen opened. It remains available during controller gaps and shows controller authority, connectivity, snapshot age, durable action results, and any SSH socket fingerprint awaiting confirmation. Use `--acknowledge-login-exit` only after the user confirms voluntary exit. The acknowledgement binds the exact fingerprint and observed absence epoch; it cannot release a live or reappeared socket. |
+| `nebius-cxcli ext-soperator jobs <config.yaml> --target <target> [--acknowledge-login-exit <fingerprint>] [--authorize-login-timeout-continuation <fingerprint>]` | Control Slurm jobs and resolve a confirmed protected-session exit through the active v5 upgrade journal. | For a Nebius target registered only by `cluster_id`, the command creates the same non-persisted temporary kubeconfig handoff as `ext-soperator upgrade`; onboarding does not need a durable `kube_context`. The TUI shows every current active or pending job; `r` performs a fresh live all-job poll, including jobs submitted after the screen opened. It remains available during controller gaps and shows controller authority, connectivity, snapshot age, durable action results, and any SSH socket fingerprint awaiting confirmation. Use `--acknowledge-login-exit` only after the user confirms voluntary exit; use `--authorize-login-timeout-continuation` only after the user confirms an involuntary timeout and explicitly authorizes continuation. Both bind the exact fingerprint and observed absence epoch; neither can release a live or reappeared socket. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
 Within one external execute attempt, cxcli avoids repeating the longest
@@ -2851,11 +2852,14 @@ nebius-cxcli soperator upgrade <config.yaml> \
 
 Managed and external upgrades use the same unconditional login-continuity
 contract. cxcli requires a Ready replacement endpoint, preserves each exact
-established SSH socket and its hosting login node indefinitely, and replaces
-that node only after the user exits voluntarily and the disappearance is
-acknowledged with `soperator jobs --acknowledge-login-exit <fingerprint>` or
-`ext-soperator jobs --acknowledge-login-exit <fingerprint>`. Neither upgrade
-exposes a login policy or timeout that can force a protected session closed.
+established SSH socket and its hosting login node indefinitely while the socket
+is live, and never disconnects it. After the exact socket is observed absent,
+the operator must either confirm voluntary exit with
+`soperator jobs --acknowledge-login-exit <fingerprint>` / `ext-soperator jobs
+--acknowledge-login-exit <fingerprint>`, or explicitly authorize continuation
+after a confirmed involuntary timeout with
+`--authorize-login-timeout-continuation <fingerprint>`. Neither upgrade exposes
+a login policy or timeout that can force a protected session closed.
 The two `jobs` commands also operate the same durable, authority-aware Slurm
 action journal while an upgrade is active.
 
@@ -3108,6 +3112,11 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   target is ready and the session either remains connected or has an explicit
   fingerprint-bound voluntary-exit acknowledgement. Socket disappearance alone
   remains `Indeterminate`.
+  If immutable-child handoff has already replaced that source Pod name, resume
+  recognizes the target successor only when the journal binds both
+  StatefulSet/Pod UID pairs and the earlier hold recorded zero active sessions
+  before release. This successor proof does not waive the original socket's
+  fingerprint-bound exit acknowledgement.
 - Controller continuity comes from the checkpointed cxcli-owned two-controller
   bridge. cxcli fences the source singleton before the bridge writes shared
   state, keeps one active and one standby bridge controller on distinct temporary
@@ -3369,6 +3378,14 @@ Important onboarding flags:
   without waiting for every group. Explicit `--job-policy preserve` and
   non-interactive runs keep jobs untouched while the separate checkpoint TUI
   remains available.
+  The finite provider-drain gate ignores terminal validation Jobs and
+  Node-owned per-node runtime Pods, admits stateless ReplicaSet Pods subject to
+  PDB checks, and recognizes the target worker StatefulSet's expected GPU
+  runtime host mounts. Unknown controllers, bare Pods, and any other live
+  hostPath state still fail closed before provider mutation.
+  Slurm's display-only `[user@timestamp]` suffix is removed before comparing a
+  node's live drain reason with the exact cxcli-owned reason; all other reason
+  text must still match exactly.
 - `--validate-sources` / `--no-validate-sources`: validate selected Soperator
   dependency chart sources before writing `config.yaml`; enabled by default.
   Use `--no-validate-sources` only when the workstation cannot run the source
@@ -3826,8 +3843,12 @@ Important external upgrade flags:
   record it with
   `nebius-cxcli ext-soperator jobs <config.yaml> --target <target>
   --acknowledge-login-exit <fingerprint>`. The durable acknowledgement binds
-  that fingerprint and its observed absence epoch. A live or reappeared socket
-  cannot be released by an earlier acknowledgement. The table polls while idle
+  that fingerprint and its observed absence epoch. If the user confirms the
+  socket ended through an involuntary timeout instead, explicitly authorize
+  continuation with `--authorize-login-timeout-continuation <fingerprint>`;
+  this records a distinct timeout disposition rather than claiming voluntary
+  exit. A live or reappeared socket cannot be released by either authorization.
+  The table polls while idle
   and exits automatically when no affected
   jobs remain. `wait-to-finish` polls
   until affected jobs finish or clear,
@@ -3924,14 +3945,18 @@ Important external upgrade flags:
   affected-job dashboard every second, locally counting down known Slurm
   `Remaining` values from `squeue`; unknown remaining time stays `unknown`, and
   cxcli polls `squeue` again on `--job-refresh-interval`.
-- External login continuity is mandatory and has no policy or timeout flag.
+- External login continuity is mandatory and has no automatic timeout policy.
   `ext-soperator upgrade` retains every exact source login Pod and owning node
   that carries a protected SSH connection while it brings up a ready target
   endpoint. The established TCP connection is never moved between Pods and the
-  source hold never expires. A disappeared socket remains `Indeterminate`; it
-  releases no source resource until the user confirms voluntary exit through
-  `ext-soperator jobs --acknowledge-login-exit <fingerprint>`, bound to that
-  exact socket fingerprint and absence epoch. Explicit persistent-path copies
+  source hold never expires while the socket is live. A disappeared socket
+  remains `Indeterminate`; it releases no source resource until the operator
+  records either confirmed voluntary exit through
+  `ext-soperator jobs --acknowledge-login-exit <fingerprint>` or explicit
+  continuation authorization
+  after a confirmed involuntary timeout through
+  `--authorize-login-timeout-continuation <fingerprint>`, bound to that exact
+  socket fingerprint and absence epoch. Explicit persistent-path copies
   that require a login writer hold remain pending under the same contract.
 - Target Helm source fencing captures the source `NodeSet` UID set once and
   reuses it on every resume. Mixed discovery after the target chart starts
@@ -4314,10 +4339,11 @@ is controlled by the exact target login workload UID, runs on the checkpointed
 replacement login node group at the target Kubernetes version, and matches the
 checkpointed SSH image identity when one is available. The preserved Service
 must route to that exact Pod while the original TCP connection remains on its
-source Pod. A disappeared socket remains
-`Indeterminate` until the user explicitly acknowledges that exact fingerprint
-and absence epoch after voluntary exit; only then can source retirement
-proceed. Missing or drifted identity evidence fails closed.
+source Pod. A disappeared socket remains `Indeterminate` until the operator
+binds that exact fingerprint and absence epoch to either confirmed voluntary
+exit or explicit continuation authorization after a confirmed involuntary
+timeout; only then can source retirement proceed. Missing or drifted identity
+evidence fails closed.
 OpenKruise `PodUnavailableBudget` remains the deletion fence for controller-owned
 login Pods. During the immutable-child handoff, an exact preserved login Pod can
 temporarily be ownerless and therefore is not counted by that controller. cxcli
@@ -4538,8 +4564,10 @@ hops after Slurm has passed post-Jail smoke.
 After a passive-slot switch, cxcli reruns the same direct GPU driver-jail gate
 before restoring any user partition. This specifically prevents an apparently
 Ready worker from reaching Slurm while the refreshed jail is missing NVIDIA
-linker symlinks; the target chart's init guard repairs the shared jail from the
-live host driver root, and cxcli verifies the repaired slot before release.
+linker symlinks. The target chart's validation-only init guard uses the Jail
+dynamic loader and libraries inside the GPU-requesting container, retaining its
+live devices without writing device nodes into the shared rootfs. cxcli verifies
+the populated slot before release.
 Before the switch, the same gate uses the immutable target controller image with
 the NVIDIA RuntimeClass, no GPU resource request, and no worker PriorityClass.
 It atomically installs the runtime-injected `nvidia-smi` and matching driver
@@ -4550,6 +4578,72 @@ same non-preempting, node-pinned RuntimeClass contract; it does not require the
 still-source-owned worker workload to claim target UID lineage before the slot
 switch. Exact target NodeSet, AdvancedStatefulSet, and Pod UID lineage remains a
 post-activation release requirement.
+
+For campaigns paused on the former chroot-based init probe, resume accepts only
+the exact failed old script and error on Pods owned by the checkpointed target
+StatefulSet UID. It records a pre-apply intent, reapplies the same chart and
+stored values once, and advances only after proving the next Helm revision,
+unchanged values, loader-based StatefulSet template, and new target-owned Pod
+UIDs. After worker rollover binds those same replacement UIDs, resume reuses the
+verified repair instead of replaying Helm. Any other failure, ownership change,
+chart/version change, values drift, replacement-UID mismatch, or indeterminate
+revision remains pending. The live Pod check treats Kubernetes' serialized
+`"1"` resource quantity as the exact chart-declared `nvidia.com/gpu: 1` limit,
+while rejecting additional GPU limit keys or any other quantity. The live init
+mount check permits Kubernetes' single standard read-only `kube-api-access-*`
+three-source projection in addition to the two exact chart-owned mounts; other
+extra mounts still fail closed. For the post-activation Slurm job gate, the
+checkpoint-bound worker Pod name is accepted only when an exact worker-container
+`scontrol show node` lookup returns that same single canonical `NodeName`; the
+gate does not depend on job-only environment variables being present during an
+arbitrary Pod exec. The full health-checker invocation likewise derives the
+same specific-first platform tag (`8xH100`, for example) from the pinned
+worker's live GPU product/count before executing the canonical Jail-installed
+`/usr/local/bin/health-checker` through the activated Jail's login environment.
+This post-activation chroot sees the live worker device mounts and the Jail
+CUDA, DCGM, NCCL, package metadata, and the chart-owned read-only host sysfs
+projection at `/sys-host`; it does not depend on the outer container `PATH` or
+expect the Slurm check runner to have exported the tag. The gate fails fast if
+the host PCI projection is missing rather than silently omitting InfiniBand
+checks.
+Before DCGM diagnostics, cxcli also aligns the installed DCGM runtime with the
+live NVIDIA driver generation and checkpoints the exact package version and
+plugin directory. Driver 580 and newer use the CUDA 13 DCGM package/plugin;
+older supported drivers use CUDA 12. For the root-only H100 allocation, cxcli
+keeps customer scheduling closed at the partition layer, proves every surviving
+target partition still matches its exact checkpointed `DOWN` record, records
+source-era partitions omitted by the canonical target configuration as retired,
+and only then compare-and-set releases its own worker drain. Final cutover
+reopens surviving target partitions and does not recreate target-retired source
+partitions. If an `srun` response is uncertain, resume never blindly resends it:
+only one exact-name terminal failed or cancelled job, found from the
+checkpointed preparation time and absent from the active queue, can be journaled
+and retried with a new identity.
+For an in-progress target release that predates this projection, resume records
+the exact chart content, installed manifest, stored values, release revision,
+target StatefulSet UIDs, and current replacement Pod UIDs before applying one
+same-version Helm revision. It then requires unchanged stored values, the next
+revision only, the exact rendered mount, and new Pods owned by the same target
+StatefulSets before sealing the repair. Later retries reuse that proof and the
+replacement UIDs instead of replaying Helm; any drift remains pending.
+When the checkpointed phase-6 OpenMetrics restore creates the immediately following Helm
+revision, resume accepts it only inside the recorded restore window and only
+when its final stored values, rendered target spec, chart/version, and installed
+loader contract all match; that downstream proof is then sealed for later
+retries. The released SConfig writer is allowed to reconcile the corresponding
+manager-generated full ConfigMap only through that sealed boundary. cxcli
+checkpoints the exact target and ConfigMap UIDs, bounded target generation,
+full-data and derived compatibility fingerprints, directive delta, and Helm
+revision proof before accepting it; later retries require the same semantic
+payload even if Kubernetes assigns a newer resource version. If a later check
+fails after that release, resume recovers the intermediate consumer status only
+when every target-slot consumer and live persistent mount still passes and the
+exact SConfig writer-release proof remains verified.
+When target login startup has already materialized the manager-restored
+full-target `slurm.conf` in the shared Jail, cxcli accepts and journals that
+digest only after every captured legacy worker Pod has an exact delete proof and
+is absent by UID. Before that worker-release boundary, only the compatible Jail
+digest is valid.
 
 The refresh uses an active/passive rootfs model. One physical jail backing store
 contains two logical rootfs slots plus stable persistent-mount directories:
@@ -4664,8 +4758,9 @@ separate from the later target-only slot-b seed pulse.
    path to a different non-overlapping target, cxcli instead checkpoints the
    immutable SlurmCluster identity and maintenance value and leaves the
    copy-time writer hold pending while any protected source SSH session is
-   active. There is no timeout or force-release path. After every disappeared
-   socket has an exact fingerprint-bound voluntary-exit acknowledgement, cxcli
+   active. There is no automatic timeout or force-disconnect path. After every
+   disappeared socket has either an exact fingerprint-bound voluntary-exit
+   acknowledgement or distinct timeout-continuation authorization, cxcli
    applies `maintenance=downscale` and runs a Kubernetes migration Job before
    passive-slot population. The Job
    mounts the existing jail PVC once at `/store`, copies only present known or
@@ -6305,7 +6400,8 @@ Common command flags:
   `--worker-ordinal`, `--namespace`, `--kube-context`,
   `--dry-run/--execute`, `--approve/--no-approve`,
   `--interactive/--no-interactive`
-- `soperator jobs`: `--target`, `--acknowledge-login-exit`
+- `soperator jobs`: `--target`, `--acknowledge-login-exit`,
+  `--authorize-login-timeout-continuation`
 - `soperator upgrade`: `--target`, `--to-chart-version`, `--to-k8s-version`,
   `--to-os`, `--to-gpu-stack-preset`, `--node-group-strategy`,
   `--zero-surge-max-unavailable`, `--strategy-max-surge-count`,

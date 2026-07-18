@@ -713,9 +713,12 @@ and chart source-family changes.
   plus live MK8s state are the source of truth for each requested run. cxcli
   uses the same unconditional login-continuity contract as external upgrade:
   one Ready replacement endpoint is required, every exact established socket
-  keeps its hosting node indefinitely, and replacement waits for voluntary exit
-  plus `soperator jobs --acknowledge-login-exit <fingerprint>`. There is no
-  managed or external login policy/timeout escape hatch. Both `jobs` commands
+  keeps its hosting node indefinitely while live, and replacement never forces
+  disconnect. After exact socket absence, the operator records either voluntary
+  exit with `soperator jobs --acknowledge-login-exit <fingerprint>` or explicit
+  continuation authorization after a confirmed involuntary timeout with
+  `--authorize-login-timeout-continuation <fingerprint>`. There is no managed or
+  external automatic login timeout or force-disconnect path. Both `jobs` commands
   write the canonical authority-aware Slurm action journal.
   After a checkpointed managed controller or system provider roll reaches its
   terminal state, cxcli refreshes discovery and permits only that exact domain's
@@ -2112,6 +2115,12 @@ nebius-cxcli ext-soperator jobs CONFIG_YAML --target TARGET \
   --acknowledge-login-exit FINGERPRINT
 ```
 
+If the user confirms that the same absent socket ended through an involuntary
+timeout instead, the operator uses
+`--authorize-login-timeout-continuation FINGERPRINT`. This creates a distinct
+timeout disposition bound to the same fingerprint and absence epoch. Neither
+command can release a live or reappeared socket.
+
 For a Nebius external target registered by `cluster_id` without a durable
 `kube_context`, the jobs command uses the same non-persisted temporary
 kubeconfig handoff as the upgrade command for the entire TUI session. Its
@@ -2528,6 +2537,45 @@ marker. The Job is journaled before apply, verifies the canonical evidence
 fields, rejects symlinked or nonempty legacy markers, and records its exact Job
 UID, Pod image digest, and success log. It never copies or rewrites driver
 libraries, including during a post-switch crash recovery.
+The worker init guard executes Jail `nvidia-smi -L` through the Jail dynamic
+loader and library path from the GPU-requesting init container, so the probe
+retains the live device namespace without persisting `/dev/nvidia*` in the
+shared rootfs. A campaign already paused on the old chroot probe may repair that
+chart content only through a checkpointed same-version Helm boundary: cxcli
+requires the exact failed old script and log on target-UID-owned Pods, seals the
+release revision, chart/app version, stored values, manifest, chart content,
+StatefulSet UID, and Pod UIDs before apply, then requires exactly one new
+revision with unchanged values and new loader-contract Pods. A different
+failure or any identity, values, version, or revision drift fails closed.
+The verified repair remains reusable after worker rollover records those exact
+replacement Pod UIDs as target-bound; an unverified repair or UID mismatch at
+that later state fails closed without another Helm apply. Kubernetes API
+resource quantities are string-serialized, so live validation canonicalizes the
+single `nvidia.com/gpu` limit value to `"1"` while still requiring that it is the
+only GPU limit key. Kubernetes also injects one read-only `kube-api-access-*`
+three-source projected mount into the init container; live validation accepts
+only that standard projection alongside the exact Jail and driver mounts and
+rejects every other extra mount. The later OpenMetrics restore is the sole phase-6 Helm
+revision allowed to follow the repair proof: its revision must be exactly next,
+its Helm timestamp must fall inside the checkpointed restore window, and its
+stored values plus target-spec render and loader contract must match before
+cxcli seals a reusable downstream proof. After that restore, the released
+SConfig writer can legitimately expose a newly generated full ConfigMap rather
+than the pre-restore digest. cxcli accepts that state once only when the sealed
+Helm proof, OpenMetrics timestamps, target UID and single bounded generation,
+ConfigMap UID, full-data fingerprint, and exact compatibility directive delta
+all agree. It journals the full and derived-compatible semantic fingerprints;
+a retry may tolerate a new Kubernetes resource version but not changed data or
+identity. A failure after writer release can leave the handoff journal at
+`consumers-verified-with-sconfig-released`; the OpenMetrics binder promotes
+that state back to `verified` only from complete target consumer/mount evidence
+and the exact released-writer/rootfs-PVC proof.
+Target login startup may materialize the manager-restored full-target config in
+the shared Jail after the compatible writer pulse. That is an allowed one-way
+transition only when target child creation is complete, the active-slot writer
+pulse is verified, and every captured legacy worker Pod has a durable exact
+delete proof and is absent by UID; the checkpoint seals those releases and the
+full-target digest before later reconciliation accepts it.
 The target-compatibility manager pulse is also a bounded generation cycle. A
 crash after manager restore but before the final login digest can reuse the
 restored manager only when the pause generation, config replacement, writer
@@ -4283,8 +4331,9 @@ target-only compatible slot seed.
    persistent path to a different non-overlapping target, checkpoint the
    immutable target SlurmCluster UID and maintenance value and leave the
    copy-time writer hold pending while any protected source SSH session is
-   active. There is no timeout or force-release path. After every disappeared
-   socket has an exact fingerprint-bound voluntary-exit acknowledgement, apply
+   active. There is no automatic timeout or force-disconnect path. After every
+   disappeared socket has either an exact fingerprint-bound voluntary-exit
+   acknowledgement or explicit timeout-continuation authorization, apply
    `maintenance=downscale` and run a Kubernetes persistent migration Job before
    passive-slot population. The Job mounts the existing
    jail PVC once at `/store`, copies only present known or explicit paths such
@@ -4446,7 +4495,25 @@ target-only compatible slot seed.
    those checks pass, resume partitions and run a bounded live `sbatch` job,
    checkpointed before and after its single submission, polled through
    accounting, and cancelled on timeout before considering the refresh
-   complete. A rerun after
+   complete. The GPU post-activation gate binds its candidate Slurm node to the
+   exact checkpointed Ready worker Pod name and requires an exec in that same
+   Pod UID/node binding to return exactly that `NodeName` from
+   `scontrol show node`; it does not infer identity from an optional process
+   environment variable. In the same binding, full health-checker execution
+   derives its specific-first platform tag from the live `nvidia-smi` product
+   and device count using the chart check-runner convention. It then invokes
+   `/usr/local/bin/health-checker` through the activated Jail login environment,
+   where the live worker devices and Jail CUDA, DCGM, NCCL, and package metadata
+   are visible. The chart-owned read-only host `/sys` projection is visible at
+   `/sys-host`, so the same gate also validates PCI and InfiniBand topology; a
+   missing `/sys-host/bus/pci` path fails before the long-running check. This
+   post-activation boundary does not rely on the outer container `PATH` or
+   job/prolog-exported environment. A target release missing that mount may
+   cross one checkpointed same-version Helm boundary: the pre-apply proof binds
+   chart content, manifest, values, revision, target StatefulSet UIDs, and Pod
+   UIDs; the post-apply proof requires exactly the next revision, unchanged
+   values, the rendered mount, the same StatefulSet owners, and replacement Pod
+   UIDs. Verified retries reuse that proof and never replay the repair. A rerun after
    a verified consumer handoff corroborates the live slot and resumes that
    smoke state without populating or switching the live PVC again.
 
@@ -4471,6 +4538,12 @@ passive-slot Job may be treated as garbage-collected evidence only after the
 versioned durable handoff and smoke contracts have passed and current
 login/worker slot, `/home` source, `scontrol`, and `sbatch --test-only` probes
 revalidate them.
+When immutable-child handoff replaces a protected source login name, the
+continuity journal accepts the target successor only after binding the exact
+source/target StatefulSet and Pod UIDs plus a zero-active-session hold release.
+That successor proof does not establish how the original session ended: any
+original socket without an end record still requires a fingerprint-bound
+voluntary-exit acknowledgement or distinct timeout-continuation authorization.
 The status loop does not duplicate this expensive live recovery proof: a
 missing checkpointed passive-slot Job remains unknown until execute-time
 revalidation. Before controller-spool cluster-name cleanup, execute resolves
@@ -4689,9 +4762,10 @@ The command boundary is intentional:
   target-compatible; onboarding never silently rewrites an aligned choice to a
   keep-existing mode. Busy workers remain on
   source nodes until jobs and epilogs finish, and exact source login
-  sessions remain until a ready target exists and their voluntary exits have
-  exact fingerprint-bound acknowledgements. Unacknowledged socket disappearance
-  remains `Indeterminate` and never releases the source hold. The v5 path also
+  sessions remain until a ready target exists and each exact socket is either
+  live or has a fingerprint-bound voluntary-exit acknowledgement or distinct
+  timeout-continuation authorization. Unresolved socket disappearance remains
+  `Indeterminate` and never releases the source hold. The v5 path also
   requires the
   cxcli-owned two-controller bridge, exact authority fencing, and a proven final
   singleton takeover. Normal `--execute --approve` authorizes mutation but

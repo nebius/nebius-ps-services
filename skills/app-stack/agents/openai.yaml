@@ -1,0 +1,6 @@
+interface:
+  display_name: "App Stack"
+  short_description: "Select and coordinate application technology stacks"
+  default_prompt: "Use $app-stack to select the smallest justified technology stack and coordinate its implementation."
+policy:
+  allow_implicit_invocation: true

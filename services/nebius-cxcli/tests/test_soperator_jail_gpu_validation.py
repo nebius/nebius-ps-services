@@ -224,9 +224,18 @@ def test_validate_jail_gpu_post_activation_requires_every_gate() -> None:
             {"name": "full health checker", "status": "passed"},
             {"name": "pinned H100 smoke", "status": "passed"},
             {"name": "post-epilog validation", "status": "passed"},
-            {"name": "Slurm IDLE+DYNAMIC_NORM", "status": "passed"},
+            {"name": "Slurm schedulable IDLE state", "status": "passed"},
         ],
     }
+
+
+def test_validate_jail_gpu_post_activation_accepts_running_cloud_idle_state() -> None:
+    evidence = _successful_post_activation_evidence()
+    evidence["slurm_node"]["state"] = "IDLE+CLOUD"
+
+    result = validate_jail_gpu_post_activation(**evidence)
+
+    assert result.passed is True
 
 
 @pytest.mark.parametrize(
@@ -241,8 +250,8 @@ def test_validate_jail_gpu_post_activation_requires_every_gate() -> None:
         (("pinned_h100_smoke", "gpu_count"), 1, "must match expected_gpu_count"),
         (("post_epilog", "completed"), False, "completed must be true"),
         (("post_epilog", "exit_code"), True, "exit_code must be integer 0"),
-        (("slurm_node", "state"), "IDLE", "exactly 'IDLE\\+DYNAMIC_NORM'"),
-        (("slurm_node", "state"), " IDLE+DYNAMIC_NORM ", "exactly 'IDLE\\+DYNAMIC_NORM'"),
+        (("slurm_node", "state"), "IDLE", "one exact schedulable idle state"),
+        (("slurm_node", "state"), " IDLE+DYNAMIC_NORM ", "one exact schedulable idle state"),
         (("slurm_node", "reason"), "Epilog error", "reason must be empty"),
         (("slurm_node", "reason"), None, "reason must be empty"),
     ],

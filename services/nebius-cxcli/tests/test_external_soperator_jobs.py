@@ -289,6 +289,7 @@ def test_checkpoint_writer_preserves_concurrent_login_exit_acknowledgement(
         disk_checkpoint["slurm"]["action_journal"],
         socket_fingerprint=fingerprint,
         acknowledged_by="ext-soperator-jobs-cli",
+        disposition=migration.SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
         acknowledged_at="2026-07-12T10:03:00Z",
     )
     path = tmp_path / ".nebius-cxcli" / "checkpoint.json"
@@ -302,10 +303,11 @@ def test_checkpoint_writer_preserves_concurrent_login_exit_acknowledgement(
         {
             "socket_fingerprint": fingerprint,
             "absence_observed_at": "2026-07-12T10:02:00Z",
-            "acknowledged_at": "2026-07-12T10:03:00Z",
-            "acknowledged_by": "ext-soperator-jobs-cli",
-        }
-    ]
+                "acknowledged_at": "2026-07-12T10:03:00Z",
+                "acknowledged_by": "ext-soperator-jobs-cli",
+                "disposition": migration.SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
+            }
+        ]
 
 
 def test_tui_writer_never_overwrites_non_action_checkpoint_progress(tmp_path: Path) -> None:
@@ -736,6 +738,7 @@ def test_ext_soperator_jobs_help_exposes_canonical_command() -> None:
     assert "ext-soperator jobs [OPTIONS] CONFIG_YAML" in normalized
     assert "--target" in normalized
     assert "--acknowledge-login-exit" in normalized
+    assert "--authorize-login-timeout-continuation" in normalized
     assert "actions remain durably Queued" in normalized
     assert "Indeterminate" in normalized
 
@@ -796,6 +799,7 @@ def test_managed_soperator_jobs_help_exposes_shared_journal_contract() -> None:
     assert "soperator jobs [OPTIONS] CONFIG_YAML" in normalized
     assert "--target" in normalized
     assert "--acknowledge-login-exit" in normalized
+    assert "--authorize-login-timeout-continuation" in normalized
     assert "controller authority epoch" in normalized
 
 

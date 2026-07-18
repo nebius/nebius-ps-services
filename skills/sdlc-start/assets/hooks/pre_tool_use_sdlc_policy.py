@@ -105,11 +105,10 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
 
     project_root = active.project_root if active else resolve_project_root(cwd)
 
-    danger = dangerous_shell_reason(command)
-    if danger:
-        return _deny(payload, danger)
-
     if tool_name == "Bash":
+        danger = dangerous_shell_reason(command)
+        if danger:
+            return _deny(payload, danger)
         git_reason = git_policy_reason(command, project_root, active)
         if git_reason:
             return _deny(payload, git_reason)

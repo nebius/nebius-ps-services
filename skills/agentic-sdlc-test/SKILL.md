@@ -1,6 +1,6 @@
 ---
 name: agentic-sdlc-test
-description: "Use only when explicitly asked, outside the Agentic SDLC workflow, to safely verify the whole Agentic SDLC system against docs/agentic-sdlc-design.md: check source-installed skill parity, deterministic prompt/execution/worktree/hook capabilities, optional private live-run evidence, and readiness reporting without changing real projects, installed skills, hooks, or agent configuration."
+description: "Use only when explicitly asked, outside the Agentic SDLC workflow, to safely verify the whole Agentic SDLC system: keep the no-flag lightweight verifier unchanged, or use --create, --create --keep, or --destroy for one owned local three-tier Docker application with computer-use GUI UAT, exact cleanup, and sanitized reporting."
 ---
 
 # Agentic SDLC Test
@@ -33,6 +33,10 @@ the SDLC system itself.
 
 ## Inputs
 
+- Lifecycle flags: no lifecycle action, `--create`, `--create --keep`, or
+  `--destroy`. Preserve every existing lightweight verifier option when no
+  lifecycle action is present. `--keep` alone is invalid, and `--destroy` is
+  mutually exclusive with create/keep; validate these rules before mutation.
 - `docs/agentic-sdlc-design.md`.
 - Optional user-specified dedicated verification root, report path under that
   private verification root, global skills path, or design path. A new custom
@@ -77,6 +81,11 @@ The default report path is:
   the `sdlc-start` skill's hook bundle when hook verification is in scope.
 - `scripts/verify_agentic_sdlc.py` before patching or relying on verifier
   behavior beyond its command-line help.
+- For a three-tier mode only: `references/three-tier-live.md`,
+  `assets/three-tier-prompt.md.template`,
+  `assets/three-tier-results.schema.json`, and
+  `scripts/three_tier_lifecycle.py` help for the needed private action. Read
+  `scripts/three_tier_semantics.py` before changing PASS derivation.
 
 ## Writes
 
@@ -95,6 +104,10 @@ Allowed writes:
 - A private verification-root ownership marker and a committed public fixture
   marker that prevent custom roots or clean unknown Git repositories from
   being mistaken for verifier-owned state.
+- For a three-tier mode only, one active private lifecycle under
+  `<verification-root>/three-tier-live/`, its owned disposable project, raw
+  evidence, exact Docker inventory, sanitized per-run report, and lifecycle
+  archive as defined by `references/three-tier-live.md`.
 
 Do not write to real project source trees, installed skill folders, hook
 configuration, credential directories, external systems, or non-disposable Git
@@ -102,11 +115,18 @@ remotes.
 
 ## Process
 
-1. Establish the source of truth.
+1. Parse the invocation mode before any mutation.
+   With no lifecycle flag, run steps 2-10 exactly as the existing lightweight
+   verifier. With `--create` or `--create --keep`, first run the unchanged
+   lightweight preflight and then follow the Three-Tier Live Process below.
+   With `--destroy`, skip project creation and follow the standalone destroy
+   process in `references/three-tier-live.md`. A missing active application is
+   the successful idempotent result `ALREADY_DESTROYED`.
+2. Establish the source of truth.
    Read `docs/agentic-sdlc-design.md` and
    `references/verification-checklist.md`. Treat the design doc as the
    workflow contract and the checklist as the test plan.
-2. Run static and hook preflight verification.
+3. Run static and hook preflight verification.
    From the skills repository root, run:
 
    ```bash
@@ -124,11 +144,11 @@ remotes.
    unowned, dirty, remote-backed, or non-canonical directories and repositories
    fail closed without mutation. The script does not edit installed skills or
    hooks.
-3. Review the preflight report.
+4. Review the preflight report.
    Any deterministic FAIL makes the report FAIL. Missing optional hook
    registration is WARN/PARTIAL; a configured payload mismatch or unsafe hook
    behavior is FAIL. Missing live evidence is PARTIAL, not synthetic PASS.
-4. Run the disposable golden-path workflow when full verification is requested.
+5. Run the disposable golden-path workflow when full verification is requested.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
@@ -139,20 +159,20 @@ remotes.
    `sdlc-commit`, and `sdlc-uat-tests`. Run `sdlc-update-documents` again
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.
-5. Verify rerun and change-request behavior.
+6. Verify rerun and change-request behavior.
    Repeat `$sdlc-start run <prompt-path-or-unique-filename>` with no prompt
    changes, then edit the same prompt with the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,
    scoped changes, refreshed evidence, and no duplicate commits.
-6. Verify failure routing and steering behavior.
+7. Verify failure routing and steering behavior.
    Inject one controlled failure at a time in the disposable project, verify
    `sdlc-classify-failure` routes to the earliest responsible phase, then
    repair and rerun. Add the pause/no-PR instruction to the same prompt and
    repeat `run`.
-7. Verify continuation and optional harness smoke checks.
+8. Verify continuation and optional harness smoke checks.
    Exercise Stop continuation with fake state and, where available, run safe
    GUI and TUI smoke checks against local disposable targets only.
-8. Persist and ingest live results.
+9. Persist and ingest live results.
    Use the identity in `verification-context.json`. Write only the v1 manifest
    and relative evidence paths defined by `assets/live-results.schema.json`.
    Evidence must stay under `evidence/<lane>/` within the verification root,
@@ -161,11 +181,88 @@ remotes.
    in the live history inside the selected nested project, exclude private SDLC
    state, and never contain prompt bodies or secrets. Rerun the verifier with
    `--live-evidence PATH`.
-9. Update the report.
+10. Update the report.
    Keep the report concise and evidence-backed. Include capability-level PASS,
    PARTIAL, or FAIL, validation commands, skipped live checks, and the low-risk
    repository recommendation. Do not paste raw evidence bodies, hook logs, or
    secret-bearing output.
+
+## Three-Tier Live Process
+
+Use this process only after explicit `--create` or `--create --keep`:
+
+1. Read and follow `references/three-tier-live.md`. Confirm Docker Engine,
+   Docker Compose, Git, installed-source skill parity, Edge or Chrome, and the
+   `computer-use` capability before live mutation. Prove computer-use with a
+   successful real `get_app_state` for the selected browser, retrying once by
+   bundle identifier only when the display-name call returns normally; tool
+   discovery alone is not proof. This initial capture proves capability only
+   and must not be reused as later GUI readiness. Edge is primary; Chrome is a
+   visible recorded fallback. Missing required live capability before an
+   attempt is PARTIAL. A failed attempted action is FAIL.
+2. Prepare one owned lifecycle with `scripts/three_tier_lifecycle.py`. Refuse a
+   second create while an active lifecycle exists. Run its `prepare-images`
+   action to pull only the fixed public base images through an owned empty
+   Docker CLI config; do not reuse that config for Compose. Use the private
+   root's isolated Codex home for all prompt workspace and phase state; never
+   reuse or delete the user's ordinary Agentic SDLC run directory.
+3. Create the project through the normal prompt-bound Agentic SDLC workflow:
+   first run `$sdlc-start workspace init <project-folder>`, then use
+   `scripts/render_three_tier_prompt.py` to replace the generated starter body
+   while preserving its managed identity, and finally run
+   `$sdlc-start run <prompt-path-or-unique-filename>`. Follow the returned phase
+   skill; do not make the lifecycle helper or hooks orchestrate phases.
+4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
+   and PostgreSQL. Run exactly two labelled Compose containers, dynamically
+   publish only the web port on loopback, and keep PostgreSQL private to the
+   Compose network. Record containers with the role-specific `--web-container`
+   and `--database-container` arguments; the helper verifies Compose service
+   labels before accepting them.
+5. Execute every phase and test class in the scenario reference. Local ship
+   means build and run the promoted clean SHA locally; it never means push,
+   publish, PR creation, or PR merge.
+6. For GUI evaluation and UAT, explicitly route through `sdlc-gui-test` with
+   `harness: computer-use`. Immediately before the first navigation in
+   `sdlc-evaluate`, and again immediately before `sdlc-uat-tests`, require a
+   fresh successful `get_app_state` for the exact selected browser. Unless the
+   current Codex surface explicitly confirms locked Computer Use is enabled for
+   this session, the host must be unlocked. A normal browser window must be
+   visible, unminimized, foreground, and on the current macOS Space.
+   Lock/unlock, display, Space, or browser-window changes invalidate earlier
+   readiness. Refresh accessibility state after every successful action.
+   Correlate GUI observations with
+   independent API and PostgreSQL results and prove persistence across a
+   service restart.
+7. If a just-in-time capture returns `cgWindowNotFound` or another visibility
+   failure, record `ENVIRONMENT_DEFECT` with the explicit stage
+   `pre-navigation-window-capture` and state that no GUI navigation or action
+   was attempted. Record only bounded sanitized diagnostics: selected browser,
+   whether lock/window visibility/frontmost/current-Space state is known, and
+   whether the call returned an error or timed out. If a Computer Use call
+   hangs or times out, or fresh capture loses responses across browsers, treat
+   the shared service as unhealthy and stop all further Computer Use calls for
+   that attempt. Do not use the same path for `list_apps`, new-window recovery,
+   repeated bundle/browser retries, tab closing, browser restart, or service
+   restart. Preserve the owned runtime and require any fresh-session or service
+   recovery as a separate explicitly authorized action.
+8. Persist semantic results using
+   `agentic-sdlc/three-tier-results-v1`. The lifecycle helper derives PASS from
+   required phases, tests, Git identity, GUI actions, API/database correlation,
+   restart persistence, and distinct artifacts. Never accept placeholder
+   `{"result":"pass"}` evidence or screenshots as the only oracle.
+9. Write the complete sanitized report with layer inventory, resolved ports
+   and endpoints, baseline/promoted SHAs, phase/test/UAT outcomes, exact owned
+   resource IDs, recorded validation commands, top issues and recommended
+   fixes, and cleanup/retention result.
+10. With `--keep`, preserve the owned project, private SDLC state/evidence, two
+   running containers, network, database volume, built web image, and dedicated
+   browser tab; report `KEPT` and the exact later destroy invocation. Without
+   `--keep`, close only the dedicated tab and destroy every exact owned live
+   resource in a finally-style path after success or failure. The safety
+   exception is an unhealthy Computer Use service that cannot safely close the
+   dedicated tab: make no further Computer Use calls, preserve every owned
+   resource, and persist resumable `CLEANUP_FAILED` state. Any cleanup failure
+   makes the overall result FAIL.
 
 ## Idempotency
 
@@ -177,6 +274,12 @@ remotes.
   the disposable project when inputs are unchanged.
 - If a previous verification run is incomplete, resume from the report and
   disposable state instead of deleting unrelated user files.
+- The three-tier profile permits one active application per verification root.
+  A second create fails without mutation. Standalone destroy is resumable and
+  returns `ALREADY_DESTROYED` when no active lifecycle exists. Destroy retains
+  sanitized reports and the lifecycle archive, but removes the owned project,
+  raw evidence, private run state, containers, network, database volume, built
+  image, and dedicated tab.
 
 ## Failure Handling
 
@@ -207,8 +310,18 @@ remotes.
   outside the verification root, or schema-invalid, never infer success.
 - If a check requires unavailable optional tooling such as a GUI harness, mark
   it NOT APPLICABLE or PARTIAL instead of failing the core workflow.
+- If a just-in-time Computer Use capture fails before navigation, classify it
+  as `ENVIRONMENT_DEFECT`, not a product, URL, evaluation, or UAT defect. If the
+  call hangs or the shared service stops responding, make no further Computer
+  Use calls in that attempt. If the dedicated tab therefore cannot be closed,
+  preserve the owned runtime as `CLEANUP_FAILED` and report the separately
+  authorized recovery action.
 - If any command would push, publish, merge, edit installed hooks, or touch a
   non-disposable project, stop and report the unsafe action.
+- For three-tier cleanup, inspect exact recorded IDs and require both lifecycle
+  and Compose ownership labels before deletion. Any mismatched label, path,
+  schema, verification ID, or browser-tab identity fails closed before deleting
+  that ambiguous resource. Never discover deletion targets from name prefixes.
 
 ## Safety
 
@@ -224,6 +337,14 @@ marker, context, manifest, report, and referenced evidence files require
 private modes. The disposable Git root must have no remote and must carry the
 exact public fixture marker. The root, fixture components, and report path must
 be real local directories and files, never symlink redirects.
+
+The three-tier lifecycle helper is additionally limited to private lifecycle
+state, sanitized reports, exact label verification, and deletion of recorded
+owned resources. It does not invoke SDLC phases. It must never delete Docker,
+shared/base images, unrelated containers, networks, volumes, projects, browser
+applications, or unrelated tabs. Database credentials stay private and must
+not appear in reports, committed prompts, screenshots, or command-line
+arguments.
 
 When executing hook source fixtures, disable Python bytecode writes so
 verification does not create `__pycache__` artifacts in skill source folders.
@@ -258,8 +379,24 @@ URLs, customer data, raw logs, or one-off local state.
 - The report states PASS, PARTIAL, or FAIL and lists top issues and fixes.
 - No installed skills, hook configuration, credentials, real repositories, or
   external services were modified.
+- In three-tier create mode, every logical layer, SDLC phase, named test class,
+  local deployment, computer-use GUI journey, API/database correlation, and
+  restart-persistence assertion has semantic evidence. The report records all
+  ports/endpoints and exact owned resources. The final lifecycle is either
+  safely `KEPT` by explicit request, `DESTROYED`, or retained as
+  `CLEANUP_FAILED`; incomplete cleanup is FAIL.
 
 ## Output Contract
+
+Return the requested mode, final PASS/PARTIAL/FAIL result, report path, checked
+environment, project and promoted SHA when applicable, layer inventory,
+resolved web/API/health endpoints, internal-only database endpoint, phase/test/
+UAT summary, retention or cleanup status, and any exact next action. Never
+return raw logs, prompts, credentials, database contents, private endpoint
+secrets, or screenshot contents.
+
+For the lightweight no-flag mode, preserve the existing readiness report and
+PASS/PARTIAL/FAIL interpretation.
 
 Return:
 

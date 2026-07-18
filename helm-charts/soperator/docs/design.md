@@ -2661,6 +2661,9 @@ For each GPU worker NodeSet, the chart injects:
 
 - `nvidia-driver-root`: hostPath `/` mounted read-only at
   `/run/nvidia/driver`.
+- `gpu-health-sysfs`: hostPath `/sys` mounted read-only at
+  `/mnt/jail/sys-host`, which is `/sys-host` inside the activated Jail and
+  supplies the host PCI/InfiniBand topology required by `health-checker`.
 - `cxcli-gpu-driver-jail`: an init guard using the same `slurmd` image as the
   worker, requesting one GPU and mounting the active jail read-only.
 
@@ -2677,16 +2680,21 @@ Each worker init guard is validation-only. It checks the marker schema and
 fields, executes host `nvidia-smi` inside the read-only host root, verifies the
 host version and hashes match the marker, proves all four jail symlinks have
 the canonical in-rootfs targets, checks the existing `ldconfig` cache, and
-runs jailed `nvidia-smi -L`. Any missing marker, mixed driver, broken or
-out-of-rootfs link, hash mismatch, or unavailable GPU blocks `slurmd` startup.
+runs jailed `nvidia-smi -L` with the Jail dynamic loader and library path in
+the GPU-requesting init container. It does not chroot into the shared rootfs,
+because that persistent filesystem intentionally contains no `/dev/nvidia*`
+device nodes; Kubernetes exposes the live devices in the init container.
+Any missing marker, mixed driver, broken or out-of-rootfs link, hash mismatch,
+or unavailable GPU blocks `slurmd` startup.
 This avoids concurrent writes to the shared active rootfs while keeping the
 durable repair outside upstream-owned `slurm_scripts/` and image-owned
 `complement_jail.sh`.
 
 The chart fails render for GPU NodeSets that define a custom mount named
-`nvidia-driver-root`, a custom mount at `/run/nvidia/driver`, or a custom init
-container named `cxcli-gpu-driver-jail`. CPU NodeSets do not receive this
-mount or init guard.
+`nvidia-driver-root` or `gpu-health-sysfs`, a custom mount at
+`/run/nvidia/driver` or `/mnt/jail/sys-host`, or a custom init container named
+`cxcli-gpu-driver-jail`. CPU NodeSets do not receive these mounts or the init
+guard.
 
 ### AppArmor And User Namespaces
 

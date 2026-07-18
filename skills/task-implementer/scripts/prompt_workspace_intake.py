@@ -300,8 +300,8 @@ def route_project_prompt(
                         raise PromptWorkspaceError(
                             "RUN_STATE_INVALID", "completed run handoff is missing"
                         )
-                    # Completed v1 history remains readable. V2 state is
-                    # validated when loaded; there is no v1 execution path.
+                    # Completed prompt history is readable only when its
+                    # canonical v3 execution state validates.
                     load_coordinator_state(latest_dir)
                 if (
                     str(verified["status"]) == "done"

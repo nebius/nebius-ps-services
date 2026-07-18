@@ -186,6 +186,9 @@ class WorktreeWaveTest(unittest.TestCase):
             "status": "committed",
             "commit": commit,
             "changed_paths": [f"services/example/{filename}"],
+            "summary": f"Implemented {task_id}",
+            "decisions": [],
+            "open_risks": [],
             "validation": "focused validation passed",
             "end_to_end_validation": "task behavior observed",
             "code_review": "code-review completed with no findings",
@@ -244,9 +247,55 @@ class WorktreeWaveTest(unittest.TestCase):
         dispatched = pw.dispatch_wave(
             self.workspace, self.run_id, self.initial, clock=lambda: FIXED
         )
-        self.assertEqual(len(dispatched["assignments"]), 2)
-        self._complete_worker("task-2", "two.txt")
+        self.assertEqual(len(dispatched["assignments"]), 1)
+        first_handoff = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "incoming-handoffs"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(first_handoff["dependencies"], [])
+        self.assertEqual(first_handoff["predecessors"], [])
         task_one_result = self._complete_worker("task-1", "one.txt")
+        next_batch = pw.advance_batch(
+            self.workspace, self.run_id, clock=lambda: FIXED
+        )
+        self.assertEqual(len(next_batch["assignments"]), 1)
+        second_handoff = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "incoming-handoffs"
+                / "wave-001"
+                / "task-2.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [item["task_id"] for item in second_handoff["predecessors"]],
+            ["task-1"],
+        )
+        second_assignment = json.loads(
+            Path(next_batch["assignments"][0]).read_text(encoding="utf-8")
+        )
+        previous = Path.cwd()
+        os.chdir(Path(second_assignment["scope_cwd"]))
+        try:
+            with self.assertRaises(PromptWorkspaceError) as reused:
+                pw.start_task(
+                    self.workspace,
+                    self.run_id,
+                    "task-2",
+                    second_assignment["assignment_sha256"],
+                    session_id="session-task-1",
+                    clock=lambda: FIXED,
+                )
+        finally:
+            os.chdir(previous)
+        self.assertEqual(reused.exception.code, "FRESH_SESSION_REQUIRED")
+        self._complete_worker("task-2", "two.txt")
         self.assertEqual(
             pw.accept_task_result(
                 self.workspace, self.run_id, "task-1", clock=lambda: FIXED
@@ -362,6 +411,24 @@ class WorktreeWaveTest(unittest.TestCase):
         pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         repaired = json.loads(coordinator_path.read_text(encoding="utf-8"))
         self.assertEqual(repaired["active_wave"], "wave-002")
+        pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        pw.dispatch_wave(
+            self.workspace, self.run_id, integration_tip, clock=lambda: FIXED
+        )
+        dependent_handoff = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "incoming-handoffs"
+                / "wave-002"
+                / "task-3.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(dependent_handoff["dependencies"], ["task-1", "task-2"])
+        self.assertEqual(
+            [item["task_id"] for item in dependent_handoff["predecessors"]],
+            ["task-1", "task-2"],
+        )
         journal = self.run_dir / "orchestration" / "journals" / "wave-001.jsonl"
         for line in journal.read_text(encoding="utf-8").splitlines():
             self.assertIsInstance(json.loads(line), dict)
@@ -406,6 +473,9 @@ class WorktreeWaveTest(unittest.TestCase):
                 "services/example/one.txt",
                 "services/example/two.txt",
             ],
+            "summary": "Expanded task scope",
+            "decisions": [],
+            "open_risks": ["scope exceeded"],
             "validation": "focused validation passed",
             "end_to_end_validation": "behavior observed",
             "code_review": "review completed",
@@ -547,6 +617,73 @@ class WorktreeWaveTest(unittest.TestCase):
             os.chdir(previous)
         self.assertEqual(recovered["observed_head"], self.initial)
         self.assertEqual(recovered["changed_paths"], ["services/example/one.txt"])
+        plane = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "tasks"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(plane["worker_session_sha256_history"]), 2)
+        task_two = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-2.json"
+            ).read_text(encoding="utf-8")
+        )
+        os.chdir(Path(task_two["scope_cwd"]))
+        try:
+            with self.assertRaises(PromptWorkspaceError) as reused:
+                pw.start_task(
+                    self.workspace,
+                    self.run_id,
+                    "task-2",
+                    task_two["assignment_sha256"],
+                    session_id="interrupted-worker",
+                    clock=lambda: FIXED,
+                )
+        finally:
+            os.chdir(previous)
+        self.assertEqual(reused.exception.code, "FRESH_SESSION_REQUIRED")
+
+    def test_tampered_incoming_handoff_blocks_worker_start(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
+        pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        pw.dispatch_wave(self.workspace, self.run_id, self.initial, clock=lambda: FIXED)
+        assignment = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        handoff_path = Path(assignment["incoming_handoff_path"])
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        handoff["dependencies"] = ["task-999"]
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        handoff_path.chmod(0o600)
+        previous = Path.cwd()
+        os.chdir(Path(assignment["scope_cwd"]))
+        try:
+            with self.assertRaises(PromptWorkspaceError) as raised:
+                pw.start_task(
+                    self.workspace,
+                    self.run_id,
+                    "task-1",
+                    assignment["assignment_sha256"],
+                    session_id="fresh-worker",
+                    clock=lambda: FIXED,
+                )
+        finally:
+            os.chdir(previous)
+        self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
 
     def test_accepted_branch_drift_blocks_integration_without_promotion(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)

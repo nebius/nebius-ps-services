@@ -63,7 +63,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-start run <prompt-path-or-unique-filename>`
 - `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
   `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
-- schema-v3 execution, exact initialized-folder scope, `task-recover`,
+- schema-v4 execution, exact initialized-folder scope, `task-recover`,
   `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
@@ -203,6 +203,9 @@ Verify:
 
 ## Golden Path
 
+This is the unchanged lightweight no-flag fixture. It must not inspect or
+mutate Docker, browser state, or three-tier lifecycle state.
+
 Use a disposable Python project that validates a Nebius-style resource name:
 
 - lowercase letters, numbers, and hyphens only
@@ -229,6 +232,77 @@ tracks all internal resources and promoted heads, releases only after final
 alignment/UAT/docs with a clean exact head, and allows the create-PR reservation
 only afterward. Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
+
+## Opt-In Three-Tier Live Profile
+
+Use only for explicit `--create` or `--create --keep`; read
+`references/three-tier-live.md` for the authoritative workflow.
+
+Verify before mutation:
+
+- the no-flag deterministic verifier has no FAIL
+- Docker Engine, Docker Compose, Git, source-installed parity, Edge or Chrome,
+  and a real computer-use browser `get_app_state` are available; tool discovery
+  or a running browser process alone is insufficient; this initial capture is
+  capability discovery only and cannot be reused as later GUI readiness
+- one valid owned verification root has no active three-tier lifecycle
+- the selected dynamic web port resolves to loopback only
+- the managed starter renders through the canonical prompt renderer and is
+  accepted by prompt intake as revision `r0001`
+- fixed public base images can be pulled with the owned empty Docker CLI config
+  without exporting that config to Compose
+
+Build and test `three-tier-task-board-v1` through the existing prompt-bound
+Agentic SDLC workflow. Require a browser GUI, Django/Gunicorn web/API server,
+and PostgreSQL database, running as exactly two labelled Compose containers.
+Do not host-publish the database port.
+Verify the recorded web and database IDs have canonical Compose service labels
+`web` and `db`; do not rely on repeated-argument order.
+
+Require semantic evidence for requirements, context, design, steering, plan,
+execution preparation, test-first development, implementation, validation,
+unit/API/database/vertical tests, evaluation, documents, alignment, commit,
+local ship, computer-use UAT, and the final document pass. Bind all evidence to
+the clean promoted SHA. Reject placeholder `{"result":"pass"}` artifacts,
+generic evidence reused across test classes, missing phases, screenshots as the
+only GUI oracle, and stale worker/integration SHAs.
+
+GUI evaluation and UAT must use `harness: computer-use`, Edge primarily and
+Chrome only as a recorded fallback. Immediately before the first navigation in
+evaluation and again before UAT, require a fresh browser `get_app_state` while
+the console is unlocked unless the current Codex surface explicitly confirms
+locked Computer Use is enabled for this session. A normal target window must
+be visible, unminimized, foreground, and on the current macOS Space. Refresh
+accessibility state after every successful action. Test blank input, create,
+refresh persistence, complete, active/completed filters, and service restart
+without volume deletion. Correlate the same record ID, title, and completion
+state through GUI, API, and database. Require five distinct sanitized
+screenshots.
+
+Classify `cgWindowNotFound` or another just-in-time visibility failure as
+`ENVIRONMENT_DEFECT` at `pre-navigation-window-capture`, explicitly recording
+that no GUI navigation or action was attempted. If any Computer Use call hangs,
+times out, or stops responding across browsers, stop all further Computer Use
+calls for that attempt. Do not attempt `list_apps`, new-window recovery,
+repeated browser retries, tab close, or browser/service restart through the
+same unhealthy path; preserve the owned runtime and report separately
+authorized fresh-session or service recovery as a separate explicitly
+authorized action.
+
+The report must include logical/container layer inventory, Docker and browser
+versions, project/report paths, baseline/promoted SHAs, resolved web/API/health
+URLs, internal database endpoint, all phase and test outcomes, exact owned
+container/network/volume/image IDs, UAT result, and cleanup/retention state.
+
+Default create closes the dedicated test tab and destroys the exact owned
+project, raw evidence/private state, two containers, network, database volume,
+and built web image even after failure. If an unhealthy Computer Use service
+prevents safe tab closure, default create must stop Computer Use, retain every
+owned resource as `CLEANUP_FAILED`, and require separately authorized recovery.
+Any cleanup failure is FAIL. Create plus keep preserves those resources and
+reports `KEPT`. Standalone destroy validates both exact ownership labels before
+deletion, retains sanitized reports and the lifecycle archive, and returns
+`ALREADY_DESTROYED` when no active application exists.
 
 ## Deterministic Capability Lanes
 

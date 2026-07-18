@@ -13,6 +13,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from .slurm_action_journal import (
+    SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
+    SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION,
+)
+
 CONTROLLER_BRIDGE_SCHEMA = "nebius-cxcli-soperator-controller-bridge/v2"
 CONTROLLER_BRIDGE_SOURCE_CONFIGURATION_SCHEMA = (
     "nebius-cxcli-controller-bridge-source-configuration/v1"
@@ -635,6 +640,7 @@ def new_bridge_journal(
             "target_pod": {},
             "service_switched_at": "",
             "voluntary_handoff_at": "",
+            "session_handoff_completed_at": "",
             "indeterminate_reason": "",
         },
         "tui_actions": {
@@ -2557,6 +2563,7 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         protected_pod_uids.add(str(pod.get("uid") or ""))
     session_keys: set[tuple[str, str]] = set()
     unconfirmed_session_count = 0
+    timeout_authorized_session_count = 0
     for session in login_handoff.get("sessions", []):
         if not isinstance(session, Mapping):
             raise ValueError("Controller bridge protected login session must be a mapping.")
@@ -2591,12 +2598,30 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                     "Active protected login session cannot contain an exit acknowledgement."
                 )
             continue
-        if session.get("outcome") != "explicitly-acknowledged-voluntary-exit" or not isinstance(
-            acknowledgement, Mapping
-        ):
+        if not isinstance(acknowledgement, Mapping):
             raise ValueError(
                 "Ended protected login session requires exact explicit-exit acknowledgement."
             )
+        disposition = str(
+            acknowledgement.get("disposition") or SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY
+        )
+        outcome = str(session.get("outcome") or "")
+        if not (
+            (
+                disposition == SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY
+                and outcome == "explicitly-acknowledged-voluntary-exit"
+            )
+            or (
+                disposition == SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION
+                and outcome == SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION
+            )
+        ):
+            raise ValueError(
+                "Ended protected login session outcome conflicts with its exact exit "
+                "disposition."
+            )
+        if disposition == SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION:
+            timeout_authorized_session_count += 1
         if (
             acknowledgement.get("socket_fingerprint") != session.get("socket_fingerprint")
             or not str(acknowledgement.get("absence_observed_at") or "").strip()
@@ -2625,10 +2650,18 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         or unconfirmed_session_count
         or (
             not login_handoff.get("no_sessions_at_lock")
-            and not str(login_handoff.get("voluntary_handoff_at", "") or "").strip()
+            and not str(
+                login_handoff.get(
+                    "session_handoff_completed_at"
+                    if timeout_authorized_session_count
+                    else "voluntary_handoff_at",
+                    "",
+                )
+                or ""
+            ).strip()
         )
     ):
-        raise ValueError("Completed login handoff lacks target and voluntary-exit proof.")
+        raise ValueError("Completed login handoff lacks target and explicit exit proof.")
     if login_handoff.get("target_ready") is True:
         target_pod = login_handoff.get("target_pod")
         if not isinstance(target_pod, Mapping):
@@ -3590,6 +3623,7 @@ def bridge_network_policy_objects(
     namespace: str,
     soperator_namespace: str,
     soperator_cluster_name: str,
+    additional_soperator_cluster_names: Sequence[str] = (),
     kubernetes_api_cidrs: Sequence[str],
     ownership_labels: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -3604,6 +3638,11 @@ def bridge_network_policy_objects(
         soperator_cluster_name,
         field="bridge Soperator workload instance",
     )
+    cluster_names = [cluster_name]
+    for value in additional_soperator_cluster_names:
+        candidate = _safe_token(value, field="bridge additional Soperator workload instance")
+        if candidate not in cluster_names:
+            cluster_names.append(candidate)
     normalized_api_cidrs: list[str] = []
     for value in kubernetes_api_cidrs:
         text = _required_text(value, field="bridge Kubernetes API CIDR")
@@ -3633,10 +3672,15 @@ def bridge_network_policy_objects(
         }
     )
     bridge_peer = {"podSelector": {"matchLabels": {CONTROLLER_BRIDGE_LABEL: "true"}}}
-    soperator_peer = {
-        "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": source_namespace}},
-        "podSelector": {"matchLabels": {"app.kubernetes.io/instance": cluster_name}},
-    }
+    soperator_peers = [
+        {
+            "namespaceSelector": {
+                "matchLabels": {"kubernetes.io/metadata.name": source_namespace}
+            },
+            "podSelector": {"matchLabels": {"app.kubernetes.io/instance": name}},
+        }
+        for name in cluster_names
+    ]
     required_traffic = {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -3650,13 +3694,13 @@ def bridge_network_policy_objects(
             "policyTypes": ["Ingress", "Egress"],
             "ingress": [
                 {
-                    "from": [bridge_peer, soperator_peer],
+                    "from": [bridge_peer, *soperator_peers],
                     "ports": [{"protocol": "TCP", "port": 6817}],
                 }
             ],
             "egress": [
                 {
-                    "to": [bridge_peer, soperator_peer],
+                    "to": [bridge_peer, *soperator_peers],
                     "ports": [{"protocol": "TCP", "port": port} for port in (6817, 6818, 6819)],
                 },
                 {

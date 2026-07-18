@@ -51,7 +51,8 @@ storage, Helm dependency, and cxcli wiring design.
 - Optional MariaDB Operator dependency for Slurm accounting.
 - CPU-only, GPU-only, and mixed CPU+GPU Slurm worker layouts.
 - GPU worker NodeSets get a chart-owned read-only host driver root mount and
-  validation-only init guard through `gpuDriverJail.enabled=true`, so Slurm
+  host sysfs projection plus a validation-only init guard through
+  `gpuDriverJail.enabled=true`, so Slurm
   jobs use cxcli-verified host `libcuda.so.1` / `libnvidia-ml.so.1` from the
   shared jail without per-worker writes to that jail.
 - Slurm partitions and node features through chart values.
@@ -258,19 +259,24 @@ Common direct Helm settings:
   inputs or the old `nodeGroupMapping` value are passed directly to Helm.
 - `gpuDriverJail.enabled`: defaults to `true` and applies only to GPU
   NodeSets. The chart injects hostPath `/` read-only at
-  `/run/nvidia/driver`, plus a one-GPU `cxcli-gpu-driver-jail` init guard that
+  `/run/nvidia/driver`, hostPath `/sys` read-only at
+  `/mnt/jail/sys-host`, plus a one-GPU `cxcli-gpu-driver-jail` init guard that
   uses the same `slurmd` image and mounts the shared jail read-only. cxcli is
   the only writer: its passive-rootfs post-population Job atomically installs
   the four NVIDIA linker symlinks and records driver, library, and
   `nvidia-smi` hashes in `/etc/nebius-cxcli/gpu-driver-jail.env`. Every worker
   guard validates that evidence against its host driver, the exact four
   in-jail symlinks, the existing `ldconfig` cache, and jailed `nvidia-smi -L`.
+  The last check invokes the Jail's own dynamic loader and libraries from the
+  GPU-requesting init container instead of chrooting into the shared rootfs;
+  the shared rootfs intentionally has no persistent `/dev/nvidia*` device
+  nodes, while the container receives the live GPU devices from Kubernetes.
   It never repairs or otherwise mutates the active shared jail. A missing,
   stale, mixed-driver, broken-link, out-of-rootfs, or hash-mismatched contract
   blocks `slurmd` startup. GPU NodeSets that define a custom mount named
-  `nvidia-driver-root`, a mount at `/run/nvidia/driver`, or a custom init
-  container named `cxcli-gpu-driver-jail` fail fast at render. CPU NodeSets are
-  untouched.
+  `nvidia-driver-root` or `gpu-health-sysfs`, a mount at
+  `/run/nvidia/driver` or `/mnt/jail/sys-host`, or a custom init container
+  named `cxcli-gpu-driver-jail` fail fast at render. CPU NodeSets are untouched.
 - `partitionConfiguration`: Slurm partitions and their NodeSet mappings.
   Each partition supports a typed `policy` block (`priorityTier`,
   `preemptMode`, `default`, `hidden`, `state`, `maxTime`, `defaultTime`,

@@ -222,7 +222,7 @@ Tasks become done only after verified fast-forward promotion.
 
 ## Coordinator Handoff
 
-- Current action: resume recorded v2 transition
+- Current action: resume recorded v3 transition
 - Coordinator state path:
 - Active wave:
 - Dispatch batch:

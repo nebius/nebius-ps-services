@@ -345,6 +345,202 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     assert "passive rootfs" in lines[0]
 
 
+@pytest.mark.parametrize("result_pods_garbage_collected", (False, True))
+def test_external_jail_gpu_post_population_accepts_exact_historical_script_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    result_pods_garbage_collected: bool,
+) -> None:
+    source_image = "registry.example.invalid/populate-jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    runner_source = "registry.example.invalid/controller_slurmctld:4.0.2-slurm25.11.3"
+    resolution = _populate_image_resolution(runner_source)
+    scheduling = migration._jail_gpu_post_population_scheduling(_gpu_values())
+    resources = build_jail_gpu_post_population_resources(
+        namespace="soperator",
+        target_ref="training",
+        runner_image=resolution.immutable_reference,
+        passive_pvc="jail-rootfs-slot-b-pvc",
+        scheduling=scheduling,
+    )
+    historical_config = copy.deepcopy(dict(resources.config_map))
+    historical_job = copy.deepcopy(dict(resources.job))
+    historical_script = str(next(iter(historical_config["data"].values()))) + "\n# historical\n"
+    historical_script_sha256 = hashlib.sha256(historical_script.encode()).hexdigest()
+    historical_config["data"][next(iter(historical_config["data"]))] = historical_script
+    historical_job["spec"]["template"]["spec"]["containers"][0]["command"] = [
+        "/bin/bash",
+        "-c",
+        migration._JAIL_GPU_POST_POPULATION_EVIDENCE_WRAPPER,
+    ]
+    source_annotations = {
+        "nebius.ai/cxcli-source-populate-job-uid": "populate-job-uid",
+        "nebius.ai/cxcli-source-populate-pvc-uid": "passive-pvc-uid",
+        "nebius.ai/cxcli-passive-pvc": "jail-rootfs-slot-b-pvc",
+        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(
+            source_image.encode()
+        ).hexdigest(),
+        "nebius.ai/cxcli-runner-image-index-digest": resolution.index_digest,
+        "nebius.ai/cxcli-runner-image-platform-digest": resolution.platform_digest,
+        "nebius.ai/script-sha256": historical_script_sha256,
+    }
+    for manifest in (historical_config, historical_job):
+        manifest["metadata"].setdefault("annotations", {}).update(source_annotations)
+    historical_job["spec"]["template"].setdefault("metadata", {}).setdefault(
+        "annotations", {}
+    ).update(source_annotations)
+
+    driver = "550.90.07"
+    libcuda_sha256 = "b" * 64
+    libnvidia_ml_sha256 = "c" * 64
+    post_logs = (
+        f"gpu-jail-post-population: driver={driver} visible_gpus=8 status=passed\n"
+        f"gpu-jail-source-evidence: driver={driver} libcuda_sha256={libcuda_sha256} "
+        f"libnvidia_ml_sha256={libnvidia_ml_sha256}\n"
+    )
+    marker_manifest = migration._jail_gpu_legacy_ready_marker_job_manifest(
+        passive_pvc="jail-rootfs-slot-b-pvc",
+        passive_pvc_uid="passive-pvc-uid",
+        image_lock=resolution.as_payload(),
+        scheduling=scheduling,
+        driver_version=driver,
+        libcuda_sha256=libcuda_sha256,
+        libnvidia_ml_sha256=libnvidia_ml_sha256,
+        namespace="soperator",
+    )
+    marker_name = marker_manifest["metadata"]["name"]
+    marker_logs = f"gpu-jail-legacy-ready-marker: status=passed driver={driver}\n"
+
+    def live_resource(manifest: Mapping[str, Any], *, uid: str) -> dict[str, Any]:
+        live = copy.deepcopy(dict(manifest))
+        live["metadata"].setdefault("annotations", {})[
+            "kubectl.kubernetes.io/last-applied-configuration"
+        ] = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        live["metadata"]["uid"] = uid
+        live["metadata"]["resourceVersion"] = "1"
+        live["status"] = {
+            "conditions": [{"type": "Complete", "status": "True"}],
+            "succeeded": 1,
+        }
+        return live
+
+    live_config = live_resource(historical_config, uid="config-uid")
+    live_job = live_resource(historical_job, uid="job-uid")
+    live_marker = live_resource(marker_manifest, uid="marker-uid")
+    live_by_resource = {
+        f"configmap/{historical_config['metadata']['name']}": live_config,
+        f"job/{historical_job['metadata']['name']}": live_job,
+        f"job/{marker_name}": live_marker,
+    }
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **kwargs: (
+            str(kwargs["resource"]) in live_by_resource,
+            copy.deepcopy(live_by_resource.get(str(kwargs["resource"]), {})),
+        ),
+    )
+    post_pod = {
+        "pod_uid": "post-pod-uid",
+        "node_name": "gpu-node-0",
+        "configured_image": resolution.immutable_reference,
+        "resolved_image_digest": resolution.platform_digest,
+        "image_id": resolution.immutable_reference,
+    }
+    marker_pod = {**post_pod, "pod_uid": "marker-pod-uid"}
+    if result_pods_garbage_collected:
+        monkeypatch.setattr(
+            migration,
+            "_jail_gpu_post_population_job_pod",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                migration.SoperatorMigrationPhasePending(
+                    "GPU Jail post-population Job must have exactly one immutable result Pod."
+                )
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            migration,
+            "_jail_gpu_post_population_job_pod",
+            lambda **kwargs: marker_pod if kwargs["job_name"] == marker_name else post_pod,
+        )
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        if "get" in args and "pods" in args:
+            return _result(args, stdout='{"items":[]}')
+        return _result(args, stdout=marker_logs if str(args[-1]).endswith(marker_name) else post_logs)
+
+    historical_config_contract = migration._jail_gpu_post_population_resource_contract(
+        historical_config
+    )
+    historical_job_contract = migration._jail_gpu_post_population_resource_contract(
+        historical_job
+    )
+    phase = {
+        "consumer_switch_applied_at": "2026-07-16T00:00:00Z",
+        "gpu_post_population": {
+            "status": "passed",
+            "image_lock": resolution.as_payload(),
+            "binding": {
+                "source_populate_job_uid": "populate-job-uid",
+                "source_populate_pvc_uid": "passive-pvc-uid",
+                "passive_pvc": "jail-rootfs-slot-b-pvc",
+                "image": source_image,
+                "runner_image": resolution.immutable_reference,
+                "runner_image_index_digest": resolution.index_digest,
+                "runner_image_platform_digest": resolution.platform_digest,
+                "script_sha256": historical_script_sha256,
+                "scheduling_sha256": migration._fingerprint(scheduling),
+                "config_map": historical_config["metadata"]["name"],
+                "job": historical_job["metadata"]["name"],
+                "config_contract_sha256": migration._fingerprint(historical_config_contract),
+                "job_contract_sha256": migration._fingerprint(historical_job_contract),
+            },
+            "resource_uids": {"config_map_uid": "config-uid", "job_uid": "job-uid"},
+            "driver_version": driver,
+            "visible_gpu_count": 8,
+            "source_library_sha256": {
+                "libcuda.so.1": libcuda_sha256,
+                "libnvidia-ml.so.1": libnvidia_ml_sha256,
+            },
+            "log_sha256": hashlib.sha256(post_logs.encode()).hexdigest(),
+            "pod": post_pod,
+            "legacy_ready_marker": {
+                "status": "verified",
+                "job_uid": "marker-uid",
+                "binding": {
+                    "job": marker_name,
+                    "manifest_sha256": migration._fingerprint(marker_manifest),
+                },
+                "pod": marker_pod,
+                "log_sha256": hashlib.sha256(marker_logs.encode()).hexdigest(),
+            },
+        },
+    }
+
+    lines = migration._ensure_jail_gpu_post_population_gate(
+        phase=phase,
+        command_runner=runner,
+        kube_context="ctx",
+        target_ref="training",
+        values=_gpu_values(),
+        populate_image=source_image,
+        runner_image_lock=resolution.as_payload(),
+        passive_pvc="jail-rootfs-slot-b-pvc",
+        populate_job={
+            "uid": "populate-job-uid",
+            "pvc_uid": "passive-pvc-uid",
+            "pvc": "jail-rootfs-slot-b-pvc",
+            "image": source_image,
+        },
+        checkpoint_writer=lambda: pytest.fail("historical proof must remain immutable"),
+        allow_apply=False,
+    )
+
+    assert lines == [
+        "GPU Jail post-population gate retained its exact historical completion proof "
+        "after the local post-population script evolved."
+    ]
+
+
 def test_external_jail_gpu_post_population_gate_never_replaces_missing_uid_bound_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -714,7 +910,12 @@ def test_external_jail_gpu_temporary_partition_is_root_only(
         selected = tuple(args)
         calls.append(selected)
         if selected[:3] == ("scontrol", "show", "partition") and len(calls) == 1:
-            return _result(selected, returncode=1, stderr="invalid partition")
+            return _result(
+                selected,
+                returncode=1,
+                stdout=f"Partition {selected[3]} not found\n",
+                stderr="command terminated with exit code 1",
+            )
         if selected[:2] == ("scontrol", "create"):
             return _result(selected)
         return _result(
@@ -739,6 +940,65 @@ def test_external_jail_gpu_temporary_partition_is_root_only(
     assert "Default=NO" in create
     assert "State=UP" in create
     assert state["partition_status"] == "created"
+
+
+def test_external_jail_gpu_partition_missing_rejects_unknown_kubectl_failure() -> None:
+    result = _result(
+        ("scontrol", "show", "partition", "cxcli-gpu-0123456789ab", "-o"),
+        returncode=1,
+        stdout="slurm controller unavailable\n",
+        stderr="command terminated with exit code 1",
+    )
+
+    assert migration._jail_gpu_partition_missing(result) is False
+
+
+def test_external_jail_gpu_recreates_missing_partition_after_terminal_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def exec_login_once(*, args: Sequence[str], **_kwargs: Any) -> Any:
+        selected = tuple(args)
+        calls.append(selected)
+        if selected[:3] == ("scontrol", "show", "partition") and len(calls) == 1:
+            return _result(
+                selected,
+                returncode=1,
+                stdout=f"Partition {selected[3]} not found\n",
+            )
+        if selected[:2] == ("scontrol", "create"):
+            return _result(selected)
+        return _result(
+            selected,
+            stdout=f"PartitionName={selected[3]} Nodes=worker-gpu-0 RootOnly=YES State=UP\n",
+        )
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login_once", exec_login_once)
+    state: dict[str, Any] = {
+        "partition_name": "cxcli-gpu-0123456789ab",
+        "partition_status": "created",
+        "partition_contract_sha256": "a" * 64,
+        "slurm_node": "worker-gpu-0",
+        "pinned_h100_smoke": {
+            "status": "",
+            "attempt_history": [{"job_id": "42", "state": "CANCELLED"}],
+        },
+    }
+
+    partition = migration._ensure_jail_gpu_temporary_partition(  # noqa: SLF001
+        command_runner=lambda args, **_kwargs: _result(args),
+        kube_context="ctx",
+        state=state,
+        slurm_node="worker-gpu-0",
+        checkpoint_writer=None,
+    )
+
+    assert partition == "cxcli-gpu-0123456789ab"
+    assert state["partition_status"] == "created"
+    assert state["partition_recreations"][-1]["terminal_attempt_count"] == 1
+    assert state["partition_recreations"][-1]["created_at"]
+    assert any(call[:2] == ("scontrol", "create") for call in calls)
 
 
 def test_external_jail_gpu_post_population_uses_gpu_nodeset_scheduling() -> None:
@@ -989,6 +1249,88 @@ def test_gpu_pre_activation_mixed_fleet_blocks_slot_switch(
     gate = phase[migration._GPU_PRE_ACTIVATION_FLEET_GATE_KEY]
     assert gate["status"] == "failed"
     assert gate["target_ready_gpu_node_uids"] == ["node-uid-0", "node-uid-1"]
+
+
+def test_post_jail_gpu_contract_transition_requires_exact_completed_rollout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workers = [
+        {
+            "status": "passed",
+            "pod": f"worker-{index}",
+            "pod_uid": f"pod-uid-{index}",
+            "node": f"gpu-node-{index}",
+            "nodeset": "worker",
+            "workload_uid": "worker-statefulset-uid",
+            "driver_version": "580.159.04",
+            "source_library_sha256": {
+                "libcuda.so.1": "c" * 64,
+                "libnvidia-ml.so.1": "d" * 64,
+            },
+        }
+        for index in range(2)
+    ]
+    gate = {
+        "expected_replicas": {"worker": 2},
+        "observed_ready_replicas": {"worker": 2},
+        "target_slurmcluster": {"uid": "target-uid"},
+        "nodeset_workload_bindings": {
+            "worker": {"workload_uid": "worker-statefulset-uid"}
+        },
+    }
+    prior_gate = {
+        **copy.deepcopy(gate),
+        "status": "passed",
+        "revision": migration._GPU_WORKLOAD_RELEASE_GATE_REVISION,  # noqa: SLF001
+        "scope": "active-jail",
+        "workers": copy.deepcopy(workers),
+    }
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "status": "completed",
+                "completed_at": "2026-07-18T02:04:51Z",
+                "in_place_gpu_workload_release_gate": prior_gate,
+            }
+        }
+    }
+    pods = [{"metadata": {"name": worker["pod"]}} for worker in workers]
+    monkeypatch.setattr(
+        migration,
+        "_verified_completed_in_place_worker_rollout_successor",
+        lambda _phase, **kwargs: {
+            "pod_uid": kwargs["live_uid"],
+            "node_uid": f"node-{kwargs['live_uid']}",
+        },
+    )
+
+    transition = migration._verified_completed_in_place_gpu_contract_transition(  # noqa: SLF001
+        checkpoint=checkpoint,
+        gate=gate,
+        workers=workers,
+        pods=pods,
+        post_population_contract=("570.211.01", "a" * 64, "b" * 64),
+        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner call"),
+        kube_context="ctx",
+    )
+
+    assert transition is not None
+    assert transition["status"] == "verified"
+    assert transition["boundary"] == "completed-in-place-worker-rollout"
+    assert transition["promoted_contract"]["driver_version"] == "580.159.04"
+    prior_gate["workers"][1]["source_library_sha256"]["libcuda.so.1"] = "e" * 64
+    assert (
+        migration._verified_completed_in_place_gpu_contract_transition(  # noqa: SLF001
+            checkpoint=checkpoint,
+            gate=gate,
+            workers=workers,
+            pods=pods,
+            post_population_contract=("570.211.01", "a" * 64, "b" * 64),
+            command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner call"),
+            kube_context="ctx",
+        )
+        is None
+    )
 
 
 def test_owned_gpu_fleet_inventory_includes_ready_podless_spare_node() -> None:
@@ -1320,6 +1662,15 @@ def test_external_jail_gpu_release_probe_uses_post_population_evidence_marker() 
         in migration._GPU_WORKLOAD_RELEASE_PROBE  # noqa: SLF001
     )
     assert "cxcli_gpu_driver_jail_prep" not in migration._GPU_WORKLOAD_RELEASE_PROBE  # noqa: SLF001
+    assert 'jail_loader="${jail}/lib64/ld-linux-x86-64.so.2"' in (  # noqa: SLF001
+        migration._GPU_WORKLOAD_RELEASE_PROBE
+    )
+    assert '--library-path "${jailed_library_path}" "${jail}/usr/bin/nvidia-smi" -L' in (  # noqa: SLF001
+        migration._GPU_WORKLOAD_RELEASE_PROBE
+    )
+    assert 'chroot "${jail}" /usr/bin/nvidia-smi -L' not in (  # noqa: SLF001
+        migration._GPU_WORKLOAD_RELEASE_PROBE
+    )
 
 
 def test_gpu_pre_activation_source_probe_rejects_broken_or_out_of_rootfs_sources() -> None:
@@ -1333,10 +1684,167 @@ def test_gpu_pre_activation_source_probe_rejects_broken_or_out_of_rootfs_sources
     assert "host NVIDIA driver version differs from passive-rootfs evidence" in probe
 
 
+def test_gpu_post_activation_resolves_slurm_node_from_exact_worker_pod_binding() -> None:
+    worker = {
+        "pod": "worker-0",
+        "pod_uid": "worker-pod-uid",
+        "node": "gpu-node-0",
+    }
+    commands: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(args)
+        commands.append(command)
+        if "get" in command:
+            return _result(
+                args,
+                stdout=json.dumps(
+                    {
+                        "metadata": {"name": "worker-0", "uid": "worker-pod-uid"},
+                        "spec": {"nodeName": "gpu-node-0"},
+                        "status": {
+                            "phase": "Running",
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                        },
+                    }
+                ),
+            )
+        return _result(args, stdout="NodeName=worker-0 State=IDLE+DYNAMIC_NORM\n")
+
+    assert (
+        migration._jail_gpu_slurm_node_name(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="ctx",
+            worker=worker,
+        )
+        == "worker-0"
+    )
+    assert commands[-1][-5:] == ("scontrol", "show", "node", "worker-0", "-o")
+
+
+def test_gpu_post_activation_rejects_slurm_node_name_not_bound_to_worker_pod() -> None:
+    worker = {
+        "pod": "worker-0",
+        "pod_uid": "worker-pod-uid",
+        "node": "gpu-node-0",
+    }
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(args)
+        if "get" in command:
+            return _result(
+                args,
+                stdout=json.dumps(
+                    {
+                        "metadata": {"name": "worker-0", "uid": "worker-pod-uid"},
+                        "spec": {"nodeName": "gpu-node-0"},
+                        "status": {
+                            "phase": "Running",
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                        },
+                    }
+                ),
+            )
+        return _result(args, stdout="NodeName=worker-1 State=IDLE+DYNAMIC_NORM\n")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="exact worker Pod name as one canonical Slurm node",
+    ):
+        migration._jail_gpu_slurm_node_name(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="ctx",
+            worker=worker,
+        )
+
+
+def test_gpu_post_activation_health_checker_derives_platform_from_live_gpus() -> None:
+    script = migration._JAIL_GPU_FULL_HEALTH_CHECK_SCRIPT  # noqa: SLF001
+
+    assert "readonly jail_root=/mnt/jail" in script
+    assert "readonly health_checker=/usr/local/bin/health-checker" in script
+    assert '[ -x "${jail_root}${health_checker}" ]' in script
+    assert '[ -d "${jail_root}/sys-host/bus/pci" ]' in script
+    assert 'chroot "${jail_root}" /bin/bash -lc' in script
+    assert "/usr/local/bin/health-checker run" in script
+    assert 'jail_output_dir="${output_dir#${jail_root}}"' in script
+    assert "\nhealth-checker run" not in script
+    assert "CHECKS_PLATFORM_TAG" not in script
+    assert "nvidia-smi --query-gpu=name --format=csv,noheader" in script
+    assert 'platform_tag="${#products[@]}xGPU"' in script
+    assert 'platform_tag="${#products[@]}xH100"' in script
+    assert '-p "${platform_tag}"' in script
+
+
+def test_gpu_post_activation_dcgm_runtime_aligns_to_driver_branch() -> None:
+    script = migration._JAIL_GPU_DCGM_RUNTIME_SCRIPT  # noqa: SLF001
+
+    assert 'if [ "${driver_major}" -ge 580 ]' in script
+    assert 'package="datacenter-gpu-manager-4-cuda${cuda_major}"' in script
+    assert 'datacenter-gpu-manager-4-core)' in script
+    assert 'apt-get install -y --no-install-recommends --reinstall "$1=$2"' in script
+    assert 'flock /var/lock/cxcli-dcgm-runtime.lock' in script
+
+    worker = {"pod": "worker-0", "pod_uid": "pod-uid", "node": "gpu-node-0"}
+
+    def runner(args: list[str], **_kwargs: Any) -> Any:
+        if args[-3:] == ["get", "pod/worker-0", "-o"]:
+            raise AssertionError("unexpected abbreviated get command")
+        if "get" in args and "pod/worker-0" in args:
+            return _result(
+                args,
+                stdout=json.dumps(
+                    {
+                        "metadata": {"name": "worker-0", "uid": "pod-uid"},
+                        "spec": {"nodeName": "gpu-node-0"},
+                        "status": {
+                            "phase": "Running",
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                        },
+                    }
+                ),
+            )
+        return _result(
+            args,
+            stdout="\n".join(
+                (
+                    "CXCLI_DCGM_ACTION=installed",
+                    "CXCLI_DCGM_DRIVER_VERSION=580.159.04",
+                    "CXCLI_DCGM_CUDA_MAJOR=13",
+                    "CXCLI_DCGM_PACKAGE=datacenter-gpu-manager-4-cuda13",
+                    "CXCLI_DCGM_PACKAGE_VERSION=1:4.5.2-1",
+                    "CXCLI_DCGM_PLUGIN_DIR=/usr/libexec/datacenter-gpu-manager-4/plugins/cuda13",
+                )
+            ),
+        )
+
+    evidence = migration._jail_gpu_dcgm_runtime_evidence(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="ctx",
+        worker=worker,
+    )
+
+    assert evidence["status"] == "passed"
+    assert evidence["action"] == "installed"
+    assert evidence["driver_version"] == "580.159.04"
+    assert evidence["package_version"] == "1:4.5.2-1"
+    assert evidence["installed_at"] == evidence["checked_at"]
+
+
 def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     phase: dict[str, Any] = {
+        "gpu_post_activation": {
+            "status": "failed",
+            "worker_binding": {
+                "pod": "worker-gpu-0",
+                "pod_uid": "old-pod-uid",
+                "kubernetes_node": "k8s-node-uid",
+                "slurm_node": "worker-gpu-0",
+                "gpu_count": 8,
+            },
+        },
         "post_jail_gpu_workload_release_gate": {
             "status": "passed",
             "workers": [
@@ -1348,6 +1856,27 @@ def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
                     "gpu_count": 8,
                 }
             ],
+        },
+    }
+    replacement_phase = {
+        "gpu_health_sysfs_repair": {
+            "schema": migration._GPU_HEALTH_SYSFS_REPAIR_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "verified_at": "2026-07-17T12:00:00Z",
+            "old_pods": {
+                "worker-gpu-0": {
+                    "nodeset": "worker-gpu",
+                    "uid": "old-pod-uid",
+                    "statefulset_uid": "worker-statefulset-uid",
+                }
+            },
+            "replacement_pods": {
+                "worker-gpu-0": {
+                    "nodeset": "worker-gpu",
+                    "uid": "pod-uid",
+                    "statefulset_uid": "worker-statefulset-uid",
+                }
+            },
         }
     }
     health_calls: list[str] = []
@@ -1368,6 +1897,19 @@ def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
         }
 
     monkeypatch.setattr(migration, "_jail_gpu_health_checker_evidence", health)
+    monkeypatch.setattr(
+        migration,
+        "_jail_gpu_dcgm_runtime_evidence",
+        lambda **_kwargs: {
+            "status": "passed",
+            "action": "verified",
+            "driver_version": "580.159.04",
+            "cuda_major": "13",
+            "package": "datacenter-gpu-manager-4-cuda13",
+            "package_version": "1:4.5.2-1",
+            "plugin_dir": "/usr/libexec/datacenter-gpu-manager-4/plugins/cuda13",
+        },
+    )
     monkeypatch.setattr(
         migration,
         "_jail_gpu_pinned_h100_smoke",
@@ -1415,6 +1957,7 @@ def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
         kube_context="ctx",
         values=_gpu_values(),
         checkpoint_writer=None,
+        replacement_phase=replacement_phase,
     )
 
     state = phase["gpu_post_activation"]
@@ -1422,9 +1965,25 @@ def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
     assert state["validation"]["passed"] is True
     assert state["validation"]["node_name"] == "worker-gpu-0"
     assert state["pinned_h100_accounting"]["exit_code"] == "0:0"
+    assert state["dcgm_runtime"]["cuda_major"] == "13"
+    assert "reason" not in state
+    assert state["worker_binding_history"] == [
+        {
+            "binding": {
+                "pod": "worker-gpu-0",
+                "pod_uid": "old-pod-uid",
+                "kubernetes_node": "k8s-node-uid",
+                "slurm_node": "worker-gpu-0",
+                "gpu_count": 8,
+            },
+            "replaced_by_pod_uid": "pod-uid",
+            "boundary": "gpu-health-sysfs-repair",
+            "repair_verified_at": "2026-07-17T12:00:00Z",
+        }
+    ]
     assert health_calls == ["health", "health"]
     assert cleaned == [True]
-    assert "IDLE+DYNAMIC_NORM" in lines[0]
+    assert "schedulable IDLE state" in lines[0]
 
 
 def test_external_jail_gpu_smoke_pins_the_full_worker_gpu_count(
@@ -1486,4 +2045,70 @@ def test_external_jail_gpu_smoke_lost_response_is_indeterminate_and_not_retried(
         )
 
     assert state["pinned_h100_smoke"]["status"] == "Indeterminate"
-    assert calls == []
+    assert not any("srun" in call for call in calls)
+
+
+def test_external_jail_gpu_smoke_retries_only_after_exact_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        migration,
+        "_ensure_jail_gpu_temporary_partition",
+        lambda **_kwargs: "cxcli-gpu-0123456789ab",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def exec_login_once(*, args: Sequence[str], **_kwargs: Any) -> Any:
+        selected = tuple(args)
+        calls.append(selected)
+        if selected[0] == "sacct":
+            return _result(
+                selected,
+                stdout=(
+                    "42|cxcli-h100-0123456789ab|None assigned|CANCELLED by 0|0:0\n"
+                ),
+            )
+        if selected[0] == "squeue":
+            return _result(
+                selected,
+                returncode=1,
+                stderr="slurm_load_jobs error: Invalid job id specified\n",
+            )
+        if selected[0] == "srun":
+            return _result(
+                selected,
+                stdout=(
+                    "cxcli-h100-smoke job_id=43 node=worker-gpu-0 gpu_count=8 "
+                    "product=NVIDIA H100 80GB HBM3\n"
+                ),
+            )
+        raise AssertionError(selected)
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login_once", exec_login_once)
+    state = {
+        "pinned_h100_smoke": {
+            "status": "Indeterminate",
+            "job_name": "cxcli-h100-0123456789ab",
+            "node_name": "worker-gpu-0",
+            "expected_gpu_count": 8,
+            "partition_name": "cxcli-gpu-0123456789ab",
+            "prepared_at": "2026-07-17T23:33:29.058228Z",
+            "reason": "lost response",
+        }
+    }
+
+    evidence = migration._jail_gpu_pinned_h100_smoke(
+        command_runner=lambda args, **_kwargs: _result(args),
+        kube_context="ctx",
+        state=state,
+        slurm_node="worker-gpu-0",
+        expected_gpu_count=8,
+        checkpoint_writer=None,
+    )
+
+    assert evidence["status"] == "passed"
+    assert evidence["job_id"] == "43"
+    assert evidence["attempt_history"][0]["job_id"] == "42"
+    assert evidence["attempt_history"][0]["state"] == "CANCELLED"
+    assert "--starttime=2026-07-17T23:33:29" in calls[0]
+    assert [call[0] for call in calls] == ["sacct", "squeue", "srun"]

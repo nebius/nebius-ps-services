@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import uuid
 
 
 class DispatchError(RuntimeError):
@@ -33,7 +32,7 @@ def load_assignment(path: Path) -> dict[str, object]:
         ) from exc
     if (
         not isinstance(value, dict)
-        or value.get("schema") != "agentic-sdlc/worker-assignment-v1"
+        or value.get("schema") != "agentic-sdlc/worker-assignment-v2"
     ):
         raise DispatchError(
             "EXECUTION_STATE_INVALID", "worker assignment schema is invalid"
@@ -48,13 +47,41 @@ def load_assignment(path: Path) -> dict[str, object]:
     scope_cwd = Path(str(value.get("scope_cwd") or ""))
     if not scope_cwd.is_absolute() or scope_cwd.is_symlink() or not scope_cwd.is_dir():
         raise DispatchError("WORKTREE_CONFLICT", "worker scope cwd is invalid")
+    handoff_path = Path(str(value.get("incoming_handoff_path") or ""))
+    if (
+        not handoff_path.is_absolute()
+        or handoff_path.is_symlink()
+        or not handoff_path.is_file()
+        or (handoff_path.stat().st_mode & 0o777) != 0o600
+    ):
+        raise DispatchError(
+            "EXECUTION_STATE_INVALID", "incoming handoff path or mode is invalid"
+        )
+    try:
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DispatchError(
+            "EXECUTION_STATE_INVALID", "incoming handoff is unreadable"
+        ) from exc
+    unsigned_handoff = dict(handoff) if isinstance(handoff, dict) else {}
+    handoff_digest = unsigned_handoff.pop("handoff_digest", None)
+    if (
+        not isinstance(handoff, dict)
+        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v1"
+        or handoff.get("feature_id") != value.get("feature_id")
+        or handoff.get("wave_id") != value.get("wave_id")
+        or handoff.get("task_id") != value.get("task_id")
+        or handoff_digest != value.get("incoming_handoff_digest")
+        or handoff_digest != stable_digest(unsigned_handoff)
+    ):
+        raise DispatchError(
+            "EXECUTION_STATE_INVALID", "incoming handoff context is invalid"
+        )
     return value
 
 
-def worker_prompt(
-    assignment_path: Path, assignment: dict[str, object], session_id: str
-) -> str:
-    run_dir = assignment_path.resolve().parents[5]
+def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
+    run_dir = assignment_path.resolve().parents[4]
     helper = (
         Path(__file__).resolve().parents[2]
         / "sdlc-prepare-execution"
@@ -75,8 +102,6 @@ def worker_prompt(
         str(assignment["task_id"]),
         "--assignment-digest",
         str(assignment["assignment_digest"]),
-        "--session-id",
-        session_id,
         "--scope-cwd",
         str(assignment["scope_cwd"]),
     ]
@@ -109,7 +134,6 @@ def dispatch_sequential(
     results: list[dict[str, object]] = []
     for assignment_path in assignment_paths:
         assignment = load_assignment(assignment_path)
-        session_id = f"sdlc-worker-{uuid.uuid4().hex}"
         command = [
             codex_binary,
             "exec",
@@ -125,7 +149,7 @@ def dispatch_sequential(
         try:
             completed = subprocess.run(
                 command,
-                input=worker_prompt(assignment_path, assignment, session_id),
+                input=worker_prompt(assignment_path, assignment),
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -155,6 +179,9 @@ def dispatch_sequential(
             or result.get("status") != "implemented"
             or not isinstance(result.get("validation"), str)
             or not isinstance(result.get("review"), str)
+            or not isinstance(result.get("summary"), str)
+            or not isinstance(result.get("decisions"), list)
+            or not isinstance(result.get("open_risks"), list)
         ):
             raise DispatchError("WORKER_FAILED", "sequential worker result is invalid")
         results.append(result)

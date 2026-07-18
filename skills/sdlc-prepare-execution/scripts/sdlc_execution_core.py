@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -10,10 +11,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from sdlc_execution_interop import (
     ExecutionInteropError,
@@ -23,11 +25,12 @@ from sdlc_execution_interop import (
 )
 
 
-COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v3"
-WAVE_SCHEMA = "agentic-sdlc/execution-wave-v1"
-TASK_SCHEMA = "agentic-sdlc/execution-task-v2"
-ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v1"
-RESULT_SCHEMA = "agentic-sdlc/worker-result-v2"
+COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v4"
+WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
+TASK_SCHEMA = "agentic-sdlc/execution-task-v3"
+ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v2"
+RESULT_SCHEMA = "agentic-sdlc/worker-result-v3"
+INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v1"
 FEATURE_ID_RE = re.compile(r"FEAT-[0-9]{3,}")
 REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}")
 WAVE_ID_RE = re.compile(r"WAVE-[0-9]{3,}")
@@ -125,6 +128,32 @@ def _session_hash(value: str) -> str:
     return sha256_bytes(value.encode("utf-8"))
 
 
+def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
+    history = task_record.get("worker_session_hash_history")
+    current = task_record.get("worker_session_hash")
+    if (
+        task_record.get("schema") != TASK_SCHEMA
+        or not isinstance(history, list)
+        or len(history) != len(set(history))
+        or any(
+            not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+            for item in history
+        )
+        or (
+            current is not None
+            and (
+                not isinstance(current, str)
+                or not history
+                or history[-1] != current
+            )
+        )
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker session history is invalid"
+        )
+    return history
+
+
 def _contains_sensitive(value: str) -> bool:
     placeholders = (
         "example",
@@ -178,6 +207,120 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+@contextmanager
+def _execution_transition_lock(
+    run_dir: Path, feature_id: str
+) -> Iterator[None]:
+    directory = execution_dir(run_dir, feature_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    path = directory / ".transition.lock"
+    if path.is_symlink():
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "execution transition lock is unsafe"
+        )
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "execution transition lock could not open"
+        ) from exc
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise ExecutionError(
+                            "WORKSPACE_BUSY", "another execution transition is active"
+                        )
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        elif os.name == "nt":  # pragma: no cover - exercised on Windows.
+            import msvcrt
+
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise ExecutionError(
+                            "WORKSPACE_BUSY", "another execution transition is active"
+                        )
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover - unsupported operating system.
+            raise ExecutionError(
+                "ENVIRONMENT_BLOCKER", "execution locking is unavailable"
+            )
+    finally:
+        os.close(descriptor)
+
+
+def _claim_worker_session(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    session_hash: str,
+) -> None:
+    directory = execution_dir(run_dir, feature_id) / "sessions"
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    path = directory / f"{session_hash}.json"
+    claim = {
+        "feature_id": feature_id,
+        "wave_id": wave_id,
+        "task_id": task_id,
+        "worker_session_hash": session_hash,
+    }
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or (path.stat().st_mode & 0o777) != 0o600
+            or read_json(path) != claim
+        ):
+            raise ExecutionError(
+                "FRESH_SESSION_REQUIRED", "worker session already owns another task"
+            )
+        return
+    except OSError as exc:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker session claim could not be created"
+        ) from exc
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(claim, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def append_journal(path: Path, event: dict[str, Any]) -> None:
@@ -596,6 +739,17 @@ def result_path(run_dir: Path, feature_id: str, wave_id: str, task_id: str) -> P
     )
 
 
+def incoming_handoff_path(
+    run_dir: Path, feature_id: str, wave_id: str, task_id: str
+) -> Path:
+    return (
+        execution_dir(run_dir, feature_id)
+        / "incoming-handoffs"
+        / _require_id(wave_id, WAVE_ID_RE, "wave ID")
+        / f"{_require_id(task_id, TASK_ID_RE, 'task ID')}.json"
+    )
+
+
 def journal_path(run_dir: Path, feature_id: str, name: str) -> Path:
     return execution_dir(run_dir, feature_id) / "journals" / f"{name}.jsonl"
 
@@ -611,10 +765,11 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
     if value.get("schema") in {
         "agentic-sdlc/execution-coordinator-v1",
         "agentic-sdlc/execution-coordinator-v2",
+        "agentic-sdlc/execution-coordinator-v3",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "unfinished execution coordinator schema is unsupported",
+            "execution coordinator schema v1/v2/v3 is unsupported",
         )
     if value.get("schema") != COORDINATOR_SCHEMA:
         raise ExecutionError("EXECUTION_STATE_INVALID", "coordinator schema is invalid")
@@ -746,7 +901,7 @@ def prepare_execution(
             )
         coordinator = {
             "schema": COORDINATOR_SCHEMA,
-            "state_version": 3,
+            "state_version": 4,
             "feature_id": feature_id,
             "run_id": run_dir.name,
             "project_root": str(project_root),
@@ -888,6 +1043,10 @@ def prepare_execution(
                 [item.task_id for item in batch]
                 for batch in capacity_batches(wave_tasks, capacity)
             ],
+            "active_batch_index": None,
+            "batch_states": [
+                "pending" for _ in capacity_batches(wave_tasks, capacity)
+            ],
             "base_head": None,
             "merged_task_ids": [],
             "integration_head": None,
@@ -919,6 +1078,7 @@ def prepare_execution(
                 "commit": None,
                 "attempt": 0,
                 "worker_session_hash": None,
+                "worker_session_hash_history": [],
             }
             task_file = task_path(run_dir, feature_id, wave_id, task.task_id)
             if task_file.exists():
@@ -1075,6 +1235,10 @@ def replan_future(
                     [task.task_id for task in batch]
                     for batch in capacity_batches(wave_tasks, capacity)
                 ],
+                "active_batch_index": None,
+                "batch_states": [
+                    "pending" for _ in capacity_batches(wave_tasks, capacity)
+                ],
                 "base_head": None,
                 "merged_task_ids": [],
                 "integration_head": None,
@@ -1094,6 +1258,7 @@ def replan_future(
                     "commit": None,
                     "attempt": 0,
                     "worker_session_hash": None,
+                    "worker_session_hash_history": [],
                 },
             )
     replaced: list[tuple[Path, Path]] = []
@@ -1237,6 +1402,204 @@ def _task_plan_from_state(value: dict[str, Any]) -> TaskPlan:
     )
 
 
+def _read_incoming_handoff(path: Path) -> dict[str, Any]:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or (path.stat().st_mode & 0o777) != 0o600
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "incoming handoff path or mode is invalid"
+        )
+    value = read_json(path)
+    required = {
+        "schema",
+        "feature_id",
+        "wave_id",
+        "task_id",
+        "assignment_base_head",
+        "dependencies",
+        "predecessors",
+        "created_at",
+        "handoff_digest",
+    }
+    unsigned = dict(value)
+    recorded = unsigned.pop("handoff_digest", None)
+    if (
+        set(value) != required
+        or value.get("schema") != INCOMING_HANDOFF_SCHEMA
+        or not isinstance(value.get("dependencies"), list)
+        or not isinstance(value.get("predecessors"), list)
+        or not isinstance(recorded, str)
+        or recorded != sha256_json(unsigned)
+    ):
+        raise ExecutionError("EXECUTION_STATE_INVALID", "incoming handoff is invalid")
+    return value
+
+
+def _validate_assignment_record(assignment: dict[str, Any]) -> None:
+    unsigned = dict(assignment)
+    recorded = unsigned.pop("assignment_digest", None)
+    if (
+        assignment.get("schema") != ASSIGNMENT_SCHEMA
+        or not isinstance(recorded, str)
+        or recorded != sha256_json(unsigned)
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker assignment digest is invalid"
+        )
+
+
+def _validate_result_record(result: dict[str, Any]) -> None:
+    unsigned = dict(result)
+    recorded = unsigned.pop("result_digest", None)
+    if (
+        result.get("schema") != RESULT_SCHEMA
+        or not isinstance(recorded, str)
+        or recorded != sha256_json(unsigned)
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker result digest is invalid"
+        )
+
+
+def _find_task_wave(
+    run_dir: Path, feature_id: str, coordinator: dict[str, Any], task_id: str
+) -> str | None:
+    for candidate_wave in coordinator["wave_ids"]:
+        candidate = read_json(wave_path(run_dir, feature_id, candidate_wave))
+        if task_id in candidate.get("task_ids", []):
+            return str(candidate_wave)
+    return None
+
+
+def _build_incoming_handoff(
+    run_dir: Path,
+    feature_id: str,
+    coordinator: dict[str, Any],
+    wave_id: str,
+    task: TaskPlan,
+    base_head: str,
+    created_at: str,
+) -> dict[str, Any]:
+    predecessors: list[dict[str, Any]] = []
+    predecessor_ids: list[str] = []
+    wave_position = coordinator["wave_ids"].index(wave_id)
+    for prior_wave_id in coordinator["wave_ids"][:wave_position]:
+        prior_wave = read_json(wave_path(run_dir, feature_id, prior_wave_id))
+        predecessor_ids.extend(str(item) for item in prior_wave["task_ids"])
+    current_wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    task_batch_index = next(
+        index
+        for index, batch in enumerate(current_wave["batches"])
+        if task.task_id in batch
+    )
+    for prior_batch in current_wave["batches"][:task_batch_index]:
+        predecessor_ids.extend(str(item) for item in prior_batch)
+    predecessor_ids.extend(
+        dependency
+        for dependency in task.dependencies
+        if dependency not in predecessor_ids
+    )
+    for dependency in predecessor_ids:
+        dependency_wave = _find_task_wave(
+            run_dir, feature_id, coordinator, dependency
+        )
+        if dependency_wave is None:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "dependency task state is missing"
+            )
+        dependency_task = read_json(
+            task_path(run_dir, feature_id, dependency_wave, dependency)
+        )
+        dependency_assignment = read_json(
+            assignment_path(run_dir, feature_id, dependency_wave, dependency)
+        )
+        dependency_result = read_json(
+            result_path(run_dir, feature_id, dependency_wave, dependency)
+        )
+        unsigned_assignment = dict(dependency_assignment)
+        assignment_digest = unsigned_assignment.pop("assignment_digest", None)
+        unsigned_result = dict(dependency_result)
+        result_digest = unsigned_result.pop("result_digest", None)
+        if (
+            dependency_task.get("status") not in {"committed", "merged"}
+            or dependency_assignment.get("schema") != ASSIGNMENT_SCHEMA
+            or assignment_digest != sha256_json(unsigned_assignment)
+            or dependency_result.get("schema") != RESULT_SCHEMA
+            or result_digest != sha256_json(unsigned_result)
+            or dependency_task.get("result_digest") != result_digest
+            or dependency_result.get("assignment_digest") != assignment_digest
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "dependency result is not accepted"
+            )
+        predecessors.append(
+            {
+                "task_id": dependency,
+                "wave_id": dependency_wave,
+                "assignment_digest": dependency_assignment.get("assignment_digest"),
+                "result_digest": dependency_result.get("result_digest"),
+                "commit": dependency_result.get("commit"),
+                "changed_paths": dependency_result.get("changed_paths"),
+                "summary": dependency_result.get("summary"),
+                "decisions": dependency_result.get("decisions"),
+                "open_risks": dependency_result.get("open_risks"),
+                "validation": dependency_result.get("validation"),
+                "review": dependency_result.get("review"),
+            }
+        )
+    value: dict[str, Any] = {
+        "schema": INCOMING_HANDOFF_SCHEMA,
+        "feature_id": feature_id,
+        "wave_id": wave_id,
+        "task_id": task.task_id,
+        "assignment_base_head": base_head,
+        "dependencies": list(task.dependencies),
+        "predecessors": predecessors,
+        "created_at": created_at,
+    }
+    value["handoff_digest"] = sha256_json(value)
+    return value
+
+
+def _validate_assignment_handoff(
+    run_dir: Path,
+    feature_id: str,
+    coordinator: dict[str, Any],
+    assignment: dict[str, Any],
+    task: TaskPlan,
+) -> dict[str, Any]:
+    path = Path(str(assignment.get("incoming_handoff_path") or ""))
+    _validate_assignment_record(assignment)
+    expected_path = incoming_handoff_path(
+        run_dir, feature_id, str(assignment["wave_id"]), task.task_id
+    ).resolve()
+    if not path.is_absolute() or path.resolve() != expected_path:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "incoming handoff path is invalid"
+        )
+    handoff = _read_incoming_handoff(path)
+    expected = _build_incoming_handoff(
+        run_dir,
+        feature_id,
+        coordinator,
+        str(assignment["wave_id"]),
+        task,
+        str(assignment["base_head"]),
+        str(handoff.get("created_at")),
+    )
+    if (
+        handoff != expected
+        or handoff.get("handoff_digest")
+        != assignment.get("incoming_handoff_digest")
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "incoming handoff context is invalid"
+        )
+    return handoff
+
+
 def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
     coordinator = _load_coordinator(run_dir, feature_id)
     if coordinator["status"] not in {"tdd_sealed", "waves_running"}:
@@ -1249,9 +1612,16 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         raise ExecutionError("EXECUTION_STATE_INVALID", "unknown wave")
     wave = read_json(wave_path(run_dir, feature_id, wave_id))
     if wave["status"] in {"running", "integrating", "integrated", "done"}:
+        active_index = wave.get("active_batch_index")
+        task_ids = (
+            wave["batches"][active_index]
+            if isinstance(active_index, int)
+            else wave["task_ids"]
+        )
         return [
             read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
-            for task_id in wave["task_ids"]
+            for task_id in task_ids
+            if assignment_path(run_dir, feature_id, wave_id, task_id).exists()
         ]
     if wave["status"] not in {"planned", "preparing", "blocked"}:
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave is not preparable")
@@ -1267,12 +1637,16 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     base_head = head(integration)
     wave["status"] = "preparing"
     wave["base_head"] = base_head
+    if wave.get("active_batch_index") is None:
+        wave["active_batch_index"] = 0
+        wave["batch_states"][0] = "active"
     write_json_atomic(wave_path(run_dir, feature_id, wave_id), wave)
     coordinator["active_wave"] = wave_id
     coordinator["status"] = "waves_running"
     _save_coordinator(run_dir, feature_id, coordinator)
     assignments: list[dict[str, Any]] = []
-    for task_id in wave["task_ids"]:
+    active_batch_index = int(wave["active_batch_index"])
+    for task_id in wave["batches"][active_batch_index]:
         task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         task = _task_plan_from_state(task_record)
@@ -1301,8 +1675,40 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                 raise ExecutionError(
                     "WORKTREE_CONFLICT", f"recorded worker drifted for {task_id}"
                 )
+            _validate_assignment_record(existing)
+            _validate_assignment_handoff(
+                run_dir, feature_id, coordinator, existing, task
+            )
             assignments.append(existing)
             continue
+        handoff_file = incoming_handoff_path(
+            run_dir, feature_id, wave_id, task_id
+        )
+        existing_handoff = (
+            _read_incoming_handoff(handoff_file) if handoff_file.exists() else None
+        )
+        created_at = (
+            str(existing_handoff["created_at"])
+            if existing_handoff is not None
+            else utc_now()
+        )
+        incoming_handoff = _build_incoming_handoff(
+            run_dir,
+            feature_id,
+            coordinator,
+            wave_id,
+            task,
+            base_head,
+            created_at,
+        )
+        handoff_file.parent.mkdir(parents=True, exist_ok=True)
+        handoff_file.parent.chmod(0o700)
+        if existing_handoff is not None and existing_handoff != incoming_handoff:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "immutable incoming handoff differs"
+            )
+        if existing_handoff is None:
+            write_json_atomic(handoff_file, incoming_handoff)
         assignment: dict[str, Any] = {
             "schema": ASSIGNMENT_SCHEMA,
             "feature_id": feature_id,
@@ -1323,9 +1729,15 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "git_common_dir": coordinator["git_common_dir"],
             "write_claims": [asdict(item) for item in task.write_claims],
             "conflict_domains": list(task.conflict_domains),
+            "requirements": list(task.requirements),
+            "goal": task.goal,
+            "dependencies": list(task.dependencies),
             "validation": task.validation,
             "done_criteria": task.done_criteria,
-            "created_at": utc_now(),
+            "rollback": task.rollback,
+            "incoming_handoff_path": str(handoff_file),
+            "incoming_handoff_digest": incoming_handoff["handoff_digest"],
+            "created_at": created_at,
         }
         assignment["assignment_digest"] = sha256_json(assignment)
         selected_project_root = Path(str(coordinator["selected_project_root"]))
@@ -1443,6 +1855,37 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     return assignments
 
 
+def advance_batch(
+    run_dir: Path, feature_id: str, wave_id: str
+) -> list[dict[str, Any]]:
+    _load_coordinator(run_dir, feature_id)
+    wave_file = wave_path(run_dir, feature_id, wave_id)
+    wave = read_json(wave_file)
+    active_index = wave.get("active_batch_index")
+    if wave.get("status") != "running" or not isinstance(active_index, int):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "wave has no active capacity batch"
+        )
+    current_task_ids = wave["batches"][active_index]
+    for task_id in current_task_ids:
+        task_record = read_json(task_path(run_dir, feature_id, wave_id, task_id))
+        if task_record.get("status") != "committed":
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "active capacity batch is incomplete"
+            )
+    wave["batch_states"][active_index] = "done"
+    next_index = active_index + 1
+    if next_index >= len(wave["batches"]):
+        wave["active_batch_index"] = None
+        write_json_atomic(wave_file, wave)
+        return []
+    wave["active_batch_index"] = next_index
+    wave["batch_states"][next_index] = "active"
+    wave["status"] = "preparing"
+    write_json_atomic(wave_file, wave)
+    return prepare_wave(run_dir, feature_id, wave_id)
+
+
 def start_task(
     run_dir: Path,
     feature_id: str,
@@ -1452,7 +1895,30 @@ def start_task(
     session_identity: str,
     scope_cwd: Path,
 ) -> dict[str, Any]:
+    with _execution_transition_lock(run_dir, feature_id):
+        return _start_task_locked(
+            run_dir,
+            feature_id,
+            wave_id,
+            task_id,
+            assignment_digest,
+            session_identity,
+            scope_cwd,
+        )
+
+
+def _start_task_locked(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    assignment_digest: str,
+    session_identity: str,
+    scope_cwd: Path,
+) -> dict[str, Any]:
+    coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    _validate_assignment_record(assignment)
     if assignment.get("assignment_digest") != assignment_digest:
         raise ExecutionError("EXECUTION_STATE_INVALID", "assignment digest mismatch")
     worktree_path = Path(assignment["worktree"])
@@ -1469,6 +1935,21 @@ def start_task(
         raise ExecutionError("WORKTREE_CONFLICT", "worker start identity mismatch")
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
+    _validated_session_history(task_record)
+    task = _task_plan_from_state(task_record)
+    _validate_assignment_handoff(
+        run_dir, feature_id, coordinator, assignment, task
+    )
+    wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    active_index = wave.get("active_batch_index")
+    if (
+        not isinstance(active_index, int)
+        or task_id not in wave["batches"][active_index]
+        or wave["batch_states"][active_index] != "active"
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "task is outside the active capacity batch"
+        )
     if task_record["status"] not in {"assigned", "running"}:
         raise ExecutionError("EXECUTION_STATE_INVALID", "task cannot start")
     session_hash = _session_hash(session_identity)
@@ -1478,21 +1959,26 @@ def start_task(
             raise ExecutionError(
                 "WORKSPACE_BUSY", "task belongs to another worker session"
             )
+        _claim_worker_session(
+            run_dir, feature_id, wave_id, task_id, session_hash
+        )
         return assignment
     for other in execution_dir(run_dir, feature_id).glob("tasks/*/*.json"):
         if other == task_record_path:
             continue
         value = read_json(other)
-        if (
-            value.get("status") == "running"
-            and value.get("worker_session_hash") == session_hash
+        history = _validated_session_history(value)
+        if value.get("worker_session_hash") == session_hash or (
+            isinstance(history, list) and session_hash in history
         ):
             raise ExecutionError(
                 "FRESH_SESSION_REQUIRED", "worker session already owns another task"
             )
+    _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
     task_record["status"] = "running"
     task_record["worker_started_at"] = utc_now()
     task_record["worker_session_hash"] = session_hash
+    task_record["worker_session_hash_history"].append(session_hash)
     task_record["attempt"] = max(1, int(task_record.get("attempt") or 0) + 1)
     write_json_atomic(task_record_path, task_record)
     return assignment
@@ -1596,21 +2082,56 @@ def recover_task(
     session_identity: str,
     scope_cwd: Path,
     *,
+    expected_attempt: int,
+    confirmed_stopped: bool,
+) -> dict[str, Any]:
+    with _execution_transition_lock(run_dir, feature_id):
+        return _recover_task_locked(
+            run_dir,
+            feature_id,
+            wave_id,
+            task_id,
+            session_identity,
+            scope_cwd,
+            expected_attempt=expected_attempt,
+            confirmed_stopped=confirmed_stopped,
+        )
+
+
+def _recover_task_locked(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    session_identity: str,
+    scope_cwd: Path,
+    *,
+    expected_attempt: int,
     confirmed_stopped: bool,
 ) -> dict[str, Any]:
     if not confirmed_stopped:
         raise ExecutionError(
             "WORKSPACE_BUSY", "previous worker must be explicitly confirmed stopped"
         )
+    coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
+    history = _validated_session_history(task_record)
+    task = _task_plan_from_state(task_record)
+    _validate_assignment_handoff(
+        run_dir, feature_id, coordinator, assignment, task
+    )
     if task_record.get("status") != "running":
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "only a running task can recover"
         )
+    if expected_attempt < 1 or int(task_record.get("attempt") or 0) != expected_attempt:
+        raise ExecutionError(
+            "WORKSPACE_BUSY", "worker recovery attempt changed before transfer"
+        )
     new_hash = _session_hash(session_identity)
-    if task_record.get("worker_session_hash") == new_hash:
+    if new_hash in history:
         raise ExecutionError(
             "FRESH_SESSION_REQUIRED", "recovery requires a fresh session"
         )
@@ -1618,10 +2139,8 @@ def recover_task(
         if other == task_record_path:
             continue
         value = read_json(other)
-        if (
-            value.get("status") == "running"
-            and value.get("worker_session_hash") == new_hash
-        ):
+        other_history = _validated_session_history(value)
+        if value.get("worker_session_hash") == new_hash or new_hash in other_history:
             raise ExecutionError(
                 "FRESH_SESSION_REQUIRED", "worker session already owns another task"
             )
@@ -1674,7 +2193,9 @@ def recover_task(
         raise ExecutionError(
             "WORKTREE_CONFLICT", "worker recovery has multiple commits"
         )
+    _claim_worker_session(run_dir, feature_id, wave_id, task_id, new_hash)
     task_record["worker_session_hash"] = new_hash
+    task_record["worker_session_hash_history"].append(new_hash)
     task_record["attempt"] = int(task_record.get("attempt") or 1) + 1
     task_record["recovered_at"] = utc_now()
     write_json_atomic(task_record_path, task_record)
@@ -1735,19 +2256,45 @@ def finish_task(
     validation: str,
     review: str,
     message: str,
+    *,
+    summary: str,
+    decisions: Iterable[str] = (),
+    open_risks: Iterable[str] = (),
 ) -> dict[str, Any]:
     if not validation.strip() or not review.strip():
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED",
             "worker validation and review evidence are required",
         )
-    _reject_sensitive_evidence(validation, review, message)
+    summary_value = summary
+    decision_values = list(decisions)
+    risk_values = list(open_risks)
+    if (
+        not summary_value.strip()
+        or any(not isinstance(item, str) or not item.strip() for item in decision_values)
+        or any(not isinstance(item, str) or not item.strip() for item in risk_values)
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker handoff evidence is invalid"
+        )
+    _reject_sensitive_evidence(
+        validation, review, message, summary_value, *decision_values, *risk_values
+    )
+    coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
     worktree_path = Path(assignment["worktree"])
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
+    _validate_assignment_handoff(
+        run_dir,
+        feature_id,
+        coordinator,
+        assignment,
+        _task_plan_from_state(task_record),
+    )
     if task_record["status"] == "committed":
         result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        _validate_result_record(result)
         if head(worktree_path) != result["commit"] or not clean(worktree_path):
             raise ExecutionError("WORKTREE_CONFLICT", "accepted worker result drifted")
         return result
@@ -1851,6 +2398,9 @@ def finish_task(
         "assignment_digest": assignment["assignment_digest"],
         "commit": task_head,
         "changed_paths": changed_paths,
+        "summary": summary_value,
+        "decisions": decision_values,
+        "open_risks": risk_values,
         "validation": validation,
         "review": review,
         "attempt": int(task_record.get("attempt") or 1),
@@ -1883,6 +2433,28 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "wave is not ready to integrate"
         )
+    active_batch_index = wave.get("active_batch_index")
+    if isinstance(active_batch_index, int):
+        active_tasks = wave["batches"][active_batch_index]
+        if any(
+            read_json(task_path(run_dir, feature_id, wave_id, task_id)).get("status")
+            != "committed"
+            for task_id in active_tasks
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "active capacity batch is incomplete"
+            )
+        if active_batch_index + 1 < len(wave["batches"]):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "later capacity batches are pending"
+            )
+        wave["batch_states"][active_batch_index] = "done"
+        wave["active_batch_index"] = None
+        write_json_atomic(wave_file, wave)
+    if any(state != "done" for state in wave.get("batch_states", [])):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "capacity batches are incomplete"
+        )
     integration = Path(coordinator["integration_worktree"])
     if not clean(integration):
         raise ExecutionError("INTEGRATION_CONFLICT", "integration worktree is dirty")
@@ -1896,6 +2468,14 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
             )
         result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
         assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+        _validate_assignment_handoff(
+            run_dir,
+            feature_id,
+            coordinator,
+            assignment,
+            _task_plan_from_state(task_record),
+        )
+        _validate_result_record(result)
         worker = Path(assignment["worktree"])
         if (
             result["assignment_digest"] != assignment["assignment_digest"]

@@ -17,6 +17,16 @@ SLURM_ACTION_APPLIED = "Applied"
 SLURM_ACTION_REJECTED = "Rejected"
 SLURM_ACTION_INDETERMINATE = "Indeterminate"
 SLURM_ACTION_ADMISSION_CLOSED = "admission-closed"
+SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY = "confirmed-voluntary-exit"
+SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION = (
+    "operator-authorized-continuation-after-involuntary-timeout"
+)
+SLURM_LOGIN_EXIT_DISPOSITIONS = frozenset(
+    {
+        SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
+        SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION,
+    }
+)
 
 SLURM_ACTION_STATES = frozenset(
     {
@@ -406,6 +416,13 @@ def validate_slurm_action_journal(journal: Mapping[str, Any]) -> None:
             acknowledgement.get("acknowledged_by"),
             field=f"Slurm login exit acknowledgement {index} acknowledged_by",
         )
+        disposition = str(
+            acknowledgement.get("disposition") or SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY
+        )
+        if disposition not in SLURM_LOGIN_EXIT_DISPOSITIONS:
+            raise ValueError(
+                f"Slurm login exit acknowledgement {index} disposition is invalid."
+            )
         key = (fingerprint, absent_at)
         if key in acknowledgement_keys:
             raise ValueError("Slurm login exit acknowledgements must be unique.")
@@ -617,8 +634,9 @@ def acknowledge_slurm_login_exit(
     *,
     socket_fingerprint: str,
     acknowledged_by: str,
+    disposition: str,
     acknowledged_at: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Acknowledge one currently absent protected SSH socket by exact fingerprint."""
 
     validate_slurm_action_journal(journal)
@@ -628,6 +646,9 @@ def acknowledge_slurm_login_exit(
     ):
         raise ValueError("Login exit acknowledgement requires a lowercase SHA256 fingerprint.")
     actor = _required_text(acknowledged_by, field="login exit acknowledged_by")
+    normalized_disposition = str(disposition or "").strip()
+    if normalized_disposition not in SLURM_LOGIN_EXIT_DISPOSITIONS:
+        raise ValueError("Login exit acknowledgement disposition is invalid.")
     login = journal.get("login")
     if not isinstance(login, MutableMapping):
         raise ValueError("Slurm action journal login observation must be mutable.")
@@ -652,6 +673,19 @@ def acknowledge_slurm_login_exit(
             acknowledgement.get("socket_fingerprint") == fingerprint
             and acknowledgement.get("absence_observed_at") == absence_observed_at
         ):
+            existing_disposition = str(acknowledgement.get("disposition") or "").strip()
+            if existing_disposition and existing_disposition != normalized_disposition:
+                raise ValueError(
+                    "Login exit acknowledgement already has a conflicting disposition."
+                )
+            if not existing_disposition:
+                # v1 acknowledgements predate explicit dispositions.  An exact
+                # follow-up action may refine that same fingerprint/absence epoch
+                # without erasing the original acknowledgement audit fields.
+                acknowledgement["disposition"] = normalized_disposition
+                acknowledgement["disposition_recorded_at"] = acknowledged_at or _utc_now()
+                acknowledgement["disposition_recorded_by"] = actor
+                validate_slurm_action_journal(journal)
             return dict(acknowledgement)
     timestamp = acknowledged_at or _utc_now()
     record = {
@@ -659,6 +693,7 @@ def acknowledge_slurm_login_exit(
         "absence_observed_at": absence_observed_at,
         "acknowledged_at": timestamp,
         "acknowledged_by": actor,
+        "disposition": normalized_disposition,
     }
     acknowledgements.append(record)
     login["observed_at"] = timestamp

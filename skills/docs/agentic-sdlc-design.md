@@ -162,11 +162,12 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `execution/FEAT-*/coordinator.json`: schema-v3 feature execution identity,
+- `execution/FEAT-*/coordinator.json`: schema-v4 feature execution identity,
   exact base/integration SHAs, wave pointers, and promotion state.
-- `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `results/`, and
-  `journals/`: separate records so parallel task agents never share a mutable
-  result file.
+- `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `incoming-handoffs/`,
+  `sessions/`, `results/`, and `journals/`: separate private records for
+  authoritative capacity batches, immutable prior-task context, exclusive
+  session ownership, and parallel result isolation.
 - `execution/interop.json`: optional run-level managed-outer-worktree lease
   identity, promoted head, and release state.
 - `worktrees/FEAT-*/integration/` and `worktrees/FEAT-*/waves/`: persistent
@@ -206,13 +207,19 @@ domains are pairwise disjoint. Unknown ownership, shared interfaces or schemas,
 migrations, dependency manifests, infrastructure identities, exclusive test
 resources, and external mutations serialize.
 
-For each current-wave task, the coordinator creates one branch, one locked
-private worktree, and one immutable assignment, then dispatches one fresh task
-agent. Workers produce one direct-child commit after focused validation and
-task-scoped review. The coordinator verifies digests, paths, Git identity, and
-ancestry, merges tasks in stable task order with retained worker commits and
-explicit `--no-ff` merge commits, runs combined evidence at the exact
-integration tip, and non-force-cleans only clean reachable worker resources.
+For each task in the active capacity batch, the coordinator creates one branch,
+one locked private worktree, one immutable assignment, and one digest-bound
+incoming handoff, then dispatches one fresh task agent. Only the first batch of
+the first wave has no predecessors; later assignments contain structured
+evidence from all earlier completed waves and batches. A process-safe transition
+lock, atomic hashed-session claims, and expected-attempt recovery guards prevent
+session or task ownership reuse. Workers return explicit summary, decisions,
+risks, validation, and review evidence and produce one direct-child commit. The
+coordinator verifies digests, paths, Git identity, and ancestry, opens the next
+batch only after the active batch commits, merges tasks in stable task order
+with retained worker commits and explicit `--no-ff` merge commits, runs combined
+evidence at the exact integration tip, and non-force-cleans only clean reachable
+worker resources.
 
 After all downstream evidence passes, `sdlc-commit` seals at most one final
 integration commit, verifies the original project checkout is unchanged, and
@@ -259,10 +266,13 @@ writes, updates, deletes, and moves may target repository files, outside-repo
 files, credential directories, Codex runtime files, global `AGENTS.md`, locked
 SDLC plans, and private SDLC state when the operator needs that flexibility.
 The hook can still deny unsafe content or action shapes such as secret-bearing
-shell, patch, or MCP payloads, destructive shell commands, destructive Git
+shell, patch, or MCP payloads, destructive Bash commands, destructive Git
 commands, protected-branch commit or push attempts, force pushes, force
 cleanup, and guarded Git or GitHub actions without valid short-lived
-authorization. Registered integration and worker worktrees remain inside the
+authorization. Dangerous-shell pattern matching applies only to Bash tool
+payloads; source patches containing Dockerfile or documentation command text
+remain governed by patch target, secret, and spec checks. Registered
+integration and worker worktrees remain inside the
 active run even though they live outside the original checkout. For sensitive
 Git operations the hook verifies their Git root/common directory, branch,
 recorded HEAD, and action-scoped authorization. Ordinary outbound network
@@ -477,7 +487,10 @@ environment blockers.
 not an SDLC phase and does not use the `sdlc-` prefix. Use it to verify the
 workflow against this design, inspect global `sdlc-*` skill discovery, check
 hook configuration, run disposable PreToolUse and Stop hook fixture tests, and
-write a verification report to `~/.codex/sdlc-verification/report.md`.
+write a verification report to `~/.codex/sdlc-verification/report.md`. Its
+no-flag behavior remains the lightweight verifier. Explicit `--create`,
+`--create --keep`, and `--destroy` select a separately owned real three-tier
+profile; they do not change the public `$sdlc-start` workflow interface.
 
 ### Verification principles
 
@@ -496,6 +509,8 @@ The verifier must remain safe and idempotent:
   resources
 - route the disposable golden-path run through the normal SDLC phase skills
   instead of creating a workflow CLI
+- for live three-tier cleanup, resolve targets from an exact private lifecycle
+  inventory and two ownership labels, never from a name prefix
 
 The verifier writes only verification-owned state under:
 
@@ -541,7 +556,7 @@ The preflight must verify and record:
   `replan-future`, secret gates, and sequential fallback; Task Implementer
   interoperability; and prompt-bound steering continuation
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs schema-v3 execution through promotion, proves the v2 outer
+  worktree, runs schema-v4 execution through promotion, proves the v2 outer
   lease blocks publication, releases after final evidence, and then acquires
   the create-PR reservation
 - duplicate SDLC skill-name detection
@@ -668,6 +683,77 @@ The full workflow test must not call `create-pr`, `review-pr`, or
 `sdlc-merge-pr` against a real remote. Merge remains outside verification
 unless the user explicitly requests a separate merge exercise.
 
+### Real three-tier application test
+
+The real-life profile is opt-in and separate from the preceding lightweight
+fixture:
+
+```text
+$agentic-sdlc-test --create
+$agentic-sdlc-test --create --keep
+$agentic-sdlc-test --destroy
+```
+
+`--keep` is valid only with `--create`; create and destroy are mutually
+exclusive. There is one active three-tier application per verification root.
+A second create fails without mutation, and repeated standalone destroy returns
+`ALREADY_DESTROYED`.
+
+Create first runs the unchanged deterministic preflight. It then prepares one
+owned project and uses only `$sdlc-start workspace init <project-folder>` and
+`$sdlc-start run <prompt-path-or-unique-filename>` to build a task-board
+application through the normal phase skills. The logical tiers are a browser
+GUI, Django/Gunicorn web/API server, and PostgreSQL database. Exactly two Docker
+Compose containers run the web and database services. Docker assigns the web
+host port and binds it to loopback only; PostgreSQL is never host-published.
+Before lifecycle creation, computer-use preflight must successfully capture a
+real selected-browser state; tool discovery or process presence is insufficient.
+That capture proves capability discovery only. Immediately before the first GUI
+navigation in evaluation and again before UAT, the verifier repeats a fresh
+capture for the exact selected browser while the host is unlocked and a normal
+browser window is visible, unminimized, foreground, and on the current macOS
+Space. A locked host is allowed only when the current Codex surface explicitly
+confirms locked Computer Use is enabled for that session.
+After workspace initialization, a deterministic renderer preserves the starter
+identity and replaces its body before prompt intake. Fixed public base-image
+pulls use an owned empty Docker CLI config only for those bounded pulls, never
+for Compose. Runtime recording requires explicit web/database container roles
+and verifies their canonical Compose service labels.
+
+PASS requires semantic evidence for every phase, the clean promoted Git SHA,
+unit/API/database/migration/vertical/GUI tests, all three layers, local
+deployment, and computer-use GUI UAT. A just-in-time visibility failure is an
+`ENVIRONMENT_DEFECT` at `pre-navigation-window-capture`, with no navigation or
+GUI action claimed. A hung/timed-out call or response loss across browsers
+stops all further Computer Use calls; fresh-session or service recovery is a
+separate explicitly authorized action. The UAT must refresh accessibility state
+after every successful action; reject blank input; create, refresh, complete,
+and filter a unique task; correlate the same record through GUI, API, and
+PostgreSQL; restart services
+without deleting the volume; and prove persistence. Edge is primary and Chrome
+is a recorded fallback. Browser or Playwright evidence cannot substitute for a
+required computer-use harness, and screenshots alone cannot establish PASS.
+
+Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v1`; semantic evidence
+uses `agentic-sdlc/three-tier-results-v1`. Reports include logical/container
+layer inventory, tool/browser versions, project/report paths, resolved web/API/
+health endpoints, internal database endpoint, baseline/promoted SHAs, phase and
+test outcomes, exact resource IDs, UAT, and cleanup/retention status. Reports
+omit prompts, raw logs, credentials, database contents, and screenshot content.
+
+Default create closes only its dedicated test tab and, after success or
+failure, removes its exact project, private state/raw evidence, containers,
+network, database volume, and built web image. If the shared Computer Use
+service is unhealthy and cannot safely close the dedicated tab, cleanup fails
+closed before Docker deletion, retains the owned runtime as `CLEANUP_FAILED`,
+and requires separately authorized recovery. Any cleanup failure makes the run
+FAIL and leaves resumable state. Create plus keep retains those resources and
+the dedicated tab. Standalone destroy validates the root, lifecycle, exact
+paths, verification ID, Compose project, and both labels on every present
+resource before removal. It retains sanitized reports and lifecycle history
+and never removes Docker, shared/base images, unrelated resources, a browser
+application, or unrelated tabs.
+
 ### Report interpretation
 
 The report status means:
@@ -680,6 +766,11 @@ The report status means:
   more live lanes are missing or partial.
 - `FAIL`: any required deterministic check, configured hook safety/parity
   check, supplied live lane, or live-evidence integrity check failed.
+
+For the opt-in three-tier profile, missing Docker/browser/computer-use capacity
+before a live attempt is PARTIAL, while any attempted required assertion
+failure is FAIL. Three-tier PASS additionally requires semantic results and a
+final lifecycle of `KEPT` by explicit request or fully `DESTROYED`.
 
 `PARTIAL` is not a production-readiness result. It means the workflow is safe
 enough to continue disposable verification, not that it is proven for real
@@ -779,7 +870,7 @@ project branch, validates the locked task graph, creates deterministic waves,
 and prepares or resumes the feature integration branch/worktree at the exact
 project base SHA. The exact folder selected by `workspace init` is enforced as
 the claim, worker-cwd, and changed-path boundary even in a monorepo. It records
-schema-v3 private execution state, supports confirmed interrupted-worker
+schema-v4 private execution state, supports confirmed interrupted-worker
 transfer and resource-free future-wave replanning, and acquires an
 `agentic-sdlc` v2 lease when nested in a managed outer worktree. It never
 implements behavior, promotes, or force-cleans resources.
@@ -949,7 +1040,8 @@ Typical routes are:
 - ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
 - unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
 - moved project/integration state -> `PROMOTION_BLOCKED`
-- unfinished execution coordinator schema v1/v2 -> `WORKFLOW_UPGRADE_REQUIRED`
+- any execution coordinator schema v1/v2/v3 record ->
+  `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
 - documentation drift -> `sdlc-update-documents`

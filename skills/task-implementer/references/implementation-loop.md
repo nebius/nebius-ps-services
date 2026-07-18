@@ -91,7 +91,7 @@ members but allow already-active workers to finish and report.
 Each worker must:
 
 1. Read its immutable assignment and verify its digest.
-2. Verify absolute cwd, real worktree root, branch, exact base SHA, clean state,
+2. Verify the incoming-handoff path and digest, then verify absolute cwd, real worktree root, branch, exact base SHA, clean state,
    scope, claims, and conflict domains.
 3. Stop with `REPLAN_REQUIRED` before editing if an undeclared path or domain
    is needed.
@@ -102,7 +102,8 @@ Each worker must:
 7. Invoke `$commit` exactly once. The task branch must contain exactly one
    direct-child commit from the common contract base.
 8. Write one private result with assignment digest, status, commit, exact paths,
-   validation, end-to-end evidence, and review evidence. Stop.
+   summary, decisions, open risks, validation, end-to-end evidence, and review
+   evidence. Stop. Never reuse this worker session for another task.
 
 Task `committed` means ready for integration, not done.
 

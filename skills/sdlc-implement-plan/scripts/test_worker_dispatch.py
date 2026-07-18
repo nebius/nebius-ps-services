@@ -46,6 +46,8 @@ print(json.dumps({
     "assignment_digest": assignment["assignment_digest"],
     "status": "implemented",
     "summary": "implemented scoped task",
+    "decisions": [],
+    "open_risks": [],
     "validation": "focused tests passed",
     "review": "focused review passed",
 }))
@@ -65,18 +67,42 @@ print(json.dumps({
             / "run-1"
             / "execution"
             / "FEAT-001"
-            / "waves"
-            / "WAVE-001"
             / "assignments"
+            / "WAVE-001"
             / f"{task_id}.json"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
+        handoff_path = (
+            self.root
+            / "run-1"
+            / "execution"
+            / "FEAT-001"
+            / "incoming-handoffs"
+            / "WAVE-001"
+            / f"{task_id}.json"
+        )
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+        handoff = {
+            "schema": "agentic-sdlc/incoming-handoff-v1",
+            "feature_id": "FEAT-001",
+            "wave_id": "WAVE-001",
+            "task_id": task_id,
+            "assignment_base_head": "a" * 40,
+            "dependencies": [],
+            "predecessors": [],
+            "created_at": "2026-07-17T00:00:00Z",
+        }
+        handoff["handoff_digest"] = dispatch.stable_digest(handoff)
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        handoff_path.chmod(0o600)
         value = {
-            "schema": "agentic-sdlc/worker-assignment-v1",
+            "schema": "agentic-sdlc/worker-assignment-v2",
             "feature_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
             "scope_cwd": str(scope),
+            "incoming_handoff_path": str(handoff_path),
+            "incoming_handoff_digest": handoff["handoff_digest"],
         }
         value["assignment_digest"] = dispatch.stable_digest(value)
         path.write_text(json.dumps(value), encoding="utf-8")
@@ -105,6 +131,7 @@ print(json.dumps({
             self.assertNotIn("--skip-git-repo-check", argv)
             self.assertNotIn("danger-full-access", argv)
             self.assertIn("task-start", entry["prompt"])
+            self.assertNotIn("--session-id", entry["prompt"])
             self.assertIn("Do not commit", entry["prompt"])
 
     def test_first_failure_stops_later_dispatch_and_retains_concise_error(self) -> None:
@@ -133,6 +160,22 @@ print(json.dumps({
                 [assignment], self.schema, codex_binary=str(self.root / "missing")
             )
         self.assertEqual(caught.exception.code, "ENVIRONMENT_BLOCKER")
+
+    def test_tampered_handoff_fails_before_worker_spawn(self) -> None:
+        assignment = self.assignment("TASK-001")
+        value = json.loads(assignment.read_text(encoding="utf-8"))
+        handoff_path = Path(value["incoming_handoff_path"])
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        handoff["dependencies"] = ["TASK-999"]
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        handoff_path.chmod(0o600)
+        with mock.patch.dict(os.environ, {"FAKE_CODEX_LOG": str(self.log)}):
+            with self.assertRaises(dispatch.DispatchError) as caught:
+                dispatch.dispatch_sequential(
+                    [assignment], self.schema, codex_binary=str(self.fake)
+                )
+        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":

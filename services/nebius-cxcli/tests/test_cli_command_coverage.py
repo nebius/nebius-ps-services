@@ -12180,7 +12180,8 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
 
     rendered = rich_console.export_text()
     assert f"Slurm job policy: {expected_policy}" in rendered
-    assert "Login SSH continuity: unconditional voluntary handoff" in rendered
+    assert "Login SSH continuity: protected explicit handoff" in rendered
+    assert "explicit fingerprint-bound authorization after an involuntary timeout" in rendered
     assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
     assert captured["job_policy"] == expected_policy
     assert captured["slurm_scheduling_pause"] is True

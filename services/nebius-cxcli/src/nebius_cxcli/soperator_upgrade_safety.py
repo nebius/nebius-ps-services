@@ -406,6 +406,7 @@ def _classify_external_intentional_deltas(
     *,
     target_ref: str,
     namespace: str = "soperator",
+    after_state: ProtectedCustomerState | None = None,
     open_metrics_handoff: Mapping[str, Any] | None = None,
     open_metrics_handoff_verified: bool = False,
     open_metrics_comparison_hashes_match: bool = False,
@@ -416,6 +417,12 @@ def _classify_external_intentional_deltas(
             _is_external_intentional_migration_delta(
                 delta,
                 target_ref=target_ref,
+            )
+            or _is_external_accounting_config_successor_delta(
+                delta,
+                after_state=after_state,
+                target_ref=target_ref,
+                namespace=namespace,
             )
             or _is_external_restored_open_metrics_delta(
                 delta,
@@ -430,6 +437,54 @@ def _classify_external_intentional_deltas(
             "Expected external migration ownership, chart takeover, node replacement, "
             "or checkpoint-verified OpenMetrics restoration drift."
         ),
+    )
+
+
+def _is_external_accounting_config_successor_delta(
+    delta: Mapping[str, Any],
+    *,
+    after_state: ProtectedCustomerState | None,
+    target_ref: str,
+    namespace: str,
+) -> bool:
+    if after_state is None:
+        return False
+    field = str(delta.get("field", "") or "")
+    if (
+        str(delta.get("kind", "") or "") != "configmaps"
+        or str(delta.get("resource", "") or "")
+        != f"{namespace}/soperator-acct-db-config-default"
+        or field != "data_sha256_by_key"
+    ):
+        return False
+    configmaps = _items_by_name(after_state.sections.get("configmaps"))
+    legacy = configmaps.get(f"{namespace}/soperator-acct-db-config-default")
+    successor = configmaps.get(f"{namespace}/{target_ref}-acct-db-config-default")
+    if not legacy or not successor:
+        return False
+    legacy_contract = legacy.get(field)
+    successor_contract = successor.get(field)
+    if bool(
+        isinstance(legacy_contract, Mapping)
+        and legacy_contract
+        and legacy_contract == successor_contract
+        and delta.get("after") == _summary_value(successor_contract)
+    ):
+        return True
+
+    # The retired legacy MariaDB may reconcile its default ConfigMap while the
+    # external handoff is completing.  That drift is harmless only when the
+    # source database workload is gone and the live target successor retains
+    # the exact protected pre-upgrade contract.
+    workloads = after_state.sections.get("workloads")
+    statefulsets = workloads.get("statefulsets") if isinstance(workloads, Mapping) else None
+    statefulsets_by_name = _items_by_name(statefulsets)
+    return bool(
+        isinstance(successor_contract, Mapping)
+        and successor_contract
+        and delta.get("before") == _summary_value(successor_contract)
+        and f"{namespace}/soperator-acct-db" not in statefulsets_by_name
+        and f"{namespace}/{target_ref}-acct-db" in statefulsets_by_name
     )
 
 
@@ -959,6 +1014,7 @@ def run_post_upgrade_fast_verification(
                 comparison,
                 target_ref=target_ref,
                 namespace=namespace,
+                after_state=after_state,
                 open_metrics_handoff=external_open_metrics_handoff,
                 open_metrics_handoff_verified=open_metrics_handoff_verified,
                 open_metrics_comparison_hashes_match=(open_metrics_comparison_hashes_match),
@@ -2457,7 +2513,12 @@ def _home_mount_is_shared_jail_home(state: ProtectedCustomerState | None) -> boo
     if not isinstance(home, Mapping) or not bool(home.get("available")):
         return False
     summary = str(home.get("summary") or "").lower()
-    return "/mnt/jail/home" in summary and "/shared/home" in summary
+    if "/mnt/jail/home" not in summary:
+        return False
+    return bool(
+        "/shared/home" in summary
+        or re.search(r'"source"\s*:\s*"jail\[/(?:shared/)?home\]"', summary)
+    )
 
 
 def _first_login_pod(pods: Mapping[str, Any]) -> str:

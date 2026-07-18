@@ -208,8 +208,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `WORKFLOW_UPGRADE_REQUIRED`. Completed unbound history remains readable; do
   not adopt or migrate it.
 - If plan lock conflicts exist, stop and report.
-- If execution coordinator schema v1 or v2 is unfinished, stop with
-  `WORKFLOW_UPGRADE_REQUIRED`. If registered Git identity, plan digest, or
+- If any execution coordinator schema v1, v2, or v3 record exists, stop with
+  `WORKFLOW_UPGRADE_REQUIRED`, including for completed records. If registered Git identity, plan digest, or
   exact HEAD drifts, stop with the execution-plane failure code rather than
   routing around the coordinator.
 - If a feature loops repeatedly, classify the blocker and stop after retry budget.

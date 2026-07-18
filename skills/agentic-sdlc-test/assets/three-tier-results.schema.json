@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentic-sdlc/three-tier-results-v1",
+  "title": "Agentic SDLC three-tier semantic results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scenario",
+    "verification_id",
+    "git",
+    "layers",
+    "tests",
+    "sdlc_phases",
+    "gui_uat"
+  ],
+  "properties": {
+    "schema": {
+      "const": "agentic-sdlc/three-tier-results-v1"
+    },
+    "scenario": {
+      "const": "three-tier-task-board-v1"
+    },
+    "verification_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline_sha", "promoted_sha", "clean"],
+      "properties": {
+        "baseline_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "promoted_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "clean": {
+          "const": true
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontend", "web", "database"],
+      "properties": {
+        "frontend": {"const": "PASS"},
+        "web": {"const": "PASS"},
+        "database": {"const": "PASS"}
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "api", "database", "migration", "vertical", "gui"],
+      "properties": {
+        "unit": {"$ref": "#/$defs/testResult"},
+        "api": {"$ref": "#/$defs/testResult"},
+        "database": {"$ref": "#/$defs/testResult"},
+        "migration": {"$ref": "#/$defs/testResult"},
+        "vertical": {"$ref": "#/$defs/testResult"},
+        "gui": {"$ref": "#/$defs/testResult"}
+      }
+    },
+    "sdlc_phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sdlc-create-requirements",
+        "sdlc-start",
+        "sdlc-gather-context",
+        "sdlc-create-design",
+        "sdlc-auto-steering",
+        "sdlc-create-plan",
+        "sdlc-prepare-execution",
+        "sdlc-tdd",
+        "sdlc-implement-plan",
+        "sdlc-validate-codes",
+        "sdlc-unit-tests",
+        "sdlc-evaluate",
+        "sdlc-update-documents",
+        "sdlc-align-specs",
+        "sdlc-commit",
+        "local-ship",
+        "sdlc-uat-tests",
+        "post-uat-documents"
+      ],
+      "properties": {
+        "sdlc-create-requirements": {"const": "PASS"},
+        "sdlc-start": {"const": "PASS"},
+        "sdlc-gather-context": {"const": "PASS"},
+        "sdlc-create-design": {"const": "PASS"},
+        "sdlc-auto-steering": {"const": "PASS"},
+        "sdlc-create-plan": {"const": "PASS"},
+        "sdlc-prepare-execution": {"const": "PASS"},
+        "sdlc-tdd": {"const": "PASS"},
+        "sdlc-implement-plan": {"const": "PASS"},
+        "sdlc-validate-codes": {"const": "PASS"},
+        "sdlc-unit-tests": {"const": "PASS"},
+        "sdlc-evaluate": {"const": "PASS"},
+        "sdlc-update-documents": {"const": "PASS"},
+        "sdlc-align-specs": {"const": "PASS"},
+        "sdlc-commit": {"const": "PASS"},
+        "local-ship": {"const": "PASS"},
+        "sdlc-uat-tests": {"const": "PASS"},
+        "post-uat-documents": {"const": "PASS"}
+      }
+    },
+    "gui_uat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "harness",
+        "browser",
+        "steps",
+        "api_db_correlated",
+        "restart_persistence",
+        "screenshots"
+      ],
+      "properties": {
+        "harness": {"const": "computer-use"},
+        "browser": {"enum": ["edge", "chrome"]},
+        "steps": {
+          "type": "array",
+          "minItems": 15,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "api_db_correlated": {"const": true},
+        "restart_persistence": {"const": true},
+        "screenshots": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^evidence/gui-uat/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*\\.(?:png|jpe?g)$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "testResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "assertions", "evidence"],
+      "properties": {
+        "status": {"const": "PASS"},
+        "assertions": {"type": "integer", "minimum": 1},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

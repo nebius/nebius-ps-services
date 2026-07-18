@@ -52,7 +52,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
-| `agentic-sdlc-test` | Explicit only | Verify Agentic SDLC source-installed parity, deterministic capabilities, hook fixtures, and private live-run evidence with a safe local report. |
+| `agentic-sdlc-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
@@ -76,6 +76,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
+| `app-stack` | Implicit allowed | Select, review, simplify, modernize, and coordinate implementation of the smallest justified application technology stack across application archetypes. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, vertical end-to-end slices, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
@@ -170,6 +171,10 @@ $publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/exam
 
 $agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 
+$agentic-sdlc-test --create --keep
+
+$agentic-sdlc-test --destroy
+
 $sdlc-start workspace init services/example-app
 
 $sdlc-start run <prompt-path-or-unique-filename>
@@ -185,6 +190,8 @@ $create-learning-course Create a public-safe course workspace for engineers lear
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
 $design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+
+$app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
 
 $code-review Review the current local branch for bugs, regressions, test gaps, reliability risks, maintainability blockers, and missed structural simplifications.
 
@@ -331,6 +338,26 @@ coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
 checklist review of an existing proposal, and `sdlc-create-design` for
 Agentic SDLC-owned `docs/design.md`.
 
+### `app-stack`
+
+`app-stack` selects, reviews, simplifies, modernizes, and coordinates
+implementation of application technology stacks. It starts from the product
+journey, application archetype, quality attributes, team skills, deployment
+constraints, data ownership, and operational capacity before choosing
+products. Every component is classified as required, conditional, deferred, or
+rejected, with a rationale and revisit trigger, so queues, caches, workflow
+engines, event streams, Kubernetes, and service boundaries are added only for
+concrete requirements.
+
+The skill is universal in selection scope while keeping Python, FastAPI,
+PostgreSQL, SQLAlchemy, and Alembic as one opinionated general-web profile. It
+remains read-only for advisory requests. When implementation is requested, it
+owns cross-layer sequencing and coordinates the narrow installed specialist
+skills that match the selected stack instead of duplicating their workflows.
+Use `research` for deep technology due diligence, `design` for a complete
+solution design, and stack-specific skills directly when the stack is already
+fixed and no selection decision remains.
+
 ### `code-review`
 
 `code-review` performs a neutral, evidence-based review of the current local
@@ -408,8 +435,8 @@ clean final promoted head with no internal resources can release it.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
-prompt bodies. Unfinished v1 execution state fails with
-`WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. The Skill
+prompt bodies. Every v1 execution record fails with
+`WORKFLOW_UPGRADE_REQUIRED`; no legacy execution schema is readable. The Skill
 is explicit-only. Use `global-context-management` for general context hygiene,
 `$sdlc-start run <prompt-path-or-unique-filename>` for Agentic SDLC, and
 `align` for final alignment.
@@ -427,6 +454,33 @@ lane-specific private evidence, and clean in-scope paths across every commit in
 the supplied history. It writes under `~/.codex/sdlc-verification/` and must
 not change real projects, installed skills, hooks, hook trust, or agent
 configuration.
+
+The no-flag invocation remains the lightweight resource-validator verifier and
+does not touch Docker or a browser. Explicit `--create` builds and tests a
+browser GUI, Django/Gunicorn web/API server, and PostgreSQL database through the
+normal two-command Agentic SDLC workflow. It uses two owned Docker Compose
+containers, a dynamically assigned loopback web port, an internal-only database
+endpoint, semantic cross-layer evidence, and computer-use GUI UAT correlated
+with API and database observations. By default it writes a complete report and
+then removes every exact owned live resource, even after failure. If an
+unhealthy Computer Use service prevents safe dedicated-tab closure, cleanup
+fails closed as `CLEANUP_FAILED` and retains the owned runtime for separately
+authorized recovery.
+
+Initial Computer Use capture proves capability discovery only. The live profile
+repeats a fresh capture immediately before GUI evaluation and UAT with an
+unlocked host unless locked Computer Use is explicitly enabled for the session,
+and a visible foreground current-Space browser window. A
+pre-navigation visibility failure is reported as `ENVIRONMENT_DEFECT`; a hung
+or non-responsive shared Computer Use service stops further calls and requires
+separately authorized recovery while the owned application is preserved.
+
+`--create --keep` retains the owned project, private state/evidence, running
+services, database volume, built image, and dedicated browser tab. A later
+`--destroy` closes only that tab and removes only resources whose exact IDs and
+two ownership labels match the private lifecycle, while retaining sanitized
+reports and lifecycle history. One active application is allowed per
+verification root; repeated destroy returns `ALREADY_DESTROYED`.
 
 ### `agent-nebius-auth`
 
@@ -465,11 +519,13 @@ resume interface.
 The committed product truth is `docs/requirements.md` and `docs/design.md`;
 private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-Each active feature also has schema-v3 execution state and private worktrees
+Each active feature also has schema-v4 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
-claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in dependency
-waves using one fresh native agent or sequential ephemeral `codex exec` fallback per task, retains worker and ordered
+claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in enforced
+capacity batches inside dependency waves, using one fresh native agent or
+sequential ephemeral `codex exec` fallback per task and immutable direct-
+predecessor handoffs, retains worker and ordered
 merge commits, and cleans only proven reachable resources without force. The
 project branch stays unchanged until `sdlc-commit` seals the final integration
 tip and promotes it with `git merge --ff-only`.

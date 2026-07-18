@@ -69,17 +69,22 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Repeated preparation returns the same verified integration identity.
 - Never recreate a recorded branch, worktree, wave, task, or contract commit.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
-  closed. Unfinished execution coordinator schema v1 or v2 returns
-  `WORKFLOW_UPGRADE_REQUIRED`.
+  closed. Every execution coordinator schema v1, v2, or v3 record returns
+  `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 
 ## Failure Handling
 
 - Use `PLAN_INVALID` for malformed tasks, unknown dependencies, or cycles.
 - Use `WORKTREE_CONFLICT` for dirty, moved, foreign, or colliding Git resources.
 - Use `REPLAN_REQUIRED` when the locked plan changes after preparation.
-- Use private `task-recover --confirmed-stopped` only with a fresh worker
-  session and an exactly re-observed clean, claimed-dirty, or one-direct-child
-  worktree. Use `replan-future` only for resource-free planned waves.
+- Use private `task-recover --confirmed-stopped --expected-attempt <n>` only
+  with a fresh worker session and an exactly re-observed clean, claimed-dirty,
+  or one-direct-child worktree. The expected attempt makes ownership transfer
+  compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
+- Treat capacity batches as authoritative: `wave-prepare` creates only the
+  active batch, and private `batch-advance` opens the next batch only after all
+  current tasks are committed. `task-start` derives worker identity from
+  `CODEX_THREAD_ID`; never accept a caller-invented session token.
 - Retain every observed partial resource in recovery state; never force-delete it.
 
 ## Must Not

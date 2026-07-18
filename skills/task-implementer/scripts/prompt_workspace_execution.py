@@ -13,14 +13,15 @@ from prompt_workspace_core import (
     load_json_object,
     stable_json,
 )
-from prompt_workspace_runs import markdown_section, read_handoff_text
+from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v2"
-WAVE_SCHEMA = "task-implementer/wave-v2"
-ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v2"
-RESULT_SCHEMA = "task-implementer/worker-result-v2"
-TASK_PLANE_SCHEMA = "task-implementer/task-plane-v2"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v3"
+WAVE_SCHEMA = "task-implementer/wave-v3"
+ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v3"
+RESULT_SCHEMA = "task-implementer/worker-result-v3"
+TASK_PLANE_SCHEMA = "task-implementer/task-plane-v3"
+INCOMING_HANDOFF_SCHEMA = "task-implementer/incoming-handoff-v1"
 LEGACY_EXECUTION_SCHEMA = "task-implementer/execution-plane-v1"
 TASK_ID_RE = re.compile(r"task-([1-9][0-9]*)")
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
@@ -59,9 +60,22 @@ class TaskPlan:
     dependencies: tuple[str, ...]
     write_claims: tuple[WriteClaim, ...]
     conflict_domains: tuple[str, ...]
+    requirement_ids: str
+    design_id: str
+    goal: str
+    plan: str
     validation: str
     done_criteria: str
+    rollback_notes: str
+    stop_conditions: str
     ownership_known: bool
+
+
+def optional_field_block(section: str, label: str) -> str:
+    try:
+        return field_block(section, label)
+    except PromptWorkspaceError:
+        return ""
 
 
 def sha256_json(value: object) -> str:
@@ -241,8 +255,14 @@ def parse_task_plans(text: str) -> list[TaskPlan]:
                 dependencies=dependencies,
                 write_claims=claims,
                 conflict_domains=domains,
+                requirement_ids=optional_field_block(section, "Requirement IDs"),
+                design_id=optional_field_block(section, "Design ID"),
+                goal=optional_field_block(section, "Goal"),
+                plan=optional_field_block(section, "Plan"),
                 validation=validation,
                 done_criteria=done_criteria,
+                rollback_notes=optional_field_block(section, "Rollback notes"),
+                stop_conditions=optional_field_block(section, "Stop conditions"),
                 ownership_known=claims_known and domains_known,
             )
         )
@@ -369,26 +389,16 @@ def assert_no_unfinished_v1(run_dir: Path) -> None:
     artifacts = _legacy_artifacts(run_dir)
     if not artifacts:
         return
-    text = read_handoff_text(run_dir) or ""
-    completed = re.search(r"(?m)^- Overall status:\s*done\s*$", text) is not None
-    phases: list[object] = []
     for path in artifacts:
         value = load_json_object(path, "legacy execution plane")
         if value.get("schema") != LEGACY_EXECUTION_SCHEMA:
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "unknown execution artifact"
             )
-        phases.append(value.get("phase"))
-    current_task = re.search(r"(?m)^- Current task:\s*(\S+)\s*$", text)
-    if (
-        not completed
-        or any(phase != "stopped" for phase in phases)
-        or (current_task is not None and current_task.group(1) != "none")
-    ):
-        raise PromptWorkspaceError(
-            "WORKFLOW_UPGRADE_REQUIRED",
-            "unfinished execution-plane-v1 runs are inert; start a new v2 run",
-        )
+    raise PromptWorkspaceError(
+        "WORKFLOW_UPGRADE_REQUIRED",
+        "execution-plane-v1 is unsupported; start a new v3 run",
+    )
 
 
 def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
@@ -397,6 +407,14 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     value = load_json_object(path, "coordinator state")
+    if value.get("schema") in {
+        "task-implementer/coordinator-v1",
+        "task-implementer/coordinator-v2",
+    }:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "coordinator-v1/v2 is unsupported; start a new v3 run",
+        )
     required = {
         "schema",
         "run_id",

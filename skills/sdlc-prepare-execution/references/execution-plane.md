@@ -48,11 +48,17 @@ batches; batches do not change logical dependencies or wave IDs.
 
 ## State And Resources
 
-Private execution state uses `agentic-sdlc/execution-coordinator-v3`; mutable
-task and result records use v2. Wave, task, assignment, and result files are
+Private execution state uses `agentic-sdlc/execution-coordinator-v4`,
+`execution-wave-v2`, `execution-task-v3`, `worker-assignment-v2`, and
+`worker-result-v3`. Wave, task, assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
-results carry SHA-256 digests. Unfinished coordinator v1/v2 state fails with
-`WORKFLOW_UPGRADE_REQUIRED` and retains resources.
+results carry SHA-256 digests. Task records retain append-only hashes of every
+worker session that has owned the task. A process-safe execution transition
+lock serializes task ownership, atomic private session claims prevent one
+identity from owning multiple tasks, and recovery requires the exact current
+attempt. Every coordinator v1/v2/v3 record fails
+with `WORKFLOW_UPGRADE_REQUIRED` and retains resources, including completed
+records.
 
 The persistent integration branch is
 `codex/sdlc/<run-id>/<feature-id>/integration`. Worker branches append
@@ -63,11 +69,16 @@ Branch/path components are sanitized IDs; never include prompt text or secrets.
 
 1. Prepare and lock the integration worktree from the exact clean project base.
 2. Run TDD there and seal one internal TDD-base commit.
-3. Create one branch/worktree/assignment per task from the current integration
-   tip and dispatch one fresh worker agent per task. Prefer native agents; when
+3. Create one branch/worktree/assignment only for the active capacity batch
+   from the current integration tip and dispatch one fresh worker agent per
+   task. Each assignment binds an immutable incoming handoff with accepted
+   result evidence from all earlier completed waves and capacity batches; only
+   the first batch of the first wave has an empty predecessor list. Prefer native agents; when
    unavailable use the sequential `codex exec` fallback with exact scope cwd,
    `workspace-write`, `--ephemeral`, stdin assignment, and output schema.
-4. Verify each worker's one direct-child commit and changed paths, then merge in
+   This preserves one fresh worker agent per task across every batch and wave.
+4. Advance to the next capacity batch only after every task in the active batch
+   is committed. Verify each worker's one direct-child commit and changed paths, then merge in
    stable task-ID order with `git merge --no-ff --no-edit`.
 5. Run combined evidence at the exact integration tip and non-force-clean
    reachable worker resources.
@@ -86,8 +97,10 @@ resources, assignments, commits, merges, or cleanup. Dirty, divergent,
 unreachable, malformed, or foreign resources stay recorded. Do not infer
 success from a command error; classify observed Git state first.
 
-`task-recover` requires explicit previous-worker-stopped confirmation, a fresh
-hashed session identity, and exact scope cwd. It preserves only a clean base,
+`task-start` and `task-recover` derive identity from `CODEX_THREAD_ID`; callers
+cannot supply arbitrary runtime session tokens. `task-recover` requires
+explicit previous-worker-stopped confirmation, the exact current attempt, a
+fresh hashed session identity, and exact scope cwd. It preserves only a clean base,
 claimed dirty state, or one clean direct-child commit. `replan-future` replaces
 only planned waves without assignments, worktrees, branches, results, commits,
 or active journals; completed and current waves remain immutable.
@@ -98,9 +111,9 @@ each promoted feature head. Release only after all resources are absent and
 final alignment, UAT, and documentation evidence exists; PR publication begins
 after release.
 
-Unfinished execution coordinator schema v1/v2 is not migrated. Return
-`WORKFLOW_UPGRADE_REQUIRED` without changing its resources. Completed history
-remains readable.
+Execution coordinator schema v1/v2/v3 is unsupported. Return
+`WORKFLOW_UPGRADE_REQUIRED` without changing its resources, including for
+completed records. There is no legacy read path or migration.
 
 ## Safety
 
@@ -110,3 +123,4 @@ base SHA, and assignment digest at every transition. Never copy ignored local
 state or widen permissions automatically. Coordinator `task-finish` screens
 evidence, commit metadata, staged filenames, and staged/committed content for
 obvious secrets and private endpoints before persisting a result.
+The same screen covers handoff summaries, decisions, and open risks.

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from prompt_workspace_execution import (
     assert_no_unfinished_v1,
     batches_for_wave,
     build_dependency_waves,
+    load_coordinator_state,
     parse_task_plans,
     tasks_conflict,
 )
@@ -35,8 +37,14 @@ def task(
         if known
         else (),
         conflict_domains=(domain or f"files:task-{number}",) if known else (),
+        requirement_ids=f"TI-REQ-{number:03d}",
+        design_id=f"TI-DES-{number:03d}",
+        goal=f"Implement task {number}",
+        plan=f"Change task {number}",
         validation="run focused tests",
         done_criteria="tests pass",
+        rollback_notes="revert the task commit",
+        stop_conditions="stop on validation failure",
         ownership_known=known,
     )
 
@@ -187,7 +195,7 @@ class DependencyWaveTest(unittest.TestCase):
                         handoff([task_markdown(1, claims=claims, domains=domains)])
                     )
 
-    def test_unfinished_v1_is_inert_but_completed_history_is_readable(self) -> None:
+    def test_execution_plane_v1_is_always_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
             execution = run_dir / "execution"
@@ -216,7 +224,34 @@ class DependencyWaveTest(unittest.TestCase):
                 encoding="utf-8",
             )
             artifact.chmod(0o600)
-            assert_no_unfinished_v1(run_dir)
+            with self.assertRaises(PromptWorkspaceError) as completed:
+                assert_no_unfinished_v1(run_dir)
+            self.assertEqual(completed.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+
+    def test_coordinator_v2_always_requires_new_v3_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            orchestration = run_dir / "orchestration"
+            orchestration.mkdir()
+            coordinator = orchestration / "coordinator.json"
+            for status in ("running", "done"):
+                with self.subTest(status=status):
+                    coordinator.write_text(
+                        json.dumps(
+                            {
+                                "schema": "task-implementer/coordinator-v2",
+                                "status": status,
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    coordinator.chmod(0o600)
+                    with self.assertRaises(PromptWorkspaceError) as raised:
+                        load_coordinator_state(run_dir)
+                    self.assertEqual(
+                        raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED"
+                    )
 
 
 if __name__ == "__main__":

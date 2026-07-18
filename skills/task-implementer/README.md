@@ -64,6 +64,12 @@ capacity, or fresh sequential `codex exec` workers when native subagents are
 unavailable. Each worker verifies its immutable assignment, implements exactly
 one task inside locked claims, validates, runs `code-review`, fixes scoped
 findings, and creates exactly one direct-child commit through `$commit`.
+Every task starts in a distinct worker session. The coordinator creates only
+the active capacity batch; later batches open after the current batch commits.
+Each assignment references an immutable private incoming-handoff record with
+the accepted commits, paths, summaries, decisions, risks, validation, and
+review evidence from all earlier completed waves and batches. Only the first
+batch of the first wave has an empty predecessor list.
 
 Workers never edit the shared handoff, managed specs, common docs, other refs
 or worktrees, or the primary checkout. An undeclared path requirement stops
@@ -94,9 +100,10 @@ release instead of starting a new task run.
 
 ## Private State And Recovery
 
-Coordinator, wave, mutable task-plane, immutable assignment/result, and journal records live with the run
+Coordinator v3, wave, mutable task-plane v3, immutable assignment/result v3,
+incoming-handoff, and journal records live with the run
 under the private prompt workspace. Every Git mutation is journaled before
-execution and re-observed afterward. A repeated `run` resumes durable v2 truth
+execution and re-observed afterward. A repeated `run` resumes durable v3 truth
 without recreating branches, worktrees, assignments, commits, or merges.
 
 `orchestration/interop.json` binds a nested run to the exact managed outer
@@ -104,9 +111,9 @@ identity and its worktree-owned lease. Completed prompt history is archive-only
 after the outer worktree has itself been removed; it is never migrated to a
 different workspace identity.
 
-Unfinished execution-plane-v1 runs are inert and return
-`WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable. There is no
-compatibility execution path or migration command.
+Every execution-plane-v1 or coordinator-v1/v2 run returns
+`WORKFLOW_UPGRADE_REQUIRED`, including completed records. There is no legacy
+read path, compatibility execution path, or migration command.
 
 Prompt filenames stay stable. Submission order comes from private
 `last_invoked_at`, not filenames or mtimes. Output never prints prompt bodies,

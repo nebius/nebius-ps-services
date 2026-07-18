@@ -59,14 +59,21 @@ Coordinate isolated task agents to implement one locked feature safely.
    sequential `codex exec` fallback: one fresh `--ephemeral` process per task,
    exact `--cd <scope_cwd>`, `--sandbox workspace-write`, schema-bound output,
    and no session resume or extra writable directories.
-4. Give each worker only its task record, assignment digest, requirements,
+   After the batch commits, invoke private `batch-advance`; it creates the next
+   batch's assignments and worktrees. Never start a task outside the active
+   batch or reuse a session hash from a completed or recovered task.
+4. Give each worker only its task record, assignment digest, digest-bound
+   incoming handoff from all earlier completed waves and batches, requirements,
    design/context reminders, test target, write claims, and stop conditions.
    The worker calls `task-start`, implements the smallest coherent change,
    including its part of the vertical end-to-end slice without widening feature scope,
    validates it, runs a task-scoped `code-review`, fixes blocking findings, and
-   returns structured validation/review evidence. The coordinator calls
-   `task-finish` to scan staged paths/content, create exactly one direct-child
+   returns an explicit summary, decisions, open risks, validation, and review
+   evidence; a commit subject is never substituted for handoff evidence. The coordinator calls
+   `task-finish` with that structured evidence to scan staged paths/content, create exactly one direct-child
    commit with normal Git hooks, and persist the result.
+   Recovery passes the recorded current attempt with explicit stopped-worker
+   confirmation so only one fresh session can win an ownership transfer.
 5. The coordinator does not edit product files while workers run. It verifies
    every result, then runs `wave-integrate`; merges occur in stable task order
    with retained worker commits and explicit merge commits.

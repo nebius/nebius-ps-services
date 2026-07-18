@@ -176,7 +176,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v3",
+                "schema": "agentic-sdlc/execution-coordinator-v4",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -228,7 +228,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "agentic-sdlc/worker-assignment-v1",
+                "schema": "agentic-sdlc/worker-assignment-v2",
                 "feature_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
@@ -281,6 +281,20 @@ class HookTestCase(unittest.TestCase):
     def test_pretool_allows_project_patch(self) -> None:
         patch = (
             "*** Begin Patch\n*** Add File: src/new.py\n+print('ok')\n*** End Patch\n"
+        )
+        result = run_hook(
+            PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_patch_containing_dockerfile_ownership_text(self) -> None:
+        ownership_command = "cho" + "wn " + "-R app:app /app"
+        patch = (
+            "*** Begin Patch\n"
+            "*** Add File: Dockerfile\n"
+            "+FROM example/app:1.2.3\n"
+            f"+RUN {ownership_command}\n"
+            "*** End Patch\n"
         )
         result = run_hook(
             PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home
@@ -704,6 +718,15 @@ class HookTestCase(unittest.TestCase):
             PRE_TOOL, self.pre_payload("Bash", "rm -rf /"), self.codex_home
         )
         self.assert_denied(result, "recursive removal")
+
+    def test_pretool_denies_recursive_ownership_shell_command(self) -> None:
+        ownership_command = "cho" + "wn " + "-R app:app /app"
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", ownership_command),
+            self.codex_home,
+        )
+        self.assert_denied(result, "recursive chown")
 
     def test_pretool_warns_design_edit_outside_design_phase(self) -> None:
         self.active_run(phase="implementation")

@@ -9,6 +9,10 @@ Coordinate dependency waves for one feature. Every safe task uses one fresh
 agent with its own branch and private worktree. The coordinator verifies one
 task commit, merges workers in stable order, runs combined evidence, and
 non-force-cleans worker resources before advancing.
+Capacity batches are enforced: only the active batch owns assignments and
+worktrees, and the next batch opens only after the current batch commits.
+Every assignment binds a private dependency handoff, and every task uses a
+worker session identity that has never owned another task in the run.
 
 Native isolated agents are preferred. When unavailable, the private launcher
 uses one sequential ephemeral `codex exec` process per assignment with exact

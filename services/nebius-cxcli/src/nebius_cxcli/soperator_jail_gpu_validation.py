@@ -16,6 +16,9 @@ GPU_JAIL_POST_POPULATION_SCRIPT_KEY = "post-populate-gpu-jail.sh"
 GPU_JAIL_POST_POPULATION_SCRIPT_MOUNT = "/opt/nebius-cxcli"
 GPU_JAIL_PASSIVE_ROOTFS_MOUNT = "/mnt/passive-rootfs"
 GPU_JAIL_POST_ACTIVATION_SCHEMA = "nebius-cxcli-soperator-jail-gpu-post-activation/v1"
+GPU_JAIL_POST_ACTIVATION_HEALTHY_IDLE_STATES = frozenset(
+    {"IDLE+CLOUD", "IDLE+DYNAMIC_NORM"}
+)
 
 _DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
 
@@ -28,6 +31,7 @@ GPU_JAIL_POST_POPULATION_SCRIPT = (
 
         readonly jail=/mnt/passive-rootfs
         readonly marker_schema=nebius-cxcli-soperator-jail-gpu-driver/v1
+        readonly allow_driver_refresh="${CXCLI_ALLOW_DRIVER_REFRESH:-false}"
 
         fail() {
           printf 'gpu-jail-post-population: %s\n' "$*" >&2
@@ -42,6 +46,10 @@ GPU_JAIL_POST_POPULATION_SCRIPT = (
           nvidia-smi readlink rm sed sha256sum sort uname wc; do
           require_command "${command_name}"
         done
+        case "${allow_driver_refresh}" in
+          true|false) ;;
+          *) fail "CXCLI_ALLOW_DRIVER_REFRESH must be exactly true or false" ;;
+        esac
 
         arch="$(uname -m)"
         [ "${arch}" = x86_64 ] \
@@ -185,8 +193,10 @@ EOF
         if [ -e "${marker}" ]; then
           [ -f "${marker}" ] && [ ! -L "${marker}" ] \
             || fail "GPU driver evidence marker is not a regular file"
-          [ "$(cat "${marker}")" = "${marker_lines}" ] \
-            || fail "existing passive-rootfs GPU driver evidence does not match the host driver"
+          if [ "$(cat "${marker}")" != "${marker_lines}" ]; then
+            [ "${allow_driver_refresh}" = true ] \
+              || fail "existing passive-rootfs GPU driver evidence does not match the host driver"
+          fi
         fi
 
         staging="$(mktemp -d "${jail_lib_dir}/.cxcli-gpu-driver.XXXXXX")"
@@ -366,6 +376,7 @@ def build_jail_gpu_post_population_resources(
     runner_image: str,
     passive_pvc: str,
     scheduling: Mapping[str, Any] | None = None,
+    allow_driver_refresh: bool = False,
 ) -> JailGpuPostPopulationResources:
     """Build a deterministic Job that validates GPU libraries in a passive rootfs.
 
@@ -418,6 +429,11 @@ def build_jail_gpu_post_population_resources(
                 "env": [
                     {"name": "NVIDIA_VISIBLE_DEVICES", "value": "all"},
                     {"name": "NVIDIA_DRIVER_CAPABILITIES", "value": "compute,utility"},
+                    *(
+                        [{"name": "CXCLI_ALLOW_DRIVER_REFRESH", "value": "true"}]
+                        if allow_driver_refresh
+                        else []
+                    ),
                 ],
                 "command": [
                     "/bin/bash",
@@ -588,8 +604,11 @@ def validate_jail_gpu_post_activation(
         raise JailGpuPostActivationError("post_epilog.exit_code must be integer 0.")
 
     _require_node(slurm, field="slurm_node", expected_node=node_name)
-    if slurm.get("state") != "IDLE+DYNAMIC_NORM":
-        raise JailGpuPostActivationError("slurm_node.state must be exactly 'IDLE+DYNAMIC_NORM'.")
+    if slurm.get("state") not in GPU_JAIL_POST_ACTIVATION_HEALTHY_IDLE_STATES:
+        expected_states = ", ".join(sorted(GPU_JAIL_POST_ACTIVATION_HEALTHY_IDLE_STATES))
+        raise JailGpuPostActivationError(
+            f"slurm_node.state must be one exact schedulable idle state: {expected_states}."
+        )
     if slurm.get("reason") != "":
         raise JailGpuPostActivationError("slurm_node.reason must be empty.")
 
@@ -600,6 +619,6 @@ def validate_jail_gpu_post_activation(
             {"name": "full health checker", "status": "passed"},
             {"name": "pinned H100 smoke", "status": "passed"},
             {"name": "post-epilog validation", "status": "passed"},
-            {"name": "Slurm IDLE+DYNAMIC_NORM", "status": "passed"},
+            {"name": "Slurm schedulable IDLE state", "status": "passed"},
         ),
     )

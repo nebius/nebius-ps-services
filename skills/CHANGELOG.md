@@ -6,6 +6,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added an opt-in real-life profile to `agentic-sdlc-test`: `--create` builds,
+  locally ships, and semantically tests an owned task-board GUI,
+  Django/Gunicorn API server, and PostgreSQL database through the normal
+  Agentic SDLC phases; `--create --keep` retains the exact application; and
+  `--destroy` safely removes it. The unchanged no-flag verifier remains the
+  default. The new lifecycle includes two-container Compose ownership labels,
+  loopback-only dynamic web ports, internal-only PostgreSQL, computer-use GUI
+  UAT with API/database correlation and restart persistence, complete sanitized
+  reports, resumable fail-closed cleanup, and retained audit reports.
 - Completed the Agentic SDLC prompt and execution coordinator with private
   editor-backed prompt creation/history, exact-rename repair, enforced
   initialized-folder scope, hashed worker ownership and interrupted recovery,
@@ -14,7 +23,7 @@ All notable changes to the reusable Codex skills are tracked here.
   Task Implementer/Agentic SDLC outer-worktree leases while preserving the
   public two-command `$sdlc-start` interface.
 - Added the explicit-only `sdlc-prepare-execution` phase and private Agentic
-  SDLC execution engine for schema-v3 feature integration worktrees,
+  SDLC execution engine for schema-v4 feature integration worktrees,
   deterministic dependency waves, immutable task assignments/results, exact
   Git identity checks, retained worker/merge commits, ff-only promotion,
   non-force cleanup, and disposable real-Git lifecycle coverage.
@@ -69,6 +78,12 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the implicitly invokable `app-stack` skill for selecting, reviewing,
+  simplifying, modernizing, and coordinating implementation of application
+  technology stacks from application archetypes and quality attributes. It
+  includes an opinionated Python web profile, explicit required/conditional/
+  deferred/rejected decisions, specialist-skill routing, trigger evals, and
+  current official vendor references.
 - Added the `brainstorm` Codex skill for evidence-first, chat-only ideation
   before implementation, with source priority across the current project
   folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
@@ -164,6 +179,41 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `agentic-sdlc-test` Computer Use verification with just-in-time
+  capture gates before GUI evaluation and UAT, unlocked-session checks unless
+  locked Computer Use is explicitly enabled, visible foreground current-Space
+  window requirements, accurate pre-navigation
+  `ENVIRONMENT_DEFECT` reporting, actionable retained-runtime guidance, and a
+  hard stop on further Computer Use calls after a hang or shared-service
+  response loss. Default cleanup now fails closed as resumable
+  `CLEANUP_FAILED` when the unhealthy service prevents safe dedicated-tab
+  closure.
+
+- Tightened the Agentic SDLC three-tier verifier so keep mode rejects a recorded
+  closed browser tab, reports retain the exact custom verification root in the
+  destroy command, migration evidence is mandatory, GUI artifacts must be
+  recognizable PNG or JPEG files, the readiness matrix includes the harness,
+  PASS requires a non-empty all-passing validation set, and per-run reports
+  record validation commands, truthful retention state, and issue/fix guidance.
+  Validation records reject named secret arguments, authorization headers,
+  user-password flags, and credential-bearing URLs before persistence. Clean
+  baseline identity can be recorded before promotion so failed runs no longer
+  lose their known starting SHA in the report.
+- Hardened the opt-in Agentic SDLC three-tier harness after a real application
+  run: managed prompt rendering now preserves canonical starter identity and is
+  covered by real intake, public base-image pulls use a bounded owned Docker CLI
+  config, runtime inventory verifies explicit web/database Compose roles,
+  computer-use preflight requires a capturable browser state, and UAT failures
+  update the sanitized environment report. The SDLC PreToolUse hook now applies
+  dangerous-shell matching only to Bash payloads, with regression coverage for
+  harmless Dockerfile command text in patches.
+- Enforced one never-reused worker session per implementation task in both
+  Task Implementer and Agentic SDLC, added immutable digest-bound dependency
+  handoffs with structured prior-wave/prior-batch evidence, and made both
+  workflows' capacity batches authoritative. Agentic worker authorization now derives
+  identity from `CODEX_THREAD_ID` instead of caller-supplied session tokens;
+  every older execution schema fails with `WORKFLOW_UPGRADE_REQUIRED`; there
+  is no legacy read path or compatibility shim.
 - Aligned the `worktree` contract with its implementation and current official
   docs: ownership state now explicitly follows fetch preflight but precedes
   managed branch/worktree creation, the Unix/Python and authenticated GitHub
@@ -228,7 +278,7 @@ All notable changes to the reusable Codex skills are tracked here.
   existing `--role` override remains available for explicitly narrower setups.
 
 - Refactored the explicit-only `task-implementer` from sequential
-  execution-plane v1 into a resumable coordinator/worker v2. One unchanged
+  execution-plane v1 into a resumable coordinator/worker v3. One unchanged
   `run <prompt-path-or-unique-filename>` now builds deterministic dependency
   waves from locked write claims and conflict domains, dispatches isolated
   full-repository worktrees in capacity-sized batches, verifies one reviewed

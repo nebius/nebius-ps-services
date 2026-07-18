@@ -33,6 +33,7 @@ from prompt_workspace_core import (  # noqa: E402
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
 from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
+    advance_batch,
     cleanup_wave,
     dispatch_wave,
     finalize_run,
@@ -67,6 +68,7 @@ __all__ = [
     "WORKSPACE_SCHEMA",
     "PromptWorkspaceError",
     "accept_task_result",
+    "advance_batch",
     "cleanup_wave",
     "create_prompt",
     "init_workspace",
@@ -219,6 +221,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_workspace(wave_dispatch)
     wave_dispatch.add_argument("--run-id", required=True)
     wave_dispatch.add_argument("--contract-commit", required=True)
+
+    batch_advance = subparsers.add_parser(
+        "batch-advance", help="Internal: activate the next capacity batch."
+    )
+    add_common_workspace(batch_advance)
+    batch_advance.add_argument("--run-id", required=True)
 
     task_start = subparsers.add_parser(
         "task-start", help="Internal: authorize one assigned worker."
@@ -388,6 +396,8 @@ def main(argv: list[str]) -> int:
             result = prepare_wave(args.workspace, args.run_id)
         elif args.command == "wave-dispatch":
             result = dispatch_wave(args.workspace, args.run_id, args.contract_commit)
+        elif args.command == "batch-advance":
+            result = advance_batch(args.workspace, args.run_id)
         elif args.command == "task-start":
             result = start_task(
                 args.workspace, args.run_id, args.task_id, args.assignment_sha256

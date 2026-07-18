@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC GUI Test"
-  short_description: "Evaluate browser UI flows"
-  default_prompt: "Use $sdlc-gui-test to control, observe, and evaluate browser UI behavior during Agentic SDLC work with durable local evidence."
+  short_description: "Evaluate GUI flows with the required harness"
+  default_prompt: "Use $sdlc-gui-test to execute the declared browser harness, including computer-use when required, refresh accessibility state after each action, and record correlated durable evidence."
 policy:
   allow_implicit_invocation: false

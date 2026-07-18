@@ -97,6 +97,7 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │           ├── waves/wave-001.json
 │           ├── tasks/wave-001/task-1.json
 │           ├── assignments/wave-001/task-1.json
+│           ├── incoming-handoffs/wave-001/task-1.json
 │           ├── results/wave-001/task-1.json
 │           └── journals/wave-001.jsonl
 └── worktrees/<project>/<scope>/<run>/wave-001/
@@ -188,24 +189,30 @@ For each wave:
    contract only if tracked coordinator files changed; that commit is every
    worker base.
 4. Invoke private `wave-dispatch`. It creates a unique validated branch and
-   locked full-repository worktree per task, plus an immutable assignment with
-   absolute scope cwd, base, digest, claims, domains, validation, and criteria.
+   locked full-repository worktree only for the active capacity batch, plus an
+   immutable assignment with absolute scope cwd, base, digest, claims, domains,
+   validation, criteria, and a digest-bound private incoming handoff. The
+   handoff contains accepted evidence from all earlier completed waves and
+   batches; only the first batch of the first wave has no predecessors.
 5. Reserve the main thread for coordination. Dispatch native worker agents up
    to available capacity. If unavailable, use fresh sequential `codex exec`
    workers in the same isolated worktrees; the coordinator never implements a worker task.
    After one failure, stop dispatching new batch members while
    active workers finish.
 6. Every worker verifies its real worktree root, branch, base SHA, assignment
-   digest, absolute cwd, and claims; implements one task; validates; runs
+   digest, incoming-handoff digest, absolute cwd, and claims; starts from a
+   worker session never used by another task in the run; implements one task; validates; runs
    `code-review`; fixes scoped findings; creates exactly one direct-child
    commit through `$commit`; and writes one private result. It never edits the
    shared handoff or manages worktrees/refs.
    If a running worker stops, private `task-recover` requires explicit stopped
    confirmation and transfers only declared dirty state or one direct-child
-   commit to a fresh session.
+   commit to a fresh session. Session hashes are append-only history: a
+   recovered-away or completed identity can never be reused.
 7. The coordinator independently verifies a clean branch, exactly one
    direct-child task commit, exact changed paths within claims, and complete
-   validation/review evidence.
+   validation/review evidence. Invoke private `batch-advance` after every task
+   in the active batch commits; it alone creates the next batch's assignments.
 8. Invoke private `wave-integrate`. Merge task branches into the integration
    branch in stable task-ID order with `git merge --no-ff --no-edit`. Never
    cherry-pick, rebase, squash, push, or merge workers directly into the
@@ -228,7 +235,7 @@ For each wave:
 ## Idempotency
 
 - Every Git mutation is journaled before execution and re-observed afterward.
-- Repeated `run` resumes recorded v2 state; it does not recreate assignments,
+- Repeated `run` resumes recorded v3 execution state; it does not recreate assignments,
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
@@ -239,9 +246,9 @@ For each wave:
   blocks outer inspect, push, PR creation, and removal. It releases only from a
   clean outer branch at the final promoted head with every internal resource
   absent. Missing or malformed coordination state fails closed.
-- Unfinished `execution-plane-v1` runs are inert and return
-  `WORKFLOW_UPGRADE_REQUIRED`. Completed v1 history remains readable. Do not
-  add an execution shim or migration path.
+- Execution-plane-v1 and coordinator-v1/v2 runs are unsupported and return
+  `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
+  read path, execution shim, or migration path.
 
 ## Failure Handling
 

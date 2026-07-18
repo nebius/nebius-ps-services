@@ -37,6 +37,7 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │           ├── waves/wave-001.json
 │           ├── tasks/wave-001/task-1.json
 │           ├── assignments/wave-001/task-1.json
+│           ├── incoming-handoffs/wave-001/task-1.json
 │           ├── results/wave-001/task-1.json
 │           └── journals/wave-001.jsonl
 └── worktrees/<project-id>/<scope-id>/<run-id>/wave-001/
@@ -90,19 +91,20 @@ Every validated, lock-acquired invocation updates private activity and the
 handoff `Last invoked at`, including no-op and blocked outcomes. Rejected and
 lock-busy calls do not reorder prompts.
 
-## V2 State Ownership
+## V3 Execution State Ownership
 
 `handoff.md` is coordinator-owned. It contains the stable task queue,
 requirements/design mappings, wave schedule, checkpoints, failure log, and
 human-readable recovery status. Workers never edit it.
 
 `coordinator.json` owns the run branch, initial `HEAD`, plan digest, ordered wave
-index, active wave, and overall v2 status. Each wave file owns its base,
+index, active wave, and overall v3 execution status. Each wave file owns its base,
 contract commit, integration identity, stable task order, task states,
 promotion proof, and cleanup inventory.
 
 Each mutable task plane records `planned -> assigned -> running -> committed -> merged|failed`,
-the worker session fingerprint, assignment digest, result digest, and commit.
+the current worker session fingerprint, append-only session-fingerprint
+history, assignment digest, result digest, and commit.
 
 `interop.json` is strict private run state. For a `worktree`-managed outer
 checkout it binds the run to the exact outer name, branch, path, outer/task
@@ -113,17 +115,23 @@ fails closed.
 
 Assignments are immutable and bind:
 
-Their schema is `task-implementer/worker-assignment-v2`.
+Their schema is `task-implementer/worker-assignment-v3`.
 
 - run, wave, and task;
 - exact base commit and plan digest;
 - unique branch and full-repository worktree;
 - absolute scope cwd inside that worktree;
 - exact/prefix write claims and conflict domains;
+- requirements, design, goal, plan, dependencies, rollback, and stop context;
+- incoming-handoff path and digest;
 - validation and done criteria;
 - assignment digest and creation time.
 
-Workers write one digest-bound private result record. The coordinator distrusts it and
+The referenced `incoming-handoff-v1` record is private, immutable, and
+digest-bound. It contains an ordered list of accepted results from all earlier
+completed waves and capacity batches. Only the first batch of the first wave
+has an empty list. Workers write one
+`worker-result-v3` record with summary, decisions, and open risks. The coordinator distrusts it and
 re-observes the branch, commit ancestry, cleanliness, and changed paths before
 acceptance.
 
@@ -136,6 +144,7 @@ prompt_workspace.py wave-plan --workspace <manifest> --run-id <id> --capacity <n
 prompt_workspace.py wave-replan --workspace <manifest> --run-id <id> --capacity <n>
 prompt_workspace.py wave-prepare --workspace <manifest> --run-id <id>
 prompt_workspace.py wave-dispatch --workspace <manifest> --run-id <id> --contract-commit <sha>
+prompt_workspace.py batch-advance --workspace <manifest> --run-id <id>
 prompt_workspace.py task-start --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest>
 prompt_workspace.py task-recover --workspace <manifest> --run-id <id> --task-id <id> --confirmed-stopped
 prompt_workspace.py task-finish --workspace <manifest> --run-id <id> --task-id <id>
@@ -169,11 +178,11 @@ checkout.
 
 ## Legacy Boundary
 
-Workspace, prompt, and run-manifest schemas remain readable because their
-storage shapes did not change. The execution state machine has no compatibility
-path: an unfinished `task-implementer/execution-plane-v1` run returns
-`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v2 resources.
-A completed v1 run remains readable as history. Do not add a migration or
+Workspace, prompt, and run-manifest schemas are unchanged. The execution state
+machine has no compatibility path: every
+`task-implementer/execution-plane-v1` or coordinator-v1/v2 run returns
+`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v3 resources,
+including completed records. Do not add a legacy read path, migration, or
 upgrade command.
 
 ## Sandbox And Bootstrap

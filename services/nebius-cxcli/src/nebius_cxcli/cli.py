@@ -15213,7 +15213,10 @@ def soperator_scale_up_command(
         "Example: nebius-cxcli soperator jobs <config.yaml> --target mk8s. "
         "Run this in a separate terminal while soperator upgrade is active. "
         "Use --acknowledge-login-exit FINGERPRINT only after the user confirms the exact "
-        "protected SSH socket exited voluntarily. Actions are bound to immutable JobID, "
+        "protected SSH socket exited voluntarily. Use "
+        "--authorize-login-timeout-continuation FINGERPRINT only after the user confirms "
+        "an involuntary timeout and explicitly authorizes continuation. Actions are bound "
+        "to immutable JobID, "
         "user, submit-time, restart lineage, and the checkpointed controller authority epoch."
     ),
 )
@@ -15239,6 +15242,17 @@ def soperator_jobs_command(
             help=(
                 "Acknowledge voluntary exit of an exact pending protected SSH socket "
                 "fingerprint; repeatable. This never disconnects a live session."
+            ),
+        ),
+    ] = None,
+    authorize_login_timeout_continuation: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--authorize-login-timeout-continuation",
+            help=(
+                "Authorize continuation after an involuntary timeout of the exact pending "
+                "protected SSH socket fingerprint; repeatable. This applies only to an "
+                "observed absent socket and never disconnects a live or reappeared session."
             ),
         ),
     ] = None,
@@ -15297,6 +15311,9 @@ def soperator_jobs_command(
             target_ref=target.target_ref,
             payload=source_payload,
             acknowledge_login_exit_fingerprints=tuple(acknowledge_login_exit or ()),
+            authorize_login_timeout_continuation_fingerprints=tuple(
+                authorize_login_timeout_continuation or ()
+            ),
             checkpoint_path_override=checkpoint_path,
             checkpoint_loader=_active_checkpoint,
             kube_context_override=kube_context,
@@ -65444,11 +65461,13 @@ def _format_soperator_migration_plan_lines(
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
     lines.append(
-        "Login SSH continuity: unconditional voluntary handoff. cxcli preserves the exact "
+        "Login SSH continuity: protected explicit handoff. cxcli preserves the exact "
         "source login Pod, node, host-key identity, shell process, and TCP connection while a "
-        "target login endpoint becomes ready. The upgrade remains pending indefinitely until "
-        "the user voluntarily exits the protected source session; there is no timeout or "
-        "forced disconnect. Existing TCP sessions are not migrated between Pods."
+        "target login endpoint becomes ready. While the socket is live, the upgrade remains "
+        "pending indefinitely with no timeout or forced disconnect. After the exact socket is "
+        "observed absent, continuation requires either fingerprint-bound confirmation of a "
+        "voluntary exit or explicit fingerprint-bound authorization after an involuntary "
+        "timeout. Existing TCP sessions are not migrated between Pods."
     )
     lines.append(
         "Login LoadBalancer allocation retention: cxcli automatically converts and "
@@ -65795,6 +65814,8 @@ def ext_soperator_scale_up_command(
         "./deployments/tenant/project/config.yaml --target external-cluster. "
         "After the jobs screen reports an absent protected SSH socket, record the user's "
         "explicit voluntary-exit confirmation with --acknowledge-login-exit FINGERPRINT. "
+        "For a confirmed involuntary timeout, record explicit continuation authorization "
+        "with --authorize-login-timeout-continuation FINGERPRINT instead. "
         "Run this in a separate terminal while ext-soperator upgrade is active. "
         "Actions are bound to immutable JobID, user, submit-time, and restart lineage. "
         "During controller gaps or accept-only handoffs, actions remain durably Queued; "
@@ -65830,6 +65851,17 @@ def ext_soperator_jobs_command(
             ),
         ),
     ] = None,
+    authorize_login_timeout_continuation: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--authorize-login-timeout-continuation",
+            help=(
+                "Authorize continuation after an involuntary timeout of the exact protected "
+                "SSH socket fingerprint reported as absent; repeatable. This does not claim "
+                "voluntary exit and never disconnects a live or reappeared session."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Open the durable during-upgrade Slurm job-control screen."""
 
@@ -65848,6 +65880,9 @@ def ext_soperator_jobs_command(
                 target_ref=target_ref,
                 payload=execution_payload,
                 acknowledge_login_exit_fingerprints=tuple(acknowledge_login_exit or ()),
+                authorize_login_timeout_continuation_fingerprints=tuple(
+                    authorize_login_timeout_continuation or ()
+                ),
             )
         console.print(
             f"Durable Slurm action journal: {checkpoint_path}",

@@ -1141,6 +1141,30 @@ def test_external_shared_jail_home_mount_change_is_intentional() -> None:
     )
 
 
+def test_external_jail_home_subpath_mount_change_is_intentional() -> None:
+    before = _capture(_Runner(home_mount='{"filesystems":[{"target":"/mnt/jail"}]}'))
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(
+            home_mount=(
+                '{ "filesystems": [ { "target": "/mnt/jail/home", '
+                '"source": "jail[/home]", "fstype": "virtiofs" } ] }'
+            )
+        ),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    assert result.status == "passed"
+    assert any(
+        check["name"] == "home-mounted" and check["status"] == "passed"
+        for check in result.checks
+    )
+
+
 def test_activechecks_restored_allows_baseline_suspended_checks() -> None:
     before = _capture(
         _Runner(
@@ -1343,6 +1367,170 @@ def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift
     for delta in classified["deltas"]:
         assert delta["classification"] == "remediation_required"
         assert delta["approval_required"] is True
+
+
+def test_external_accounting_config_delta_requires_exact_target_successor_contract() -> None:
+    target_ref = "cxcli-ext-upg-1223b"
+
+    def state(*, legacy_hash: str, successor_hash: str | None) -> ProtectedCustomerState:
+        items = [
+            {
+                "kind": "ConfigMap",
+                "namespace": "soperator",
+                "name": "soperator-acct-db-config-default",
+                "data_keys": ["0-default.cnf"],
+                "binary_data_keys": [],
+                "data_sha256_by_key": {"0-default.cnf": legacy_hash},
+                "binary_data_sha256_by_key": {},
+            }
+        ]
+        if successor_hash is not None:
+            items.append(
+                {
+                    "kind": "ConfigMap",
+                    "namespace": "soperator",
+                    "name": f"{target_ref}-acct-db-config-default",
+                    "data_keys": ["0-default.cnf"],
+                    "binary_data_keys": [],
+                    "data_sha256_by_key": {"0-default.cnf": successor_hash},
+                    "binary_data_sha256_by_key": {},
+                }
+            )
+        return ProtectedCustomerState(
+            target_ref=target_ref,
+            namespace="soperator",
+            captured_at="2026-07-18T00:00:00Z",
+            sections={
+                "configmaps": {
+                    "available": True,
+                    "count": len(items),
+                    "items": items,
+                }
+            },
+        )
+
+    before = state(legacy_hash="old", successor_hash=None)
+    matching_after = state(legacy_hash="new", successor_hash="new")
+    classified = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=matching_after),
+        target_ref=target_ref,
+        after_state=matching_after,
+    )
+    matching_delta = next(
+        delta
+        for delta in classified["deltas"]
+        if delta["resource"] == "soperator/soperator-acct-db-config-default"
+        and delta["field"] == "data_sha256_by_key"
+    )
+    assert matching_delta["classification"] == "intentional_upgrade"
+    assert matching_delta["approval_required"] is False
+
+    mismatched_after = state(legacy_hash="new", successor_hash="different")
+    mismatched = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=mismatched_after),
+        target_ref=target_ref,
+        after_state=mismatched_after,
+    )
+    mismatched_delta = next(
+        delta
+        for delta in mismatched["deltas"]
+        if delta["resource"] == "soperator/soperator-acct-db-config-default"
+        and delta["field"] == "data_sha256_by_key"
+    )
+    assert mismatched_delta["classification"] == "remediation_required"
+    assert mismatched_delta["approval_required"] is True
+
+
+def test_external_accounting_config_delta_accepts_retired_legacy_reconciliation() -> None:
+    target_ref = "cxcli-ext-upg-1223b"
+
+    def state(
+        *,
+        legacy_hash: str,
+        successor_hash: str | None,
+        statefulsets: list[str],
+    ) -> ProtectedCustomerState:
+        configmaps = [
+            {
+                "kind": "ConfigMap",
+                "namespace": "soperator",
+                "name": "soperator-acct-db-config-default",
+                "data_sha256_by_key": {"0-default.cnf": legacy_hash},
+            }
+        ]
+        if successor_hash is not None:
+            configmaps.append(
+                {
+                    "kind": "ConfigMap",
+                    "namespace": "soperator",
+                    "name": f"{target_ref}-acct-db-config-default",
+                    "data_sha256_by_key": {"0-default.cnf": successor_hash},
+                }
+            )
+        return ProtectedCustomerState(
+            target_ref=target_ref,
+            namespace="soperator",
+            captured_at="2026-07-18T00:00:00Z",
+            sections={
+                "configmaps": {"available": True, "items": configmaps},
+                "workloads": {
+                    "statefulsets": {
+                        "available": True,
+                        "items": [
+                            {
+                                "kind": "StatefulSet",
+                                "namespace": "soperator",
+                                "name": name,
+                            }
+                            for name in statefulsets
+                        ],
+                    }
+                },
+            },
+        )
+
+    before = state(
+        legacy_hash="protected",
+        successor_hash=None,
+        statefulsets=["soperator-acct-db"],
+    )
+    retired_after = state(
+        legacy_hash="reconciled",
+        successor_hash="protected",
+        statefulsets=[f"{target_ref}-acct-db"],
+    )
+    classified = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=retired_after),
+        target_ref=target_ref,
+        after_state=retired_after,
+    )
+    matching_delta = next(
+        delta
+        for delta in classified["deltas"]
+        if delta["resource"] == "soperator/soperator-acct-db-config-default"
+        and delta["field"] == "data_sha256_by_key"
+    )
+    assert matching_delta["classification"] == "intentional_upgrade"
+    assert matching_delta["approval_required"] is False
+
+    source_still_live = state(
+        legacy_hash="reconciled",
+        successor_hash="protected",
+        statefulsets=["soperator-acct-db", f"{target_ref}-acct-db"],
+    )
+    rejected = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=source_still_live),
+        target_ref=target_ref,
+        after_state=source_still_live,
+    )
+    rejected_delta = next(
+        delta
+        for delta in rejected["deltas"]
+        if delta["resource"] == "soperator/soperator-acct-db-config-default"
+        and delta["field"] == "data_sha256_by_key"
+    )
+    assert rejected_delta["classification"] == "remediation_required"
+    assert rejected_delta["approval_required"] is True
 
 
 def test_helmrelease_suspended_state_drift_is_detected() -> None:

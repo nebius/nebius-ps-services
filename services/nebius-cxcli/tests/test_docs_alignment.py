@@ -481,7 +481,10 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--approve-remediation/--no-approve-remediation`, "
         "`--interactive/--no-interactive`"
     ) in common_flags_flat
-    assert "- `soperator jobs`: `--target`, `--acknowledge-login-exit`" in common_flags_flat
+    assert (
+        "- `soperator jobs`: `--target`, `--acknowledge-login-exit`, "
+        "`--authorize-login-timeout-continuation`"
+    ) in common_flags_flat
     assert (
         "- `ext-soperator backup`: `--client-name`, `--tenant-id`, `--project-id`, "
         "`--target`, `--backup-dir`, `--namespace`, `--release-name`, "
@@ -659,13 +662,17 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "--login-session-drain-timeout" not in managed_upgrade_section
     assert "same unconditional login-continuity contract" in managed_upgrade_flat
     assert "`soperator jobs --acknowledge-login-exit <fingerprint>`" in managed_upgrade_section
+    assert "`--authorize-login-timeout-continuation <fingerprint>`" in managed_upgrade_section
     assert "--login-session-policy" not in external_upgrade_section
     assert "--login-session-drain-timeout" not in external_upgrade_section
-    assert "External login continuity is mandatory and has no policy or timeout flag" in (
+    assert "External login continuity is mandatory and has no automatic timeout policy" in (
         external_upgrade_section
     )
-    assert "source hold never expires" in external_upgrade_section
+    assert "source hold never expires while the socket is live" in external_upgrade_section
     assert "`ext-soperator jobs --acknowledge-login-exit <fingerprint>`" in (
+        external_upgrade_section
+    )
+    assert "`--authorize-login-timeout-continuation <fingerprint>`" in (
         external_upgrade_section
     )
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
@@ -2295,11 +2302,12 @@ def test_docs_define_component_selector_contract() -> None:
     assert "no mechanism moves an established TCP connection between Pods" in design_flat
     assert "every exact established socket keeps its hosting node indefinitely" in design_flat
     assert "soperator jobs --acknowledge-login-exit <fingerprint>" in design_flat
-    assert "There is no managed or external login policy/timeout escape hatch" in design_flat
+    assert "--authorize-login-timeout-continuation <fingerprint>" in design_flat
+    assert "There is no managed or external automatic login timeout" in design_flat
     assert "A Pod/node carrying a protected connection is never rolled, deleted, replaced" in (
         design_flat
     )
-    assert "There is no timeout or force-release path" in design_flat
+    assert "There is no automatic timeout or force-disconnect path" in design_flat
     assert "The `?` key opens a scrollable help overlay" in design_flat
     assert (
         "canonical action keys are `r` refresh, `w` wait, `c` cancel, `q` requeue, "

@@ -9,6 +9,8 @@ from nebius_cxcli.slurm_action_journal import (
     SLURM_ACTION_INDETERMINATE,
     SLURM_ACTION_QUEUED,
     SLURM_ACTION_REJECTED,
+    SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
+    SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION,
     SlurmJobActionBinding,
     acknowledge_slurm_login_exit,
     begin_target_slurm_action_generation,
@@ -144,6 +146,7 @@ def test_login_exit_acknowledgement_binds_exact_pending_absence_epoch() -> None:
         journal,
         socket_fingerprint=fingerprint,
         acknowledged_by="operator",
+        disposition=SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
         acknowledged_at="2026-07-12T10:03:00Z",
     )
 
@@ -152,12 +155,14 @@ def test_login_exit_acknowledgement_binds_exact_pending_absence_epoch() -> None:
         "absence_observed_at": "2026-07-12T10:02:00Z",
         "acknowledged_at": "2026-07-12T10:03:00Z",
         "acknowledged_by": "operator",
+        "disposition": SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
     }
     assert (
         acknowledge_slurm_login_exit(
             journal,
             socket_fingerprint=fingerprint,
             acknowledged_by="operator",
+            disposition=SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
             acknowledged_at="2026-07-12T10:04:00Z",
         )
         == acknowledgement
@@ -172,7 +177,45 @@ def test_login_exit_acknowledgement_rejects_live_or_unmatched_session() -> None:
             journal,
             socket_fingerprint="a" * 64,
             acknowledged_by="operator",
+            disposition=SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
         )
+
+
+def test_login_timeout_continuation_refines_unqualified_exact_acknowledgement() -> None:
+    journal = new_slurm_action_journal()
+    fingerprint = "a" * 64
+    record_slurm_login_observation(
+        journal,
+        state="indeterminate",
+        protected_pod_count=1,
+        active_session_count=1,
+        target_ready=True,
+        exit_confirmation_requests=(
+            {
+                "socket_fingerprint": fingerprint,
+                "absence_observed_at": "2026-07-12T10:02:00Z",
+            },
+        ),
+    )
+    journal["login"]["exit_acknowledgements"].append(
+        {
+            "socket_fingerprint": fingerprint,
+            "absence_observed_at": "2026-07-12T10:02:00Z",
+            "acknowledged_at": "2026-07-12T10:03:00Z",
+            "acknowledged_by": "ext-soperator-jobs-cli",
+        }
+    )
+
+    acknowledgement = acknowledge_slurm_login_exit(
+        journal,
+        socket_fingerprint=fingerprint,
+        acknowledged_by="ext-soperator-jobs-cli",
+        disposition=SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION,
+        acknowledged_at="2026-07-12T10:04:00Z",
+    )
+
+    assert acknowledgement["disposition"] == SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION
+    assert acknowledgement["disposition_recorded_at"] == "2026-07-12T10:04:00Z"
 
 
 def test_login_observation_rejects_invalid_state_or_counts() -> None:

@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -20,6 +21,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from sdlc_execution_core import (  # noqa: E402
     ExecutionError,
+    _claim_worker_session,
+    advance_batch,
     assignment_path,
     append_journal,
     build_dependency_waves,
@@ -204,6 +207,66 @@ class GitLifecycleTests(unittest.TestCase):
             Path(assignment["scope_cwd"]),
         )
 
+    def test_parallel_session_claim_is_atomic(self) -> None:
+        def claim(task_id: str) -> str:
+            try:
+                _claim_worker_session(
+                    self.run_dir,
+                    "FEAT-001",
+                    "WAVE-001",
+                    task_id,
+                    "a" * 64,
+                )
+            except ExecutionError as exc:
+                return exc.code
+            return "claimed"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = sorted(executor.map(claim, ("TASK-001", "TASK-002")))
+        self.assertEqual(outcomes, ["FRESH_SESSION_REQUIRED", "claimed"])
+
+    def test_parallel_task_start_has_one_owner(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+
+        def start(session: str) -> str:
+            try:
+                self.start_assignment(assignment, "WAVE-001", session)
+            except ExecutionError as exc:
+                return exc.code
+            return "started"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = sorted(executor.map(start, ("worker-a", "worker-b")))
+        self.assertEqual(outcomes, ["WORKSPACE_BUSY", "started"])
+
+    def test_parallel_recovery_transfers_once(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001", "old-worker")
+
+        def recover(session: str) -> str:
+            try:
+                recover_task(
+                    self.run_dir,
+                    "FEAT-001",
+                    "WAVE-001",
+                    assignment["task_id"],
+                    session,
+                    Path(assignment["scope_cwd"]),
+                    expected_attempt=1,
+                    confirmed_stopped=True,
+                )
+            except ExecutionError as exc:
+                return exc.code
+            return "recovered"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = sorted(executor.map(recover, ("worker-a", "worker-b")))
+        self.assertEqual(outcomes, ["WORKSPACE_BUSY", "recovered"])
+
     def test_nested_project_scope_is_persisted_and_enforced(self) -> None:
         selected = self.project / "services" / "a"
         sibling = self.project / "services" / "b"
@@ -244,6 +307,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "focused test passed",
                 "review passed",
                 "feat(FEAT-001): escaped change",
+                summary="escaped-change handoff",
             )
         self.assertEqual(caught.exception.code, "REPLAN_REQUIRED")
 
@@ -301,6 +365,7 @@ class GitLifecycleTests(unittest.TestCase):
                 assignment["task_id"],
                 "new-worker-session",
                 Path(assignment["scope_cwd"]),
+                expected_attempt=1,
                 confirmed_stopped=False,
             )
         self.assertEqual(unconfirmed.exception.code, "WORKSPACE_BUSY")
@@ -311,6 +376,7 @@ class GitLifecycleTests(unittest.TestCase):
             assignment["task_id"],
             "new-worker-session",
             Path(assignment["scope_cwd"]),
+            expected_attempt=1,
             confirmed_stopped=True,
         )
         state = json.loads(
@@ -319,6 +385,7 @@ class GitLifecycleTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(state["attempt"], 2)
+        self.assertEqual(len(state["worker_session_hash_history"]), 2)
         self.assertNotIn("old-worker-session", json.dumps(state))
         self.assertNotIn("new-worker-session", json.dumps(state))
         result = finish_task(
@@ -329,6 +396,7 @@ class GitLifecycleTests(unittest.TestCase):
             "focused test passed",
             "review passed",
             "feat(FEAT-001): recovered task",
+            summary="recovered-task handoff",
         )
         self.assertEqual(result["attempt"], 2)
 
@@ -349,6 +417,7 @@ class GitLifecycleTests(unittest.TestCase):
             assignment["task_id"],
             "fresh-clean-session",
             Path(assignment["scope_cwd"]),
+            expected_attempt=1,
             confirmed_stopped=True,
         )
         self.assertEqual(
@@ -377,6 +446,7 @@ class GitLifecycleTests(unittest.TestCase):
             assignment["task_id"],
             "fresh-commit-session",
             Path(assignment["scope_cwd"]),
+            expected_attempt=1,
             confirmed_stopped=True,
         )
         self.assertEqual(
@@ -391,6 +461,82 @@ class GitLifecycleTests(unittest.TestCase):
         with self.assertRaises(ExecutionError) as caught:
             self.start_assignment(second, "WAVE-001", "single-worker-session")
         self.assertEqual(caught.exception.code, "FRESH_SESSION_REQUIRED")
+
+    def test_malformed_session_history_fails_closed(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        first, second = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        second_path = task_path(
+            self.run_dir, "FEAT-001", "WAVE-001", second["task_id"]
+        )
+        state = json.loads(second_path.read_text(encoding="utf-8"))
+        state["worker_session_hash_history"] = ["malformed"]
+        second_path.write_text(json.dumps(state), encoding="utf-8")
+        with self.assertRaises(ExecutionError) as caught:
+            self.start_assignment(first, "WAVE-001", "fresh-session")
+        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+
+    def test_committed_worker_session_cannot_start_another_task(self) -> None:
+        coordinator = self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        first, second = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.start_assignment(first, "WAVE-001", "burned-worker-session")
+        worker = Path(first["worktree"])
+        (worker / "src").mkdir(exist_ok=True)
+        (worker / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+        finish_task(
+            self.run_dir,
+            "FEAT-001",
+            "WAVE-001",
+            "TASK-001",
+            "focused test passed",
+            "review passed",
+            "feat(FEAT-001): first task",
+            summary="first-task handoff",
+        )
+        with self.assertRaises(ExecutionError) as caught:
+            self.start_assignment(second, "WAVE-001", "burned-worker-session")
+        self.assertEqual(caught.exception.code, "FRESH_SESSION_REQUIRED")
+        self.assertEqual(Path(coordinator["integration_worktree"]).name, "integration")
+
+    def test_capacity_batches_create_only_active_assignments(self) -> None:
+        prepare_execution(
+            self.run_dir, self.project, "FEAT-001", self.plan, capacity=1
+        )
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        first_batch = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual([item["task_id"] for item in first_batch], ["TASK-001"])
+        self.assertFalse(
+            assignment_path(
+                self.run_dir, "FEAT-001", "WAVE-001", "TASK-002"
+            ).exists()
+        )
+        with self.assertRaises(ExecutionError) as incomplete:
+            advance_batch(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(incomplete.exception.code, "EXECUTION_STATE_INVALID")
+        self.start_assignment(first_batch[0], "WAVE-001")
+        worker = Path(first_batch[0]["worktree"])
+        (worker / "src").mkdir(exist_ok=True)
+        (worker / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+        finish_task(
+            self.run_dir,
+            "FEAT-001",
+            "WAVE-001",
+            "TASK-001",
+            "focused test passed",
+            "review passed",
+            "feat(FEAT-001): first batch",
+            summary="first-batch handoff",
+        )
+        second_batch = advance_batch(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual([item["task_id"] for item in second_batch], ["TASK-002"])
+        later_handoff = json.loads(
+            Path(second_batch[0]["incoming_handoff_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [item["summary"] for item in later_handoff["predecessors"]],
+            ["first-batch handoff"],
+        )
 
     def test_finish_rejects_sensitive_staged_content_without_leaking(self) -> None:
         coordinator = self.prepare()
@@ -417,6 +563,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "focused test passed",
                 "review passed",
                 "feat(FEAT-001): unsafe task",
+                summary="unsafe-task handoff",
             )
         self.assertEqual(caught.exception.code, "SECURITY_BLOCKER")
         self.assertNotIn(sensitive, str(caught.exception))
@@ -500,6 +647,11 @@ class GitLifecycleTests(unittest.TestCase):
         self.assertEqual(
             [item["task_id"] for item in first_wave], ["TASK-001", "TASK-002"]
         )
+        first_handoff = json.loads(
+            Path(first_wave[0]["incoming_handoff_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(first_handoff["dependencies"], [])
+        self.assertEqual(first_handoff["predecessors"], [])
         for assignment in reversed(first_wave):
             self.start_assignment(assignment, "WAVE-001")
             worker = Path(assignment["worktree"])
@@ -518,6 +670,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "focused test passed",
                 "code review passed",
                 f"feat(FEAT-001): {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
             )
         integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
         self.assertEqual(integrated["merged_task_ids"], ["TASK-001", "TASK-002"])
@@ -525,6 +678,17 @@ class GitLifecycleTests(unittest.TestCase):
 
         second_wave = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")
         assignment = second_wave[0]
+        dependent_handoff = json.loads(
+            Path(assignment["incoming_handoff_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [item["task_id"] for item in dependent_handoff["predecessors"]],
+            ["TASK-001", "TASK-002"],
+        )
+        self.assertEqual(
+            [item["summary"] for item in dependent_handoff["predecessors"]],
+            ["completed TASK-001", "completed TASK-002"],
+        )
         self.start_assignment(assignment, "WAVE-002")
         worker = Path(assignment["worktree"])
         (worker / "src" / "c.py").write_text("VALUE = 'TASK-003'\n", encoding="utf-8")
@@ -536,6 +700,7 @@ class GitLifecycleTests(unittest.TestCase):
             "focused test passed",
             "code review passed",
             "feat(FEAT-001): TASK-003",
+            summary="completed TASK-003",
         )
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
         complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed")
@@ -685,6 +850,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "validation passed",
                 "review passed",
                 "feat: invalid",
+                summary="invalid-path handoff",
             )
         self.assertEqual(raised.exception.code, "REPLAN_REQUIRED")
         self.assertEqual(git(worker, "diff", "--cached", "--name-only"), "")
@@ -745,8 +911,8 @@ class GitLifecycleTests(unittest.TestCase):
         state_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v3",
-                    "state_version": 3,
+                    "schema": "agentic-sdlc/execution-coordinator-v4",
+                    "state_version": 4,
                     "feature_id": "FEAT-001",
                     "run_id": "run-1",
                     "project_root": str(self.project.resolve()),
@@ -795,6 +961,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "validation passed",
                 "review passed",
                 f"feat: {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
             )
         integration = Path(coordinator["integration_worktree"])
         git(integration, "merge", "--no-ff", "--no-edit", assignments[0]["branch"])
@@ -865,6 +1032,7 @@ class GitLifecycleTests(unittest.TestCase):
                     "validation passed",
                     "review passed",
                     f"feat: {assignment['task_id']}",
+                    summary=f"completed {assignment['task_id']}",
                 )
             integrate_wave(self.run_dir, "FEAT-001", wave_id)
             complete_wave(self.run_dir, "FEAT-001", wave_id, "combined tests passed")
@@ -892,6 +1060,7 @@ class GitLifecycleTests(unittest.TestCase):
                 "validation passed",
                 "review passed",
                 f"feat: {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
             )
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
         first = assignments[0]
@@ -946,23 +1115,33 @@ class GitLifecycleTests(unittest.TestCase):
                 "validation passed",
                 "review passed",
                 "feat: invalid symlink",
+                summary="invalid-symlink handoff",
             )
         self.assertEqual(raised.exception.code, "REPLAN_REQUIRED")
 
-    def test_unfinished_v1_and_v2_require_workflow_upgrade(self) -> None:
+    def test_v1_v2_and_v3_always_require_workflow_upgrade(self) -> None:
         state = coordinator_path(self.run_dir, "FEAT-001")
         state.parent.mkdir(parents=True, exist_ok=True)
-        for version in (1, 2):
-            with self.subTest(version=version):
-                state.write_text(
-                    json.dumps(
-                        {"schema": f"agentic-sdlc/execution-coordinator-v{version}"}
-                    ),
-                    encoding="utf-8",
-                )
-                with self.assertRaises(ExecutionError) as raised:
-                    self.prepare()
-                self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+        for version in (1, 2, 3):
+            for status in ("running", "done"):
+                with self.subTest(version=version, status=status):
+                    state.write_text(
+                        json.dumps(
+                            {
+                                "schema": (
+                                    "agentic-sdlc/execution-coordinator-"
+                                    f"v{version}"
+                                ),
+                                "status": status,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ExecutionError) as raised:
+                        self.prepare()
+                    self.assertEqual(
+                        raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED"
+                    )
 
 
 class ManagedOuterLifecycleTests(unittest.TestCase):
@@ -1037,6 +1216,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 "focused test passed",
                 "review passed",
                 "feat(FEAT-001): add selected-scope value",
+                summary="selected-scope handoff",
             )
             integrate_wave(run_dir, "FEAT-001", "WAVE-001")
             complete_wave(run_dir, "FEAT-001", "WAVE-001", "combined tests passed")

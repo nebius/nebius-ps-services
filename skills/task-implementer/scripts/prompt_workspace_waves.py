@@ -29,6 +29,7 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import (
     ASSIGNMENT_SCHEMA,
     COORDINATOR_SCHEMA,
+    INCOMING_HANDOFF_SCHEMA,
     RESULT_SCHEMA,
     SHA_RE,
     TASK_PLANE_SCHEMA,
@@ -302,6 +303,9 @@ def _load_wave(run_dir: Path, wave_id: str) -> dict[str, object]:
         "integration_worktree",
         "task_ids",
         "task_states",
+        "batches",
+        "batch_states",
+        "active_batch_index",
         "created_at",
         "updated_at",
         "promoted_head",
@@ -331,6 +335,29 @@ def _load_wave(run_dir: Path, wave_id: str) -> dict[str, object]:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "wave task status is invalid"
         )
+    batches = value.get("batches")
+    batch_states = value.get("batch_states")
+    active_batch_index = value.get("active_batch_index")
+    if (
+        not isinstance(batches, list)
+        or not batches
+        or [task_id for batch in batches for task_id in batch] != task_ids
+        or not isinstance(batch_states, list)
+        or len(batch_states) != len(batches)
+        or any(state not in {"planned", "active", "done"} for state in batch_states)
+        or (
+            active_batch_index is not None
+            and (
+                not isinstance(active_batch_index, int)
+                or active_batch_index < 0
+                or active_batch_index >= len(batches)
+                or batch_states[active_batch_index] != "active"
+            )
+        )
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "wave capacity batches are invalid"
+        )
     return value
 
 
@@ -358,6 +385,19 @@ def _result_path(run_dir: Path, wave_id: str, task_id: str) -> Path:
     return orchestration_dir(run_dir) / "results" / wave_id / f"{task_id}.json"
 
 
+def _incoming_handoff_path(run_dir: Path, wave_id: str, task_id: str) -> Path:
+    if WAVE_ID_RE.fullmatch(wave_id) is None or TASK_ID_RE.fullmatch(task_id) is None:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "incoming handoff identity is invalid"
+        )
+    return (
+        orchestration_dir(run_dir)
+        / "incoming-handoffs"
+        / wave_id
+        / f"{task_id}.json"
+    )
+
+
 def _journal_path(run_dir: Path, wave_id: str) -> Path:
     if WAVE_ID_RE.fullmatch(wave_id) is None:
         raise PromptWorkspaceError("EXECUTION_STATE_INVALID", "wave ID is invalid")
@@ -383,6 +423,7 @@ def _load_task_plane(run_dir: Path, wave_id: str, task_id: str) -> dict[str, obj
         "base_commit",
         "assignment_sha256",
         "worker_session_sha256",
+        "worker_session_sha256_history",
         "result_sha256",
         "commit",
         "created_at",
@@ -395,6 +436,21 @@ def _load_task_plane(run_dir: Path, wave_id: str, task_id: str) -> dict[str, obj
         or value.get("wave_id") != wave_id
         or value.get("task_id") != task_id
         or value.get("state") not in TASK_STATES
+        or not isinstance(value.get("worker_session_sha256_history"), list)
+        or len(value["worker_session_sha256_history"])
+        != len(set(value["worker_session_sha256_history"]))
+        or any(
+            not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+            for item in value["worker_session_sha256_history"]
+        )
+        or (
+            value.get("worker_session_sha256") is not None
+            and (
+                not value["worker_session_sha256_history"]
+                or value["worker_session_sha256_history"][-1]
+                != value["worker_session_sha256"]
+            )
+        )
     ):
         raise PromptWorkspaceError("EXECUTION_STATE_INVALID", "task plane is invalid")
     return value
@@ -414,8 +470,14 @@ def _task_record(task: TaskPlan) -> dict[str, object]:
         "dependencies": list(task.dependencies),
         "write_claims": [claim.__dict__ for claim in task.write_claims],
         "conflict_domains": list(task.conflict_domains),
+        "requirement_ids": task.requirement_ids,
+        "design_id": task.design_id,
+        "goal": task.goal,
+        "plan": task.plan,
         "validation": task.validation,
         "done_criteria": task.done_criteria,
+        "rollback_notes": task.rollback_notes,
+        "stop_conditions": task.stop_conditions,
         "ownership_known": task.ownership_known,
     }
 
@@ -493,8 +555,17 @@ def _validated_assignment(path: Path) -> dict[str, object]:
         "result_path",
         "write_claims",
         "conflict_domains",
+        "requirement_ids",
+        "design_id",
+        "goal",
+        "plan",
         "validation",
         "done_criteria",
+        "rollback_notes",
+        "stop_conditions",
+        "dependencies",
+        "incoming_handoff_path",
+        "incoming_handoff_sha256",
         "plan_sha256",
         "created_at",
         "assignment_sha256",
@@ -512,6 +583,185 @@ def _validated_assignment(path: Path) -> dict[str, object]:
             "EXECUTION_STATE_INVALID", "worker assignment digest is invalid"
         )
     return assignment
+
+
+def _validated_incoming_handoff(path: Path) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != 0o600:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "incoming handoff path or mode is invalid"
+        )
+    handoff = load_json_object(path, "incoming handoff")
+    required = {
+        "schema",
+        "run_id",
+        "wave_id",
+        "task_id",
+        "assignment_base_commit",
+        "dependencies",
+        "predecessors",
+        "created_at",
+        "handoff_sha256",
+    }
+    recorded = handoff.get("handoff_sha256")
+    unsigned = {key: value for key, value in handoff.items() if key != "handoff_sha256"}
+    if (
+        set(handoff) != required
+        or handoff.get("schema") != INCOMING_HANDOFF_SCHEMA
+        or not isinstance(handoff.get("dependencies"), list)
+        or not isinstance(handoff.get("predecessors"), list)
+        or not isinstance(recorded, str)
+        or recorded != sha256_json(unsigned)
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "incoming handoff is invalid"
+        )
+    return handoff
+
+
+def _task_location(
+    coordinator: dict[str, object], task_id: str
+) -> tuple[str, dict[str, object]] | None:
+    for wave in coordinator["waves"]:
+        for task in wave["tasks"]:
+            if task.get("task_id") == task_id:
+                return str(wave["wave_id"]), task
+    return None
+
+
+def _predecessor_record(
+    run_dir: Path, coordinator: dict[str, object], dependency: str
+) -> dict[str, object] | None:
+    located = _task_location(coordinator, dependency)
+    if located is None:
+        return None
+    wave_id, _ = located
+    assignment = _validated_assignment(_assignment_path(run_dir, wave_id, dependency))
+    result = load_json_object(_result_path(run_dir, wave_id, dependency), "worker result")
+    plane = _load_task_plane(run_dir, wave_id, dependency)
+    unsigned_result = {
+        key: value for key, value in result.items() if key != "result_sha256"
+    }
+    if (
+        result.get("schema") != RESULT_SCHEMA
+        or result.get("task_id") != dependency
+        or result.get("wave_id") != wave_id
+        or result.get("assignment_sha256") != assignment.get("assignment_sha256")
+        or result.get("result_sha256") != sha256_json(unsigned_result)
+        or plane.get("state") not in {"committed", "merged"}
+        or plane.get("result_sha256") != result.get("result_sha256")
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "predecessor result is invalid"
+        )
+    return {
+        "task_id": dependency,
+        "wave_id": wave_id,
+        "assignment_sha256": assignment["assignment_sha256"],
+        "result_sha256": result.get("result_sha256"),
+        "commit": result.get("commit"),
+        "changed_paths": result.get("changed_paths"),
+        "summary": result.get("summary"),
+        "decisions": result.get("decisions"),
+        "open_risks": result.get("open_risks"),
+        "validation": result.get("validation"),
+        "review": result.get("code_review"),
+    }
+
+
+def _build_incoming_handoff(
+    run_dir: Path,
+    coordinator: dict[str, object],
+    wave_id: str,
+    task: dict[str, object],
+    base_commit: str,
+    created_at: str,
+) -> dict[str, object]:
+    dependencies = list(task["dependencies"])
+    predecessor_ids: list[str] = []
+    current_wave_index = next(
+        index
+        for index, item in enumerate(coordinator["waves"])
+        if item["wave_id"] == wave_id
+    )
+    for prior_wave in coordinator["waves"][:current_wave_index]:
+        predecessor_ids.extend(
+            str(item["task_id"]) for item in prior_wave["tasks"]
+        )
+    current_wave = coordinator["waves"][current_wave_index]
+    task_batch_index = next(
+        index
+        for index, batch in enumerate(current_wave["batches"])
+        if task["task_id"] in batch
+    )
+    for prior_batch in current_wave["batches"][:task_batch_index]:
+        predecessor_ids.extend(str(task_id) for task_id in prior_batch)
+    predecessor_ids.extend(
+        dependency for dependency in dependencies if dependency not in predecessor_ids
+    )
+    predecessors = [
+        record
+        for dependency in predecessor_ids
+        if (record := _predecessor_record(run_dir, coordinator, str(dependency)))
+        is not None
+    ]
+    handoff: dict[str, object] = {
+        "schema": INCOMING_HANDOFF_SCHEMA,
+        "run_id": run_dir.name,
+        "wave_id": wave_id,
+        "task_id": task["task_id"],
+        "assignment_base_commit": base_commit,
+        "dependencies": dependencies,
+        "predecessors": predecessors,
+        "created_at": created_at,
+    }
+    handoff["handoff_sha256"] = sha256_json(handoff)
+    return handoff
+
+
+def _validate_incoming_handoff_context(
+    handoff: dict[str, object],
+    run_dir: Path,
+    coordinator: dict[str, object],
+    wave_id: str,
+    task: dict[str, object],
+    base_commit: str,
+) -> None:
+    expected = _build_incoming_handoff(
+        run_dir,
+        coordinator,
+        wave_id,
+        task,
+        base_commit,
+        str(handoff.get("created_at")),
+    )
+    if handoff != expected:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "incoming handoff context is invalid"
+        )
+
+
+def _validate_assignment_handoff(
+    assignment: dict[str, object],
+    run_dir: Path,
+    coordinator: dict[str, object],
+    wave_id: str,
+    task: dict[str, object],
+) -> dict[str, object]:
+    path = Path(required_string(assignment, "incoming_handoff_path", "worker assignment"))
+    handoff = _validated_incoming_handoff(path)
+    if handoff.get("handoff_sha256") != assignment.get("incoming_handoff_sha256"):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "worker assignment handoff digest differs"
+        )
+    _validate_incoming_handoff_context(
+        handoff,
+        run_dir,
+        coordinator,
+        wave_id,
+        task,
+        required_string(assignment, "base_commit", "worker assignment"),
+    )
+    return handoff
 
 
 def _validate_wave_git_identity(
@@ -571,8 +821,17 @@ def _validate_assignment_context(
             != expected_result.resolve(),
             assignment.get("write_claims") != task["write_claims"],
             assignment.get("conflict_domains") != task["conflict_domains"],
+            assignment.get("requirement_ids") != task["requirement_ids"],
+            assignment.get("design_id") != task["design_id"],
+            assignment.get("goal") != task["goal"],
+            assignment.get("plan") != task["plan"],
             assignment.get("validation") != task["validation"],
             assignment.get("done_criteria") != task["done_criteria"],
+            assignment.get("rollback_notes") != task["rollback_notes"],
+            assignment.get("stop_conditions") != task["stop_conditions"],
+            assignment.get("dependencies") != task["dependencies"],
+            Path(str(assignment.get("incoming_handoff_path"))).resolve()
+            != _incoming_handoff_path(run_dir, wave_id, task_id).resolve(),
             assignment.get("plan_sha256") != coordinator["plan_sha256"],
         )
     ):
@@ -627,6 +886,10 @@ def plan_waves(
         ensure_private_dir(orchestration_dir(run_dir))
         for wave_id, tasks_in_wave in zip(wave_ids, waves, strict=True):
             wave_root = root / wave_id
+            batches = [
+                [task.task_id for task in batch]
+                for batch in batches_for_wave(tasks_in_wave, capacity)
+            ]
             wave = {
                 "schema": WAVE_SCHEMA,
                 "run_id": run_id,
@@ -642,6 +905,9 @@ def plan_waves(
                 "integration_worktree": str(wave_root / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
                 "task_states": {task.task_id: "planned" for task in tasks_in_wave},
+                "batches": batches,
+                "batch_states": ["planned"] * len(batches),
+                "active_batch_index": None,
                 "created_at": created,
                 "updated_at": created,
                 "promoted_head": None,
@@ -660,6 +926,7 @@ def plan_waves(
                         "base_commit": None,
                         "assignment_sha256": None,
                         "worker_session_sha256": None,
+                        "worker_session_sha256_history": [],
                         "result_sha256": None,
                         "commit": None,
                         "created_at": created,
@@ -769,6 +1036,10 @@ def replan_waves(
             existing_wave = (
                 load_json_object(path, "replacement wave") if path.exists() else None
             )
+            batches = [
+                [task.task_id for task in batch]
+                for batch in batches_for_wave(tasks_in_wave, capacity)
+            ]
             wave = {
                 "schema": WAVE_SCHEMA,
                 "run_id": run_id,
@@ -784,6 +1055,9 @@ def replan_waves(
                 "integration_worktree": str(root / wave_id / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
                 "task_states": {task.task_id: "planned" for task in tasks_in_wave},
+                "batches": batches,
+                "batch_states": ["planned"] * len(batches),
+                "active_batch_index": None,
                 "created_at": (
                     existing_wave["created_at"]
                     if existing_wave is not None
@@ -818,6 +1092,7 @@ def replan_waves(
                     "base_commit": None,
                     "assignment_sha256": None,
                     "worker_session_sha256": None,
+                    "worker_session_sha256_history": [],
                     "result_sha256": None,
                     "commit": None,
                     "created_at": (
@@ -1162,7 +1437,17 @@ def dispatch_wave(
                 raise PromptWorkspaceError(
                     "WORKTREE_CONFLICT", "running wave contract commit changed"
                 )
-            tasks = _wave_plan(coordinator, str(wave["wave_id"]))
+            active_index = wave.get("active_batch_index")
+            if not isinstance(active_index, int):
+                raise PromptWorkspaceError(
+                    "EXECUTION_STATE_INVALID", "wave has no active capacity batch"
+                )
+            active_task_ids = set(wave["batches"][active_index])
+            tasks = [
+                task
+                for task in _wave_plan(coordinator, str(wave["wave_id"]))
+                if task["task_id"] in active_task_ids
+            ]
             assignments: list[str] = []
             for task in tasks:
                 task_id = str(task["task_id"])
@@ -1170,6 +1455,13 @@ def dispatch_wave(
                 assignment = _validated_assignment(target)
                 _validate_assignment_context(
                     assignment, workspace, coordinator, run_dir, wave, task_id
+                )
+                _validate_assignment_handoff(
+                    assignment,
+                    run_dir,
+                    coordinator,
+                    str(wave["wave_id"]),
+                    task,
                 )
                 assignments.append(str(target))
             return {"wave": wave, "assignments": assignments}
@@ -1212,7 +1504,16 @@ def dispatch_wave(
                 "REPLAN_REQUIRED",
                 "coordinator contract commit changed files outside its locked ownership",
             )
-        tasks = _wave_plan(coordinator, str(wave["wave_id"]))
+        if wave.get("active_batch_index") is None:
+            wave["active_batch_index"] = 0
+            wave["batch_states"][0] = "active"
+        active_batch_index = int(wave["active_batch_index"])
+        active_task_ids = set(wave["batches"][active_batch_index])
+        tasks = [
+            task
+            for task in _wave_plan(coordinator, str(wave["wave_id"]))
+            if task["task_id"] in active_task_ids
+        ]
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         scope = required_string(workspace, "scope", "workspace manifest")
         wave_root = Path(str(wave["integration_worktree"])).parent
@@ -1255,6 +1556,37 @@ def dispatch_wave(
             existing_assignment = (
                 _validated_assignment(target) if target.exists() else None
             )
+            handoff_path = _incoming_handoff_path(
+                run_dir, str(wave["wave_id"]), task_id
+            )
+            existing_handoff = (
+                _validated_incoming_handoff(handoff_path)
+                if handoff_path.exists()
+                else None
+            )
+            created_at = (
+                str(existing_assignment["created_at"])
+                if existing_assignment is not None
+                else _utc(clock)
+            )
+            incoming_handoff = _build_incoming_handoff(
+                run_dir,
+                coordinator,
+                str(wave["wave_id"]),
+                task,
+                contract_commit,
+                str(existing_handoff["created_at"])
+                if existing_handoff is not None
+                else created_at,
+            )
+            ensure_private_dir(handoff_path.parent)
+            if existing_handoff is not None:
+                if existing_handoff != incoming_handoff:
+                    raise PromptWorkspaceError(
+                        "EXECUTION_STATE_INVALID", "immutable incoming handoff differs"
+                    )
+            else:
+                write_exclusive(handoff_path, stable_json(incoming_handoff))
             assignment: dict[str, object] = {
                 "schema": ASSIGNMENT_SCHEMA,
                 "run_id": run_id,
@@ -1269,14 +1601,19 @@ def dispatch_wave(
                 ),
                 "write_claims": task["write_claims"],
                 "conflict_domains": task["conflict_domains"],
+                "requirement_ids": task["requirement_ids"],
+                "design_id": task["design_id"],
+                "goal": task["goal"],
+                "plan": task["plan"],
                 "validation": task["validation"],
                 "done_criteria": task["done_criteria"],
+                "rollback_notes": task["rollback_notes"],
+                "stop_conditions": task["stop_conditions"],
+                "dependencies": task["dependencies"],
+                "incoming_handoff_path": str(handoff_path),
+                "incoming_handoff_sha256": incoming_handoff["handoff_sha256"],
                 "plan_sha256": coordinator["plan_sha256"],
-                "created_at": (
-                    existing_assignment["created_at"]
-                    if existing_assignment is not None
-                    else _utc(clock)
-                ),
+                "created_at": created_at,
             }
             assignment["assignment_sha256"] = sha256_json(assignment)
             ensure_private_dir(target.parent)
@@ -1315,6 +1652,45 @@ def dispatch_wave(
         }
 
 
+def advance_batch(
+    manifest_path: Path,
+    run_id: str,
+    *,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, _, wave = _coordinator_and_wave(workspace, run_id)
+        _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
+        active_index = wave.get("active_batch_index")
+        if wave["status"] != "running" or not isinstance(active_index, int):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "wave has no active capacity batch"
+            )
+        if any(
+            wave["task_states"][task_id] != "committed"
+            for task_id in wave["batches"][active_index]
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "active capacity batch is incomplete"
+            )
+        wave["batch_states"][active_index] = "done"
+        next_index = active_index + 1
+        if next_index >= len(wave["batches"]):
+            wave["active_batch_index"] = None
+            wave["updated_at"] = _utc(clock)
+            _save_wave(run_dir, wave)
+            return {"wave": wave, "assignments": []}
+        wave["active_batch_index"] = next_index
+        wave["batch_states"][next_index] = "active"
+        wave["status"] = "preparing"
+        wave["updated_at"] = _utc(clock)
+        contract_commit = required_string(wave, "contract_commit", "wave state")
+        _save_wave(run_dir, wave)
+    return dispatch_wave(manifest_path, run_id, contract_commit, clock=clock)
+
+
 def _session_fingerprint(session_id: str | None = None) -> str:
     value = session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
     if not isinstance(value, str) or not value.strip() or len(value) > 512:
@@ -1322,6 +1698,22 @@ def _session_fingerprint(session_id: str | None = None) -> str:
             "SESSION_ID_UNAVAILABLE", "worker session identifier is required"
         )
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _session_was_used(
+    run_dir: Path, worker_session: str, *, except_path: Path | None = None
+) -> bool:
+    tasks_root = orchestration_dir(run_dir) / "tasks"
+    for candidate in sorted(tasks_root.glob("*/*.json")):
+        if except_path is not None and candidate == except_path:
+            continue
+        other = load_json_object(candidate, "task plane")
+        history = other.get("worker_session_sha256_history", [])
+        if worker_session == other.get("worker_session_sha256") or (
+            isinstance(history, list) and worker_session in history
+        ):
+            return True
+    return False
 
 
 def start_task(
@@ -1343,6 +1735,27 @@ def start_task(
         )
         _validate_assignment_context(
             assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        task = next(
+            item
+            for item in _wave_plan(coordinator, str(wave["wave_id"]))
+            if item["task_id"] == task_id
+        )
+        active_index = wave.get("active_batch_index")
+        if (
+            not isinstance(active_index, int)
+            or task_id not in wave["batches"][active_index]
+            or wave["batch_states"][active_index] != "active"
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task is outside the active capacity batch"
+            )
+        _validate_assignment_handoff(
+            assignment,
+            run_dir,
+            coordinator,
+            str(wave["wave_id"]),
+            task,
         )
         if (
             wave["status"] != "running"
@@ -1395,22 +1808,19 @@ def start_task(
             raise PromptWorkspaceError(
                 "WORKSPACE_BUSY", "task is owned by another worker session"
             )
-        tasks_root = orchestration_dir(run_dir) / "tasks"
-        for candidate in sorted(tasks_root.glob("*/*.json")):
-            other = load_json_object(candidate, "task plane")
-            if (
-                other.get("task_id") != task_id
-                and other.get("worker_session_sha256") == worker_session
-            ):
-                raise PromptWorkspaceError(
-                    "FRESH_SESSION_REQUIRED",
-                    "one worker session cannot own multiple task planes",
-                )
+        plane_path = _task_plane_path(run_dir, str(wave["wave_id"]), task_id)
+        if _session_was_used(run_dir, worker_session, except_path=plane_path):
+            raise PromptWorkspaceError(
+                "FRESH_SESSION_REQUIRED",
+                "one worker session cannot own multiple task planes",
+            )
         wave["task_states"][task_id] = "running"
         wave["updated_at"] = _utc(clock)
         _save_wave(run_dir, wave)
         plane["state"] = "running"
         plane["worker_session_sha256"] = worker_session
+        if not plane["worker_session_sha256_history"]:
+            plane["worker_session_sha256_history"].append(worker_session)
         plane["updated_at"] = _utc(clock)
         _save_task_plane(run_dir, plane)
         return {"assignment": assignment, "worker_session_sha256": worker_session}
@@ -1457,6 +1867,18 @@ def recover_task(
         )
         _validate_assignment_context(
             assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        task = next(
+            item
+            for item in _wave_plan(coordinator, str(wave["wave_id"]))
+            if item["task_id"] == task_id
+        )
+        _validate_assignment_handoff(
+            assignment,
+            run_dir,
+            coordinator,
+            str(wave["wave_id"]),
+            task,
         )
         plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
         if plane["state"] != "running" or wave["task_states"].get(task_id) != "running":
@@ -1507,18 +1929,15 @@ def recover_task(
             raise PromptWorkspaceError(
                 "FRESH_SESSION_REQUIRED", "recovery requires a fresh worker session"
             )
-        tasks_root = orchestration_dir(run_dir) / "tasks"
-        for candidate in sorted(tasks_root.glob("*/*.json")):
-            other = load_json_object(candidate, "task plane")
-            if (
-                other.get("task_id") != task_id
-                and other.get("worker_session_sha256") == worker_session
-            ):
-                raise PromptWorkspaceError(
-                    "FRESH_SESSION_REQUIRED",
-                    "one worker session cannot own multiple task planes",
-                )
+        if worker_session in plane["worker_session_sha256_history"] or _session_was_used(
+            run_dir, worker_session
+        ):
+            raise PromptWorkspaceError(
+                "FRESH_SESSION_REQUIRED",
+                "recovery session identity was already used by this run",
+            )
         plane["worker_session_sha256"] = worker_session
+        plane["worker_session_sha256_history"].append(worker_session)
         plane["updated_at"] = _utc(clock)
         _save_task_plane(run_dir, plane)
         return {
@@ -1587,6 +2006,9 @@ def accept_task_result(
             "status",
             "commit",
             "changed_paths",
+            "summary",
+            "decisions",
+            "open_risks",
             "validation",
             "end_to_end_validation",
             "code_review",
@@ -1600,6 +2022,18 @@ def accept_task_result(
             or result.get("wave_id") != wave["wave_id"]
             or result.get("task_id") != task_id
             or result.get("assignment_sha256") != assignment.get("assignment_sha256")
+            or not isinstance(result.get("summary"), str)
+            or not result["summary"].strip()
+            or not isinstance(result.get("decisions"), list)
+            or not isinstance(result.get("open_risks"), list)
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in result.get("decisions", [])
+            )
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in result.get("open_risks", [])
+            )
         ):
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "worker result identity is invalid"
@@ -1725,6 +2159,24 @@ def integrate_wave(
         run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
         _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
         states = wave["task_states"]
+        active_batch_index = wave.get("active_batch_index")
+        if isinstance(active_batch_index, int):
+            active_tasks = wave["batches"][active_batch_index]
+            if any(states[task_id] != "committed" for task_id in active_tasks):
+                raise PromptWorkspaceError(
+                    "EXECUTION_STATE_INVALID", "active capacity batch is incomplete"
+                )
+            if active_batch_index + 1 < len(wave["batches"]):
+                raise PromptWorkspaceError(
+                    "EXECUTION_STATE_INVALID", "later capacity batches are pending"
+                )
+            wave["batch_states"][active_batch_index] = "done"
+            wave["active_batch_index"] = None
+            _save_wave(run_dir, wave)
+        if any(state != "done" for state in wave["batch_states"]):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "capacity batches are incomplete"
+            )
         if any(
             states[task_id] not in {"committed", "merged"}
             for task_id in wave["task_ids"]

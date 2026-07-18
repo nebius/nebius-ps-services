@@ -33,8 +33,10 @@ local Codex home.
   `AGENTS.md`, locked SDLC plans, `$CODEX_HOME/task-state`, and private SDLC
   state are all path-allowed for operator flexibility.
 - The PreToolUse hook must still block secret-bearing payloads, dangerous shell
-  patterns, and guarded Git/GitHub actions. Ordinary outbound network commands
-  are not restricted by the hook unless they match one of those unsafe checks.
+  patterns in Bash tool payloads, and guarded Git/GitHub actions. Patch content
+  that merely contains a shell command is not executed and remains governed by
+  patch target, secret, and spec checks. Ordinary outbound network commands are
+  not restricted by the hook unless they match one of those unsafe checks.
 - An active run also covers coordinator-registered integration and worker
   worktrees outside the original checkout. The hook verifies canonical Git
   root/common directory, branch, and recorded HEAD before sensitive Git actions.

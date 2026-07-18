@@ -21,6 +21,6 @@ force-cleans resources. Interrupted or unsafe resources remain recorded for
 exact recovery.
 
 The private helper exposes `prepare`, `seal-tdd`, `replan-future`,
-`wave-prepare`, `task-start`, `task-recover`, `task-finish`, `wave-integrate`,
+`wave-prepare`, `batch-advance`, `task-start`, `task-recover`, `task-finish`, `wave-integrate`,
 `wave-complete`, `seal-feature`, `promote`, `release-outer-lease`, and `status`.
 It is an internal state-transition surface, not a public SDLC CLI.

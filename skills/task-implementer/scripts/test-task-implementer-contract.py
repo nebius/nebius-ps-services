@@ -50,7 +50,7 @@ def main() -> int:
             "git merge --ff-only",
             "git worktree remove",
             "git branch -d",
-            "completed v1 history remains readable",
+            "coordinator-v1/v2 runs are unsupported",
         ),
         "README.md": common
         + (
@@ -61,7 +61,7 @@ def main() -> int:
         ),
         "prompt workspace": (
             "coordinator.json",
-            "worker-assignment-v2",
+            "worker-assignment-v3",
             "wave-plan",
             "wave-replan",
             "task-recover",
@@ -104,7 +104,7 @@ def main() -> int:
             "WORKFLOW_UPGRADE_REQUIRED",
         ),
         "changelog": (
-            "coordinator/worker v2",
+            "coordinator/worker v3",
             "capacity-sized batches",
             "WORKFLOW_UPGRADE_REQUIRED",
         ),

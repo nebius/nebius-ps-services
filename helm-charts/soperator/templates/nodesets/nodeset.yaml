@@ -209,6 +209,10 @@ spec:
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"nvidia-driver-root\". The chart owns this GPU driver jail mount; remove the custom mount." $ns.name) }}
       {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/run/nvidia/driver") }}
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/run/nvidia/driver\". The chart owns this GPU driver jail mount; use another mountPath." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "name") "gpu-health-sysfs") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"gpu-health-sysfs\". The chart owns this GPU health sysfs jail mount; remove the custom mount." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/mnt/jail/sys-host") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/mnt/jail/sys-host\". The chart owns this GPU health sysfs jail mount; use another mountPath." $ns.name) }}
       {{- end }}
       {{- end }}
       customVolumeMounts:
@@ -217,6 +221,7 @@ spec:
         {{- include "nodesets.slurmConfigJailMount" (list $) | nindent 8 }}
         {{- if $gpuDriverJailEnabled }}
         {{- include "nodesets.gpuDriverJailMount" . | nindent 8 }}
+        {{- include "nodesets.gpuHealthSysfsJailMount" . | nindent 8 }}
         {{- end }}
         {{- range $customVolumeMounts }}
         {{- toYaml (list .) | nindent 8 }}

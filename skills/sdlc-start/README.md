@@ -80,7 +80,10 @@ filename mirror disagrees. The PreToolUse hook does not block file targets
 by path; repo files, outside-repo files, credential directories, Codex runtime
 files, global `AGENTS.md`, locked SDLC plans, and private SDLC state are all
 path-allowed for operator flexibility. It still blocks secret-bearing payloads,
-dangerous shell patterns, and guarded Git/GitHub actions.
+dangerous Bash command patterns, and guarded Git/GitHub actions. Dangerous
+shell matching is not applied to patch contents, so Dockerfile and
+documentation command examples remain subject to patch secret/target/spec
+checks instead of being treated as commands being executed.
 Coordinator-registered integration and worker worktrees outside the original
 checkout remain inside active-run policy; sensitive raw Git actions require
 exact identity and action-scoped authorization.

@@ -449,7 +449,7 @@ def test_service_role_replacement_rechecks_slot_b_and_persistent_mounts(
     ]
 
 
-@pytest.mark.parametrize("field", ["history", "registrations", "catalogs"])
+@pytest.mark.parametrize("field", ["registrations", "catalogs"])
 def test_in_place_accounting_continuity_rejects_exact_evidence_drift(field: str) -> None:
     baseline = {
         "writer_identity": {
@@ -479,6 +479,52 @@ def test_in_place_accounting_continuity_rejects_exact_evidence_drift(field: str)
         )
 
 
+def test_in_place_accounting_continuity_allows_monotonic_job_history() -> None:
+    baseline = {
+        "writer_identity": {
+            "pod": "cluster-acct-db-0",
+            "pod_uid": "pod-old",
+            "statefulset": "cluster-acct-db",
+            "statefulset_uid": "statefulset-uid",
+            "mariadb": "cluster-acct-db",
+            "mariadb_uid": "mariadb-uid",
+            "slurmcluster": "cluster",
+            "slurmcluster_uid": "slurmcluster-uid",
+            "pvc": "storage-cluster-acct-db-0",
+            "pvc_uid": "pvc-uid",
+        },
+        "history": {"jobs": 4, "steps": 2, "completed_jobs": 4, "max_job_id": 5},
+        "registrations": {"cluster": {"id": 1}},
+        "catalogs": {"qos": {"row_count": 1, "sha256": "a" * 64}},
+    }
+    observed = json.loads(json.dumps(baseline))
+    observed["history"].update(
+        {"jobs": 5, "steps": 2, "completed_jobs": 5, "max_job_id": 6}
+    )
+
+    migration._verify_in_place_accounting_continuity(  # noqa: SLF001
+        baseline=baseline,
+        observed=observed,
+    )
+
+
+def test_in_place_accounting_continuity_rejects_history_regression() -> None:
+    baseline = {
+        "writer_identity": {},
+        "history": {"jobs": 5, "max_job_id": 6},
+        "registrations": {},
+        "catalogs": {},
+    }
+    observed = json.loads(json.dumps(baseline))
+    observed["history"]["jobs"] = 4
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="history.*jobs"):
+        migration._verify_in_place_accounting_continuity(  # noqa: SLF001
+            baseline=baseline,
+            observed=observed,
+        )
+
+
 def test_in_place_accounting_continuity_allows_only_writer_pod_recreation() -> None:
     baseline = {
         "writer_identity": {
@@ -499,6 +545,36 @@ def test_in_place_accounting_continuity_allows_only_writer_pod_recreation() -> N
     }
     observed = json.loads(json.dumps(baseline))
     observed["writer_identity"]["pod_uid"] = "pod-new"
+
+    migration._verify_in_place_accounting_continuity(  # noqa: SLF001
+        baseline=baseline,
+        observed=observed,
+    )
+
+
+def test_in_place_accounting_continuity_allows_controller_host_refresh() -> None:
+    baseline = {
+        "writer_identity": {
+            "pod": "cluster-acct-db-0",
+            "pod_uid": "pod-old",
+            "statefulset": "cluster-acct-db",
+            "statefulset_uid": "statefulset-uid",
+            "mariadb": "cluster-acct-db",
+            "mariadb_uid": "mariadb-uid",
+            "slurmcluster": "cluster",
+            "slurmcluster_uid": "slurmcluster-uid",
+            "pvc": "storage-cluster-acct-db-0",
+            "pvc_uid": "pvc-uid",
+        },
+        "history": {"jobs": 10},
+        "registrations": {
+            "cluster": {"control_host": "10.0.0.1", "control_port": "6817", "rpc": "1"}
+        },
+        "catalogs": {"qos": {"row_count": 1, "sha256": "a" * 64}},
+    }
+    observed = json.loads(json.dumps(baseline))
+    observed["writer_identity"]["pod_uid"] = "pod-new"
+    observed["registrations"]["cluster"]["control_host"] = "10.0.0.2"
 
     migration._verify_in_place_accounting_continuity(  # noqa: SLF001
         baseline=baseline,
@@ -537,6 +613,16 @@ def test_in_place_controller_roll_requires_system_domain_authority(
     )
     monkeypatch.setattr(
         migration,
+        "_ensure_in_place_target_controller_command_gate",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
         "_controller_bridge_primary_role_from_ping",
         lambda **_kwargs: next(observations),
     )
@@ -564,6 +650,7 @@ def test_in_place_controller_roll_requires_system_domain_authority(
             {"role": "controller", "id": "controller-group"},
             {"role": "system", "id": "system-group"},
         ),
+        target_ref="target",
         command_runner=_runner,
         kube_context="context",
         checkpoint_writer=lambda: None,
@@ -575,6 +662,301 @@ def test_in_place_controller_roll_requires_system_domain_authority(
     assert lines == [
         "Transferred bridge authority to the system domain before controller replacement."
     ]
+
+
+def test_in_place_controller_roll_reasserts_reconciled_target_command_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = {
+        "controller_bridge": {
+            "target_singleton_takeover": {"command_gate_applied": True},
+        }
+    }
+    phase: dict[str, Any] = {}
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": {
+                "uid": "cluster-uid",
+                "resourceVersion": "42",
+            },
+            "spec": {
+                "slurmNodes": {
+                    "controller": {
+                        "slurmctld": {
+                            "command": ["slurmctld"],
+                            "args": [],
+                        }
+                    }
+                }
+            },
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def _runner(args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        commands.append(tuple(args))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="reasserted the exact inert target controller command gate",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target",
+            command_runner=_runner,
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    patch_command = next(command for command in commands if "patch" in command)
+    patch_payload = json.loads(patch_command[-1])
+    expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"][
+        "slurmctld"
+    ]
+    assert patch_payload["metadata"]["resourceVersion"] == "42"
+    assert patch_payload["spec"]["slurmNodes"]["controller"]["slurmctld"] == expected
+    assert (
+        phase["in_place_target_controller_command_gate"]["status"]
+        == "slurmcluster-accepted"
+    )
+
+
+def test_in_place_singleton_gate_removal_uses_exact_admission_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_ref = "target-cluster"
+    gated = {
+        "metadata": {"uid": "target-uid", "resourceVersion": "41"},
+        "spec": {
+            "slurmNodes": {
+                "controller": {
+                    "slurmctld": {
+                        "image": "example.invalid/controller:target",
+                        "command": ["/bin/sh", "-ec"],
+                        "args": ["sleep 30"],
+                    }
+                }
+            }
+        },
+    }
+    ungated = json.loads(json.dumps(gated))
+    ungated["metadata"]["resourceVersion"] = "42"
+    ungated["spec"]["slurmNodes"]["controller"]["slurmctld"].pop("command")
+    ungated["spec"]["slurmNodes"]["controller"]["slurmctld"].pop("args")
+    resources = iter((gated, ungated))
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: next(resources),
+    )
+    policy = {"value": "Fail", "resource_version": 10}
+
+    def _admission(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "name": "soperator-validating-webhook-configuration",
+            "uid": "webhook-uid",
+            "resourceVersion": str(policy["resource_version"]),
+            "webhook_name": "vslurmcluster-v1.kb.io",
+            "webhook_index": 1,
+            "failure_policy": policy["value"],
+        }
+
+    def _patch_policy(*, desired_policy: str, **_kwargs: Any) -> None:
+        policy["value"] = desired_policy
+        policy["resource_version"] += 1
+
+    monkeypatch.setattr(migration, "_soperator_slurmcluster_admission_webhook", _admission)
+    monkeypatch.setattr(
+        migration,
+        "_patch_soperator_slurmcluster_admission_policy",
+        _patch_policy,
+    )
+    patches: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_patch_namespace_resource",
+        lambda **kwargs: patches.append(kwargs["patch"]),
+    )
+    state: dict[str, Any] = {}
+    writes: list[str] = []
+
+    migration._remove_in_place_target_controller_command_gate(  # noqa: SLF001
+        state=state,
+        target_ref=target_ref,
+        command_runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+        kube_context="context",
+        checkpoint_writer=lambda: writes.append(
+            str(state.get("slurmcluster_admission_window", {}).get("status") or "")
+        ),
+    )
+
+    assert policy["value"] == "Fail"
+    assert state["slurmcluster_admission_window"]["status"] == "restored"
+    assert state["controller_gate_removed_at"]
+    assert patches[0]["metadata"] == {
+        "uid": "target-uid",
+        "resourceVersion": "41",
+    }
+    assert writes[:3] == ["intent", "active", "target-patched"]
+    assert "restored" in writes
+
+
+def test_in_place_singleton_gate_removal_recovers_lost_patch_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "metadata": {"uid": "target-uid", "resourceVersion": "42"},
+        "spec": {
+            "slurmNodes": {
+                "controller": {
+                    "slurmctld": {"image": "example.invalid/controller:target"}
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: target,
+    )
+    policy = {"value": "Ignore"}
+
+    def _admission(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "name": "soperator-validating-webhook-configuration",
+            "uid": "webhook-uid",
+            "resourceVersion": "12",
+            "webhook_name": "vslurmcluster-v1.kb.io",
+            "webhook_index": 1,
+            "failure_policy": policy["value"],
+        }
+
+    def _patch_policy(*, desired_policy: str, **_kwargs: Any) -> None:
+        policy["value"] = desired_policy
+
+    monkeypatch.setattr(migration, "_soperator_slurmcluster_admission_webhook", _admission)
+    monkeypatch.setattr(
+        migration,
+        "_patch_soperator_slurmcluster_admission_policy",
+        _patch_policy,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_patch_namespace_resource",
+        lambda **_kwargs: pytest.fail("an accepted target patch must not be replayed"),
+    )
+    state = {
+        "slurmcluster_admission_window": {
+            "schema": "nebius-cxcli/in-place-slurmcluster-admission-window-v1",
+            "status": "active",
+            "target_ref": "target-cluster",
+            "target_uid": "target-uid",
+            "name": "soperator-validating-webhook-configuration",
+            "uid": "webhook-uid",
+            "webhook_name": "vslurmcluster-v1.kb.io",
+            "webhook_index": 1,
+            "original_failure_policy": "Fail",
+        }
+    }
+
+    migration._remove_in_place_target_controller_command_gate(  # noqa: SLF001
+        state=state,
+        target_ref="target-cluster",
+        command_runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+        kube_context="context",
+        checkpoint_writer=lambda: None,
+    )
+
+    assert policy["value"] == "Fail"
+    assert state["slurmcluster_admission_window"]["status"] == "restored"
+
+
+def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase = {
+        "in_place_target_native_controller_ha": {
+            "cleanup_status": "singleton-config-accepted",
+        },
+        "in_place_target_manager_pause": {"original_replicas": 1},
+    }
+    checkpoint = {
+        "controller_bridge": {
+            "target_singleton_takeover": {"command_gate_applied": True}
+        }
+    }
+    monkeypatch.setattr(
+        migration,
+        "_verify_in_place_target_native_controller_ha",
+        lambda **_kwargs: pytest.fail("retired backup must not be revalidated"),
+    )
+    removed: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_remove_in_place_target_controller_command_gate",
+        lambda **_kwargs: removed.append("gate"),
+    )
+    monkeypatch.setattr(migration, "_kubectl_rollout_status", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="Slurmctld(primary) at controller-0 is UP\n",
+            stderr="",
+        ),
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def _runner(args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        commands.append(tuple(args))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    lines = migration._finalize_in_place_target_native_controller_ha(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        command_runner=_runner,
+        kube_context="context",
+        checkpoint_writer=lambda: None,
+    )
+
+    state = phase["in_place_target_native_controller_ha"]
+    assert state["cleanup_status"] == "verified"
+    assert phase["in_place_target_manager_pause"]["status"] == "restored"
+    assert removed == ["gate"]
+    assert any(
+        command[-2:] == ("deployment/soperator-manager", "--replicas=1")
+        for command in commands
+    )
+    assert lines
+
+
+def test_in_place_completed_service_role_skips_retired_ha_revalidation() -> None:
+    assert migration._in_place_service_role_authority_finalized(  # noqa: SLF001
+        phase={
+            "in_place_target_native_controller_ha": {
+                "cleanup_status": "singleton-config-accepted"
+            }
+        },
+        group_state={"status": "completed"},
+    )
+    assert not migration._in_place_service_role_authority_finalized(  # noqa: SLF001
+        phase={
+            "in_place_target_native_controller_ha": {
+                "cleanup_status": "singleton-config-accepted"
+            }
+        },
+        group_state={"status": "provider-complete-health-pending"},
+    )
 
 
 def test_service_role_replacement_blocks_when_controller_alias_is_unhealthy(
@@ -804,7 +1186,7 @@ def test_tui_dispatched_cancel_is_counted_as_an_operator_cancellation() -> None:
     )
 
 
-def test_replacement_health_proves_slot_b_mounts_and_gpu_before_release(
+def test_replacement_health_releases_owned_drain_before_gpu_smoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -834,6 +1216,12 @@ def test_replacement_health_proves_slot_b_mounts_and_gpu_before_release(
         "_ensure_gpu_worker_jail_release_gate",
         lambda **_kwargs: calls.append("gpu-release") or ["gpu release passed"],
     )
+    monkeypatch.setattr(migration, "_gpu_worker_nodeset_names", lambda _values: ("worker",))
+    monkeypatch.setattr(
+        migration,
+        "_release_in_place_worker_locks_for_gpu_smoke",
+        lambda **_kwargs: calls.append("drain-release") or ["drain release passed"],
+    )
     monkeypatch.setattr(
         migration,
         "_ensure_jail_gpu_post_activation_gate",
@@ -858,9 +1246,139 @@ def test_replacement_health_proves_slot_b_mounts_and_gpu_before_release(
         checkpoint_writer=None,
     )
 
-    assert calls == ["ready", "gpu-release", "gpu-health"]
+    assert calls == ["ready", "gpu-release", "drain-release", "gpu-health"]
     assert phase["in_place_worker_replacement_health"]["status"] == "passed"
     assert "slot-b Jail consumers" in lines[0]
+
+
+def test_gpu_smoke_drain_release_requires_continuous_partition_pause() -> None:
+    phase: dict[str, Any] = {"slurm_scheduling_pause": False}
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="continuous Slurm scheduling pause",
+    ):
+        migration._release_in_place_worker_locks_for_gpu_smoke(  # noqa: SLF001
+            phase=phase,
+            command_runner=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
+            kube_context="test",
+            values={"partitionConfiguration": {"partitions": [{"name": "gpu"}]}},
+            checkpoint_writer=None,
+        )
+
+    assert phase["in_place_gpu_smoke_scheduling_gate"]["status"] == "failed"
+
+
+def test_gpu_smoke_drain_release_accepts_only_target_retired_missing_partitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = (
+        SimpleNamespace(
+            partition="background",
+            applied_state="DOWN",
+            applied_record="PartitionName=background State=DOWN",
+            applied_record_fingerprint="background-down",
+        ),
+        SimpleNamespace(
+            partition="gpu",
+            applied_state="DOWN",
+            applied_record="PartitionName=gpu State=DOWN",
+            applied_record_fingerprint="gpu-down",
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_rolling_compute_checkpoint_pause_records",
+        lambda _phase: records,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state_snapshot",
+        lambda **_kwargs: (SimpleNamespace(name="gpu", record="PartitionName=gpu State=DOWN"),),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_slurm_partition_observation_matches",
+        lambda observation, **_kwargs: observation.name == "gpu",
+    )
+    restored: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_restore_in_place_worker_group_lock",
+        lambda **_kwargs: restored.append("worker") or ["worker drain released"],
+    )
+    phase = {
+        "slurm_scheduling_pause": True,
+        "in_place_node_groups": {"worker": {"status": "provider-complete-health-pending"}},
+    }
+
+    lines = migration._release_in_place_worker_locks_for_gpu_smoke(  # noqa: SLF001
+        phase=phase,
+        command_runner=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
+        kube_context="test",
+        values={"partitionConfiguration": {"partitions": [{"name": "gpu"}]}},
+        checkpoint_writer=None,
+    )
+
+    gate = phase["in_place_gpu_smoke_scheduling_gate"]
+    assert gate["status"] == "passed"
+    assert gate["retired_partitions"] == ["background"]
+    assert gate["partitions"][0]["status"] == "retired-from-target"
+    assert gate["partitions"][1]["status"] == "down"
+    assert restored == ["worker"]
+    assert "source-era partitions" in lines[0]
+
+
+def test_final_restore_filters_only_checkpointed_target_retired_partitions() -> None:
+    target_partitions = ["gpu"]
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "in_place_gpu_smoke_scheduling_gate": {
+                    "status": "passed",
+                    "target_partitions": target_partitions,
+                    "target_partitions_sha256": migration._fingerprint(target_partitions),  # noqa: SLF001
+                    "retired_partitions": ["background"],
+                    "partitions": [
+                        {"partition": "background", "status": "retired-from-target"},
+                        {"partition": "gpu", "status": "down"},
+                    ],
+                }
+            }
+        }
+    }
+    records = (SimpleNamespace(partition="background"), SimpleNamespace(partition="gpu"))
+
+    retired = migration._checkpoint_target_retired_slurm_partition_names(  # noqa: SLF001
+        checkpoint,
+        records=records,  # type: ignore[arg-type]
+    )
+
+    assert retired == frozenset({"background"})
+
+
+def test_terminal_worker_provider_operation_resumes_at_health_boundary() -> None:
+    state = {
+        "status": "provider-complete-health-pending",
+        "replacement_node_uids": ["node-a", "node-b"],
+        "target_update": {"operation": {"attempt_state": "provider-terminal"}},
+    }
+
+    assert migration._in_place_worker_health_resume_ready(  # noqa: SLF001
+        state,
+        accepted_size=2,
+    )
+    assert not migration._in_place_worker_health_resume_ready(  # noqa: SLF001
+        {**state, "replacement_node_uids": ["node-a"]},
+        accepted_size=2,
+    )
+    assert not migration._in_place_worker_health_resume_ready(  # noqa: SLF001
+        {
+            **state,
+            "target_update": {"operation": {"attempt_state": "provider-accepted"}},
+        },
+        accepted_size=2,
+    )
 
 
 class _ScaleApi:

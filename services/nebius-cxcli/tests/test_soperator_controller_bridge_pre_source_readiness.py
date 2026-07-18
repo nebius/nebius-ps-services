@@ -870,6 +870,60 @@ def test_reused_bridge_groups_preserve_proven_runtime_scheduling_bindings(
     assert journal["fencing"]["source"]["proven"] is False
 
 
+def test_reused_bridge_groups_bind_checkpointed_version_after_control_plane_hop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _journal()
+    plan = replace(_plan(), source_kubernetes_version="1.32")
+    provider_groups: list[dict[str, Any]] = []
+    for record in journal["node_groups"]:
+        group_id = str(record["id"])
+        record["operation"] = {
+            "verified_postcondition": {
+                "name": record["name"],
+                "node_group_id": group_id,
+                "version": "1.31",
+            }
+        }
+        provider_groups.append(
+            {"metadata": {"id": group_id, "name": record["name"]}}
+        )
+
+    monkeypatch.setattr(migration, "_list_node_groups", lambda **_kwargs: provider_groups)
+    monkeypatch.setattr(
+        migration,
+        "_node_group_payload_by_id",
+        lambda **kwargs: next(
+            item for item in provider_groups if item["metadata"]["id"] == kwargs["node_group_id"]
+        ),
+    )
+    validations: list[tuple[str, str]] = []
+
+    def validate(**kwargs: Any) -> str:
+        validations.append((kwargs["source_version"], kwargs["expected_node_group_id"]))
+        return str(kwargs["node_group"]["metadata"]["id"])
+
+    monkeypatch.setattr(
+        migration,
+        "_validate_reused_controller_bridge_quota_group",
+        validate,
+    )
+
+    mutated, _lines = migration._create_controller_bridge_node_groups(  # noqa: SLF001
+        checkpoint={"phase_state": {}},
+        journal=journal,
+        plan=plan,
+        nebius_api=object(),  # type: ignore[arg-type]
+        checkpoint_writer=lambda: None,
+    )
+
+    assert mutated is False
+    assert validations == [
+        ("1.31", "bridge-node-group-0"),
+        ("1.31", "bridge-node-group-1"),
+    ]
+
+
 def test_managed_bridge_binds_existing_domains_without_provider_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

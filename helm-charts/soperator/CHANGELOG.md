@@ -4,6 +4,11 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Fixed the validation-only GPU worker init guard so jailed `nvidia-smi -L`
+  uses the Jail dynamic loader and libraries while retaining the
+  GPU-requesting init container's live `/dev/nvidia*` devices. The shared
+  rootfs intentionally has no persistent GPU device nodes, so chrooting into
+  it caused every otherwise-valid target worker to crash-loop before `slurmd`.
 - Bound cxcli's protected-login capture dependency to the exact pinned
   `login_sshd` platform image. The upstream verifier now runs a restricted,
   read-only command-presence probe against the immutable `linux/amd64` digest
@@ -92,6 +97,10 @@ All notable changes to this chart are tracked here.
   `libcuda.so.1` / `libnvidia-ml.so.1` into the shared jail, and fails fast on
   conflicting GPU worker mounts or init-container names while leaving CPU
   NodeSets unchanged.
+- Added the chart-owned read-only `/sys` projection at
+  `/mnt/jail/sys-host` for GPU NodeSets so activated-Jail health checks can
+  validate the host PCI and InfiniBand topology instead of failing on a
+  missing `/sys-host/bus/pci` path.
 - Made the `cxcli-gpu-driver-jail` init guard avoid GPU inventory before the
   GPU-requesting worker container starts. The guard still requires the host
   driver root, `nvidia-smi` binary, and real driver libraries, but GPU

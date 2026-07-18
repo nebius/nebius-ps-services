@@ -48,6 +48,7 @@ All run artifacts are private local state under
           waves/WAVE-001.json
           tasks/WAVE-001/TASK-001.json
           assignments/WAVE-001/TASK-001.json
+          incoming-handoffs/WAVE-001/TASK-001.json
           results/WAVE-001/TASK-001.json
           journals/coordinator.jsonl
       worktrees/
@@ -126,7 +127,7 @@ bodies.
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
   "execution": {
-    "schema": "agentic-sdlc/execution-coordinator-v3",
+    "schema": "agentic-sdlc/execution-coordinator-v4",
     "feature_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -141,13 +142,19 @@ bodies.
 }
 ```
 
-Coordinator v3 binds the exact initialized folder through `git_root`,
+Coordinator v4 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
-Mutable task/result records use v2 and store only hashed worker session
-identity plus attempt count. Optional `execution/interop.json` uses
+Execution wave v2 enforces an active capacity-batch cursor. Mutable task v3
+records store append-only hashed worker-session history plus attempt count;
+assignment v2 binds an immutable `incoming-handoff-v1`, and result v3 carries
+an explicit summary, decisions, and open risks. Atomic private
+`execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
+one session identity across tasks. A private execution transition lock and
+expected-attempt recovery guard make each task ownership transfer exclusive.
+Optional `execution/interop.json` uses
 `agentic-sdlc/worktree-interop-v1` for a managed outer-worktree lease.
-Unfinished coordinator v1/v2 state fails with `WORKFLOW_UPGRADE_REQUIRED` and
-is not mutated.
+Every coordinator v1/v2/v3 record fails with `WORKFLOW_UPGRADE_REQUIRED` and is
+not mutated, including completed records.
 
 ## Minimum checkpoint
 
@@ -208,12 +215,12 @@ without conversation history.
 }
 ```
 
-State version 3 is the only writable execution schema. If an unfinished
+Execution coordinator v4 is the only supported execution schema. If an
 `agentic-sdlc/execution-coordinator-v1` or
-`agentic-sdlc/execution-coordinator-v2` record exists, stop with
+`agentic-sdlc/execution-coordinator-v2` or
+`agentic-sdlc/execution-coordinator-v3` record exists, stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate its
-resources. Completed v1 or v2 run history may still be read as historical
-evidence.
+resources. This applies to completed records; there is no legacy read path.
 
 `checkpoints/latest.json` points to the newest complete checkpoint:
 

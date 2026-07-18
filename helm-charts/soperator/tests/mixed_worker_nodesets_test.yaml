@@ -128,6 +128,17 @@ tests:
                 type: ""
         documentIndex: 1
       - equal:
+          path: spec.slurmd.volumes.customVolumeMounts[4]
+          value:
+            name: gpu-health-sysfs
+            mountPath: /mnt/jail/sys-host
+            readOnly: true
+            volumeSource:
+              hostPath:
+                path: /sys
+                type: Directory
+        documentIndex: 1
+      - equal:
           path: spec.customInitContainers[0].name
           value: cxcli-slurm-config-jail
         documentIndex: 1
@@ -188,6 +199,18 @@ tests:
       - matchRegex:
           path: spec.customInitContainers[1].args[0]
           pattern: 'validated cxcli NVIDIA driver evidence without modifying the shared jail'
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'jail_loader="\$\{jail\}/lib64/ld-linux-x86-64.so.2"'
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: '--library-path "\$\{jailed_library_path\}" "\$\{jail\}/usr/bin/nvidia-smi" -L'
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'chroot "\$\{jail\}" /usr/bin/nvidia-smi -L'
         documentIndex: 1
       - notMatchRegex:
           path: spec.customInitContainers[1].args[0]

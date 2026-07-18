@@ -51,11 +51,18 @@ Validate the full product, not just individual features, before PR creation.
 - Use `assets/templates/uat-report.md.template` for the report.
 - Build a UAT matrix from acceptance criteria.
 - Select GUI, TUI, API, service, or mixed harness.
+- When a UAT matrix row declares `computer-use`, route the GUI journey through
+  `sdlc-gui-test` with that exact harness and the declared browser. Browser or
+  Playwright evidence cannot substitute. Require fresh accessibility state
+  after each action and record an ordered action/observation ledger.
 - Use the Live Experiment Environment only when it is marked provided, has
   explicit non-production or disposable confirmation, and the UAT actions fit
   the recorded allowed operations and reset process. If unavailable or unsafe,
   classify the blocker instead of improvising against production.
 - Run end-to-end user journeys and negative criteria.
+- For data-backed GUI journeys, use an independent API, database, or service
+  oracle when required by the acceptance plan; screenshots alone are not PASS
+  evidence.
 - Validate cross-feature interactions.
 - Record evidence and classify failures.
 
@@ -91,6 +98,8 @@ Validate the full product, not just individual features, before PR creation.
 - All P0 acceptance criteria pass or blockers are classified.
 - Cross-feature flows pass.
 - Product is ready for `create-pr` only on pass.
+- Every constrained GUI row records the actual harness, browser, ordered
+  actions, checkpoints, independent oracle, and cleanup/retention result.
 
 ## SDLC Invariants
 

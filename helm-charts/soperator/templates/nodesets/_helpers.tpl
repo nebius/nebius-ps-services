@@ -168,6 +168,17 @@ IfNotPresent
       type: ""
 {{- end -}}
 
+{{/* Read-only host sysfs projection required by GPU/InfiniBand health checks in the jail. */}}
+{{- define "nodesets.gpuHealthSysfsJailMount" -}}
+- name: "gpu-health-sysfs"
+  mountPath: "/mnt/jail/sys-host"
+  readOnly: true
+  volumeSource:
+    hostPath:
+      path: "/sys"
+      type: "Directory"
+{{- end -}}
+
 {{/* Read-only init guard for the cxcli-populated NVIDIA driver contract. */}}
 {{- define "nodesets.gpuDriverJailInitContainer" -}}
 {{- $root := index . 0 -}}
@@ -323,8 +334,11 @@ IfNotPresent
         *) fail "jail linker cache is missing libnvidia-ml.so.1" ;;
       esac
 
-      jailed_gpu_output="$(env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-        chroot "${jail}" /usr/bin/nvidia-smi -L)" \
+      jail_loader="${jail}/lib64/ld-linux-x86-64.so.2"
+      [ -x "${jail_loader}" ] || fail "shared-jail dynamic loader is missing"
+      jailed_library_path="${jail_lib_dir}:${jail}/lib/${arch}-linux-gnu:${jail}/lib64:${jail}/usr/lib64"
+      jailed_gpu_output="$(env -i "${jail_loader}" \
+        --library-path "${jailed_library_path}" "${jail}/usr/bin/nvidia-smi" -L)" \
         || fail "jailed nvidia-smi -L failed"
       [ "$(printf '%s\n' "${jailed_gpu_output}" | grep -c '^GPU ')" -gt 0 ] \
         || fail "jailed nvidia-smi -L reported no GPUs"
