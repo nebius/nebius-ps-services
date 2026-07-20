@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Jail Rootfs Active/Passive Storage</title>
+  <desc id="desc">Replaceable Jail rootfs generations alternate between slot A and slot B while customer data remains on stable persistent mount PV and PVC views of the same physical Jail SFS. Managed clusters use paths under /mnt/jail-store; external first adoption creates slots below /mnt/jail/.cxcli/rootfs and retains legacy-rootfs only as a rootfs rollback source. The passive populate Job mounts only its destination rootfs PVC.</desc>
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow-navy" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#172554"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#15803d"/></marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#ea580c"/></marker>
+    <symbol id="folder" viewBox="0 0 96 76">
+      <path d="M8 20 H39 L48 30 H88 V68 H8 Z" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M8 20 V12 H37 L46 20" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="database" viewBox="0 0 72 82">
+      <ellipse cx="36" cy="14" rx="27" ry="10" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="3"/>
+      <path d="M9 14 V65 C9 71 21 76 36 76 C51 76 63 71 63 65 V14" fill="currentColor" fill-opacity="0.06" stroke="currentColor" stroke-width="3"/>
+      <path d="M9 38 C9 44 21 49 36 49 C51 49 63 44 63 38 M9 59 C9 65 21 70 36 70 C51 70 63 65 63 59" fill="none" stroke="currentColor" stroke-width="2"/>
+    </symbol>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 40px Inter, Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px Inter, Arial, sans-serif; fill: #475569; }
+      .panel { fill: #fff; stroke: #172554; stroke-width: 2.3; filter: url(#shadow); }
+      .panel-green { fill: #f8fff9; stroke: #166534; stroke-width: 2.3; filter: url(#shadow); }
+      .section { font: 700 18px Inter, Arial, sans-serif; fill: #172554; letter-spacing: .2px; }
+      .section-green { font: 700 18px Inter, Arial, sans-serif; fill: #166534; letter-spacing: .2px; }
+      .card { fill: #fff; stroke: #94a3b8; stroke-width: 1.7; }
+      .card-green { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.8; }
+      .card-blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.8; }
+      .card-orange { fill: #fff7ed; stroke: #f97316; stroke-width: 1.8; }
+      .label { font: 700 16px Inter, Arial, sans-serif; fill: #0f172a; }
+      .body { font: 500 13.5px Inter, Arial, sans-serif; fill: #334155; }
+      .small { font: 500 12px Inter, Arial, sans-serif; fill: #475569; }
+      .micro { font: 600 11px Inter, Arial, sans-serif; fill: #475569; }
+      .mono { font: 600 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #172554; }
+      .flow { fill: none; stroke: #172554; stroke-width: 2.5; marker-end: url(#arrow-navy); }
+      .flow-green { fill: none; stroke: #15803d; stroke-width: 2.5; marker-end: url(#arrow-green); }
+      .flow-orange { fill: none; stroke: #ea580c; stroke-width: 2.5; marker-end: url(#arrow-orange); }
+      .dash { stroke-dasharray: 7 5; }
+      .pill { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.3; }
+      .pill-blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.3; }
+      .pill-orange { fill: #fff7ed; stroke: #f97316; stroke-width: 1.3; }
+      .pill-text { font: 700 11.5px Inter, Arial, sans-serif; }
+      .banner { fill: #fff7ed; stroke: #f97316; stroke-width: 1.6; }
+      .banner-green { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.6; }
+      .banner-text { font: 700 14px Inter, Arial, sans-serif; }
+      .blue { color: #2563eb; }.green { color: #15803d; }.orange { color: #ea580c; }.slate { color: #64748b; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1536" height="1024"/>
+  <text class="title" x="768" y="50" text-anchor="middle">Jail Rootfs Active/Passive Storage</text>
+  <text class="subtitle" x="768" y="78" text-anchor="middle">Rootfs generations are replaceable; persistent customer data stays on stable mount PV/PVCs</text>
+
+  <rect class="panel" x="28" y="101" width="1480" height="315" rx="16"/>
+  <text class="section" x="58" y="133">ROOTFS GENERATION FLOW</text>
+  <text class="small" x="350" y="133">Managed starts on a slot; external first adoption begins on the legacy rootfs.</text>
+
+  <g>
+    <rect class="card-orange" x="59" y="158" width="280" height="171" rx="13"/>
+    <rect class="pill-orange" x="80" y="176" width="154" height="26" rx="13"/><text class="pill-text" x="157" y="193" text-anchor="middle" fill="#c2410c">EXTERNAL FIRST ADOPTION</text>
+    <use href="#database" x="76" y="213" width="58" height="66" class="orange"/>
+    <text class="label" x="151" y="232">legacy-rootfs</text>
+    <text class="body" x="151" y="255">active source before cutover</text>
+    <text class="small" x="80" y="302">Retained after cutover as rootfs rollback.</text>
+  </g>
+
+  <path class="flow-orange" d="M349 244 H430"/>
+  <text class="micro" x="390" y="216" text-anchor="middle" fill="#c2410c">populate slot-b</text>
+  <text class="micro" x="390" y="232" text-anchor="middle" fill="#c2410c">verify + switch</text>
+
+  <g>
+    <rect class="card-green" x="440" y="158" width="280" height="171" rx="13"/>
+    <rect class="pill" x="462" y="176" width="144" height="26" rx="13"/><text class="pill-text" x="534" y="193" text-anchor="middle" fill="#166534">FIRST SLOT ACTIVE</text>
+    <use href="#folder" x="455" y="211" width="75" height="61" class="green"/>
+    <text class="label" x="544" y="232">slot-b</text>
+    <text class="body" x="544" y="255">target rootfs generation</text>
+    <text class="small" x="462" y="302">Exactly one rootfs source is mounted per consumer.</text>
+  </g>
+
+  <path class="flow" d="M730 244 H811"/>
+  <text class="micro" x="771" y="216" text-anchor="middle">populate inactive</text>
+  <text class="micro" x="771" y="232" text-anchor="middle">verify + switch</text>
+
+  <g>
+    <rect class="card-blue" x="821" y="158" width="280" height="171" rx="13"/>
+    <rect class="pill-blue" x="843" y="176" width="126" height="26" rx="13"/><text class="pill-text" x="906" y="193" text-anchor="middle" fill="#1d4ed8">NEXT ACTIVE</text>
+    <use href="#folder" x="836" y="211" width="75" height="61" class="blue"/>
+    <text class="label" x="925" y="232">slot-a</text>
+    <text class="body" x="925" y="255">next rootfs generation</text>
+    <text class="small" x="843" y="302">The previous slot becomes the rollback generation.</text>
+  </g>
+
+  <path class="flow" d="M1111 244 H1192"/>
+  <text class="micro" x="1152" y="216" text-anchor="middle">later upgrades</text>
+  <text class="micro" x="1152" y="232" text-anchor="middle">alternate slots</text>
+
+  <g>
+    <rect class="card" x="1202" y="158" width="275" height="171" rx="13"/>
+    <rect class="pill-blue" x="1224" y="176" width="112" height="26" rx="13"/><text class="pill-text" x="1280" y="193" text-anchor="middle" fill="#1d4ed8">THEN ACTIVE</text>
+    <use href="#folder" x="1217" y="211" width="75" height="61" class="blue"/>
+    <text class="label" x="1306" y="232">slot-b</text>
+    <text class="body" x="1306" y="255">subsequent generation</text>
+    <text class="small" x="1224" y="302">Repeat: B → A → B, with one active slot.</text>
+  </g>
+
+  <rect class="banner-green" x="59" y="348" width="1418" height="46" rx="12"/>
+  <text class="banner-text" x="768" y="376" text-anchor="middle" fill="#166534">Populate the inactive slot → verify its rootfs → rebind every consumer → keep the previous generation for rollback.</text>
+
+  <rect class="panel-green" x="28" y="438" width="1480" height="332" rx="16"/>
+  <text class="section-green" x="58" y="470">ONE PHYSICAL JAIL SFS · ONE RETAINED PV/PVC VIEW PER SLOT AND PERSISTENT PATH</text>
+
+  <g>
+    <rect class="card" x="58" y="492" width="445" height="170" rx="13"/>
+    <text class="label" x="80" y="520">Managed layout</text>
+    <text class="small" x="80" y="542">cxcli owns the store paths</text>
+    <use href="#folder" x="74" y="559" width="65" height="52" class="blue"/>
+    <text class="mono" x="150" y="576">/mnt/jail-store/rootfs/slot-a</text>
+    <text class="mono" x="150" y="600">/mnt/jail-store/rootfs/slot-b</text>
+    <text class="mono" x="80" y="635">/mnt/jail-store/shared/{home,data,scripts,models}</text>
+  </g>
+
+  <g>
+    <rect class="card" x="520" y="492" width="470" height="170" rx="13"/>
+    <text class="label" x="542" y="520">External first-adoption layout</text>
+    <text class="small" x="542" y="542">existing SFS stays in place</text>
+    <use href="#folder" x="536" y="559" width="65" height="52" class="blue"/>
+    <text class="mono" x="612" y="576">/mnt/jail/.cxcli/rootfs/slot-a</text>
+    <text class="mono" x="612" y="600">/mnt/jail/.cxcli/rootfs/slot-b</text>
+    <text class="mono" x="542" y="635">/mnt/jail/{home,data,scripts,models}</text>
+    <text class="micro" x="542" y="653">The legacy PVC stays retained and untouched.</text>
+  </g>
+
+  <g>
+    <rect class="card-green" x="1007" y="492" width="470" height="170" rx="13"/>
+    <text class="label" x="1029" y="520">Stable persistent mounts</text>
+    <use href="#database" x="1025" y="544" width="58" height="66" class="green"/>
+    <rect class="pill" x="1094" y="542" width="287" height="25" rx="12.5"/><text class="pill-text" x="1238" y="559" text-anchor="middle" fill="#166534">AUTOMATIC · /home /data /scripts /models</text>
+    <rect class="pill-blue" x="1094" y="576" width="326" height="25" rx="12.5"/><text class="pill-text" x="1257" y="593" text-anchor="middle" fill="#1d4ed8">DISCOVERED · existing submount / external NFS</text>
+    <rect class="pill-orange" x="1094" y="610" width="304" height="25" rx="12.5"/><text class="pill-text" x="1246" y="627" text-anchor="middle" fill="#c2410c">EXPLICIT · unmodeled paths, e.g. /checkpoints</text>
+    <text class="micro" x="1029" y="652">Missing automatic paths start empty and persist future writes.</text>
+  </g>
+
+  <path class="flow-green dash" d="M277 672 V704 H602"/>
+  <path class="flow-green dash" d="M755 672 V704 H935"/>
+  <path class="flow-green dash" d="M1242 672 V704 H1011"/>
+  <rect class="banner-green" x="238" y="696" width="1060" height="51" rx="12"/>
+  <text class="banner-text" x="768" y="718" text-anchor="middle" fill="#166534">Persistent data is outside both replaceable slots.</text>
+  <text class="small" x="768" y="738" text-anchor="middle">One stable PV/PVC per persistent path mounts over the active rootfs; later slot refreshes do not recopy this data.</text>
+
+  <rect class="panel" x="28" y="792" width="725" height="138" rx="16"/>
+  <text class="section" x="56" y="824">ACTIVE CONSUMERS</text>
+  <rect class="pill-blue" x="56" y="845" width="104" height="29" rx="14.5"/><text class="pill-text" x="108" y="864" text-anchor="middle" fill="#1d4ed8">controller</text>
+  <rect class="pill-blue" x="172" y="845" width="82" height="29" rx="14.5"/><text class="pill-text" x="213" y="864" text-anchor="middle" fill="#1d4ed8">login</text>
+  <rect class="pill-blue" x="266" y="845" width="134" height="29" rx="14.5"/><text class="pill-text" x="333" y="864" text-anchor="middle" fill="#1d4ed8">REST / SConfig</text>
+  <rect class="pill-blue" x="412" y="845" width="128" height="29" rx="14.5"/><text class="pill-text" x="476" y="864" text-anchor="middle" fill="#1d4ed8">every worker</text>
+  <text class="body" x="56" y="896"><tspan x="56">Switching rolls consumers, so old- and new-root Pods may briefly coexist.</tspan><tspan x="56" dy="20">Each individual Pod mounts exactly one rootfs plus the declared persistent mounts.</tspan></text>
+
+  <rect class="panel" x="770" y="792" width="738" height="138" rx="16"/>
+  <text class="section" x="798" y="824">ROLLBACK BOUNDARY</text>
+  <text class="body" x="798" y="854"><tspan x="798">Retained legacy-rootfs preserves the old rootfs source only.</tspan><tspan x="798" dy="21">For explicitly relocated writable data, rollback must mount the current</tspan><tspan x="798" dy="21">persistent PV/PVCs—or cxcli must reject that rollback path.</tspan></text>
+
+  <rect class="banner" x="28" y="950" width="1480" height="50" rx="13"/>
+  <path d="M55 986 L69 960 L83 986 Z" fill="#ea580c"/><rect x="67.5" y="968" width="3" height="10" rx="1.5" fill="#fff"/><circle cx="69" cy="982" r="1.8" fill="#fff"/>
+  <text class="banner-text" x="789" y="980" text-anchor="middle" fill="#c2410c">The passive populate Job mounts only its destination rootfs PVC—never a persistent-mount PVC.</text>
+</svg>

@@ -2295,6 +2295,29 @@ Schema v5 supports two explicit compute migration modes:
   customers need not create a full duplicate fleet before beginning the
   incremental source-to-target exchange.
 
+### In-place upgrade workflow
+
+The in-place diagram shows how cxcli establishes controller and login
+continuity, prepares and verifies the passive Jail rootfs slot, and only then
+updates the same accepted service and worker node groups under the Slurm-clear
+and provider gates.
+
+![Soperator in-place upgrade workflow from protected source state through controller bridge, Jail handoff, same-group rollout, and final validation](docs/soperator-in-place-upgrade-workflow.png)
+
+[Editable in-place workflow SVG source](docs/soperator-in-place-upgrade-workflow.svg)
+
+### Blue-green upgrade workflow
+
+The blue-green diagram shows how cxcli keeps source node-group templates
+immutable, creates target-version capacity beside them, transfers controller
+authority to the target, and then completes the Jail handoff. Source groups
+are retired independently only after their workload, accounting,
+login-session, and final health gates pass.
+
+![Soperator blue-green upgrade workflow from retained source groups through controller bridge, target activation, Jail handoff, and source retirement](docs/soperator-blue-green-upgrade-workflow.png)
+
+[Editable blue-green workflow SVG source](docs/soperator-blue-green-upgrade-workflow.svg)
+
 Both external modes use `external isolated bridge: temporary node groups`:
 two temporary one-node CPU controller bridge groups and a two-replica login
 gateway. New SSH connections use the gateway while protected
@@ -2303,8 +2326,9 @@ while slot A is retained; workers, login, and controllers must converge on slot
 B before slot A or temporary continuity resources can be retired. Service-role
 groups remain serial, use an unlimited provider drain timeout, and re-run the
 slot-B consumer, persistent-mount, controller-bridge, and login-gateway gates
-after every replacement; controllers remain last. The bridge locks the target
-Slurm controller image to an OCI digest from an explicit
+after every replacement. The accepted service order is `login`, `accounting`,
+`controller`, then `system`; workers follow under their job-clear gates. The
+bridge locks the target Slurm controller image to an OCI digest from an explicit
 `values.images.slurmctld` override or the committed target Soperator release
 profile, so onboarding-generated override-only values do not leave the bridge
 image ambiguous. cxcli establishes bridge namespaces before namespaced
@@ -2327,7 +2351,13 @@ campaign image lock; container runtimes may report either representation, and
 no other digest is accepted. A recreated retry Pod is accepted only after the
 previous UID and node have an exact checkpointed runtime-fence proof.
 
-![Controller bridge and login gateway continuity during Jail handoff](docs/soperator-controller-bridge-login-gateway-continuity.png)
+The controller diagram traces single-writer authority from the source
+singleton through source- and target-version HA bridge states to the final
+target singleton, including the bounded RPC gap and cleanup order.
+
+![Controller bridge HA continuity from source singleton through target singleton](docs/soperator-controller-bridge-ha-continuity.png)
+
+[Editable controller-bridge SVG source](docs/soperator-controller-bridge-ha-continuity.svg)
 
 A Slurm controller major-version change restarts both HA controllers together;
 running allocations continue on `slurmd`, but controller RPCs have a bounded
@@ -4022,6 +4052,14 @@ Important external upgrade flags:
   `--authorize-login-timeout-continuation <fingerprint>`, bound to that exact
   socket fingerprint and absence epoch. Explicit persistent-path copies
   that require a login writer hold remain pending under the same contract.
+
+  The login diagram separates connection lifetimes: established SSH remains on
+  its exact source Pod, while new SSH uses the stable Login Service and a Ready
+  target backend.
+
+  ![Login node continuity for established and fresh SSH connections](docs/soperator-login-node-continuity.png)
+
+  [Editable login-continuity SVG source](docs/soperator-login-node-continuity.svg)
 - Target Helm source fencing captures the source `NodeSet` UID set once and
   reuses it on every resume. Mixed discovery after the target chart starts
   cannot add target-created `NodeSet` children to the immutable source closure.
@@ -4724,7 +4762,13 @@ contains two logical rootfs slots plus stable persistent-mount directories:
 - the persistent directories: customer-owned paths such as `/home`, `/data`,
   `/scripts`, or `/models` that must survive rootfs replacement.
 
+The Jail storage diagram separates replaceable rootfs generations from stable
+persistent overlays and calls out the first-adoption, consumer-switch, and
+rollback boundaries.
+
 ![Active/passive Jail rootfs slots sharing stable persistent mounts](docs/jail-rootfs-active-passive-storage.png)
+
+[Editable SVG source](docs/jail-rootfs-active-passive-storage.svg)
 
 Slot images may contain mount-point directories or image-provided scaffolding at
 these paths, but persistent customer data lives only in disjoint backing
@@ -5077,13 +5121,6 @@ the chart creates it at its stable `/mnt/jail/<path>` location and the readiness
 gate proves it is a real directory before switch-over. It remains empty until
 users write data there. The old legacy rootfs remains untouched for rollback
 until an explicit cleanup policy is added.
-
-![Soperator Jail Upgrade rootfs workflow with two controller pods and two example worker pods](docs/jail-upgrade-workflow.png)
-
-The diagram uses two controller pods and two example worker pods for
-readability. The worker pair is illustrative: the rootfs handoff still applies
-to every configured worker NodeSet and to enabled REST and SConfigController
-workloads.
 
 ### Soperator Slurm Scheduling And Command Examples
 

@@ -14,6 +14,7 @@ $CODEX_HOME/
 |-- config.toml
 |-- hooks.json
 |-- hooks/
+|   |-- global_context_state.py
 |   |-- session_start_context.py
 |   |-- user_prompt_context.py
 |   `-- global_context_policy.json  # optional local opt-in
@@ -66,8 +67,9 @@ global file.
   the `global-context-management` skill.
 - Read the durable task-state file injected by global hooks at task start,
   resume, or after compaction when prior context may matter. Update it with
-  concise checkpoints, and do not create repo-local task-state files unless
-  explicitly requested.
+  concise checkpoints. Hooks may create only an empty private scaffold at
+  compaction or the first complex prompt; the parent owns semantic content.
+  Do not create repo-local task-state files unless explicitly requested.
 - If hooks suggest same-workspace prior task-state candidate paths, read only
   candidates that appear relevant to the current task, treat them as stale
   hints, and verify against current repo or runtime evidence.
@@ -207,6 +209,7 @@ from pathlib import Path
 
 codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
 for path in (
+    codex_home / "hooks/global_context_state.py",
     codex_home / "hooks/session_start_context.py",
     codex_home / "hooks/user_prompt_context.py",
 ):
@@ -232,9 +235,9 @@ injected task-state path appears. Treat runtime activation as unverified until
 observed in the target Codex surface.
 
 For persistence, also confirm any installed PreToolUse write guard allows
-agent edits under `$CODEX_HOME/task-state`. The global-context hooks only
-advertise or reuse the session-scoped `current.md`; the parent agent creates
-and updates that file when continuity is useful. Keep broader runtime paths
+agent edits under `$CODEX_HOME/task-state`. Normal startup stays lazy;
+compaction and the first complex prompt create only an empty private scaffold.
+The parent agent writes and updates all semantic content. Keep broader runtime paths
 such as `$CODEX_HOME/hooks` protected unless the user deliberately syncs hook
 sources.
 Treat existing `current.md` files as compact rolling summaries: replace stale
@@ -246,10 +249,8 @@ bucket. It must not inject the contents of those files. Treat candidate paths
 as optional stale context to inspect only when relevant; the current session's
 advertised `current.md` remains the write target.
 
-Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values should not create task-state files or directories. They
-validate hook path calculation and prompt-time hints, not active persistent
-model state. Prefer
+Do not run complex synthetic hook probes against a live `$CODEX_HOME`; the
+first complex prompt intentionally creates an empty scaffold. Prefer
 `scripts/validate-local-templates.py` for hook-unit validation because it uses
 disposable temporary homes. If a hook payload has no `session_id`, task state is
 unavailable and no manual or legacy fallback path is created.

@@ -74,8 +74,9 @@
 
 - Read the durable task-state file injected by global hooks at task start,
   resume, or after compaction when prior context may matter. Update it with
-  concise checkpoints, and do not create repo-local task-state files unless
-  explicitly requested.
+  concise checkpoints. Hooks may create only an empty private scaffold at
+  compaction or the first complex prompt; the parent owns semantic content.
+  Do not create repo-local task-state files unless explicitly requested.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment

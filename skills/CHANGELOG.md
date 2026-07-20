@@ -25,6 +25,27 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added a shared global-context task-state helper with collision-resistant
+  session paths, private empty-scaffold initialization, read-only nested
+  permission auditing, and an explicit content-preserving permission repair.
+  Added `install-skills.sh --refresh-hook-registrations` for targeted replacement
+  of a differing registration with the same event/script and identical handler
+  list while preserving unrelated `hooks.json` content.
+- Added the implicitly invokable `troubleshoot` skill for controlled causal
+  investigation and repair across application code, shell scripts, CI,
+  installed software, services, containers, networks, storage, and
+  infrastructure. The workflow preserves a stable failure contract, separates
+  incident stabilization from diagnosis, maintains competing hypotheses and
+  discriminating experiments, localizes the earliest divergence, requires
+  causal proof before closure, and applies the narrowest durable repair. It
+  permits bounded reversible live changes only in confirmed non-production,
+  keeps production and unconfirmed targets read-only without exact approval,
+  and requires action-specific authorization for destructive, credential,
+  IAM, data, public-exposure, deletion, material-cost, and
+  material-availability changes. Bundled Python helpers collect sanitized local
+  evidence, measure repeated-command behavior and signature clusters, and
+  compare known-good and known-bad snapshots with deterministic tests and
+  process/trigger evaluation cases.
 - Added the explicit-only `task-implementer-test` verifier with a no-flag
   lightweight Task Implementer contract and temporary-fixture profile plus
   opt-in `--create`, `--create --keep`, and idempotent `--destroy` modes for one
@@ -247,6 +268,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Changed global-context task-state lifecycle ownership: normal startup remains
+  lazy, compaction and the first complex prompt create only an empty `0600`
+  scaffold below `0700` directories, and the parent agent remains responsible
+  for the semantic rolling summary. Unsafe, overlong, dot, and dot-dot session
+  IDs now use collision-resistant derived segments, and managed symlink paths
+  fail closed.
 - Updated `design` to delegate undecided or reconsidered application-stack and
   layer technology choices to `app-stack`, including frontend, API, backend,
   data, asynchronous-work, deployment, and observability decisions, while

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+  <title id="title">Soperator Login Node Continuity</title>
+  <desc id="desc">The exact client-facing Login Service identity and load-balancer allocation are preserved. Established SSH sessions remain bound to their original source Pods and nodes, independently of the client route, while fresh connections enter the preserved Service and its UID-owned EndpointSlices route them to an eligible Ready target Pod with the preserved host key. A disappeared socket remains indeterminate until the operator acknowledges voluntary exit or explicitly authorizes continuation after a confirmed timeout. Releasing the exact source-session hold unblocks final Slurm partition restoration.</desc>
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/></filter>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#15803d"/></marker>
+    <symbol id="login-pod" viewBox="0 0 130 62">
+      <rect x="3" y="5" width="124" height="52" rx="10" fill="#fff" stroke="currentColor" stroke-width="3"/>
+      <path d="M82 16 L94 23 L94 38 L82 45 L70 38 L70 23 Z" fill="currentColor" fill-opacity="0.12" stroke="currentColor" stroke-width="2"/>
+      <path d="M82 16 V30 M70 23 L82 30 L94 23 M82 30 V45" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <rect x="102" y="19" width="18" height="24" rx="4" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.7"/>
+      <path d="M106 31 L110 35 L116 27" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="service" viewBox="0 0 112 80">
+      <circle cx="56" cy="17" r="8" fill="#fff" stroke="currentColor" stroke-width="3"/><circle cx="24" cy="61" r="8" fill="#fff" stroke="currentColor" stroke-width="3"/><circle cx="88" cy="61" r="8" fill="#fff" stroke="currentColor" stroke-width="3"/>
+      <path d="M52 24 L29 54 M60 24 L83 54 M32 61 H80" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="terminal" viewBox="0 0 90 66"><rect x="5" y="6" width="80" height="54" rx="7" fill="#fff" stroke="currentColor" stroke-width="3"/><path d="M18 23 L28 33 L18 43 M36 43 H58" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="user" viewBox="0 0 54 66"><circle cx="27" cy="16" r="11" fill="#fff" stroke="currentColor" stroke-width="3"/><path d="M7 58 V49 C7 37 15 31 27 31 C39 31 47 37 47 49 V58 Z" fill="#fff" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></symbol>
+    <symbol id="lock" viewBox="0 0 58 70"><rect x="8" y="30" width="42" height="32" rx="6" fill="#fff" stroke="currentColor" stroke-width="3"/><path d="M17 30 V21 C17 9 24 5 29 5 C34 5 41 9 41 21 V30" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="29" cy="45" r="4" fill="currentColor"/><path d="M29 49 V55" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
+    <style>
+      .bg { fill: #f8fafc; }.title { font: 700 40px Inter, Arial, sans-serif; fill: #0f172a; }.subtitle { font: 500 16px Inter, Arial, sans-serif; fill: #475569; }
+      .panel { fill: #fff; stroke: #172554; stroke-width: 2.4; filter: url(#shadow); }.rail { fill: #172554; }.rail-title { font: 700 23px Inter, Arial, sans-serif; fill: #fff; }.rail-sub { font: 500 13px Inter, Arial, sans-serif; fill: #cbd5e1; }
+      .section { font: 700 15px Inter, Arial, sans-serif; letter-spacing: .3px; }.node-label { font: 700 14px Inter, Arial, sans-serif; fill: #0f172a; }.node-sub { font: 500 12px Inter, Arial, sans-serif; fill: #475569; }.micro { font: 600 11px Inter, Arial, sans-serif; fill: #475569; }
+      .route { fill: none; stroke: #15803d; stroke-width: 2.7; marker-end: url(#arrow-green); }.service-route { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 5 4; }
+      .card { fill: #fff; stroke: #cbd5e1; stroke-width: 1.8; filter: url(#shadow); }.card-title { font: 700 15px Inter, Arial, sans-serif; fill: #0f172a; }.card-body { font: 500 12.5px Inter, Arial, sans-serif; fill: #334155; }.card-num { font: 700 17px Inter, Arial, sans-serif; fill: #fff; }
+      .pill { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.4; }.pill-warn { fill: #fff7ed; stroke: #f97316; stroke-width: 1.4; }.pill-text { font: 700 11.5px Inter, Arial, sans-serif; }
+      .banner { fill: #fff1f2; stroke: #dc2626; stroke-width: 1.6; }.banner-text { font: 700 15px Inter, Arial, sans-serif; fill: #b91c1c; }
+      .blue { color: #2563eb; }.green { color: #15803d; }.navy { color: #172554; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="760"/>
+  <text class="title" x="800" y="50" text-anchor="middle">Soperator Login Node Continuity</text>
+  <text class="subtitle" x="800" y="78" text-anchor="middle">The client route stays stable; old and new SSH connections intentionally follow different Pod lifecycles</text>
+
+  <rect class="panel" x="28" y="100" width="1544" height="286" rx="16"/>
+  <rect class="rail" x="28" y="100" width="145" height="286" rx="16"/>
+  <text class="rail-title" x="100" y="160" text-anchor="middle">SSH</text><text class="rail-title" x="100" y="187" text-anchor="middle">continuity</text>
+  <text class="rail-sub" x="100" y="221" text-anchor="middle">stable route</text><text class="rail-sub" x="100" y="240" text-anchor="middle">exact transport</text>
+  <use href="#terminal" x="58" y="278" width="84" height="62" class="navy"/>
+
+  <text class="node-label" x="252" y="230" text-anchor="middle" fill="#166534">fresh SSH</text>
+  <use href="#user" x="188" y="249" width="46" height="58" class="green"/><use href="#terminal" x="240" y="249" width="70" height="52" class="green"/>
+  <path class="route" d="M310 280 H329"/>
+
+  <text class="section" x="411" y="130" text-anchor="middle" fill="#1d4ed8">PRESERVED LOGIN SERVICE</text>
+  <rect x="330" y="150" width="162" height="174" rx="13" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+  <text class="node-label" x="411" y="177" text-anchor="middle">Login Service</text><text class="micro" x="411" y="195" text-anchor="middle">same UID, address, allocation</text>
+  <use href="#service" x="363" y="207" width="96" height="69" class="blue"/>
+  <rect class="pill" x="349" y="286" width="124" height="25" rx="12.5"/><text class="pill-text" x="411" y="303" text-anchor="middle" fill="#166534">exact identity</text>
+
+  <text class="section" x="674" y="130" text-anchor="middle" fill="#1d4ed8">PROTECTED SOURCE POD(S)</text>
+  <use href="#login-pod" x="560" y="151" width="228" height="78" class="blue"/><text class="node-label" x="604" y="198">login-0</text>
+  <use href="#login-pod" x="560" y="257" width="228" height="78" class="blue"/><text class="node-label" x="604" y="304">login-1</text>
+
+  <use href="#user" x="810" y="151" width="46" height="58" class="navy"/><use href="#terminal" x="862" y="151" width="70" height="52" class="navy"/><use href="#lock" x="946" y="147" width="42" height="52" class="navy"/>
+  <path d="M788 188 H808 M856 180 H862 M932 180 H946" stroke="#172554" stroke-width="2.5"/>
+  <text class="node-label" x="907" y="227" text-anchor="middle">established SSH stays on its exact source Pod</text>
+  <text class="micro" x="907" y="246" text-anchor="middle">already-bound Pod, node, socket, sshd, shell and host keys remain unchanged</text>
+
+  <path class="route" d="M492 280 V350 H1115 V296 H1139"/>
+  <text class="node-label" x="820" y="374" text-anchor="middle" fill="#166534">preserved Service + UID-owned EndpointSlice → exact Ready target Pod</text>
+
+  <text class="section" x="1254" y="130" text-anchor="middle" fill="#166534">ELIGIBLE TARGET LOGIN PODS</text>
+  <use href="#login-pod" x="1140" y="151" width="228" height="78" class="green"/><text class="node-label" x="1184" y="198">login-0</text>
+  <use href="#login-pod" x="1140" y="257" width="228" height="78" class="green"/><text class="node-label" x="1184" y="304">login-1</text>
+  <text class="micro" x="1254" y="354" text-anchor="middle">in-place gate: 2 Ready replicas on distinct nodes</text>
+  <path d="M1368 188 H1376 V294 H1368" fill="none" stroke="#15803d" stroke-width="2"/>
+  <rect class="pill" x="1380" y="226" width="150" height="25" rx="12.5"/><text class="pill-text" x="1455" y="243" text-anchor="middle" fill="#166534">≥ 1 exact backend</text>
+
+  <g>
+    <rect class="card" x="30" y="412" width="296" height="210" rx="14"/><circle cx="57" cy="440" r="18" fill="#172554"/><text class="card-num" x="57" y="446" text-anchor="middle">1</text><text class="card-title" x="84" y="445">Bind the stable route</text>
+    <text class="card-body" x="48" y="476"><tspan x="48">Capture each client-facing Service UID, type,</tspan><tspan x="48" dy="19">ClusterIP, load-balancer address and Nebius</tspan><tspan x="48" dy="19">allocation. Reject ambiguous identity drift.</tspan></text>
+    <rect class="pill" x="48" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="178" y="596" text-anchor="middle" fill="#166534">Service identity preserved</text>
+
+    <rect class="card" x="341" y="412" width="296" height="210" rx="14"/><circle cx="368" cy="440" r="18" fill="#172554"/><text class="card-num" x="368" y="446" text-anchor="middle">2</text><text class="card-title" x="395" y="445">Protect exact source transport</text>
+    <text class="card-body" x="359" y="476"><tspan x="359">Hold every source Pod carrying a session and</tspan><tspan x="359" dy="19">bind Pod/node/workload/container identity,</tspan><tspan x="359" dy="19">socket, sshd, shell and SSH host keys.</tspan></text>
+    <rect class="pill" x="359" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="489" y="596" text-anchor="middle" fill="#166534">source deletion hold verified</text>
+
+    <rect class="card" x="652" y="412" width="296" height="210" rx="14"/><circle cx="679" cy="440" r="18" fill="#15803d"/><text class="card-num" x="679" y="446" text-anchor="middle">3</text><text class="card-title" x="706" y="445">Prove target readiness</text>
+    <text class="card-body" x="670" y="476"><tspan x="670">Require the exact target workload, provider</tspan><tspan x="670" dy="19">group, Kubernetes/image contract and preserved</tspan><tspan x="670" dy="19">host key. In-place needs two distinct nodes.</tspan></text>
+    <rect class="pill" x="670" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="800" y="596" text-anchor="middle" fill="#166534">target gateway Ready</text>
+
+    <rect class="card" x="963" y="412" width="296" height="210" rx="14"/><circle cx="990" cy="440" r="18" fill="#15803d"/><text class="card-num" x="990" y="446" text-anchor="middle">4</text><text class="card-title" x="1017" y="445">Route only new connections</text>
+    <text class="card-body" x="981" y="476"><tspan x="981">Every preserved non-headless Service must own</tspan><tspan x="981" dy="19">EndpointSlices that route to at least one exact</tspan><tspan x="981" dy="19">eligible Ready target Pod UID.</tspan></text>
+    <rect class="pill" x="981" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="1111" y="596" text-anchor="middle" fill="#166534">≥ 1 exact target backend</text>
+
+    <rect class="card" x="1274" y="412" width="296" height="210" rx="14"/><circle cx="1301" cy="440" r="18" fill="#ea580c"/><text class="card-num" x="1301" y="446" text-anchor="middle">5</text><text class="card-title" x="1328" y="445">Resolve, then release</text>
+    <text class="card-body" x="1292" y="476"><tspan x="1292">Keep live or reappeared sockets protected.</tspan><tspan x="1292" dy="19">For disappearance, require voluntary-exit ack</tspan><tspan x="1292" dy="19">or explicit timeout continuation; then release</tspan><tspan x="1292" dy="19">the exact source hold.</tspan></text>
+    <rect class="pill-warn" x="1292" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="1422" y="596" text-anchor="middle" fill="#c2410c">no automatic timeout</text>
+  </g>
+
+  <rect class="banner" x="30" y="646" width="1540" height="82" rx="14"/>
+  <path d="M58 665 L76 657 L94 665 V680 C94 693 85 701 76 705 C67 701 58 693 58 680 Z" fill="none" stroke="#dc2626" stroke-width="3"/><path d="M67 681 L73 687 L86 672" fill="none" stroke="#dc2626" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text class="banner-text" x="815" y="674" text-anchor="middle">Established TCP/SSH sessions never migrate between Pods and are never force-closed by cxcli.</text>
+  <text class="banner-text" x="815" y="697" text-anchor="middle">Socket disappearance is Indeterminate until voluntary exit is acknowledged or timeout continuation is explicitly authorized.</text>
+  <text class="banner-text" x="815" y="720" text-anchor="middle">Releasing the exact source-session hold unblocks final partition restoration; the stable Service and target backend remain.</text>
+</svg>

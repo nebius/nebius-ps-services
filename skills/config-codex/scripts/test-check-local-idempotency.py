@@ -374,6 +374,31 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "idempotency fixture test should not leave __pycache__ under config-codex",
         )
 
+    def test_nested_task_state_loose_modes_fail_without_mutation(self) -> None:
+        state_file = self.codex_home / "task-state/workspace/session/current.md"
+        state_file.parent.mkdir(parents=True)
+        state_file.write_text("preserve me\n", encoding="utf-8")
+        state_file.parent.chmod(0o755)
+        state_file.chmod(0o644)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("nested task-state permissions or types are unsafe", result.stdout)
+        self.assertEqual(state_file.read_text(encoding="utf-8"), "preserve me\n")
+        self.assertEqual(state_file.stat().st_mode & 0o777, 0o644)
+
+    def test_nested_task_state_private_tree_passes(self) -> None:
+        workspace = self.codex_home / "task-state/workspace"
+        session = workspace / "session"
+        session.mkdir(parents=True)
+        state_file = session / "current.md"
+        state_file.write_text("private\n", encoding="utf-8")
+        workspace.chmod(0o700)
+        session.chmod(0o700)
+        state_file.chmod(0o600)
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("nested task-state permissions and types are private", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

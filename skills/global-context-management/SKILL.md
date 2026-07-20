@@ -120,9 +120,12 @@ path is created when the hook payload has no session id. If no path is
 available, continue without durable task state rather than creating a manual or
 repo-local fallback.
 
-The hook only advertises or reuses the path; the parent creates and updates the
-file when continuity is useful. If a local PreToolUse write guard is installed,
-it must allow writes under
+Normal `SessionStart` only advertises or reuses the path. A `compact`
+`SessionStart`, or the first complex `UserPromptSubmit` for the session, creates
+an empty private scaffold with `0700` directories and a `0600` `current.md`.
+Hooks never copy prompt text into that scaffold. The parent owns all semantic
+content and rewrites the rolling summary when the task changes. If a local
+PreToolUse write guard is installed, it must allow writes under
 `$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
 runtime edits such as hook rewrites.
 
@@ -137,8 +140,8 @@ At task start, resume, or context transition, read existing task state when it
 may contain prior decisions, validation status, or next action. Keep
 `current.md` as a rolling summary, not an append-only log: retain only the
 objective, constraints, decisions, changed files, validation status, risks, and
-next action needed for continuation. Use `assets/task-state-template.md` only
-when a section template is helpful.
+next action needed for continuation. Keep it below 12 KiB when practical and
+use `assets/task-state-template.md` only when a section template is helpful.
 
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the

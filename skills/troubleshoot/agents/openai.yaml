@@ -1,0 +1,6 @@
+interface:
+  display_name: "Troubleshoot"
+  short_description: "Prove and fix complex failures"
+  default_prompt: "Use $troubleshoot to investigate this failure causally, apply the safest durable fix, and verify it end to end."
+policy:
+  allow_implicit_invocation: true

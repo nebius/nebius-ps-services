@@ -54,7 +54,7 @@ They should say, in effect:
 Here is the workspace root.
 Here is the durable task-state path.
 Here are bounded same-workspace prior task-state candidate paths, when relevant.
-Do not create task state from hooks.
+Create only an empty private scaffold at compaction or the first complex prompt.
 Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
 Keep the parent thread concise.
@@ -79,17 +79,15 @@ whether any candidate is relevant enough to read.
 
 ### Task-State Lifecycle
 
-Task-state files are useful only when Codex reads and updates them. The
-`SessionStart` hook injects the path without creating a missing `current.md`;
-the `UserPromptSubmit` hook only advertises or reuses the same path for complex
-prompts. Hooks do not create task-state files, SDLC run state, workflow state,
-or hidden state automatically active in the model forever.
-Synthetic complex-prompt hook probes that pass a made-up `session_id` against a
-live `$CODEX_HOME` should not create task-state files or directories. They
-validate hook path calculation and prompt-time hints only.
+Task-state files are useful only when Codex reads and updates them. Normal
+`SessionStart` startup advertises a missing path without creating it and secures
+an existing state file. `SessionStart` with `source=compact` and the first
+complex `UserPromptSubmit` create an empty scaffold with `0700` directories and
+a `0600` `current.md`. Hook scaffolding never contains prompt text or semantic
+task state, and hooks never create SDLC run state or workflow state.
 
-The parent agent creates or updates the advertised file when durable continuity
-is useful. Any local PreToolUse write guard must explicitly allow
+The parent agent writes and updates all semantic content in the advertised file
+when durable continuity is useful. Any local PreToolUse write guard must explicitly allow
 `$CODEX_HOME/task-state` writes; otherwise the hook can advertise a valid path
 that later edits cannot persist. That allowlist is separate from broader
 runtime files such as `$CODEX_HOME/hooks`, which should remain protected unless
@@ -292,8 +290,8 @@ installed.
 
 For a complex task, the intended flow is:
 
-1. Receive prompt and injected task-state path; hooks only advertise or reuse
-   an existing file and do not create task-state.
+1. Receive prompt and injected task-state path; hooks may create only an empty
+   private scaffold at compaction or the first complex prompt.
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
@@ -320,7 +318,7 @@ Before Codex starts working:
   "Here is the repo.
    Here is the task-state path.
    Here are likely related prior state paths, if any.
-   Advertise it for complex prompts; do not create it automatically.
+   Initialize an empty private scaffold for the first complex prompt.
    Read it when it already exists and prior context may matter.
    Use the global workflow for complex work."
 
@@ -385,8 +383,9 @@ Runtime hook activation is surface-dependent. Treat it as unverified until a
 fresh Codex session has loaded and trusted the hooks.
 
 The local template validator uses disposable Codex homes. It verifies hook path
-calculation, lazy SessionStart behavior, private task-state permissions
-including reuse-time permission repair, prompt-leak prevention, bounded
+calculation, lazy startup and compaction behavior, empty-scaffold creation,
+private task-state permissions including reuse-time permission repair,
+prompt-leak prevention, bounded
 same-workspace related task-state candidate discovery, no unrelated workspace
 candidate leakage, and that existing nonempty `current.md` files are preserved
 for the agent to read rather than overwritten or copied into hook context.

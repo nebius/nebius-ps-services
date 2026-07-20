@@ -91,6 +91,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
+| `troubleshoot` | Implicit allowed | Causally investigate and repair difficult code, shell, installed-software, service, container, network, storage, and infrastructure failures with evidence preservation, competing hypotheses, bounded live safety, and layered verification. |
 
 ### Agentic SDLC Workflow
 
@@ -853,8 +854,9 @@ finalizing when close controls are available, reporting any unavailable or
 failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
-`$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
-without creating missing state files and may suggest bounded same-workspace
+`$CODEX_HOME`. Normal startup advertises session-scoped task-state paths
+without creating missing state files; compaction and the first complex prompt
+create only an empty private scaffold. Prompt hooks may suggest bounded same-workspace
 prior task-state candidate paths for complex prompts without injecting their
 contents; an existing file is meant to be read at task start, resume, or after
 compaction when prior context may matter, then updated with concise decisions,
@@ -954,6 +956,17 @@ hardening `.sh` automation.
 repositories with reusable structure, state guidance, validation, security
 controls, examples, and CI expectations.
 
+### `troubleshoot`
+
+`troubleshoot` causally investigates difficult code, shell, CI, installed
+software, service, container, network, storage, and infrastructure failures.
+It preserves evidence, maintains competing hypotheses, runs discriminating
+experiments, proves the earliest causal divergence, applies the smallest
+durable repair, and verifies the original failure plus affected boundaries.
+Live mutations are bounded to confirmed non-production unless the user
+authorizes an exact production action; destructive and high-impact changes
+always require action-specific approval.
+
 ## Skills Installer
 
 `install-skills.sh` installs or updates skills into `~/.agents/skills` by
@@ -981,8 +994,8 @@ be removed with `--remove-skill` when they are not same-source managed.
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
-./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
+./install-skills.sh --install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
@@ -1002,7 +1015,9 @@ The `--install-all-hooks` option is also explicit, but discovers every reviewed
 hook-only `*/assets/hooks` directory under this source skills folder and syncs
 those payload files in one pass. It does not scan mixed `assets/` directories.
 With `--register-hooks`, it also merges each discovered bundle's registration
-manifest while preserving existing hook entries. Add `--replace-hooks-json`
+manifest while preserving existing hook entries. Add
+`--refresh-hook-registrations` to replace only differing registrations with the
+same event/script and an identical handler list. Add `--replace-hooks-json`
 only when you intentionally want to back up and replace `hooks.json` with a
 clean file built from the selected source manifests. Hook install modes are
 idempotent: unchanged files are not recopied, hook file provenance is recorded,

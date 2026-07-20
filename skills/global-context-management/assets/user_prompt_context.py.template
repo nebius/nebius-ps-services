@@ -3,13 +3,21 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import subprocess
+import stat
 import sys
+
+from global_context_state import (
+    TaskStateError,
+    codex_home,
+    prepare_state_file,
+    resolve_root,
+    state_file_for_payload,
+    workspace_state_dir,
+)
 
 try:
     import tomllib
@@ -135,65 +143,6 @@ def looks_complex(prompt: str) -> bool:
     return len(prompt) >= 300 or any(keyword in lower for keyword in COMPLEX_KEYWORDS)
 
 
-def resolve_root(cwd: str) -> str:
-    cwd = os.path.abspath(cwd)
-
-    try:
-        root = subprocess.check_output(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        root = ""
-
-    return os.path.abspath(root or cwd)
-
-
-def safe_segment(value: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
-    return safe[:80]
-
-
-def chmod_private(path: Path, mode: int) -> None:
-    try:
-        path.chmod(mode)
-    except OSError:
-        pass
-
-
-def codex_home() -> Path:
-    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-
-
-def workspace_state_dir(root: str, home: Path) -> Path:
-    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
-    workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
-    return home / "task-state" / f"{workspace_name}-{workspace_hash}"
-
-
-def state_file_for_payload(root: str, payload: dict) -> Path | None:
-    home = codex_home()
-
-    session_id = payload.get("session_id")
-    if not session_id:
-        return None
-    session_segment = safe_segment(str(session_id))
-    if not session_segment:
-        return None
-
-    state_dir = workspace_state_dir(root, home) / session_segment
-
-    state_file = state_dir / "current.md"
-    if state_file.exists():
-        chmod_private(home / "task-state", 0o700)
-        chmod_private(state_dir.parent, 0o700)
-        chmod_private(state_dir, 0o700)
-        chmod_private(state_file, 0o600)
-
-    return state_file
-
-
 def prompt_terms(text: str) -> set[str]:
     terms: list[str] = []
     seen: set[str] = set()
@@ -220,6 +169,8 @@ def is_continuation_prompt(prompt: str) -> bool:
 
 def read_state_sample(path: Path) -> str:
     try:
+        if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+            return ""
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             return handle.read(MAX_RELATED_STATE_SCAN_BYTES)
     except OSError:
@@ -234,10 +185,16 @@ def related_task_state_candidates(
     home: Path,
 ) -> list[Path]:
     workspace_dir = workspace_state_dir(root, home)
-    if not workspace_dir.exists():
+    try:
+        if workspace_dir.is_symlink() or not stat.S_ISDIR(
+            workspace_dir.lstat().st_mode
+        ):
+            return []
+        workspace_root = workspace_dir.resolve(strict=True)
+    except OSError:
         return []
 
-    current_state = state_file_for_payload(root, payload)
+    current_state = state_file_for_payload(root, payload, home)
     prompt_words = prompt_terms(prompt)
     continuation_prompt = is_continuation_prompt(prompt)
     if not prompt_words:
@@ -245,11 +202,19 @@ def related_task_state_candidates(
 
     candidates: list[tuple[int, float, Path]] = []
     try:
-        paths = sorted(
-            workspace_dir.glob("*/current.md"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
+        paths = []
+        for session_dir in workspace_dir.iterdir():
+            if session_dir.is_symlink() or not stat.S_ISDIR(
+                session_dir.lstat().st_mode
+            ):
+                continue
+            state_path = session_dir / "current.md"
+            if state_path.is_symlink() or not stat.S_ISREG(state_path.lstat().st_mode):
+                continue
+            if not state_path.resolve(strict=True).is_relative_to(workspace_root):
+                continue
+            paths.append(state_path)
+        paths.sort(key=lambda item: item.lstat().st_mtime, reverse=True)
     except OSError:
         return []
 
@@ -261,11 +226,10 @@ def related_task_state_candidates(
             except OSError:
                 if path == current_state:
                     continue
-        if not path.is_file():
-            continue
-
         try:
-            mtime = path.stat().st_mtime
+            if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+                continue
+            mtime = path.lstat().st_mtime
         except OSError:
             continue
 
@@ -491,8 +455,8 @@ def main() -> int:
 
     cwd = payload.get("cwd") or os.getcwd()
     root = resolve_root(cwd)
-    state_file = state_file_for_payload(root, payload)
     home = codex_home()
+    state_file = state_file_for_payload(root, payload, home)
     if state_file is None:
         task_state_context = """Durable task-state file: unavailable (hook payload missing session_id)
 
@@ -500,21 +464,36 @@ No session-scoped task-state path is available for this prompt. Continue without
 creating a manual fallback path or repo-local state file.
 """
     else:
-        state_note = (
-            "An existing task-state file is available; read it when this prompt "
-            "is a continuation or prior decisions may matter."
-            if state_file.exists()
-            else "This hook only advertises the path; it does not create task-state, SDLC run state, or workflow state."
-        )
-        task_state_context = f"""Durable task-state file: `{state_file}`
+        try:
+            state_status = prepare_state_file(state_file, home=home, create=True)
+        except (TaskStateError, OSError):
+            task_state_context = """Durable task-state file: unavailable (private initialization failed)
+
+Continue without durable task state for this prompt. Do not create a manual
+fallback path or repo-local state file.
+"""
+            state_file = None
+        else:
+            state_note = (
+                "An empty private task-state scaffold was initialized. Replace it "
+                "with a concise rolling summary after initial exploration."
+                if state_status == "created"
+                else "An existing private task-state file is available; read it when this prompt is a continuation or prior decisions may matter."
+            )
+            task_state_context = f"""Durable task-state file: `{state_file}`
 
 {state_note}
 """
 
+    related_context = (
+        related_task_state_context(root, payload, prompt, home)
+        if state_file is not None
+        else ""
+    )
     context = f"""Global context hint for a complex prompt.
 
 {task_state_context}
-{related_task_state_context(root, payload, prompt, home)}
+{related_context}
 Keep raw exploration output out of parent context. Use read-only subagents when
 the prompt or local policy request authorizes delegation, tools are exposed,
 and active instructions permit it.

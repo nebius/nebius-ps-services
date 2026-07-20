@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage: ./install-skills.sh [source] [destination_dir]
 #        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
-#        ./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
+#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
+#        ./install-skills.sh --install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
 #        ./install-skills.sh --help
 # No-argument install: source is this script's directory and destination is
 # ~/.agents/skills. --remove-skill without a destination removes from the same
@@ -96,8 +96,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--replace-hooks-json]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--help${S_RESET}"
   printf '\n'
 
@@ -129,6 +129,9 @@ show_usage() {
   printf '%b\n' "                           source skills folder."
   printf '%b\n' "  ${S_YELLOW}--register-hooks${S_RESET}        With a hook install mode, merge selected source manifest(s)"
   printf '%b\n' "                           into ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks.json${S_RESET}."
+  printf '%b\n' "  ${S_YELLOW}--refresh-hook-registrations${S_RESET}"
+  printf '%b\n' "                           With ${S_CYAN}--register-hooks${S_RESET}, replace only differing registrations"
+  printf '%b\n' "                           for the same event/script when the handler list is identical."
   printf '%b\n' "  ${S_YELLOW}--replace-hooks-json${S_RESET}    With ${S_CYAN}--register-hooks${S_RESET}, replace hooks.json with a clean"
   printf '%b\n' "                           file built only from selected source manifest(s)."
   printf '\n'
@@ -149,6 +152,7 @@ show_usage() {
   printf '%b\n' "  ${S_DIM}# Sync reviewed hook payload files. Add --register-hooks to update hooks.json.${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks sdlc-start/assets/hooks${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks --refresh-hook-registrations${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks${S_RESET}"
   printf '\n'
   printf '%b\n' "  ${S_DIM}# Rebuild hooks.json only from the selected reviewed hook manifests.${S_RESET}"
@@ -177,6 +181,8 @@ show_usage() {
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preflights ${S_CYAN}hooks.json${S_RESET}, preserves existing entries,"
   printf '%b\n' "    and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
+  printf '%b\n' "  - ${S_CYAN}--refresh-hook-registrations${S_RESET} explicitly replaces only a differing registration"
+  printf '%b\n' "    with the same event/script and identical handler list, preserving unrelated entries."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with"
   printf '%b\n' "    selected source entries."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET}"
@@ -992,6 +998,7 @@ HOOK_REGISTRATION_PREFLIGHT=0
 register_hooks_manifests() {
   local codex_home="$1"
   local replace_hooks_json="$2"
+  local refresh_hook_registrations="$3"
   local hook_src=""
   local source_label=""
   local manifest_src=""
@@ -999,7 +1006,7 @@ register_hooks_manifests() {
   local status_file="${HOOK_REGISTRATION_STATUS_FILE:-}"
   local preflight="${HOOK_REGISTRATION_PREFLIGHT:-0}"
 
-  shift 2
+  shift 3
   require_command "python3" "for hooks.json registration"
 
   for hook_src in "$@"; do
@@ -1012,7 +1019,7 @@ register_hooks_manifests() {
     manifest_args+=("${source_label}" "${manifest_src}")
   done
 
-  python3 - "${codex_home}" "${replace_hooks_json}" "${status_file}" "${preflight}" "${manifest_args[@]}" <<'PY'
+  python3 - "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${status_file}" "${preflight}" "${manifest_args[@]}" <<'PY'
 import json
 import os
 import re
@@ -1157,9 +1164,10 @@ def existing_script_index(
 
 codex_home = Path(sys.argv[1]).expanduser()
 replace_hooks_json = sys.argv[2] == "1"
-status_file = sys.argv[3]
-preflight_only = sys.argv[4] == "1"
-manifest_args = sys.argv[5:]
+refresh_hook_registrations = sys.argv[3] == "1"
+status_file = sys.argv[4]
+preflight_only = sys.argv[5] == "1"
+manifest_args = sys.argv[6:]
 if len(manifest_args) % 2 != 0:
     fail("internal error: hook registration source arguments must be label/path pairs")
 source_manifests = [
@@ -1199,6 +1207,7 @@ existing_valid = False
 existing_count = 0
 had_existing = hooks_json.exists()
 added = 0
+refreshed = 0
 unchanged_entries = 0
 registration_statuses: list[tuple[str, str, str]] = []
 
@@ -1239,17 +1248,46 @@ else:
                     unchanged_entries += 1
                     registration_statuses.append((source_label, "unchanged", label))
                     continue
-                for script_name in entry_python_script_names(entry):
-                    existing_entry = target_script_entries.get((event_name, script_name))
-                    if existing_entry is not None:
+                conflicts = {
+                    id(existing_entry): existing_entry
+                    for script_name in entry_python_script_names(entry)
+                    if (
+                        existing_entry := target_script_entries.get(
+                            (event_name, script_name)
+                        )
+                    )
+                    is not None
+                }
+                if conflicts:
+                    if not refresh_hook_registrations:
                         fail(
                             "Refusing to register duplicate "
-                            f"{event_name} hook script {script_name!r}: {hooks_json} "
+                            f"{event_name} hook script: {hooks_json} "
                             "already has a different entry for that Python file. "
                             "Remove the obsolete entry manually or rerun with "
-                            "--replace-hooks-json when the selected source manifests "
-                            "should be authoritative."
+                            "--refresh-hook-registrations to replace only this "
+                            "same-event, same-script registration."
                         )
+                    if len(conflicts) != 1:
+                        fail(
+                            "Targeted hook registration refresh matched multiple "
+                            f"existing {event_name} entries; refusing ambiguous replacement"
+                        )
+                    existing_entry = next(iter(conflicts.values()))
+                    if existing_entry.get("hooks") != entry.get("hooks"):
+                        fail(
+                            "Targeted hook registration refresh matched an entry "
+                            "with a differing or mixed handler list; refusing to "
+                            "replace unrelated handlers"
+                        )
+                    target_entries[target_entries.index(existing_entry)] = entry
+                    for script_name in entry_python_script_names(existing_entry):
+                        target_script_entries.pop((event_name, script_name), None)
+                    for script_name in entry_python_script_names(entry):
+                        target_script_entries[(event_name, script_name)] = entry
+                    refreshed += 1
+                    registration_statuses.append((source_label, "refreshed", label))
+                    continue
                 target_entries.append(entry)
                 added += 1
                 registration_statuses.append((source_label, "added", label))
@@ -1266,7 +1304,7 @@ if replace_hooks_json:
 if replace_hooks_json:
     unchanged = existing_valid and existing_target == target
 else:
-    unchanged = had_existing and existing_valid and added == 0
+    unchanged = had_existing and existing_valid and added == 0 and refreshed == 0
 
 if preflight_only:
     raise SystemExit(0)
@@ -1317,7 +1355,8 @@ if not unchanged:
                 )
     else:
         summary_message = (
-            f"Hook registrations summary: added {added}, unchanged {unchanged_entries} "
+            f"Hook registrations summary: added {added}, refreshed {refreshed}, "
+            f"unchanged {unchanged_entries} "
             f"from {len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
     if backup_path:
@@ -1330,7 +1369,8 @@ else:
         )
     else:
         summary_message = (
-            f"Hook registrations summary: added 0, unchanged {unchanged_entries} "
+            f"Hook registrations summary: added 0, refreshed 0, "
+            f"unchanged {unchanged_entries} "
             f"from {len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
 
@@ -1349,11 +1389,13 @@ if status_file:
                 "SOURCE\t"
                 f"{source_label}\t"
                 f"{counts['added']}\t"
+                f"{counts['refreshed']}\t"
                 f"{counts['unchanged']}\t"
                 f"{counts['selected']}\n"
             )
         handle.write(
             f"TOTAL\t{total_status_counts['added']}\t"
+            f"{total_status_counts['refreshed']}\t"
             f"{total_status_counts['unchanged']}\t"
             f"{total_status_counts['selected']}\t"
             f"{0 if unchanged else 1}\t{summary_message}\n"
@@ -1378,24 +1420,27 @@ register_hooks_manifest() {
   local hook_src="$1"
   local codex_home="$2"
   local replace_hooks_json="${3:-0}"
+  local refresh_hook_registrations="${4:-0}"
 
-  register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_src}"
+  register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_src}"
 }
 
 preflight_register_hooks_manifests() {
   local codex_home="$1"
   local replace_hooks_json="$2"
+  local refresh_hook_registrations="$3"
 
-  shift 2
-  HOOK_REGISTRATION_PREFLIGHT=1 register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "$@"
+  shift 3
+  HOOK_REGISTRATION_PREFLIGHT=1 register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "$@"
 }
 
 preflight_register_hooks_manifest() {
   local hook_src="$1"
   local codex_home="$2"
   local replace_hooks_json="${3:-0}"
+  local refresh_hook_registrations="${4:-0}"
 
-  preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_src}"
+  preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_src}"
 }
 
 HOOK_STATUS_REVIEW_NEEDED=0
@@ -1431,14 +1476,18 @@ format_two_counts() {
 
 format_registration_counts() {
   local added="$1"
-  local unchanged="$2"
-  local selected="$3"
+  local refreshed="$2"
+  local unchanged="$3"
+  local selected="$4"
   local parts=()
   local result=""
   local part=""
 
   if [[ "${added}" -gt 0 ]]; then
     parts+=("added ${added}")
+  fi
+  if [[ "${refreshed}" -gt 0 ]]; then
+    parts+=("refreshed ${refreshed}")
   fi
   if [[ "${selected}" -gt 0 ]]; then
     parts+=("selected ${selected}")
@@ -1463,7 +1512,7 @@ registration_status_for_source() {
 
   [[ -f "${status_file}" ]] || return 1
   awk -F '\t' -v source_label="${source_label}" \
-    '$1 == "SOURCE" && $2 == source_label { print $3 "\t" $4 "\t" $5; found = 1; exit } END { exit found ? 0 : 1 }' \
+    '$1 == "SOURCE" && $2 == source_label { print $3 "\t" $4 "\t" $5 "\t" $6; found = 1; exit } END { exit found ? 0 : 1 }' \
     "${status_file}"
 }
 
@@ -1478,7 +1527,7 @@ registration_total_from_status() {
   local status_file="$1"
 
   [[ -f "${status_file}" ]] || return 1
-  awk -F '\t' '$1 == "TOTAL" { print $2 "\t" $3 "\t" $4 "\t" $5; found = 1; exit } END { exit found ? 0 : 1 }' "${status_file}"
+  awk -F '\t' '$1 == "TOTAL" { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6; found = 1; exit } END { exit found ? 0 : 1 }' "${status_file}"
 }
 
 print_registration_messages() {
@@ -1500,11 +1549,13 @@ print_combined_hook_status() {
   local file_updated=0
   local file_unchanged=0
   local reg_added=0
+  local reg_refreshed=0
   local reg_unchanged=0
   local reg_selected=0
   local total_file_updated=0
   local total_file_unchanged=0
   local total_reg_added=0
+  local total_reg_refreshed=0
   local total_reg_unchanged=0
   local total_reg_selected=0
   local reg_changed=0
@@ -1523,17 +1574,18 @@ print_combined_hook_status() {
     total_file_updated=$((total_file_updated + file_updated))
     total_file_unchanged=$((total_file_unchanged + file_unchanged))
     reg_added=0
+    reg_refreshed=0
     reg_unchanged=0
     reg_selected=0
     if [[ "${register_hooks}" -eq 1 ]]; then
       reg_line="$(registration_status_for_source "${registration_status_file}" "${source_label}" 2>/dev/null || true)"
       if [[ -n "${reg_line}" ]]; then
-        IFS=$'\t' read -r reg_added reg_unchanged reg_selected <<< "${reg_line}"
+        IFS=$'\t' read -r reg_added reg_refreshed reg_unchanged reg_selected <<< "${reg_line}"
       fi
     fi
 
     source_changed=0
-    if [[ "${file_updated}" -gt 0 || "${reg_added}" -gt 0 || "${reg_selected}" -gt 0 ]]; then
+    if [[ "${file_updated}" -gt 0 || "${reg_added}" -gt 0 || "${reg_refreshed}" -gt 0 || "${reg_selected}" -gt 0 ]]; then
       source_changed=1
     fi
 
@@ -1544,7 +1596,7 @@ print_combined_hook_status() {
     fi
     printf '%b\n' "    files: $(format_two_counts updated "${file_updated}" unchanged "${file_unchanged}") -> ${hook_dest}"
     if [[ "${register_hooks}" -eq 1 ]]; then
-      printf '%b\n' "    registrations: $(format_registration_counts "${reg_added}" "${reg_unchanged}" "${reg_selected}") -> ${registration_dest}"
+      printf '%b\n' "    registrations: $(format_registration_counts "${reg_added}" "${reg_refreshed}" "${reg_unchanged}" "${reg_selected}") -> ${registration_dest}"
     else
       printf '%b\n' "    registrations: not requested"
     fi
@@ -1553,15 +1605,15 @@ print_combined_hook_status() {
   if [[ "${register_hooks}" -eq 1 ]]; then
     reg_line="$(registration_total_from_status "${registration_status_file}" 2>/dev/null || true)"
     if [[ -n "${reg_line}" ]]; then
-      IFS=$'\t' read -r total_reg_added total_reg_unchanged total_reg_selected reg_changed <<< "${reg_line}"
+      IFS=$'\t' read -r total_reg_added total_reg_refreshed total_reg_unchanged total_reg_selected reg_changed <<< "${reg_line}"
     fi
-    printf '%b\n' "Summary: files $(format_updated_label "${total_file_updated}") ${total_file_updated}, unchanged ${total_file_unchanged}; registrations $(format_registration_counts "${total_reg_added}" "${total_reg_unchanged}" "${total_reg_selected}")"
+    printf '%b\n' "Summary: files $(format_updated_label "${total_file_updated}") ${total_file_updated}, unchanged ${total_file_unchanged}; registrations $(format_registration_counts "${total_reg_added}" "${total_reg_refreshed}" "${total_reg_unchanged}" "${total_reg_selected}")"
     print_registration_messages "${registration_status_file}"
   else
     printf '%b\n' "Summary: files $(format_updated_label "${total_file_updated}") ${total_file_updated}, unchanged ${total_file_unchanged}; registrations not requested"
   fi
 
-  if [[ "${total_file_updated}" -gt 0 || "${total_reg_added}" -gt 0 || "${total_reg_selected}" -gt 0 || "${reg_changed}" -gt 0 ]]; then
+  if [[ "${total_file_updated}" -gt 0 || "${total_reg_added}" -gt 0 || "${total_reg_refreshed}" -gt 0 || "${total_reg_selected}" -gt 0 || "${reg_changed}" -gt 0 ]]; then
     HOOK_STATUS_REVIEW_NEEDED=1
   fi
 }
@@ -1572,6 +1624,7 @@ install_hooks() {
   local register_hooks="${3:-0}"
   local report_extras="${4:-1}"
   local replace_hooks_json="${5:-0}"
+  local refresh_hook_registrations="${6:-0}"
   local hook_src=""
   local file_status_file=""
   local registration_status_file=""
@@ -1594,7 +1647,7 @@ install_hooks() {
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
-    preflight_register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}"
+    preflight_register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}"
   fi
 
   file_status_file="$(mktemp)"
@@ -1604,7 +1657,7 @@ install_hooks() {
   HOOK_FILE_STATUS_FILE=""
   if [[ "${register_hooks}" -eq 1 ]]; then
     HOOK_REGISTRATION_STATUS_FILE="${registration_status_file}"
-    register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}"
+    register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}"
     HOOK_REGISTRATION_STATUS_FILE=""
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge a source registration manifest."
@@ -1698,6 +1751,7 @@ install_all_hooks() {
   local codex_home="$2"
   local register_hooks="${3:-0}"
   local replace_hooks_json="${4:-0}"
+  local refresh_hook_registrations="${5:-0}"
   local source_root=""
   local hook_src=""
   local hook_dirs=()
@@ -1734,7 +1788,7 @@ install_all_hooks() {
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
-    preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_dirs[@]}"
+    preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_dirs[@]}"
   fi
 
   file_status_file="$(mktemp)"
@@ -1747,7 +1801,7 @@ install_all_hooks() {
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     HOOK_REGISTRATION_STATUS_FILE="${registration_status_file}"
-    register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_dirs[@]}"
+    register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_dirs[@]}"
     HOOK_REGISTRATION_STATUS_FILE=""
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge discovered source registration manifests."
@@ -1768,6 +1822,7 @@ HOOK_INSTALL_SOURCE=""
 INSTALL_ALL_HOOKS=0
 REGISTER_HOOKS=0
 REPLACE_HOOKS_JSON=0
+REFRESH_HOOK_REGISTRATIONS=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1831,6 +1886,15 @@ while [[ $# -gt 0 ]]; do
       REPLACE_HOOKS_JSON=1
       shift
       ;;
+    --refresh-hook-registrations)
+      if [[ "${REFRESH_HOOK_REGISTRATIONS}" -eq 1 ]]; then
+        log_error "--refresh-hook-registrations may only be specified once."
+        show_usage >&2
+        exit 1
+      fi
+      REFRESH_HOOK_REGISTRATIONS=1
+      shift
+      ;;
     --)
       shift
       while [[ $# -gt 0 ]]; do
@@ -1874,6 +1938,18 @@ if [[ "${REPLACE_HOOKS_JSON}" -eq 1 && "${REGISTER_HOOKS}" -eq 0 ]]; then
   exit 1
 fi
 
+if [[ "${REFRESH_HOOK_REGISTRATIONS}" -eq 1 && "${REGISTER_HOOKS}" -eq 0 ]]; then
+  log_error "--refresh-hook-registrations must be combined with --register-hooks."
+  show_usage >&2
+  exit 1
+fi
+
+if [[ "${REFRESH_HOOK_REGISTRATIONS}" -eq 1 && "${REPLACE_HOOKS_JSON}" -eq 1 ]]; then
+  log_error "--refresh-hook-registrations cannot be combined with --replace-hooks-json."
+  show_usage >&2
+  exit 1
+fi
+
 if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   if [[ "${#POSITIONAL[@]}" -gt 0 ]]; then
     log_error "--install-all-hooks does not accept positional arguments."
@@ -1883,7 +1959,7 @@ if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" "${REPLACE_HOOKS_JSON}"
+  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" "${REPLACE_HOOKS_JSON}" "${REFRESH_HOOK_REGISTRATIONS}"
   exit 0
 fi
 
@@ -1895,7 +1971,7 @@ if [[ -n "${HOOK_INSTALL_SOURCE}" ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" 1 "${REPLACE_HOOKS_JSON}"
+  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" 1 "${REPLACE_HOOKS_JSON}" "${REFRESH_HOOK_REGISTRATIONS}"
   exit 0
 fi
 

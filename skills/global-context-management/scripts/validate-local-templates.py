@@ -37,6 +37,9 @@ def skill_dir() -> Path:
 def parse_templates(root: Path) -> dict:
     hooks_template = root / "assets" / "hooks.json.template"
     hooks = json.loads(hooks_template.read_text(encoding="utf-8"))
+    matcher = hooks["hooks"]["SessionStart"][0].get("matcher")
+    if matcher != "startup|resume|clear|compact":
+        raise AssertionError("SessionStart matcher must include compact exactly once")
     policy = json.loads(
         (root / "assets" / "global_context_policy.json.template").read_text(
             encoding="utf-8"
@@ -52,6 +55,7 @@ def parse_templates(root: Path) -> dict:
         tomllib.loads(path.read_text(encoding="utf-8"))
 
     for path in (
+        root / "assets" / "global_context_state.py.template",
         root / "assets" / "session_start_context.py.template",
         root / "assets" / "user_prompt_context.py.template",
     ):
@@ -89,6 +93,18 @@ def assert_private_file(path: Path) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode != 0o600:
         raise AssertionError(f"{path} mode is {oct(mode)}, expected 0o600")
+
+
+def assert_private_state_tree(state_file: Path, codex_home: Path) -> None:
+    assert_private_file(state_file)
+    for directory in (
+        codex_home / "task-state",
+        state_file.parent.parent,
+        state_file.parent,
+    ):
+        mode = stat.S_IMODE(directory.stat().st_mode)
+        if mode != 0o700:
+            raise AssertionError(f"{directory} mode is {oct(mode)}, expected 0o700")
 
 
 def assert_no_prompt_leak(state_file: Path) -> None:
@@ -246,8 +262,15 @@ def expected_workspace_segment(root: Path) -> str:
 
 
 def expected_session_segment(session_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip("-")
-    return safe[:80]
+    if re.fullmatch(r"[A-Za-z0-9._-]{1,80}", session_id) and session_id not in {
+        ".",
+        "..",
+    }:
+        return session_id
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip("-")[:48]
+    prefix = safe or "session"
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
 
 
 def expected_state_file(codex_home: Path, root: Path, session_id: str) -> Path:
@@ -279,6 +302,10 @@ def assert_duplicate_templates(root: Path) -> None:
         (
             root / "assets" / "hooks.json.template",
             config_assets / "hooks.json.template",
+        ),
+        (
+            root / "assets" / "global_context_state.py.template",
+            config_assets / "hooks" / "global_context_state.py.template",
         ),
         (
             root / "assets" / "session_start_context.py.template",
@@ -330,6 +357,12 @@ def validate_path_contract_helpers(temp_dir: Path) -> None:
     if resolve_root_for_cwd(str(link)).name != "linkroot":
         raise AssertionError("resolve_root_for_cwd should match hook abspath semantics")
 
+    if expected_session_segment("a/b") == expected_session_segment("a b"):
+        raise AssertionError("unsafe session IDs must not collide after normalization")
+    for session_id in (".", ".."):
+        if expected_session_segment(session_id) == session_id:
+            raise AssertionError("dot session IDs must be hashed")
+
 
 def assert_doc_contracts(root: Path) -> None:
     gcm_readme = (root / "README.md").read_text(encoding="utf-8")
@@ -380,14 +413,13 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_gcm = (
         "Task-state files are useful only when Codex reads and updates them.",
-        "`SessionStart` hook injects the path without creating a missing `current.md`",
+        "Normal\n`SessionStart` startup advertises a missing path without creating it",
+        "`SessionStart` with `source=compact` and the first\ncomplex `UserPromptSubmit` create an empty scaffold",
         "manual or legacy fallback path",
-        "hidden state automatically active",
         "same-workspace prior `current.md` candidate paths",
         "must not inject historical task-state contents",
         "current session's advertised `current.md` remains the only write target",
         "continuity note",
-        "should not create task-state files or directories",
         "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
         "rolling summary, not an append-only transcript",
         "summarize any older task-state file",
@@ -404,9 +436,9 @@ def assert_doc_contracts(root: Path) -> None:
     required_config = (
         "Treat runtime activation as unverified",
         "task-state path under",
-        "Direct hook unit probes against a live `$CODEX_HOME`",
+        "Do not run complex synthetic hook probes against a live `$CODEX_HOME`",
         "same-workspace prior `current.md` candidate paths",
-        "do not create missing scaffold",
+        "compaction and complex-prompt empty scaffolds",
         "No manual or legacy",
         "rolling summary, not an append-only transcript",
         "summarize oversized historical files",
@@ -497,6 +529,8 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
 
     session_script = hooks_dir / "session_start_context.py"
     user_script = hooks_dir / "user_prompt_context.py"
+    helper_script = hooks_dir / "global_context_state.py"
+    shutil.copyfile(root / "assets" / "global_context_state.py.template", helper_script)
     shutil.copyfile(root / "assets" / "session_start_context.py.template", session_script)
     shutil.copyfile(root / "assets" / "user_prompt_context.py.template", user_script)
 
@@ -553,6 +587,19 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     if "sdlc-start" in session_context:
         raise AssertionError("SessionStart should not route SDLC")
     assert_missing_state_path(state_file, codex_home)
+
+    compact_payload = {
+        **session_payload,
+        "session_id": "compact session",
+        "source": "compact",
+    }
+    compact_result = run_hook(session_script, compact_payload, env)
+    compact_state = extract_state_path(compact_result.stdout)
+    if compact_state.read_bytes() != b"":
+        raise AssertionError("compact SessionStart scaffold must be empty")
+    assert_private_state_tree(compact_state, codex_home)
+    if "Compaction initialized" not in extract_context(compact_result.stdout):
+        raise AssertionError("compact SessionStart did not report initialization")
     preserved_state = (
         "# Current Codex task state\n\n"
         "## Workspace\n\n"
@@ -687,6 +734,14 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         "# Current Codex task state\n\n## Objective\n\n- Review hooks elsewhere.\n",
         encoding="utf-8",
     )
+    outside_related = codex_home.parent / "outside-related-session"
+    outside_related.mkdir()
+    (outside_related / "current.md").write_text(
+        "# Current Codex task state\n\n## Objective\n\n- Review hooks outside.\n",
+        encoding="utf-8",
+    )
+    linked_session = related_state_one.parent.parent / "linked-session"
+    linked_session.symlink_to(outside_related, target_is_directory=True)
 
     complex_payload = {
         "session_id": "session one/with spaces",
@@ -720,9 +775,11 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     for unrelated_state in (unrelated_same_workspace, unrelated_workspace):
         if str(unrelated_state) in context:
             raise AssertionError(f"unrelated task-state path leaked: {unrelated_state}")
+    if str(outside_related) in context:
+        raise AssertionError("symlinked outside task-state candidate leaked")
     if RELATED_STATE_CONTENT_MARKER in context:
         raise AssertionError("hook injected related task-state contents")
-    if len(context) > 1300:
+    if len(context) > 1400:
         raise AssertionError("non-delegated UserPromptSubmit context is too large")
     if "sdlc-start" in context:
         raise AssertionError("UserPromptSubmit should not route sdlc-start")
@@ -791,7 +848,15 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
             "fresh complex prompt used unexpected state path: "
             f"{fresh_complex_state} != {expected_fresh_complex_state}"
         )
-    assert_missing_state_path(fresh_complex_state, codex_home)
+    if fresh_complex_state.read_bytes() != b"":
+        raise AssertionError("fresh complex prompt scaffold must be empty")
+    assert_private_state_tree(fresh_complex_state, codex_home)
+    if SENTINEL_MARKER in fresh_complex_state.read_text(encoding="utf-8"):
+        raise AssertionError("fresh scaffold persisted prompt content")
+    if "empty private task-state scaffold" not in extract_context(
+        fresh_complex_result.stdout
+    ):
+        raise AssertionError("fresh complex prompt did not report initialization")
 
     missing_session_complex_payload = {
         "cwd": cwd,
@@ -854,6 +919,10 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
     hooks_dir.mkdir(parents=True)
     normal_home.mkdir()
     shutil.copyfile(
+        root / "assets" / "global_context_state.py.template",
+        hooks_dir / "global_context_state.py",
+    )
+    shutil.copyfile(
         root / "assets" / "session_start_context.py.template",
         hooks_dir / "session_start_context.py",
     )
@@ -887,6 +956,142 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
         )
 
 
+def validate_security_and_permission_helper(root: Path, temp_dir: Path) -> None:
+    codex_home = temp_dir / "security-codex"
+    hooks_dir = codex_home / "hooks"
+    hooks_dir.mkdir(parents=True)
+    helper = hooks_dir / "global_context_state.py"
+    user_hook = hooks_dir / "user_prompt_context.py"
+    shutil.copyfile(root / "assets/global_context_state.py.template", helper)
+    shutil.copyfile(root / "assets/user_prompt_context.py.template", user_hook)
+    env = {**os.environ, "CODEX_HOME": str(codex_home)}
+    payload = {
+        "session_id": "concurrent session",
+        "cwd": str(root),
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Please review, implement, and validate this complex task.",
+    }
+
+    processes = []
+    for _ in range(8):
+        processes.append(
+            subprocess.Popen(
+                [sys.executable, str(user_hook)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                preexec_fn=lambda: os.umask(0),
+            )
+        )
+    for process in processes:
+        stdout, stderr = process.communicate(json.dumps(payload), timeout=10)
+        if process.returncode != 0 or stderr:
+            raise AssertionError(f"concurrent hook failed: {stdout} {stderr}")
+    state_file = expected_state_file(
+        codex_home, resolve_root_for_cwd(str(root)), "concurrent session"
+    )
+    if state_file.read_bytes() != b"":
+        raise AssertionError("concurrent initialization changed scaffold content")
+    assert_private_state_tree(state_file, codex_home)
+    audit_command = [
+        sys.executable,
+        str(helper),
+        "--codex-home",
+        str(codex_home),
+    ]
+
+    task_root = codex_home / "task-state"
+    bad_workspace = task_root / "workspace-is-file"
+    bad_workspace.write_text("unexpected node\n", encoding="utf-8")
+    bad_audit = subprocess.run(
+        [*audit_command, "audit-permissions"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if bad_audit.returncode == 0 or json.loads(bad_audit.stdout)["unsafe"] == 0:
+        raise AssertionError("permission audit ignored non-directory workspace")
+    bad_workspace.unlink()
+
+    bad_session = state_file.parent.parent / "session-is-file"
+    bad_session.write_text("unexpected node\n", encoding="utf-8")
+    bad_audit = subprocess.run(
+        [*audit_command, "audit-permissions"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if bad_audit.returncode == 0 or json.loads(bad_audit.stdout)["unsafe"] == 0:
+        raise AssertionError("permission audit ignored non-directory session")
+    bad_session.unlink()
+
+    bad_current = state_file.parent.parent / "bad-current-session" / "current.md"
+    bad_current.mkdir(parents=True)
+    bad_audit = subprocess.run(
+        [*audit_command, "audit-permissions"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if bad_audit.returncode == 0 or json.loads(bad_audit.stdout)["unsafe"] == 0:
+        raise AssertionError("permission audit ignored non-regular current.md")
+    bad_current.rmdir()
+    bad_current.parent.rmdir()
+
+    state_file.write_text("content-preservation-sentinel\n", encoding="utf-8")
+    original_hash = hashlib.sha256(state_file.read_bytes()).hexdigest()
+    state_file.chmod(0o644)
+    state_file.parent.chmod(0o755)
+    audit = subprocess.run(
+        [*audit_command, "audit-permissions"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if audit.returncode == 0 or json.loads(audit.stdout)["unsafe"] == 0:
+        raise AssertionError("permission audit did not report loose modes")
+    if stat.S_IMODE(state_file.stat().st_mode) != 0o644:
+        raise AssertionError("read-only permission audit changed state")
+    repair = subprocess.run(
+        [*audit_command, "repair-permissions", "--execute"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if repair.returncode != 0 or json.loads(repair.stdout)["repaired"] == 0:
+        raise AssertionError(f"permission repair failed: {repair.stderr}")
+    if hashlib.sha256(state_file.read_bytes()).hexdigest() != original_hash:
+        raise AssertionError("permission repair changed task-state content")
+    assert_private_state_tree(state_file, codex_home)
+
+    outside = temp_dir / "outside"
+    outside.mkdir()
+    unsafe_home = temp_dir / "unsafe-codex"
+    unsafe_home.symlink_to(outside, target_is_directory=True)
+    unsafe_env = {**env, "CODEX_HOME": str(unsafe_home)}
+    unsafe_result = run_hook(user_hook, {**payload, "session_id": "unsafe"}, unsafe_env)
+    if "private initialization failed" not in extract_context(unsafe_result.stdout):
+        raise AssertionError("symlinked CODEX_HOME did not fail closed")
+    if (outside / "task-state").exists():
+        raise AssertionError("symlinked CODEX_HOME was followed")
+
+    unsafe_root_home = temp_dir / "unsafe-task-root-home"
+    unsafe_root_home.mkdir()
+    (unsafe_root_home / "task-state").symlink_to(outside, target_is_directory=True)
+    unsafe_root_env = {**env, "CODEX_HOME": str(unsafe_root_home)}
+    unsafe_root_result = run_hook(
+        user_hook, {**payload, "session_id": "unsafe-root"}, unsafe_root_env
+    )
+    if "private initialization failed" not in extract_context(
+        unsafe_root_result.stdout
+    ):
+        raise AssertionError("symlinked task-state root did not fail closed")
+    if any(outside.iterdir()):
+        raise AssertionError("symlinked task-state root was followed")
+
+
 def main() -> int:
     root = skill_dir()
     hooks = parse_templates(root)
@@ -902,6 +1107,7 @@ def main() -> int:
             home=temp_dir / "home-default",
         )
         validate_hooks_json_command(root=root, hooks=hooks, temp_dir=temp_dir)
+        validate_security_and_permission_helper(root=root, temp_dir=temp_dir)
 
     print("global-context-management local templates validated")
     return 0

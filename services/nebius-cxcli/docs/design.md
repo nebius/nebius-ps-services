@@ -1964,6 +1964,29 @@ keeps accepted source templates immutable while creating replacements, and
 in-place compare-and-set updates those same accepted groups under the rollout,
 Slurm-clear, identity, and provider-operation gates described below.
 
+#### In-place upgrade workflow
+
+The in-place diagram shows how cxcli establishes controller and login
+continuity, prepares and verifies the passive Jail rootfs slot, and only then
+updates the same accepted service and worker node groups under the Slurm-clear
+and provider gates.
+
+![Soperator in-place upgrade workflow from protected source state through controller bridge, Jail handoff, same-group rollout, and final validation](soperator-in-place-upgrade-workflow.png)
+
+[Editable in-place workflow SVG source](soperator-in-place-upgrade-workflow.svg)
+
+#### Blue-green upgrade workflow
+
+The blue-green diagram shows how cxcli keeps source node-group templates
+immutable, creates target-version capacity beside them, transfers controller
+authority to the target, and then completes the Jail handoff. Source groups
+are retired independently only after their workload, accounting,
+login-session, and final health gates pass.
+
+![Soperator blue-green upgrade workflow from retained source groups through controller bridge, target activation, Jail handoff, and source retirement](soperator-blue-green-upgrade-workflow.png)
+
+[Editable blue-green workflow SVG source](soperator-blue-green-upgrade-workflow.svg)
+
 - each accepted segment changes only the MK8s control plane in its source
   cluster hop before its mode-specific compute operation;
 - cxcli creates two temporary one-node controller groups cloned from the exact
@@ -1983,9 +2006,6 @@ Slurm-clear, identity, and provider-operation gates described below.
   membership stop the campaign before controller mutation. This is a scheduling
   and process-isolation contract, not a claim that the bridge controllers occupy
   separate provider availability zones.
-
-  ![Controller bridge and login gateway continuity during Jail handoff](soperator-controller-bridge-login-gateway-continuity.png)
-
   cxcli
   strips every inherited source-role taint from the cloned node templates and
   applies one bridge-only `NoSchedule` taint. The controller StatefulSet,
@@ -2017,6 +2037,15 @@ Slurm-clear, identity, and provider-operation gates described below.
   or cxcli dispatches scale-to-zero. A stale proof, recreated Node, lost
   attachment, or changed Node/node-group identity therefore leaves the source singleton running
   and unfenced;
+
+  The controller diagram traces single-writer authority from the source
+  singleton through source- and target-version HA bridge states to the final
+  target singleton, including the bounded RPC gap and cleanup order.
+
+  ![Controller bridge HA continuity from source singleton through target singleton](soperator-controller-bridge-ha-continuity.png)
+
+  [Editable controller-bridge SVG source](soperator-controller-bridge-ha-continuity.svg)
+
 - rolling compute follows the fingerprinted v5 mode: in-place provider updates
   for accepted fixed-size groups or separately identified blue/green targets;
 - workers remain blocked until jobs and epilogs finish, and the exact source
@@ -2028,6 +2057,14 @@ Slurm-clear, identity, and provider-operation gates described below.
 - in-place zero-surge and safe-surge expose only the accepted unavailable,
   surge, worker drain-timeout, and parallel-group controls; service roles remain
   serial with unlimited provider drain.
+
+  The login diagram separates connection lifetimes: established SSH remains on
+  its exact source Pod, while new SSH uses the stable Login Service and a Ready
+  target backend.
+
+  ![Login node continuity for established and fresh SSH connections](soperator-login-node-continuity.png)
+
+  [Editable login-continuity SVG source](soperator-login-node-continuity.svg)
 
 Before controller authority moves, cxcli snapshots every partition and changes
 only currently `UP` partitions to `DOWN`. Already non-schedulable states are
@@ -4349,7 +4386,13 @@ persistent-mount directories on the same physical jail SFS:
   outside the replaceable rootfs slots and are mounted back into whichever slot
   is active.
 
+The Jail storage diagram separates replaceable rootfs generations from stable
+persistent overlays and calls out the first-adoption, consumer-switch, and
+rollback boundaries.
+
 ![Active/passive Jail rootfs slots sharing stable persistent mounts](jail-rootfs-active-passive-storage.png)
+
+[Editable SVG source](jail-rootfs-active-passive-storage.svg)
 
 Slot images may contain mount-point directories or image-provided scaffolding at
 these paths, but persistent customer data lives only in disjoint backing
@@ -4709,13 +4752,6 @@ the operator has generated the active-PVC template instead of judging the stale
 pre-reconcile generation. Completed-phase reconciliation
 repeats the live alias, alias-consumer, login/worker, `/home`, and Slurm admission
 checks even when the historical populate Job still exists.
-
-![Soperator Jail Upgrade rootfs workflow with two controller pods and two example worker pods](jail-upgrade-workflow.png)
-
-The diagram uses two controller pods and two example worker pods for
-readability. The worker pair is illustrative: the rootfs handoff still applies
-to every configured worker NodeSet and to enabled REST and SConfigController
-workloads.
 
 ## Config Model
 

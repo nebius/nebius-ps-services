@@ -6,6 +6,23 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Replace the crowded combined Soperator Jail handoff diagram with separate
+  in-place and blue-green overall upgrade workflows. Each diagram now shows the
+  controller bridge, login continuity, mode-specific compute ordering, Jail
+  activation, validation, rollback retention, and final cleanup boundaries.
+- Split controller-bridge HA and login-node continuity into separate diagrams
+  with editable SVG sources and matching PNGs. The controller view owns
+  singleton/bridge authority and partition-restore ordering; the login view
+  owns stable Service routing, exact source holds, target readiness, and
+  explicit protected-SSH exit disposition.
+- Refresh the Jail rootfs storage diagram and add an editable SVG source. The
+  updated view distinguishes managed and external slot paths; automatic,
+  discovered, and explicitly declared persistent overlays; passive-populate
+  isolation; rolling consumer rebinding; and the data-current limit of
+  legacy-rootfs rollback.
+- Document all five current architecture diagrams once in both the README and
+  design guide, with a concise explanation, one rendered PNG, and one editable
+  SVG source link per diagram.
 - Fix completed external Soperator replay so it reconciles exact current Slurm
   worker runtime identities before fresh discovery and evaluates final health
   against the checkpoint-proven target SlurmCluster UID after source-to-target

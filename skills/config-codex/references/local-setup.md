@@ -144,6 +144,8 @@ replace-if-unmodified rules after the list.
 assets/AGENTS.md.template              -> $CODEX_HOME/AGENTS.md
 assets/config.toml.template            -> $CODEX_HOME/config.toml
 assets/hooks.json.template             -> $CODEX_HOME/hooks.json
+assets/hooks/global_context_state.py.template
+  -> $CODEX_HOME/hooks/global_context_state.py
 assets/hooks/session_start_context.py.template
   -> $CODEX_HOME/hooks/session_start_context.py
 assets/hooks/user_prompt_context.py.template
@@ -194,6 +196,10 @@ file installation copies missing files, leaves matching files unchanged, and
 records hook file provenance hashes. It backs up differing existing hook files,
 then refreshes them from the selected source. It still does not trust hooks or
 patch `config.toml`. Add
+`--refresh-hook-registrations` when differing registrations for the same
+event/script and identical handler list should be replaced while unrelated
+entries remain.
+Add
 `--replace-hooks-json` only when the operator intentionally wants to back up
 and replace `hooks.json` with a clean file built from the selected source
 manifests. Hook install modes are idempotent and report extra installed hook
@@ -455,15 +461,16 @@ Expected evidence:
   task-state contents.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
+- Normal startup remains lazy. Compaction and the first complex prompt create
+  only an empty `0600` scaffold below private `0700` directories; the parent
+  writes and updates all semantic content.
 - Sandbox configuration and any installed PreToolUse write guard allow
-  `$CODEX_HOME/task-state` so the parent agent can create and update the
+  `$CODEX_HOME/task-state` so the parent agent can update the
   advertised `current.md`, while broader runtime paths such as
   `$CODEX_HOME/hooks` remain protected unless deliberately synced.
 
-Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values should not create task-state files or directories. They
-validate hook path calculation and prompt-time hints, not active persistent
-model state. Prefer
+Do not run complex synthetic hook probes against a live `$CODEX_HOME`: the
+first complex prompt intentionally creates an empty private scaffold. Prefer
 `global-context-management/scripts/validate-local-templates.py` for hook-unit
 validation because it uses disposable temporary homes. If a hook payload has no
 `session_id`, task state is unavailable and no manual or legacy fallback path is

@@ -215,6 +215,23 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             check=False,
         )
 
+    def run_installer_refresh_hooks(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--install-hooks",
+                HOOK_SOURCE,
+                "--register-hooks",
+                "--refresh-hook-registrations",
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def run_all_hooks_installer(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
@@ -354,6 +371,98 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             original_hooks_json,
             original_hook_payload,
         )
+
+    def test_targeted_refresh_replaces_only_same_event_script_entry(self) -> None:
+        initial = self.run_installer()
+        self.assertEqual(initial.returncode, 0, initial.stdout + initial.stderr)
+        hooks_path = self.codex_home / "hooks.json"
+        existing = json.loads(hooks_path.read_text(encoding="utf-8"))
+        existing["hooks"]["PreToolUse"][0]["matcher"] = "^OldBash$"
+        existing["owner"] = "preserve-me"
+        existing["hooks"]["Stop"] = [
+            {
+                "hooks": [
+                    {"type": "command", "command": "python3 /other/keep_me.py"}
+                ]
+            }
+        ]
+        hooks_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+        first = self.run_installer_refresh_hooks()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        refreshed = json.loads(hooks_path.read_text(encoding="utf-8"))
+        self.assertEqual(refreshed["owner"], "preserve-me")
+        self.assertEqual(refreshed["hooks"]["Stop"], existing["hooks"]["Stop"])
+        registrations = self.hook_registrations()
+        self.assertEqual(len(registrations), 1)
+        self.assertIn("registrations: refreshed 1", first.stdout)
+        backups = list(self.codex_home.glob("hooks.json.bak.*"))
+        self.assertEqual(len(backups), 1)
+
+        second = self.run_installer_refresh_hooks()
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("registrations: unchanged 1", second.stdout)
+        self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
+
+    def test_targeted_refresh_rejects_mixed_handler_group_before_mutation(self) -> None:
+        initial = self.run_installer()
+        self.assertEqual(initial.returncode, 0, initial.stdout + initial.stderr)
+        hooks_path = self.codex_home / "hooks.json"
+        existing = json.loads(hooks_path.read_text(encoding="utf-8"))
+        existing["hooks"]["PreToolUse"][0]["matcher"] = "^OldBash$"
+        existing["hooks"]["PreToolUse"][0]["hooks"].append(
+            {"type": "command", "command": "python3 /other/keep_me.py"}
+        )
+        original = json.dumps(existing, indent=2) + "\n"
+        hooks_path.write_text(original, encoding="utf-8")
+        payload_before = self.installed_hook_path().read_bytes()
+
+        result = self.run_installer_refresh_hooks()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("differing or mixed handler list", result.stderr)
+        self.assertEqual(hooks_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(self.installed_hook_path().read_bytes(), payload_before)
+
+    def test_targeted_refresh_cli_guards(self) -> None:
+        cases = (
+            (
+                ["--refresh-hook-registrations"],
+                "must be combined with --register-hooks",
+            ),
+            (
+                [
+                    "--install-hooks",
+                    HOOK_SOURCE,
+                    "--register-hooks",
+                    "--refresh-hook-registrations",
+                    "--replace-hooks-json",
+                ],
+                "cannot be combined with --replace-hooks-json",
+            ),
+            (
+                [
+                    "--install-hooks",
+                    HOOK_SOURCE,
+                    "--register-hooks",
+                    "--refresh-hook-registrations",
+                    "--refresh-hook-registrations",
+                ],
+                "may only be specified once",
+            ),
+        )
+        for args, message in cases:
+            with self.subTest(args=args):
+                result = subprocess.run(
+                    ["bash", str(self.installer), *args],
+                    cwd=str(self.repo_root),
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
     def test_install_all_hooks_duplicate_registration_fails_before_payload_overwrite(self) -> None:
         original_hooks_json = self.write_duplicate_hooks_json_registration()
@@ -614,11 +723,11 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
         self.assertIn("files: unchanged 1", second.stdout)
-        self.assertIn("files: unchanged 3", second.stdout)
+        self.assertIn("files: unchanged 4", second.stdout)
         self.assertIn("files: unchanged 6", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 10; registrations unchanged 5", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 11; registrations unchanged 5", second.stdout)
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)

@@ -106,18 +106,136 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
         "The switch-over is not a live bind-mount flip inside an already-running consumer container"
     ) in design_flat
     assert "Prompt for a ChatGPT-generated infographic" not in design
+    assert "#### In-place upgrade workflow" in design
+    assert "#### Blue-green upgrade workflow" in design
+    assert "same accepted service and worker node groups" in design_flat
+    assert "keeps source node-group templates immutable" in design_flat
+    workflow_images = {
+        "soperator-in-place-upgrade-workflow.png": "Soperator In-Place Upgrade Workflow",
+        "soperator-blue-green-upgrade-workflow.png": "Soperator Blue-Green Upgrade Workflow",
+    }
+    for image_name, title in workflow_images.items():
+        assert f"]({image_name})" in design
+        workflow_image = REPO_ROOT / "docs" / image_name
+        assert workflow_image.is_file()
+        assert workflow_image.stat().st_size > 0
+        workflow_source = workflow_image.with_suffix(".svg")
+        assert workflow_source.is_file()
+        workflow_source_text = workflow_source.read_text(encoding="utf-8")
+        assert f'<title id="title">{title}</title>' in workflow_source_text
+        for component_label in (
+            "CONTROLLER",
+            "LOGIN",
+            "ACCOUNTING",
+            "SYSTEM",
+            "WORKERS",
+            "JAIL ROOTFS",
+        ):
+            assert component_label in workflow_source_text
+
+        if image_name == "soperator-blue-green-upgrade-workflow.png":
+            assert "CAPACITY PREFLIGHT" in workflow_source_text
+            assert (
+                "every target replacement group must fit quota before mutation"
+                in workflow_source_text
+            )
+            assert "Full-size source/target overlap is about 2× per role" in workflow_source_text
+            assert "worker targets may bootstrap incrementally" in workflow_source_text
+
+    focused_continuity_images = {
+        "soperator-controller-bridge-ha-continuity.png": (
+            "Soperator Controller Bridge HA Continuity",
+            (
+                "source singleton",
+                "target-version HA proven",
+                "only UP controller",
+                "scheduling restored first",
+                "After Login Continuity releases its",
+            ),
+        ),
+        "soperator-login-node-continuity.png": (
+            "Soperator Login Node Continuity",
+            (
+                "same UID, address, allocation",
+                "2 Ready replicas on distinct nodes",
+                "≥ 1 exact backend",
+                "Socket disappearance is Indeterminate",
+                "no automatic timeout",
+                "unblocks final partition restoration",
+            ),
+        ),
+    }
+    for image_name, (title, contract_texts) in focused_continuity_images.items():
+        image = REPO_ROOT / "docs" / image_name
+        source = image.with_suffix(".svg")
+        assert image.is_file()
+        assert image.stat().st_size > 0
+        assert source.is_file()
+        source_text = source.read_text(encoding="utf-8")
+        assert f'<title id="title">{title}</title>' in source_text
+        for contract_text in contract_texts:
+            assert contract_text in source_text
+        assert f"]({source.name})" in design
+
+    controller_source = (
+        REPO_ROOT / "docs" / "soperator-controller-bridge-ha-continuity.svg"
+    ).read_text(encoding="utf-8")
     assert (
-        "![Soperator Jail Upgrade rootfs workflow with two controller pods and "
-        "two example worker pods](jail-upgrade-workflow.png)"
-    ) in design
-    assert (
-        "The diagram uses two controller pods and two example worker pods for readability"
-        in design_flat
+        controller_source.index("Login Continuity releases its")
+        < (controller_source.index("restore exact partitions"))
+        < controller_source.index("delete the stopped bridge")
     )
-    assert "The worker pair is illustrative" in design_flat
-    infographic = REPO_ROOT / "docs" / "jail-upgrade-workflow.png"
-    assert infographic.is_file()
-    assert infographic.stat().st_size > 0
+    login_source = (REPO_ROOT / "docs" / "soperator-login-node-continuity.svg").read_text(
+        encoding="utf-8"
+    )
+    assert login_source.index("unblocks final partition restoration") < (
+        login_source.index("the stable Service and target backend remain")
+    )
+    assert (
+        login_source.index("require voluntary-exit ack")
+        < login_source.index("or explicit timeout continuation; then release")
+        < login_source.index("the exact source hold")
+    )
+
+
+def test_architecture_diagrams_are_referenced_once_and_explained() -> None:
+    diagram_explanations = {
+        "soperator-in-place-upgrade-workflow": (
+            "The in-place diagram shows how cxcli establishes controller and login continuity"
+        ),
+        "soperator-blue-green-upgrade-workflow": (
+            "The blue-green diagram shows how cxcli keeps source node-group templates immutable"
+        ),
+        "soperator-controller-bridge-ha-continuity": (
+            "The controller diagram traces single-writer authority"
+        ),
+        "soperator-login-node-continuity": (
+            "The login diagram separates connection lifetimes"
+        ),
+        "jail-rootfs-active-passive-storage": (
+            "The Jail storage diagram separates replaceable rootfs generations"
+        ),
+    }
+    expected_assets = {
+        f"{basename}.{suffix}"
+        for basename in diagram_explanations
+        for suffix in ("png", "svg")
+    }
+    for asset_name in expected_assets:
+        asset = REPO_ROOT / "docs" / asset_name
+        assert asset.is_file()
+        assert asset.stat().st_size > 0
+
+    documents = (
+        ((REPO_ROOT / "README.md").read_text(encoding="utf-8"), "docs/"),
+        ((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"), ""),
+    )
+    for document, relative_prefix in documents:
+        flattened = _squash(document)
+        for basename, explanation in diagram_explanations.items():
+            assert document.count(f"{relative_prefix}{basename}.png") == 1
+            assert document.count(f"{relative_prefix}{basename}.svg") == 1
+            assert explanation in flattened
 
 
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
@@ -672,9 +790,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`ext-soperator jobs --acknowledge-login-exit <fingerprint>`" in (
         external_upgrade_section
     )
-    assert "`--authorize-login-timeout-continuation <fingerprint>`" in (
-        external_upgrade_section
-    )
+    assert "`--authorize-login-timeout-continuation <fingerprint>`" in (external_upgrade_section)
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
     )
@@ -960,15 +1076,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Create a multi-step technical infographic as six sequential panels" not in (
         soperator_flat
     )
-    assert (
-        "![Soperator Jail Upgrade rootfs workflow with two controller pods and "
-        "two example worker pods](docs/jail-upgrade-workflow.png)"
-    ) in soperator
-    assert (
-        "The diagram uses two controller pods and two example worker pods for readability"
-        in soperator_flat
-    )
-    assert "The worker pair is illustrative" in soperator_flat
+    assert "### In-place upgrade workflow" in soperator
+    assert "### Blue-green upgrade workflow" in soperator
+    assert "](docs/soperator-in-place-upgrade-workflow.png)" in soperator
+    assert "](docs/soperator-blue-green-upgrade-workflow.png)" in soperator
+    assert "](docs/soperator-controller-bridge-ha-continuity.svg)" in soperator
+    assert "](docs/soperator-login-node-continuity.svg)" in soperator
+    assert "prepares and verifies the passive Jail rootfs slot" in soperator_flat
+    assert "Source groups are retired independently" in soperator_flat
     assert (
         "operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, "
         "or `Jail Upgrade`)"
@@ -1199,6 +1314,8 @@ def test_jail_upgrade_architecture_covers_runtime_consumers() -> None:
         "![Active/passive Jail rootfs slots sharing stable persistent mounts]"
         "(jail-rootfs-active-passive-storage.png)"
     ) in design
+    assert "[Editable SVG source](docs/jail-rootfs-active-passive-storage.svg)" in readme
+    assert "[Editable SVG source](jail-rootfs-active-passive-storage.svg)" in design
     for flat_doc in (readme_flat, design_flat):
         assert "Slot images may contain mount-point directories" in flat_doc
         assert "persistent backing directories do not overlap either rootfs slot" in flat_doc
@@ -1213,6 +1330,23 @@ def test_jail_upgrade_architecture_covers_runtime_consumers() -> None:
     assert header[:8] == b"\x89PNG\r\n\x1a\n"
     assert header[12:16] == b"IHDR"
     assert struct.unpack(">II", header[16:24]) == (1536, 1024)
+    topology_svg = REPO_ROOT / "docs" / "jail-rootfs-active-passive-storage.svg"
+    assert topology_svg.is_file()
+    topology_svg_text = topology_svg.read_text(encoding="utf-8")
+    assert '<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024"' in (
+        topology_svg_text
+    )
+    for label in (
+        "Jail Rootfs Active/Passive Storage",
+        "legacy-rootfs",
+        "/mnt/jail-store/rootfs/slot-a",
+        "/mnt/jail/.cxcli/rootfs/slot-b",
+        "AUTOMATIC · /home /data /scripts /models",
+        "DISCOVERED · existing submount / external NFS",
+        "EXPLICIT · unmodeled paths, e.g. /checkpoints",
+        "The passive populate Job mounts only its destination rootfs PVC",
+    ):
+        assert label in topology_svg_text
 
 
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:

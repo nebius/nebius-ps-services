@@ -125,6 +125,7 @@ For existing `$CODEX_HOME/config.toml`:
    - `AGENTS.md.template`
    - `config.toml.template`
    - `hooks.json.template`
+   - shared task-state helper template
    - hook script templates
    - optional hook policy template
    - custom-agent TOML templates
@@ -138,6 +139,9 @@ For existing `$CODEX_HOME/config.toml`:
    contents. The parent agent should read only relevant candidates as stale
    hints, verify them against current repo or runtime evidence, and keep the
    current session's advertised `current.md` as the write target.
+   Normal startup must remain lazy. Compaction and the first complex prompt may
+   create only an empty scaffold with `0700` directories and a `0600` file;
+   the parent agent owns semantic state updates.
    For hook scripts, custom-agent assets, and optional policy assets, use
    replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when
@@ -154,7 +158,9 @@ For existing `$CODEX_HOME/config.toml`:
    refreshing them from source. Add `--register-hooks` only when the operator
    explicitly wants the installer to semantically merge the
    bundle's hook registration into `hooks.json`; add
-   `--replace-hooks-json` only when the selected source manifests should replace
+   `--refresh-hook-registrations` only when differing registrations for the
+   same event/script and an identical handler list should be replaced while
+   unrelated entries remain intact. Add `--replace-hooks-json` only when the selected source manifests should replace
    `hooks.json` after backup. Registration is validated before payload sync.
    Neither path trusts hooks, patches `config.toml`, replaces `AGENTS.md`, or
    replaces this full setup workflow.
@@ -162,7 +168,9 @@ For existing `$CODEX_HOME/config.toml`:
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
-    secret hygiene. When prompt-workspace integration was requested, run the
+    secret hygiene. Audit the full nested task-state tree read-only; use the
+    helper's explicit `repair-permissions --execute` only after the operator
+    approves a content-preserving one-time mode repair. When prompt-workspace integration was requested, run the
     idempotency preflight with `--require-task-implementer-workspace`.
 11. Produce an alignment report that lists each checked surface as
     `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for

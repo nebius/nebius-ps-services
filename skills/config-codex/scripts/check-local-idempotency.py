@@ -43,6 +43,7 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     ),
 )
 TEMPLATE_ASSETS = {
+    "hooks/global_context_state.py": "hooks/global_context_state.py.template",
     "hooks/session_start_context.py": "hooks/session_start_context.py.template",
     "hooks/user_prompt_context.py": "hooks/user_prompt_context.py.template",
     "agents/repo_mapper.toml": "agents/repo_mapper.toml.template",
@@ -444,6 +445,25 @@ def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
         ok("task-state directory mode is 0700")
     else:
         fail(f"task-state directory mode is {oct(mode)}, expected 0o700", failures)
+
+    helper = codex_home / "hooks/global_context_state.py"
+    if helper.is_file():
+        audit = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "--codex-home",
+                str(codex_home),
+                "audit-permissions",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if audit.returncode == 0:
+            ok("nested task-state permissions and types are private")
+        else:
+            fail("nested task-state permissions or types are unsafe", failures)
 
     policy = codex_home / "hooks/global_context_policy.json"
     if policy.exists():

@@ -15,6 +15,7 @@ $CODEX_HOME/
 |-- config.toml
 |-- hooks.json
 |-- hooks/
+|   |-- global_context_state.py
 |   |-- session_start_context.py
 |   `-- user_prompt_context.py
 |-- agents/
@@ -24,6 +25,11 @@ $CODEX_HOME/
 |-- task-state/
 `-- task-implementer/  # optional private prompt workspace
 ```
+
+Normal session startup advertises task state lazily. Compaction and the first
+complex prompt initialize only an empty private scaffold; the parent agent owns
+the concise semantic summary. The shared helper also provides read-only nested
+permission auditing and an explicit content-preserving repair command.
 
 It also points Codex at user-installed skills under `$HOME/.agents/skills`,
 including `global-context-management` and `config-codex`.
@@ -179,16 +185,17 @@ The hook layer injects durable context before Codex starts work:
 Here is the workspace root.
 Here is the task-state path.
 Here are bounded same-workspace prior task-state candidate paths, when relevant.
-Do not create task state automatically.
+Create only an empty private scaffold at compaction or the first complex prompt.
 Read existing task state when prior context may matter.
 Keep raw logs and broad exploration output out of task state.
 Keep current.md as a rolling summary, not an append-only transcript.
 Use skills for workflow-specific instructions.
 ```
 
-Hooks do not implement the task. They make the right context visible to Codex.
-The parent agent creates and updates the advertised task-state file when
-continuity is useful. The config template allows sandbox writes under
+Hooks do not implement the task. Normal startup remains lazy; compaction and
+the first complex prompt create only an empty `0600` scaffold below `0700`
+directories. The parent agent owns all semantic updates when continuity is
+useful. The config template allows sandbox writes under
 `$CODEX_HOME/task-state`; any installed PreToolUse guard should allow that
 same path while continuing to protect unrelated runtime files such as
 `$CODEX_HOME/hooks`.
@@ -494,14 +501,13 @@ setup.
    agent should use `tool_search` to look for deferred multi-agent/subagent
    tools before reporting delegation unavailable.
 
-   Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-   `session_id` values should not create task-state files or directories. They
-   prove hook path calculation and prompt-time hints, not active persistent
-   model state. Prefer
+   Do not run complex synthetic hook probes against a live `$CODEX_HOME`: the
+   first complex prompt intentionally initializes an empty private scaffold.
+   Prefer
    `global-context-management/scripts/validate-local-templates.py` for
    hook-unit validation because it uses disposable temporary homes and checks
-   that `SessionStart` and `UserPromptSubmit` do not create missing scaffold
-   files, related same-workspace prior task-state candidate paths are bounded
+   lazy normal startup, compaction and complex-prompt empty scaffolds, related
+   same-workspace prior task-state candidate paths are bounded
    and do not leak contents or unrelated workspace files, an existing nonempty
    `current.md` is preserved for the agent to read instead of being overwritten
    or injected into hook context, and loose task-state file permissions are
