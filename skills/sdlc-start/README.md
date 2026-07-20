@@ -83,7 +83,9 @@ path-allowed for operator flexibility. It still blocks secret-bearing payloads,
 dangerous Bash command patterns, and guarded Git/GitHub actions. Dangerous
 shell matching is not applied to patch contents, so Dockerfile and
 documentation command examples remain subject to patch secret/target/spec
-checks instead of being treated as commands being executed.
+checks instead of being treated as commands being executed. Public Nebius
+profile, project, and credential-file path assignments are allowed as metadata;
+all other long Nebius assignments remain fail-closed.
 Coordinator-registered integration and worker worktrees outside the original
 checkout remain inside active-run policy; sensitive raw Git actions require
 exact identity and action-scoped authorization.

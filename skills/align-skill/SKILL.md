@@ -236,9 +236,11 @@ contract:
   auth or local setup, high-risk security mutation, container attachment,
   external MCP installation, workflow test harnesses, or any `sdlc-*` Agentic
   SDLC phase.
-- For `sdlc-*` skills, keep the description prefix
+- For Agentic SDLC phase skills, keep the description prefix
   `Use only as part of the Agentic SDLC workflow;` and set
-  `allow_implicit_invocation: false`.
+  `allow_implicit_invocation: false`. The explicit external
+  `sdlc-workflow-test` verifier keeps an outside-workflow description and also
+  sets `allow_implicit_invocation: false`.
 - If a skill's front matter, Non-Goals, Guardrails, or workflow says it should
   run only after an explicit request, encode that requirement in
   `agents/openai.yaml` instead of relying on prose alone.

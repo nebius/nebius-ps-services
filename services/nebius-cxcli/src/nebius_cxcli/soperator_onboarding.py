@@ -490,11 +490,12 @@ def validate_soperator_onboarding_acceptance(
                 "uses the current Soperator onboarding action contract."
             )
     raise ValueError(
-        f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
-        "a current accepted configuration. External Soperator upgrade requires a locked "
+        f"recovery-required: apps:soperator target '{target}' uses "
+        "onboard-existing-cluster but has no v5 campaign and does not have a current "
+        "accepted configuration. External Soperator upgrade requires a locked "
         "v5 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
-        "`nebius-cxcli ext-soperator onboard` for this cluster; a journal is never an "
-        "upgrade-path authority."
+        "`nebius-cxcli ext-soperator onboard` for this cluster; in-place conversion is "
+        "not supported, and a journal is never an upgrade-path authority."
     )
 
 

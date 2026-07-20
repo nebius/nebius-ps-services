@@ -96,6 +96,11 @@ body, secrets, raw logs, or private material.
 
 ## Task Queue
 
+Worker liveness is derived deterministically: tasks with no dependencies use
+the `standard` profile; tasks with dependencies use the `integration` profile.
+Every task must carry non-empty implementation steps, validation,
+end-to-end validation, and done criteria into its immutable assignment.
+
 ### task-1
 
 - Status: pending | in_progress | committed | done | blocked | superseded

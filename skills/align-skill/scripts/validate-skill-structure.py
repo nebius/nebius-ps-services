@@ -43,6 +43,7 @@ STATEFUL_WORKFLOW_REQUIRED_HEADINGS = (
     "## Output Contract",
 )
 SDLC_ONLY_DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
+SDLC_PREFIX_EXTERNAL_SKILLS = {"sdlc-workflow-test"}
 OPENAI_METADATA_RELATIVE_PATH = "agents/openai.yaml"
 WRONG_OPENAI_METADATA_FILENAME = "agents.openai.yaml"
 EXPLICIT_INVOCATION_DESCRIPTION_MARKERS = (
@@ -67,7 +68,7 @@ EXPLICIT_INVOCATION_SECTION_MARKERS = (
 )
 EXPLICIT_ONLY_SKILL_NAMES = {
     "agent-nebius-auth",
-    "agentic-sdlc-test",
+    "sdlc-workflow-test",
     "attach-ubuntu",
     "code-info",
     "commit",
@@ -369,8 +370,10 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
         result.failures.append("front matter is missing description")
     elif len(description) > 1024:
         result.failures.append("description exceeds 1024 characters")
-    elif name.startswith("sdlc-") and not description.startswith(
-        SDLC_ONLY_DESCRIPTION_PREFIX
+    elif (
+        name.startswith("sdlc-")
+        and name not in SDLC_PREFIX_EXTERNAL_SKILLS
+        and not description.startswith(SDLC_ONLY_DESCRIPTION_PREFIX)
     ):
         result.failures.append(
             "SDLC-only skills must start the description with: "

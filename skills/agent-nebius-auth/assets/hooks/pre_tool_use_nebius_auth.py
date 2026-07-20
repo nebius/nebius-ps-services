@@ -769,7 +769,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         if is_safe_manual_token_verification(command):
             return {}
         return deny(
-            "Nebius access-token commands can expose token material to Codex output. Use the agent profile through $agent-nebius-auth or redirect verification output to /dev/null outside model-visible logs."
+            "Nebius access-token commands can expose token material to Codex output. Use normal Nebius commands through the automatically selected agent profile, or run only the exact agent-profile token verification with stdout redirected to /dev/null."
         )
 
     needs_token = command_needs_nebius_token(command)

@@ -98,7 +98,7 @@ requirements/design mappings, wave schedule, checkpoints, failure log, and
 human-readable recovery status. Workers never edit it.
 
 `coordinator.json` owns the run branch, initial `HEAD`, plan digest, ordered wave
-index, active wave, and overall v3 execution status. Each wave file owns its base,
+index, active wave, and overall v4 execution status. Each wave file owns its base,
 contract commit, integration identity, stable task order, task states,
 promotion proof, and cleanup inventory.
 
@@ -115,17 +115,33 @@ fails closed.
 
 Assignments are immutable and bind:
 
-Their schema is `task-implementer/worker-assignment-v3`.
+Their schema is `task-implementer/worker-assignment-v7`; v6 and older
+assignments are a hard-cut unsupported execution surface.
 
 - run, wave, and task;
 - exact base commit and plan digest;
 - unique branch and full-repository worktree;
 - absolute scope cwd inside that worktree;
+- exact helper and workspace-manifest paths for the first transition;
 - exact/prefix write claims and conflict domains;
-- requirements, design, goal, plan, dependencies, rollback, and stop context;
+- requirements, design, goal, plan, implementation steps, end-to-end
+  validation, dependencies, rollback, and stop context;
+- canonical worktree/network/credential/external-service guardrails that may be
+  relaxed only by exact immutable-assignment authorization, plus read/execute-
+  only use of required installed skill instructions/helpers and standard local
+  executables;
+- immutable `standard` 240/300-second or dependent `integration`
+  360/420-second read-only warning/timeout profile, plus 60-second
+  dispatch-to-start, 30-second heartbeat, 240-second stale-heartbeat, and total
+  worker budgets;
 - incoming-handoff path and digest;
 - validation and done criteria;
 - assignment digest and creation time.
+
+The worker passes the embedded assignment digest unchanged to `task-start`
+through those exact paths. That helper validates the canonical unsigned
+assignment digest and Git/cwd identity; workers must not guess or recompute the
+JSON serialization before starting.
 
 The referenced `incoming-handoff-v1` record is private, immutable, and
 digest-bound. It contains an ordered list of accepted results from all earlier
@@ -145,7 +161,10 @@ prompt_workspace.py wave-replan --workspace <manifest> --run-id <id> --capacity 
 prompt_workspace.py wave-prepare --workspace <manifest> --run-id <id>
 prompt_workspace.py wave-dispatch --workspace <manifest> --run-id <id> --contract-commit <sha>
 prompt_workspace.py batch-advance --workspace <manifest> --run-id <id>
+prompt_workspace.py task-arm --workspace <manifest> --run-id <id> --task-id <id>
 prompt_workspace.py task-start --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest>
+prompt_workspace.py task-heartbeat --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest> --phase <phase>
+prompt_workspace.py task-watch --workspace <manifest> --run-id <id> --task-id <id>
 prompt_workspace.py task-recover --workspace <manifest> --run-id <id> --task-id <id> --confirmed-stopped
 prompt_workspace.py task-finish --workspace <manifest> --run-id <id> --task-id <id>
 prompt_workspace.py wave-integrate --workspace <manifest> --run-id <id>
@@ -156,10 +175,17 @@ prompt_workspace.py run-finalize --workspace <manifest> --run-id <id> --alignmen
 
 These names and arguments are not public workflow commands. Human output stays
 redacted; internal JSON may carry assignment paths to the coordinator.
-`wave-replan` replaces only a clean planned wave that owns no Git resources.
-`task-recover` requires confirmation that the previous worker stopped and
-transfers only declared dirty state or one direct-child commit to a fresh
-session. Blocked resources remain retained for operator-directed recovery;
+`wave-replan` replaces only a clean planned tail that owns no Git resources.
+The coordinator index keeps completed history plus the replacement schedule;
+superseded planned wave files remain blocked, non-indexed history.
+After the last promoted wave is cleaned, `wave-replan` may append a new
+isolated correction tail discovered by integration review before finalization.
+`task-recover` requires confirmation that the previous worker stopped and must
+be invoked by the fresh replacement worker from the assigned scope cwd. The
+coordinator communicates the stop confirmation but never invokes recovery for
+the replacement because heartbeat and finish ownership bind to the caller.
+Recovery transfers only declared dirty state or one direct-child commit.
+Blocked resources remain retained for operator-directed recovery;
 they are never silently discarded.
 
 `wave-plan` acquires the managed outer task lease before task resources exist.
@@ -180,7 +206,7 @@ checkout.
 
 Workspace, prompt, and run-manifest schemas are unchanged. The execution state
 machine has no compatibility path: every
-`task-implementer/execution-plane-v1` or coordinator-v1/v2 run returns
+`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3 run returns
 `WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v3 resources,
 including completed records. Do not add a legacy read path, migration, or
 upgrade command.

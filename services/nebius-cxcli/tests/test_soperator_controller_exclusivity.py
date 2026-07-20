@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 from collections.abc import Mapping, Sequence
@@ -265,6 +266,16 @@ def _verified_runtime_fence_pod() -> tuple[dict[str, Any], dict[str, Any]]:
 
 def test_bridge_exclusivity_allows_exact_verified_runtime_fence_pod() -> None:
     fence, journal = _verified_runtime_fence_pod()
+
+    _prove(_runner(extra_pods=(fence,)), journal=journal)
+
+
+def test_bridge_exclusivity_allows_verified_fence_resource_tuning() -> None:
+    fence, journal = _verified_runtime_fence_pod()
+    fence["spec"]["containers"][0]["resources"] = {
+        "requests": {"cpu": "5m", "memory": "16Mi"},
+        "limits": {"cpu": "100m", "memory": "64Mi"},
+    }
 
     _prove(_runner(extra_pods=(fence,)), journal=journal)
 
@@ -629,6 +640,68 @@ def test_target_singleton_proof_rejects_a_foreign_controller() -> None:
         )
 
 
+def test_target_singleton_proof_accepts_tagged_spec_with_locked_runtime_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digest = "a" * 64
+    final_config = (
+        "ClusterName=target-cluster\n"
+        "SlurmctldHost=controller-0(target-cluster-controller-svc)\n"
+        "StateSaveLocation=/target/state\n"
+    )
+    journal = {
+        "campaign_fingerprint": "b" * 64,
+        "authority": {"epoch": "target-bbbbbbbbbbbb", "owner": "target-singleton"},
+        "source_configuration": {"config_key": "slurm.conf"},
+        "version_transition": {
+            "target_image": f"registry.example/controller@sha256:{digest}",
+        },
+        "target_singleton_takeover": {
+            "target_ref": "target-cluster",
+            "controller_pod_uid": "target-pod-uid",
+            "controller_workload_uid": "target-workload-uid",
+            "final_config_map_name": "target-config",
+            "final_config_sha256": hashlib.sha256(final_config.encode()).hexdigest(),
+            "target_state_save_location": "/target/state",
+        },
+    }
+    monkeypatch.setattr(migration, "_revalidate_controller_authority_lease", lambda **_: None)
+    monkeypatch.setattr(migration, "_prove_cluster_wide_slurmctld_exclusivity", lambda **_: [])
+    monkeypatch.setattr(migration, "_controller_bridge_client_consumers", lambda **_: [])
+
+    def fake_json(_runner: Any, args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        if "configmap" in args:
+            return {"data": {"slurm.conf": final_config}}
+        return {
+            "metadata": {"uid": "target-pod-uid"},
+            "spec": {
+                "containers": [
+                    {
+                        "name": "slurmctld",
+                        "image": "registry.example/controller:4.0.2",
+                    }
+                ]
+            },
+            "status": {
+                "containerStatuses": [
+                    {
+                        "name": "slurmctld",
+                        "imageID": f"registry.example/controller@sha256:{digest}",
+                    }
+                ]
+            },
+        }
+
+    monkeypatch.setattr(migration, "_json_from_command", fake_json)
+
+    migration._prove_journaled_target_singleton_exclusivity(  # noqa: SLF001
+        journal=journal,
+        proof_label="test target singleton",
+        kube_context="test-context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
+    )
+
+
 def test_every_action_dispatch_boundary_has_a_cluster_wide_authority_proof() -> None:
     recovery = inspect.getsource(
         migration._restart_target_version_bridge_after_failed_takeover  # noqa: SLF001
@@ -659,12 +732,14 @@ def test_runtime_census_starts_all_node_inspectors_together_and_removes_them() -
     )
     assert 'phase in {"Succeeded", "Failed"}' in source
     assert '"--for=jsonpath={.status.phase}=Succeeded"' not in source
-    assert "namespace=CONTROLLER_INSPECTOR_NAMESPACE" in source
+    assert "CONTROLLER_INSPECTOR_NAMESPACE" in source
     assert source.index("try:") < source.index("_kubectl_apply_objects(")
     finally_index = source.index("finally:")
     assert finally_index < source.index("_delete_census_pods_and_prove_absence()", finally_index)
     assert '"--wait=true"' in source
-    assert "if exists:" in source
+    assert "_inspector_pods_by_name" in source
+    assert "set(census_pod_names) & set(_inspector_pods_by_name())" in source
+    assert "_kubectl_get_namespace_resource(" not in source
 
 
 def test_source_reconciliation_is_fenced_before_source_config_mutation() -> None:
@@ -710,7 +785,7 @@ def test_every_writer_start_revalidates_security_and_full_node_membership() -> N
         ),
         (
             migration._handoff_controller_bridge_to_target_singleton,
-            "_helm_upgrade_target_soperator",
+            "_ungate_in_place_target_controller_for_takeover",
         ),
     ):
         source = inspect.getsource(function)
@@ -748,6 +823,26 @@ def test_source_to_target_bridge_census_runs_before_cold_stop_and_is_reused() ->
 
     assert pre_stop_census < stop_dispatch < cold_stop_scale < exact_node_fence < api_absence
     assert "process_census=False" in source[api_absence:reused_node_identity]
+
+
+def test_source_bridge_stages_jailed_config_before_initial_or_recovery_writer_scale() -> None:
+    activation = inspect.getsource(  # noqa: SLF001
+        migration._activate_source_version_controller_bridge
+    )
+    repair = inspect.getsource(  # noqa: SLF001
+        migration._ensure_controller_bridge_source_jailed_config
+    )
+
+    staging_gate = activation.index("_ensure_controller_bridge_source_jailed_config")
+    authority = activation.index("_transition_controller_authority_lease", staging_gate)
+    initial_scale = activation.index("_kubectl_scale_namespace_resource", authority)
+    assert staging_gate < authority < initial_scale
+
+    stop_scale = repair.index("_kubectl_scale_namespace_resource")
+    stopped_fence = repair.index('boundary="source-bridge-jailed-config-repair"', stop_scale)
+    stage = repair.index("_stage_controller_bridge_jailed_config", stopped_fence)
+    restart_scale = repair.index("_kubectl_scale_namespace_resource", stage)
+    assert stop_scale < stopped_fence < stage < restart_scale
 
 
 def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -> None:
@@ -789,7 +884,9 @@ def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -
         < (target_start_runtime_index)
         < target_start_fresh_index
         < target_handoff.index("_prove_cluster_wide_slurmctld_absence", target_start_fresh_index)
-        < target_handoff.index("_helm_upgrade_target_soperator", target_start_fresh_index)
+        < target_handoff.index(
+            "_ungate_in_place_target_controller_for_takeover", target_start_fresh_index
+        )
     )
 
     assert failed_takeover_recovery.count("fresh_attempt=True") == 3
@@ -829,7 +926,16 @@ def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -
         < recovery_bridge_start_index
     )
 
-    assert source_activation.count("fresh_attempt=True") == 3
+    recovery_jailed_config_index = failed_takeover_recovery.index(
+        "_stage_controller_bridge_jailed_config"
+    )
+    assert recovery_lease_index < recovery_jailed_config_index < recovery_pre_scale_index
+    assert (
+        'resource="statefulset/cxcli-slurm-controller-bridge"'
+        in failed_takeover_recovery[:recovery_pre_authority_index]
+    )
+
+    assert source_activation.count("fresh_attempt=True") == 2
     source_pre_authority_index = source_activation.index(
         'boundary="source-version-bridge-pre-authority"'
     )
@@ -840,12 +946,11 @@ def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -
         "_prove_cluster_wide_slurmctld_absence", source_pre_authority_fresh
     )
     source_lease_index = source_activation.index("_transition_controller_authority_lease")
-    source_pre_scale_index = source_activation.index(
-        'boundary="source-version-bridge-pre-writer-scale"', source_lease_index
-    )
-    source_pre_scale_fresh = source_activation.index("fresh_attempt=True", source_pre_scale_index)
     source_absence_before_scale = source_activation.index(
-        "_prove_cluster_wide_slurmctld_absence", source_pre_scale_fresh
+        "_prove_cluster_wide_slurmctld_absence", source_lease_index
+    )
+    source_revalidated_runtime = source_activation.index(
+        "_revalidate_controller_runtime_census_nodes", source_absence_before_scale
     )
     source_scale_index = source_activation.index(
         "_kubectl_scale_namespace_resource", source_absence_before_scale
@@ -855,10 +960,16 @@ def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -
         < source_pre_authority_fresh
         < source_absence_before_lease
         < source_lease_index
-        < source_pre_scale_index
-        < source_pre_scale_fresh
         < source_absence_before_scale
+        < source_revalidated_runtime
         < source_scale_index
+    )
+    assert (
+        "process_census=False" in source_activation[source_absence_before_scale:source_scale_index]
+    )
+    assert (
+        "node_census=pre_authority_census"
+        in source_activation[source_absence_before_scale:source_scale_index]
     )
     source_rollback_index = source_activation.index(
         'boundary="source-version-bridge-scale-rejected-pre-authority-rollback"',
@@ -1050,3 +1161,131 @@ def test_cleaned_bridge_proof_failure_never_demotes_to_recreation(
             nebius_api=object(),  # type: ignore[arg-type]
             command_runner=lambda args, **_kwargs: _result(args),
         )
+
+
+def test_in_place_login_bridge_config_repair_serially_recreates_session_free_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_ref = "external-cluster"
+    expected_text = (
+        f"ClusterName={target_ref}\n"
+        "SlurmctldHost=bridge-0(bridge-0.bridge.svc)\n"
+        "SlurmctldHost=bridge-1(bridge-1.bridge.svc)\n"
+        "SlurmdTimeout=3600\nSlurmctldTimeout=3600\n"
+    )
+    stale_text = expected_text.replace(
+        "SlurmctldHost=bridge-0",
+        "SlurmctldHost=controller-0(controller.svc)\nSlurmctldHost=bridge-0",
+    )
+    expected_contract = migration._controller_bridge_client_config_contract(  # noqa: SLF001
+        expected_text
+    )
+    state = {"recreated": False, "deletes": 0}
+
+    def consumers(**_kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "target-login",
+                "name": "login-0",
+                "uid": "new-login-uid" if state["recreated"] else "old-login-uid",
+                "container_name": "sshd",
+            },
+            {
+                "role": "target-login",
+                "name": "login-1",
+                "uid": "login-1-uid",
+                "container_name": "sshd",
+            },
+            {
+                "role": "target-worker",
+                "name": "worker-0",
+                "uid": "worker-uid",
+                "container_name": "slurmd",
+            },
+        ]
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        pod = command[command.index("exec") + 1] if "exec" in command else ""
+        output = stale_text if pod == "login-0" and not state["recreated"] else expected_text
+        return SoperatorMigrationCommandResult(command, 0, output, "")
+
+    monkeypatch.setattr(migration, "_controller_bridge_client_consumers", consumers)
+    monkeypatch.setattr(
+        migration,
+        "_active_login_ssh_session_probe",
+        lambda **_kwargs: {"status": "checked", "active_sessions": 0, "pods": []},
+    )
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: {"ready_endpoints": 2},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": {
+                "name": "login-0",
+                "uid": "new-login-uid" if state["recreated"] else "old-login-uid",
+                "resourceVersion": "42",
+            },
+            "status": {
+                "phase": "Running",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        },
+    )
+
+    def delete(*_args: Any, **_kwargs: Any) -> None:
+        state["recreated"] = True
+        state["deletes"] += 1
+
+    monkeypatch.setattr(migration, "_command_runner_uid_preconditioned_delete", delete)
+
+    phase: dict[str, Any] = {}
+    lines = migration._repair_in_place_login_bridge_config_propagation(  # noqa: SLF001
+        checkpoint={"controller_bridge": {}},
+        phase=phase,
+        expected_contract=expected_contract,
+        target_ref=target_ref,
+        kube_context="context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
+
+    assert state["recreated"] is True
+    assert state["deletes"] == 1
+    assert lines
+    rollout = phase["in_place_bridge_client_handoff"]["login_config_rollout"]
+    assert rollout["status"] == "verified"
+    assert rollout["pods"]["login-0"]["uid"] == "new-login-uid"
+
+
+def test_controller_runtime_census_retries_one_fresh_attempt_after_malformed_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def census(**_kwargs: Any) -> list[dict[str, Any]]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise migration.SoperatorMigrationPhasePending(
+                "boundary runtime census failed on node-a after three immutable log reads: "
+                "controller runtime census output is malformed or duplicated."
+            )
+        return [{"node_name": "node-a"}]
+
+    monkeypatch.setattr(migration, "_prove_controller_runtime_process_census", census)
+
+    result = migration._prove_controller_runtime_process_census_with_fresh_retry(  # noqa: SLF001
+        expected_pods=(),
+        proof_label="boundary",
+        campaign_fingerprint="a" * 64,
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("runner must not be called"),
+    )
+
+    assert attempts == 2
+    assert result == [{"node_name": "node-a"}]

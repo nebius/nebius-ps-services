@@ -52,7 +52,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
-| `agentic-sdlc-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
+| `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
@@ -78,7 +78,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `app-stack` | Implicit allowed | Select, review, simplify, modernize, and coordinate implementation of the smallest justified application technology stack across application archetypes. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
-| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, vertical end-to-end slices, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
+| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and vertical slices before implementation, using `research`, `app-stack`, and `system-design-rules` where relevant before the `/plan` handoff. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
@@ -89,13 +89,16 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
 | `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
+| `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
 
-All `sdlc-*` skills are explicit-only and should run through the Agentic SDLC
-workflow, starting with `$sdlc-start workspace init [project-folder]` and then
-`$sdlc-start run <prompt-path-or-unique-filename>`.
+All `sdlc-*` skills are explicit-only. The phase skills run through the
+Agentic SDLC workflow, starting with
+`$sdlc-start workspace init [project-folder]` and then
+`$sdlc-start run <prompt-path-or-unique-filename>`; the external
+`sdlc-workflow-test` verifier is not a phase.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
@@ -169,11 +172,13 @@ $merge-pr Merge PR #110 with squash after verifying checks, reviews, mergeabilit
 
 $publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/example-app prep, PR, merge, tag, wait for CI, verify the image digest, and report the published artifact.
 
-$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+$sdlc-workflow-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 
-$agentic-sdlc-test --create --keep
+$sdlc-workflow-test --create --keep
 
-$agentic-sdlc-test --destroy
+$sdlc-workflow-test --resume
+
+$sdlc-workflow-test --destroy
 
 $sdlc-start workspace init services/example-app
 
@@ -189,7 +194,7 @@ $create-learning-course Create a public-safe course workspace for engineers lear
 
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
-$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for any undecided application-layer technology choices, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
 
 $app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
 
@@ -200,6 +205,12 @@ $system-design-rules Review this ADR against the system design checklist, compar
 $task-implementer workspace init services/nebius-cxcli
 
 $task-implementer run <prompt-path-or-unique-filename>
+
+$task-implementer-test
+
+$task-implementer-test --create --keep
+
+$task-implementer-test --destroy
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
@@ -328,15 +339,17 @@ ideation, `design` for solution design and `/plan` handoff, and
 topic, requirement, and technology due diligence into a concrete software
 design before implementation. It follows a phased workflow: understand
 requirements, understand the existing system or greenfield context, route
-missing knowledge through `research` when available, design the solution, apply
-`system-design-rules` to non-trivial solution decisions, evaluate alternatives,
-define vertical end-to-end slices for serial multi-layer applications, and
-create a Codex `/plan` handoff. Use it for new features,
+missing knowledge through `research` when available, route undecided
+application-stack or layer technology choices through `app-stack`, design the
+solution, apply `system-design-rules` to non-trivial solution decisions,
+evaluate alternatives, define vertical end-to-end slices for serial multi-layer
+applications, and create a Codex `/plan` handoff. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
-checklist review of an existing proposal, and `sdlc-create-design` for
-Agentic SDLC-owned `docs/design.md`.
+checklist review of an existing proposal, `app-stack` directly for a
+stack-selection-only request, and `sdlc-create-design` for Agentic SDLC-owned
+`docs/design.md`.
 
 ### `app-stack`
 
@@ -356,7 +369,9 @@ owns cross-layer sequencing and coordinates the narrow installed specialist
 skills that match the selected stack instead of duplicating their workflows.
 Use `research` for deep technology due diligence, `design` for a complete
 solution design, and stack-specific skills directly when the stack is already
-fixed and no selection decision remains.
+fixed and no selection decision remains. When `design` delegates a scoped stack
+decision, `app-stack` returns it to the active design workflow instead of
+starting a recursive handoff.
 
 ### `code-review`
 
@@ -419,6 +434,32 @@ operate from the scope path inside those full checkouts. Native workers dispatch
 up to capacity; fresh sequential `codex exec` workers provide the same isolation
 when native subagents are unavailable. Each worker implements one locked task,
 validates, runs `code-review`, and creates exactly one direct-child `$commit`.
+Worker-assignment v7 also carries immutable default guardrails plus exact
+helper/workspace-manifest paths for the first transition: unless the exact
+assignment authorizes it, a worker stays inside its worktree/private
+state; required installed skill instructions/helpers and standard executables
+are read/execute-only. It does not modify installed files, intentionally write
+unrelated paths, or access network, credentials, external services, or live
+runtimes. Applicable prompt and repository constraints, implementation steps,
+and end-to-end validation are repeated in each self-contained assignment.
+Workers heartbeat every 30 seconds. Dependency-free `standard` tasks warn/stop
+at 240/300 seconds without claimed-file progress; dependent `integration` tasks
+warn/stop at 360/420 seconds. Heartbeats become hard-stale at 240 seconds;
+workers that exceed their
+immutable total budget are interrupted independently.
+Workers receive fresh assignment-only context and must reach `task-start`
+within 60 seconds after the coordinator arms an available worker slot. Queued
+assignments remain unarmed and do not consume the deadline.
+The worker makes `task-start` its first private transition after immediate
+Git/cwd verification, passing the embedded digest unchanged through the exact
+embedded paths. The helper performs authoritative canonical digest validation,
+so the worker never guesses JSON serialization. It then reads the incoming
+handoff and performs deeper preflight.
+At the profile warning, the coordinator demands an edit or blocker; background
+and autonomous heartbeat loops are forbidden. Workers rely on the assignment
+and incoming handoff instead of rereading the full prompt or coordinator state.
+Worker start is single-use, and only in-claim mutations count as liveness
+progress.
 
 The coordinator verifies worker commits and changed paths, merges task branches
 into a temporary integration branch in stable task-ID order, runs combined
@@ -441,31 +482,84 @@ is explicit-only. Use `global-context-management` for general context hygiene,
 `$sdlc-start run <prompt-path-or-unique-filename>` for Agentic SDLC, and
 `align` for final alignment.
 
-### `agentic-sdlc-test`
+### `task-implementer-test`
 
-`agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
+`task-implementer-test` verifies Task Implementer without using a real user
+project. With no flags it runs the current explicit-only and exact two-command
+contract checks plus the local temporary-fixture workspace, specification,
+scheduler, Git-wave, outer-worktree, verifier-helper, lifecycle, reporting, and
+semantic suites. It never starts Docker, dispatches implementation workers, or
+creates a persistent application.
+
+The opt-in `--create` mode first replaces any prior exactly owned verifier
+generation, then exercises the real Task Implementer public interface on a
+seeded remote-free brownfield task board. The target is a browser frontend,
+HTTP API, and PostgreSQL stack with disjoint first-wave tier ownership and a
+dependent integration/runtime task. The verifier checks worker isolation,
+reviewed commits, ordered integration, ff-only promotion, final alignment,
+frontend/API/database semantics, and restart persistence before writing a
+sanitized report and cleaning the fixture. PASS is gated by a generation-bound
+semantic transition over canonical Task Implementer state, Git identity, the
+helper-collected application artifact, and an unchanged post-completion prompt
+invocation.
+The live verifier checks worker liveness every 30 seconds, stops rather than
+recovering a stalled disposable worker, and proceeds directly from a validated,
+cleaned Task Implementer workspace to runtime evidence and reporting.
+Its generation-fenced stage ledger records deterministic checks, individual
+tier workers, wave integration, finalization, runtime, semantic validation,
+reporting, and cleanup as PASS/PARTIAL/FAIL/NOT_RUN. The preserved report shows
+the complete stage matrix, exact bounded failure analysis, downstream stages
+that did not run, and a minimum next action even when normal report creation
+fails.
+
+Before Docker sees generated configuration, the verifier accepts only the
+fixture's narrow Compose subset and rejects external includes, extends, label
+files, privileged build options, and external build/cache inputs. Runtime
+service networks use the verifier's long-form object-map syntax rather than
+Compose list shorthand. Runtime
+collection stays under one generation lock, and built-image cleanup requires
+both exact generation and verifier project labels.
+
+`--create --keep` retains the one current exact generation for inspection.
+`--destroy` later removes only its ownership-checked project, isolated Task
+Implementer state, raw evidence, and runtime resources while preserving reports
+and lifecycle history. Every create is replace-on-create. Symlink, marker,
+remote, external-worktree, generation, or Docker ambiguity blocks replacement
+rather than creating a second instance. Explicit destroy or replacement also
+removes inspection edits inside the exact disposable owned run.
+
+### `sdlc-workflow-test`
+
+`sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
 skill parity, explicit-only invocation policy, prompt/execution/worktree/
 steering regressions, composed managed-outer lease behavior, and disposable
 hook fixtures. Optional private live-results evidence covers the golden path,
 idempotency, change requests, failure routing, auto-steering, documentation,
-and continuation. Live PASS requires a real selected-scope commit,
-lane-specific private evidence, and clean in-scope paths across every commit in
-the supplied history. It writes under `~/.codex/sdlc-verification/` and must
-not change real projects, installed skills, hooks, hook trust, or agent
-configuration.
+and continuation, plus one explicit evidence row for each of the 20 Agentic
+SDLC skills. Live PASS requires a real selected-scope commit, lane-specific
+private evidence, the exact complete skill matrix, and clean in-scope paths
+across every commit in the supplied history. It writes under
+`~/.codex/sdlc-verification/` and must not change real projects, installed
+skills, hooks, hook trust, or agent configuration.
+
+The rename is an intentional ownership hard cut. Destroy retained live
+verifier environments before installing it; the renamed skill does not read or
+clean old-format ownership markers, labels, or Compose names.
 
 The no-flag invocation remains the lightweight resource-validator verifier and
-does not touch Docker or a browser. Explicit `--create` builds and tests a
-browser GUI, Django/Gunicorn web/API server, and PostgreSQL database through the
-normal two-command Agentic SDLC workflow. It uses two owned Docker Compose
+does not touch Docker or a browser. Every explicit `--create` first safely
+destroys the previous active exactly owned environment, then builds and tests a
+fresh browser GUI, Django/Gunicorn web/API server, and PostgreSQL database
+through the normal two-command Agentic SDLC workflow. It launches one fresh
+verifier-owned Chrome process group with a private profile and exact marker,
+never an existing Chrome instance. It uses two owned Docker Compose
 containers, a dynamically assigned loopback web port, an internal-only database
 endpoint, semantic cross-layer evidence, and computer-use GUI UAT correlated
 with API and database observations. By default it writes a complete report and
-then removes every exact owned live resource, even after failure. If an
-unhealthy Computer Use service prevents safe dedicated-tab closure, cleanup
-fails closed as `CLEANUP_FAILED` and retains the owned runtime for separately
-authorized recovery.
+then removes every exact owned live resource, even after failure. Browser
+cleanup revalidates and signals only the recorded process group; identity
+ambiguity fails closed as `CLEANUP_FAILED` before Docker mutation.
 
 Initial Computer Use capture proves capability discovery only. The live profile
 repeats a fresh capture immediately before GUI evaluation and UAT with an
@@ -475,12 +569,22 @@ pre-navigation visibility failure is reported as `ENVIRONMENT_DEFECT`; a hung
 or non-responsive shared Computer Use service stops further calls and requires
 separately authorized recovery while the owned application is preserved.
 
-`--create --keep` retains the owned project, private state/evidence, running
-services, database volume, built image, and dedicated browser tab. A later
-`--destroy` closes only that tab and removes only resources whose exact IDs and
-two ownership labels match the private lifecycle, while retaining sanitized
-reports and lifecycle history. One active application is allowed per
-verification root; repeated destroy returns `ALREADY_DESTROYED`.
+`--create --keep` performs the same replacement and then retains the new owned
+project, private state/evidence, running services, database volume, built image,
+and dedicated Chrome instance/profile. A later
+`--resume` revalidates and continues that application only after a failed or
+partial kept run. A later `--destroy` closes only that exact verifier-owned
+Chrome process group and removes resources whose canonical identities and two
+ownership labels match the private lifecycle, while retaining sanitized reports
+and lifecycle history. Existing Chrome processes are never targets. One
+active application is allowed per verification root; cleanup ambiguity blocks
+replacement rather than starting a second stack. Cleanup includes resources
+discovered by the exact verification-ID and Compose-project labels even when a
+prior interruption prevented inventory capture. Name/ID aliases are
+canonicalized and deduplicated, and cleanup retries preserve their cumulative
+removed/already-absent ledger. Later helper mutations and
+Compose actions are generation-fenced so a superseded invocation cannot
+continue against the replacement. Repeated destroy returns `ALREADY_DESTROYED`.
 
 ### `agent-nebius-auth`
 
@@ -510,8 +614,9 @@ and explicit final merge.
 Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 `sdlc-start`, so tool discovery does not confuse workflow phases such as
 `sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
-All `sdlc-*` skills set `allow_implicit_invocation: false`. Initialize and run
-the workflow through exactly `$sdlc-start workspace init [project-folder]` and
+All `sdlc-*` skills set `allow_implicit_invocation: false`. Except for the
+external `sdlc-workflow-test` verifier, initialize and run the workflow through
+exactly `$sdlc-start workspace init [project-folder]` and
 `$sdlc-start run <prompt-path-or-unique-filename>`, then let the coordinator
 record the next recommended phase in local run state. Editing the same managed
 prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a

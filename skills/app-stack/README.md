@@ -48,6 +48,8 @@ alignment guidance with their specialist owners.
 - Use `research` for deep due diligence on a technology or architecture
   pattern.
 - Use `design` for a complete solution design before implementation.
+- When `design` requests a scoped stack decision, return the decision to that
+  active workflow instead of starting a recursive design handoff.
 - Use a stack-specific skill directly when the stack is already fixed and no
   selection decision remains.
 - Use `align` after implementation to reconcile the changed project surfaces.

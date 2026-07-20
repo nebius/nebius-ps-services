@@ -1,0 +1,6 @@
+interface:
+  display_name: "Task Implementer Test"
+  short_description: "Verify Task Implementer safely"
+  default_prompt: "Use $task-implementer-test to run the lightweight verifier, or pass --create, --create --keep, or --destroy for the disposable multi-tier lifecycle."
+policy:
+  allow_implicit_invocation: false

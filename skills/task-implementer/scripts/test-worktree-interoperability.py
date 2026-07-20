@@ -147,7 +147,9 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
 - Depends on: none
 - Write claims: exact: services/example/feature.txt
 - Conflict domains: files:feature.txt
+- Implementation steps: update only the claimed feature file
 - Validation: inspect feature.txt
+- End-to-end validation: verify the nested worktree result
 - Done criteria: feature.txt contains the composed update
 """
         handoff_path = self.run_dir / "handoff.md"
@@ -187,6 +189,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         assignment_path = Path(str(dispatched["assignments"][0]))
         assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
         worker = Path(str(assignment["worktree"]))
+        pw.arm_task(self.workspace, self.run_id, "task-1", clock=lambda: FIXED)
         previous = Path.cwd()
         os.chdir(Path(str(assignment["scope_cwd"])))
         try:

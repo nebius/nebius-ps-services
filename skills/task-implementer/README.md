@@ -22,6 +22,12 @@ received after a wave starts remains queued until the next safe boundary. An
 unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
 prompt starts a new run.
 
+Before resources exist, replanning replaces the resource-free planned tail.
+The coordinator index keeps completed waves plus the replacement schedule;
+superseded planned wave files remain blocked history outside final completion.
+After a final promoted wave is cleaned, replanning can append an isolated
+correction tail found by integration review before finalization.
+
 When initialized inside a linked worktree created by the `worktree` skill, the
 entire task run is nested under that outer branch. The exact current outer
 `HEAD` becomes the worker base, all wave promotions return to that branch, and
@@ -71,6 +77,37 @@ the accepted commits, paths, summaries, decisions, risks, validation, and
 review evidence from all earlier completed waves and batches. Only the first
 batch of the first wave has an empty predecessor list.
 
+Immutable worker-assignment v7 records also carry canonical guardrails and the
+exact helper/workspace-manifest paths for the first transition. Unless
+the exact assignment explicitly authorizes an action, workers stay inside the
+assigned worktree/private state; installed skill instructions/helpers and
+standard local executables are read/execute-only when required. Workers do not
+modify installed files, intentionally write other paths, or access network,
+credentials, external services, or live runtimes. Applicable prompt and
+repository constraints, implementation steps, and end-to-end validation are
+repeated in the assignment so it and the incoming handoff are the worker's
+complete task context.
+Workers record a private heartbeat at least every 30 seconds. The coordinator
+checks liveness on the same cadence. Dependency-free `standard` tasks warn at
+240 seconds and stop at 300 seconds without a claimed-path edit or blocker.
+Dependent `integration` tasks warn at 360 seconds and stop at 420 seconds.
+A heartbeat becomes hard-stale at 240 seconds; that stop gate and the immutable
+total budget remain independent of the recommended 30-second cadence.
+Workers receive assignment-only fresh context with no inherited coordinator
+transcript. Queued assignments do not consume a start budget; the coordinator
+arms one only when a real worker slot is available. That worker reads its
+assignment and makes `task-start` the first private transition after immediate
+Git/cwd verification. It passes the embedded digest unchanged through the
+embedded helper/workspace paths; `task-start` performs authoritative canonical
+digest validation, so workers never guess JSON serialization. Incoming-handoff
+reading and deeper preflight follow. The start budget is 60 seconds.
+At the profile warning, `task-watch` tells the coordinator to demand an
+immediate edit or blocker. Heartbeats are direct bounded calls;
+background or autonomous heartbeat loops are forbidden. Workers do not reread the full
+managed prompt or coordinator-only state after validating their assignment.
+`task-start` is single-use, and mutations outside immutable write claims stop as
+`WORKER_SCOPE_VIOLATION` instead of extending any liveness budget.
+
 Workers never edit the shared handoff, managed specs, common docs, other refs
 or worktrees, or the primary checkout. An undeclared path requirement stops
 with `REPLAN_REQUIRED` before edit or commit.
@@ -100,10 +137,10 @@ release instead of starting a new task run.
 
 ## Private State And Recovery
 
-Coordinator v3, wave, mutable task-plane v3, immutable assignment/result v3,
+Coordinator v4, wave, mutable task-plane v5, immutable assignment v7/result v3,
 incoming-handoff, and journal records live with the run
 under the private prompt workspace. Every Git mutation is journaled before
-execution and re-observed afterward. A repeated `run` resumes durable v3 truth
+execution and re-observed afterward. A repeated `run` resumes durable v4 truth
 without recreating branches, worktrees, assignments, commits, or merges.
 
 `orchestration/interop.json` binds a nested run to the exact managed outer
@@ -111,7 +148,7 @@ identity and its worktree-owned lease. Completed prompt history is archive-only
 after the outer worktree has itself been removed; it is never migrated to a
 different workspace identity.
 
-Every execution-plane-v1 or coordinator-v1/v2 run returns
+Every execution-plane-v1 or coordinator-v1/v2/v3 run returns
 `WORKFLOW_UPGRADE_REQUIRED`, including completed records. There is no legacy
 read path, compatibility execution path, or migration command.
 

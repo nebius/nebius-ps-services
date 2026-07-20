@@ -122,6 +122,7 @@ def _target_pod(*, gated: bool = True) -> dict[str, Any]:
             "ownerReferences": [{"uid": "target-controller-workload-uid"}],
         },
         "spec": {
+            "nodeName": "controller-node",
             "volumes": [{"name": "material", "secret": {"secretName": _MATERIAL_NAME}}],
             "containers": [
                 {
@@ -132,12 +133,16 @@ def _target_pod(*, gated: bool = True) -> dict[str, Any]:
             ],
         },
         "status": {
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "True"}],
             "containerStatuses": [
                 {
                     "name": "slurmctld",
                     "imageID": "registry.example/slurm@sha256:" + "a" * 64,
+                    "ready": True,
+                    "restartCount": 0,
                 }
-            ]
+            ],
         },
     }
     if gated:
@@ -302,13 +307,39 @@ def test_target_singleton_jwt_material_is_bound_without_secret_bytes() -> None:
     serialized = json.dumps(journal, sort_keys=True)
     assert _SOURCE_VALUE not in serialized
     assert journal["target_singleton_takeover"]["jwt_material_proof"]["status"] == "verified"
-    assert writes == ["write", "write"]
+    assert writes == ["write", "write", "write", "write"]
     probe_scripts = [
         call[call.index("-ec") + 1] for call in runner.calls if "cxcli-jwt-proof" in call
     ]
     assert len(probe_scripts) == 2
     for script in probe_scripts:
         subprocess.run(["/bin/sh", "-n", "-c", script], check=True)
+
+
+def test_target_singleton_jwt_material_allows_runtime_image_id_resolution_change() -> None:
+    journal, _source, material = _journal_and_source()
+    runner = _JwtRunner(pod=_target_pod(), material=material)
+    _preflight(journal, runner)
+    preflight = journal["target_singleton_takeover"]["jwt_material_preflight"]
+
+    _activate_target(journal, runner)
+    resolved_image_id = "registry.example/slurm@sha256:" + "b" * 64
+    runner.pod["status"]["containerStatuses"][0]["imageID"] = resolved_image_id
+    migration._revalidate_target_singleton_jwt_material(  # noqa: SLF001
+        journal=journal,
+        target_ref="target-cluster",
+        target_pod=runner.pod,
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
+
+    proof = journal["target_singleton_takeover"]["jwt_material_proof"]
+    assert proof["status"] == "verified"
+    assert proof["controller_container_image"] == preflight["controller_container_image"]
+    assert proof["controller_container_image_id"] == resolved_image_id
+    assert proof["controller_container_image_id"] != preflight["controller_container_image_id"]
+    validate_bridge_journal(journal)
 
 
 def test_target_singleton_jwt_material_mismatch_fails_without_disclosure() -> None:
@@ -345,6 +376,8 @@ def test_target_singleton_jwt_material_resume_revalidates_live_secret(
             "2026-07-13T09:59:00Z",
             "2026-07-13T10:00:00Z",
             "2026-07-13T10:01:00Z",
+            "2026-07-13T10:02:00Z",
+            "2026-07-13T10:03:00Z",
         )
     )
     monkeypatch.setattr(migration, "_utc_now", lambda: next(times))
@@ -368,10 +401,111 @@ def test_target_singleton_jwt_material_resume_revalidates_live_secret(
     )
 
     proof = journal["target_singleton_takeover"]["jwt_material_proof"]
-    assert proof["verified_at"] == "2026-07-13T10:00:00Z"
-    assert proof["revalidated_at"] == "2026-07-13T10:01:00Z"
+    assert proof["verified_at"] == "2026-07-13T10:02:00Z"
+    assert proof["revalidated_at"] == "2026-07-13T10:03:00Z"
     assert runner.token_smoke_calls == 2
     assert any("pod/controller-0" in call for call in runner.calls)
+
+
+def test_target_singleton_jwt_material_adopts_fully_reproven_pod_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal, _source, material = _journal_and_source()
+    runner = _JwtRunner(pod=_target_pod(), material=material)
+    _preflight(journal, runner)
+    _activate_target(journal, runner)
+    migration._revalidate_target_singleton_jwt_material(  # noqa: SLF001
+        journal=journal,
+        target_ref="target-cluster",
+        target_pod=runner.pod,
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
+    original_uid = runner.pod["metadata"]["uid"]
+    locked_index_image_id = "registry.example/slurm@sha256:" + "b" * 64
+    journal["target_image_lock"]["index_digest"] = "sha256:" + "b" * 64
+    runner.pod["metadata"]["uid"] = "target-controller-successor-uid"
+    runner.pod["status"]["containerStatuses"][0]["imageID"] = locked_index_image_id
+    proofs: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_prove_replacement_target_singleton_adoption",
+        lambda **kwargs: proofs.append(str(kwargs["pod_uid"])),
+    )
+
+    migration._revalidate_target_singleton_jwt_material(  # noqa: SLF001
+        journal=journal,
+        target_ref="target-cluster",
+        target_pod=runner.pod,
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
+
+    takeover = journal["target_singleton_takeover"]
+    assert takeover["controller_pod_uid"] == "target-controller-successor-uid"
+    assert takeover["jwt_material_proof"]["controller_pod_uid"] == (
+        "target-controller-successor-uid"
+    )
+    assert takeover["controller_pod_successors"][-1]["prior_pod_uid"] == original_uid
+    assert (
+        takeover["controller_pod_successors"][-1]["controller_container_image_id"]
+        == locked_index_image_id
+    )
+    assert proofs == ["target-controller-successor-uid"]
+    validate_bridge_journal(journal)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda pod: pod["metadata"].update({"ownerReferences": [{"uid": "other"}]}), "workload"),
+        (
+            lambda pod: pod["status"]["containerStatuses"][0].update(
+                {"imageID": "registry.example/slurm@sha256:" + "f" * 64}
+            ),
+            "immutable image",
+        ),
+        (
+            lambda pod: pod["status"]["containerStatuses"][0].update({"restartCount": 1}),
+            "restart",
+        ),
+    ),
+)
+def test_target_singleton_jwt_material_rejects_unproven_pod_successor(
+    mutation: Any,
+    message: str,
+) -> None:
+    journal, _source, material = _journal_and_source()
+    runner = _JwtRunner(pod=_target_pod(), material=material)
+    _preflight(journal, runner)
+    _activate_target(journal, runner)
+    migration._revalidate_target_singleton_jwt_material(  # noqa: SLF001
+        journal=journal,
+        target_ref="target-cluster",
+        target_pod=runner.pod,
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
+    original_uid = runner.pod["metadata"]["uid"]
+    runner.pod["metadata"]["uid"] = "target-controller-successor-uid"
+    mutation(runner.pod)
+
+    with pytest.raises(RuntimeError, match=message):
+        migration._revalidate_target_singleton_jwt_material(  # noqa: SLF001
+            journal=journal,
+            target_ref="target-cluster",
+            target_pod=runner.pod,
+            kube_context="external-context",
+            command_runner=runner,
+            checkpoint_writer=None,
+        )
+
+    takeover = journal["target_singleton_takeover"]
+    assert takeover["controller_pod_uid"] == original_uid
+    assert "controller_pod_successors" not in takeover
 
 
 def test_target_jwt_preflight_rejects_an_unmounted_or_sidecar_only_secret() -> None:
@@ -396,7 +530,7 @@ def test_target_jwt_preflight_rejects_an_unmounted_or_sidecar_only_secret() -> N
         workload=_target_workload(pod, gated=True),
     )
 
-    with pytest.raises(RuntimeError, match="mount exactly one checkpointed HS256 Secret"):
+    with pytest.raises(RuntimeError, match="mount exactly one Secret source"):
         _preflight(journal, runner)
 
 
@@ -599,12 +733,13 @@ def test_gated_target_replica_is_explicitly_ungated_before_startup_proof() -> No
 
     gate_observation = source.index("target_gated_before")
     ungate_branch = source.index("if ungate_required:", gate_observation)
-    helm_ungate = source.index("_helm_upgrade_target_soperator", ungate_branch)
-    wait_old_uid = source.index("_wait_for_kubernetes_resource_uid_absent", helm_ungate)
-    reject_live_gate = source.index("_is_exact_target_controller_command_gate", wait_old_uid)
+    controller_ungate = source.index(
+        "_ungate_in_place_target_controller_for_takeover", ungate_branch
+    )
+    reject_live_gate = source.index("_is_exact_target_controller_command_gate", controller_ungate)
     startup_proof = source.index("scontrol ping", reject_live_gate)
-    assert gate_observation < ungate_branch < helm_ungate < wait_old_uid
-    assert wait_old_uid < reject_live_gate < startup_proof
+    assert gate_observation < ungate_branch < controller_ungate
+    assert controller_ungate < reject_live_gate < startup_proof
 
 
 def test_failed_takeover_clears_jwt_proof_only_after_target_runtime_fence() -> None:

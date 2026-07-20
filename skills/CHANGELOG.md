@@ -4,9 +4,77 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the SDLC `PreToolUse` secret classifier so public Nebius profile,
+  project, and credential-file path assignments no longer trigger false
+  authentication-policy denials, while all other long Nebius assignments
+  remain fail-closed. The agent auth hook now directs ordinary commands through
+  its automatically selected profile and reserves direct token minting for the
+  exact `/dev/null` verification form.
+- Tightened `task-implementer-test` integration-task guidance to require
+  long-form service network object maps with empty option objects, matching the
+  pre-Compose ownership validator instead of allowing ambiguous list syntax.
+- Finalized successful cleanup reports with an accurate no-action result, and
+  made a later explicit destroy promote the cleanup stage to PASS instead of
+  leaving stale retained-run wording or a NOT_RUN cleanup row.
+- Fixed Task Implementer post-integration correction handling so a cleaned
+  final wave can append a new isolated correction tail before finalization,
+  and clarified that the replacement worker—not the coordinator—must invoke
+  `task-recover` so heartbeat and finish ownership bind to the right session.
+
 ### Added
 
-- Added an opt-in real-life profile to `agentic-sdlc-test`: `--create` builds,
+- Added the explicit-only `task-implementer-test` verifier with a no-flag
+  lightweight Task Implementer contract and temporary-fixture profile plus
+  opt-in `--create`, `--create --keep`, and idempotent `--destroy` modes for one
+  replace-on-create, exactly owned local frontend/API/PostgreSQL fixture. The
+  live contract isolates Task Implementer private state, generation-fences
+  mutations, digest-pins Compose input, validates exact dual-label runtime
+  ownership and loopback/database exposure, derives frontend/API/database and
+  restart evidence through fenced helpers, and gates PASS on canonical
+  dependency-wave, Git, unchanged-prompt, application, and lifecycle evidence.
+  It preserves sanitized reports and lifecycle history and fails closed rather
+  than creating a second instance. The deterministic gate also runs the
+  verifier's own helper suites, validates the exact folder/frontmatter identity
+  and two-command surface, and preserves distinct PARTIAL, FAIL, and
+  OWNERSHIP_BLOCKED lifecycle classifications. Live Compose inspection parses
+  Docker's documented JSON Lines output as well as single-document output, and
+  preserved reports are finalized from lifecycle-owned cleanup results. The
+  Docker boundary now rejects every non-allowlisted Compose/build key before
+  invoking Compose, locally built images require exact generation-plus-project
+  labels, collection holds one lifecycle lease through HTTP/database/restart
+  mutations, and an atomically moved deletion tombstone resumes exact cleanup
+  after partial filesystem deletion without re-adopting a damaged project.
+  Canonical Compose validation now accepts only Docker Compose's injected null
+  `command` and `entrypoint` plus empty network `ipam` defaults after strict
+  raw-source validation, while continuing to reject authored or non-empty
+  runtime/network overrides.
+  Reports now use a generation-fenced ordered stage ledger and show stage
+  totals, individual tier/wave/runtime outcomes, explicit bounded failure
+  analysis, downstream NOT_RUN stages, and the next action. Failure-path report
+  synthesis uses the same matrix instead of reducing the run to one overall
+  sentence.
+- Hardened `sdlc-workflow-test` live cleanup with canonical Docker identity
+  deduplication, cumulative idempotent retry reporting, and inspect-proven
+  already-absent handling. Replaced Edge/fallback browser reuse with one fresh
+  verifier-owned Chrome process group, isolated profile, verification marker,
+  marker-gated Computer Use, and exact identity-scoped close behavior.
+- Hardened `sdlc-workflow-test` with resumable retained failed/partial
+  lifecycles, v4 immutable phase-time Git identity and ancestry-bound canonical
+  phase results, structured Computer
+  Use readiness state, and a v3
+  seven-lane and exact 20-skill evidence contract with identity/head binding,
+  explicit lightweight/three-tier/deterministic/safety provenance, owner-local
+  assertion artifacts, profile source-schema artifacts, a fail-closed bounded
+  evidence collector, canonical phase/handoff assertions, and SHA-256
+  verification, plus verifier-derived deterministic and merge-safety profiles
+  that live manifests cannot self-assert and strict retained three-tier source
+  validation while lightweight claims remain fail-closed; preserved partial semantic
+  progress; explicit retained-resource reporting; and fail-closed rejection of
+  placeholder or self-attested PASS artifacts. The merge skill is verified by
+  explicit-authorization safety evidence only and never by a real merge.
+- Added an opt-in real-life profile to `sdlc-workflow-test`: `--create` builds,
   locally ships, and semantically tests an owned task-board GUI,
   Django/Gunicorn API server, and PostgreSQL database through the normal
   Agentic SDLC phases; `--create --keep` retains the exact application; and
@@ -116,8 +184,8 @@ All notable changes to the reusable Codex skills are tracked here.
   loops that order prompt-derived work as `task-1` through `task-n`, keep one
   write task active at a time, and hand off between fresh Codex sessions
   through private markdown checkpoints.
-- Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
-  SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
+- Added the `sdlc-workflow-test` Codex skill for safely verifying the Agentic
+  SDLC workflow from outside the workflow with required phase-skill discovery,
   hook configuration inspection, disposable PreToolUse and Stop hook fixture
   tests, disposable golden-path guidance, idempotency and failure-loop checks,
   and a report under `~/.codex/sdlc-verification/`.
@@ -179,7 +247,75 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Hardened `agentic-sdlc-test` Computer Use verification with just-in-time
+- Updated `design` to delegate undecided or reconsidered application-stack and
+  layer technology choices to `app-stack`, including frontend, API, backend,
+  data, asynchronous-work, deployment, and observability decisions, while
+  retaining ownership of the complete cross-layer design and `/plan` handoff.
+  Designs with an already approved stack now explicitly skip stack reselection,
+  and scoped `app-stack` handoffs return to the active design workflow without
+  recursive routing.
+- Changed Task Implementer worker assignments to the hard-cut v7 schema and
+  coordinator state to v4. Dependency-free `standard` workers receive
+  240/300-second read-only warning/timeout budgets, while dependent
+  `integration` workers receive 360/420-second budgets. Assignments now bind
+  implementation steps and end-to-end validation so the assignment plus
+  incoming handoff is complete worker context and full-prompt/coordinator-state
+  rereads are unnecessary. Assignments embed the exact helper and workspace
+  manifest paths needed for startup. Workers make `task-start` their first
+  private transition after immediate Git/cwd verification, passing the embedded
+  digest unchanged for the helper's authoritative canonical validation instead
+  of guessing JSON serialization,
+  before incoming-handoff reading or deeper preflight consumes the 60-second
+  start budget. The hard cut has no v3 coordinator or v6 assignment
+  compatibility path. Worker assignments retain
+  immutable default guardrails: workers stay inside their assigned worktree and
+  private state; required installed skill instructions/helpers and standard
+  local executables are read/execute-only. Workers cannot modify installed
+  files, intentionally write unrelated paths, or access network, credentials,
+  external services, or live runtimes unless the exact assignment explicitly
+  authorizes that action. Task decomposition must also repeat applicable prompt
+  and repository constraints in every task's stop context. Mutable task-plane
+  v5 now distinguishes queued assignments from explicitly armed worker slots,
+  records 30-second worker heartbeats, and exposes a coordinator watch check
+  that fails closed when fresh assignment-only workers miss a 60-second armed
+  start deadline, exceed their profile-specific read-only/no-file budget, a
+  240-second stale heartbeat, or the immutable total worker budget. The live
+  verifier stops a stalled disposable run and continues from successful
+  workspace validation directly into runtime evidence and report generation.
+  It now escalates the profile-specific read-only warning before the hard cutoff and
+  forbids background or autonomous heartbeat loops. `task-start` is single-use,
+  only in-claim mutations count as progress, and out-of-claim mutations stop as
+  `WORKER_SCOPE_VIOLATION` rather than extending worker budgets.
+- Changed Task Implementer planned-tail replanning to remove superseded waves
+  from the active coordinator index while preserving their blocked private
+  history. Final completion and semantic validation now see only completed
+  waves plus the replacement schedule, preventing duplicate task ownership
+  and impossible cleanup demands after safe pre-resource correction tasks.
+- Changed `task-implementer-test --create` planning to require four explicit,
+  self-contained verifier task contracts before dispatch, including frontend
+  port 80, API-owned idempotent schema setup without bind mounts, and the exact
+  strict Compose ownership/allowlist model. Workers no longer need forbidden
+  full-prompt rereads to discover runtime constraints.
+- Renamed the external workflow verifier skill to `sdlc-workflow-test` across
+  its folder, invocation, metadata, ownership markers and labels, Compose
+  prefix, reports, tests, and documentation. This is a hard cut: there is no
+  alias, compatibility reader, or migration path for retained old-format
+  verifier state.
+- Changed `sdlc-workflow-test --create`, including `--create --keep`, to
+  serialize lifecycle mutation and replace the previous active exactly owned
+  three-tier environment through fail-closed cleanup before creating a fresh
+  one. Cleanup combines recorded inventory with resources discovered by both
+  exact ownership labels; immutable verification-generation fencing covers
+  every later helper mutation and holds the lifecycle lock through each owned
+  Compose action. Ambiguity or stale generations block mutation so multiple
+  live stacks are not intentionally started; the no-flag invocation remains
+  lightweight and does not create or inspect a Docker/browser application.
+- Changed standalone `sdlc-workflow-test --destroy` to leave all browser tabs
+  untouched and treat recorded tab state as audit metadata only, while retaining
+  exact project, lifecycle, Git, verification-ID, Compose, and dual-label
+  ownership checks before deleting verifier-owned application resources.
+
+- Hardened `sdlc-workflow-test` Computer Use verification with just-in-time
   capture gates before GUI evaluation and UAT, unlocked-session checks unless
   locked Computer Use is explicitly enabled, visible foreground current-Space
   window requirements, accurate pre-navigation
@@ -221,7 +357,7 @@ All notable changes to the reusable Codex skills are tracked here.
   references the `gh pr list` command it actually uses. New generated names use
   a constant public-safe prefix instead of copying a potentially confidential
   repository-relative project scope into local and remote branch identities.
-- Aligned `agentic-sdlc-test` with the completed coordinator: deterministic
+- Aligned `sdlc-workflow-test` with the completed coordinator: deterministic
   capability-level prompt/execution/worktree/hook regressions, required
   source-installed parity, a composed nested managed-outer lease test,
   verifier self-tests, private v1 live-evidence ingestion, and fail-closed
@@ -507,7 +643,7 @@ All notable changes to the reusable Codex skills are tracked here.
   cover wrong metadata paths plus explicit-only policy derived from `SKILL.md`.
 - Added explicit `agents/openai.yaml` invocation policies across all source
   skills: operational setup, commit, PR, merge, publish, security, code-info,
-  container, Grafana MCP, `agentic-sdlc-test`, and every `sdlc-*` workflow
+  container, Grafana MCP, `sdlc-workflow-test`, and every `sdlc-*` workflow
   skill now disable implicit invocation, while the remaining non-SDLC skills
   opt in to implicit matching. The Agentic SDLC Stop hook now emits explicit
   `$sdlc-start` continuation prompts, and the skill-structure validator checks
@@ -594,14 +730,14 @@ All notable changes to the reusable Codex skills are tracked here.
 - Expanded `docs/agentic-sdlc-design.md` with an explicit SDLC workflow
   verification procedure, including quick preflight usage, full disposable
   golden-path testing, report status interpretation, and fix/rerun policy for
-  `agentic-sdlc-test`.
-- Hardened `agentic-sdlc-test` hook fixture execution so subprocesses disable
+  `sdlc-workflow-test`.
+- Hardened `sdlc-workflow-test` hook fixture execution so subprocesses disable
   Python bytecode writes and do not create `__pycache__` artifacts in skill
   source folders.
 - Aligned `global-context-management` and `config-codex` local setup guidance
   to syntax-check rendered hooks without bytecode writes, and clarified that
   installable global-context hook bundle sync is owned by `config-codex`.
-- Strengthened `agentic-sdlc-test` design-contract preflight so it verifies the
+- Strengthened `sdlc-workflow-test` design-contract preflight so it verifies the
   Agentic SDLC design document includes the workflow verification procedure and
   report path, not only the core SDLC lifecycle terms.
 - Updated `align` so alignment decisions first synthesize the active thread,

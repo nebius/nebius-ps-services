@@ -1492,6 +1492,67 @@ def _validate_jwt_material_contract(
         journal.get("target_singleton_takeover"),
         field="bridge target_singleton_takeover",
     )
+    raw_handoff = takeover.get("target_jwt_secret_handoff")
+    target_handoff_binding: dict[str, str] | None = None
+    target_handoff_status = ""
+    target_handoff_verified = False
+    if isinstance(raw_handoff, Mapping) and raw_handoff:
+        if raw_handoff.get("schema") != "nebius-cxcli/target-jwt-secret-handoff-v1":
+            raise ValueError("Target JWT Secret handoff schema mismatch.")
+        target_handoff_status = _required_text(
+            raw_handoff.get("status"),
+            field="target JWT Secret handoff status",
+        )
+        if target_handoff_status not in {"dispatching", "verified"}:
+            raise ValueError("Target JWT Secret handoff status is invalid.")
+        source_name = _required_text(
+            raw_handoff.get("source_secret_name"),
+            field="target JWT Secret handoff source name",
+        )
+        source_uid = _required_text(
+            raw_handoff.get("source_secret_uid"),
+            field="target JWT Secret handoff source UID",
+        )
+        data_key = _required_text(
+            raw_handoff.get("data_key"),
+            field="target JWT Secret handoff data key",
+        )
+        source_matches = [
+            item
+            for item in bindings
+            if item["name"] == source_name
+            and item["uid"] == source_uid
+            and data_key in item["data_keys"]
+        ]
+        if len(source_matches) != 1:
+            raise ValueError("Target JWT Secret handoff is not source-bound.")
+        target_handoff_binding = {
+            "namespace": source_matches[0]["namespace"],
+            "name": _required_text(
+                raw_handoff.get("target_secret_name"),
+                field="target JWT Secret handoff target name",
+            ),
+            "uid": _required_text(
+                raw_handoff.get("target_secret_uid"),
+                field="target JWT Secret handoff target UID",
+            ),
+            "data_key": data_key,
+        }
+        _sha256(
+            raw_handoff.get("key_sha256"),
+            field="target JWT Secret handoff key_sha256",
+        )
+        _required_text(
+            raw_handoff.get("intent_at"),
+            field="target JWT Secret handoff intent_at",
+        )
+        target_handoff_verified_at = str(raw_handoff.get("verified_at", "") or "")
+        if target_handoff_status == "verified" or target_handoff_verified_at:
+            _required_text(
+                target_handoff_verified_at,
+                field="target JWT Secret handoff verified_at",
+            )
+            target_handoff_verified = True
 
     def _validate_live_binding(record: Mapping[str, Any], *, label: str) -> None:
         binding = _required_mapping(
@@ -1506,14 +1567,14 @@ def _validate_jwt_material_contract(
             for field in ("namespace", "name", "uid")
         }
         data_key = _required_text(record.get("jwt_data_key"), field=f"{label} JWT data key")
-        matches = [
-            item
-            for item in bindings
-            if all(item[field] == normalized_binding[field] for field in normalized_binding)
-            and data_key in item["data_keys"]
-        ]
-        if len(matches) != 1:
-            raise ValueError(f"{label} JWT configured key is not source-bound.")
+        if (
+            target_handoff_binding is None
+            or not target_handoff_verified
+            or normalized_binding
+            != {field: target_handoff_binding[field] for field in ("namespace", "name", "uid")}
+            or data_key != target_handoff_binding["data_key"]
+        ):
+            raise ValueError(f"{label} JWT configured key is not handoff-bound.")
         key_path = _required_text(record.get("jwt_key_path"), field=f"{label} jwt_key path")
         if not key_path.startswith("/") or "/../" in f"{key_path}/":
             raise ValueError(f"{label} jwt_key path must be normalized and absolute.")
@@ -1604,7 +1665,6 @@ def _validate_jwt_material_contract(
                 "live_key_sha256",
                 "controller_container_name",
                 "controller_container_image",
-                "controller_container_image_id",
             )
         )
         or proof.get("controller_pod_uid") != takeover.get("controller_pod_uid")
@@ -2325,11 +2385,133 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             raise ValueError("Bridge source client propagation stage is invalid.")
     if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.BRIDGE_FENCED.value]:
         handoff_proof = takeover.get("client_handoff_propagation")
+        target_ref = _required_text(
+            takeover.get("target_ref"),
+            field="bridge target singleton target_ref",
+        )
+        expected_handoff_hosts = (
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            f"controller-0({target_ref}-controller-svc)",
+        )
+        if not isinstance(handoff_proof, Mapping):
+            interrupted_recovery = _required_mapping(
+                takeover.get("client_handoff_singleton_recovery"),
+                field="bridge interrupted singleton client recovery",
+            )
+            superseded_handoff = _required_mapping(
+                takeover.get("superseded_client_handoff_propagation"),
+                field="bridge superseded target handoff client propagation",
+            )
+            target_start = _required_mapping(
+                takeover.get("target_start"),
+                field="bridge interrupted singleton target start",
+            )
+            authority = _required_mapping(journal.get("authority"), field="bridge authority")
+            fencing = _required_mapping(journal.get("fencing"), field="bridge fencing")
+            bridge_fencing = _required_mapping(
+                fencing.get("bridge"),
+                field="bridge target fencing",
+            )
+            target_start_state = str(target_start.get("state") or "")
+            accepted_start = target_start_state == "accepted" or (
+                target_start_state == "dispatching"
+                and bool(
+                    _required_text(
+                        target_start.get("accepted_at"),
+                        field="bridge interrupted singleton accepted timestamp",
+                    )
+                )
+                and bool(
+                    _required_text(
+                        target_start.get("pod_uid"),
+                        field="bridge interrupted singleton Pod UID",
+                    )
+                )
+                and bool(
+                    _required_text(
+                        target_start.get("node_name"),
+                        field="bridge interrupted singleton node name",
+                    )
+                )
+                and target_start.get("ungate_required") is False
+            )
+            target_stop_pods = takeover.get("target_stop_pods")
+            target_stop_attempt = takeover.get("target_stop_attempt")
+            target_stop = (
+                target_stop_pods[0]
+                if isinstance(target_stop_pods, Sequence)
+                and not isinstance(target_stop_pods, (str, bytes, bytearray))
+                and len(target_stop_pods) == 1
+                and isinstance(target_stop_pods[0], Mapping)
+                else {}
+            )
+            bridge_roles = journal.get("controller_roles")
+            bridge_role_count = (
+                len(bridge_roles)
+                if isinstance(bridge_roles, Sequence)
+                and not isinstance(bridge_roles, (str, bytes, bytearray))
+                else 0
+            )
+            recovery_authority = (
+                str(authority.get("owner") or "") == "bridge-target"
+                and str(authority.get("epoch") or "")
+                == _required_text(
+                    takeover.get("bridge_authority_epoch"),
+                    field="bridge interrupted recovery authority epoch",
+                )
+                and isinstance(target_stop_attempt, int)
+                and not isinstance(target_stop_attempt, bool)
+                and target_stop_attempt > 0
+                and str(target_stop.get("pod_uid") or "") == str(target_start.get("pod_uid") or "")
+                and str(target_stop.get("node_name") or "")
+                == str(target_start.get("node_name") or "")
+                and bool(str(target_stop.get("node_uid") or ""))
+                and takeover.get("controller_pod_uid") == ""
+                and takeover.get("controller_workload_uid") == ""
+                and _required_mapping(
+                    takeover.get("jwt_material_proof"),
+                    field="bridge interrupted recovery cleared JWT proof",
+                )
+                == {}
+                and bool(str(takeover.get("jwt_material_proof_cleared_at") or ""))
+                and bridge_role_count == 2
+            )
+            if recovery_authority:
+                _validate_runtime_fence_evidence(
+                    takeover.get("target_runtime_fence"),
+                    field="bridge interrupted recovery target runtime fence",
+                    expected_count=1,
+                )
+                _validate_runtime_fence_evidence(
+                    takeover.get("recovery_pre_authority_runtime_fence"),
+                    field="bridge interrupted recovery pre-authority runtime fence",
+                    expected_count=bridge_role_count + 1,
+                )
+            singleton_authority = (
+                str(authority.get("owner") or "") == "target-singleton"
+                and bridge_fencing.get("proven") is True
+            )
+            if (
+                interrupted_recovery.get("schema")
+                != "nebius-cxcli/target-takeover-client-singleton-recovery-v1"
+                or interrupted_recovery.get("status") != "accepted"
+                or tuple(interrupted_recovery.get("controller_hosts", []) or [])
+                != expected_handoff_hosts
+                or _sha256(
+                    interrupted_recovery.get("superseded_proof_sha256"),
+                    field="bridge interrupted singleton superseded proof",
+                )
+                != _journal_payload_fingerprint(superseded_handoff)
+                or not accepted_start
+                or not (singleton_authority or recovery_authority)
+            ):
+                raise ValueError("Bridge interrupted singleton client recovery proof is invalid.")
+            handoff_proof = superseded_handoff
         _validate_client_propagation_proof(
             handoff_proof,
             field="bridge target handoff client propagation",
-            cluster_name=str(journal.get("cluster_name", "") or ""),
-            controller_hosts=("controller-0", *CONTROLLER_BRIDGE_CONTROLLER_HOSTS),
+            cluster_name=target_ref,
+            controller_hosts=expected_handoff_hosts,
             roles=("target-login", "target-worker"),
         )
         if (
@@ -2339,11 +2521,12 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             raise ValueError("Bridge target handoff client propagation stage is invalid.")
     if _BRIDGE_STAGE_INDEX[stage] >= _BRIDGE_STAGE_INDEX[BridgeStage.HANDOFF_VALIDATED.value]:
         final_client_proof = takeover.get("final_client_propagation")
+        final_singleton_host = f"controller-0({target_ref}-controller-svc)"
         _validate_client_propagation_proof(
             final_client_proof,
             field="bridge final singleton client propagation",
-            cluster_name=str(journal.get("cluster_name", "") or ""),
-            controller_hosts=("controller-0",),
+            cluster_name=target_ref,
+            controller_hosts=(final_singleton_host,),
             roles=("target-login", "target-worker"),
         )
         if (
@@ -2394,9 +2577,10 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         raise ValueError("Controller bridge preservation_jobs capture state is invalid.")
     if (preservation_records or completed_during_capture) and capture_state == "":
         raise ValueError("Controller bridge preservation_jobs records lack capture intent.")
-    if capture_state == "complete" and not str(
-        preservation_jobs.get("captured_at", "") or ""
-    ).strip():
+    if (
+        capture_state == "complete"
+        and not str(preservation_jobs.get("captured_at", "") or "").strip()
+    ):
         raise ValueError("Controller bridge preservation_jobs lacks captured_at.")
     verification_stages: set[str] = set()
     for job_id, record in preservation_records.items():
@@ -2617,8 +2801,7 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             )
         ):
             raise ValueError(
-                "Ended protected login session outcome conflicts with its exact exit "
-                "disposition."
+                "Ended protected login session outcome conflicts with its exact exit disposition."
             )
         if disposition == SLURM_LOGIN_EXIT_TIMEOUT_CONTINUATION:
             timeout_authorized_session_count += 1
@@ -3035,10 +3218,10 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             namespace_operation.get("absent_at"),
             field="bridge Namespace cleanup absent_at",
         )
-        pvc_absence_times = [
+        pvc_acceptance_times = [
             _required_text(
-                operation.get("absent_at"),
-                field="bridge PVC cleanup absent_at",
+                operation.get("accepted_at"),
+                field="bridge PVC cleanup accepted_at",
             )
             for operation in pvc_operations
         ]
@@ -3049,12 +3232,12 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             )
             for operation in pv_operations
         ]
-        if any(timestamp > namespace_intent for timestamp in pvc_absence_times) or any(
+        if any(timestamp > namespace_intent for timestamp in pvc_acceptance_times) or any(
             timestamp < namespace_absent for timestamp in pv_intent_times
         ):
             raise ValueError(
-                "Controller bridge cleanup must delete both PVCs before the Namespace and "
-                "both PVs after it."
+                "Controller bridge cleanup must accept both PVC deletes before the Namespace "
+                "and delete both PVs after it."
             )
         node_group_operations = cleanup.get("node_group_operations")
         if not isinstance(node_group_operations, Mapping):
@@ -3081,7 +3264,13 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             raise ValueError("Controller bridge cleanup target state binding must be a mapping.")
         for field in ("pvc_name", "pvc_uid", "pv_name", "pv_uid", "state_path"):
             _required_text(target_state.get(field), field=f"bridge cleanup target state {field}")
-        if target_state.get("state_path") != journal.get("state_manifest", {}).get("stable_path"):
+        target_state_path = _required_text(
+            journal.get("target_singleton_takeover", {}).get("target_state_save_location"),
+            field="target singleton takeover target_state_save_location",
+        )
+        if not target_state_path.startswith("/"):
+            raise ValueError("Controller bridge cleanup target state path must be absolute.")
+        if target_state.get("state_path") != target_state_path:
             raise ValueError("Controller bridge cleanup target state path changed.")
         _required_text(cleanup.get("proof_checked_at"), field="bridge cleanup proof_checked_at")
         _required_text(cleanup.get("completed_at"), field="bridge cleanup completed_at")
@@ -3674,9 +3863,7 @@ def bridge_network_policy_objects(
     bridge_peer = {"podSelector": {"matchLabels": {CONTROLLER_BRIDGE_LABEL: "true"}}}
     soperator_peers = [
         {
-            "namespaceSelector": {
-                "matchLabels": {"kubernetes.io/metadata.name": source_namespace}
-            },
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": source_namespace}},
             "podSelector": {"matchLabels": {"app.kubernetes.io/instance": name}},
         }
         for name in cluster_names

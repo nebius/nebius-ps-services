@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -394,9 +395,7 @@ def test_mirrored_material_excludes_kubernetes_owned_root_ca() -> None:
 
     objects = migration._controller_bridge_mirrored_objects(  # noqa: SLF001
         source={
-            "configuration": {
-                "config_map_names": ["controller-material", "kube-root-ca.crt"]
-            },
+            "configuration": {"config_map_names": ["controller-material", "kube-root-ca.crt"]},
             "munge": {},
             "jwt": {},
         },
@@ -498,3 +497,73 @@ def test_writer_boundary_revalidation_accepts_exact_source_role_contract() -> No
             live_binding=live_binding,
         ),
     )
+
+
+@pytest.mark.parametrize("drift", ("", "other_data", "binary_data"))
+def test_writer_boundary_revalidation_binds_exact_handoff_config_successor(
+    drift: str,
+) -> None:
+    journal, config, source_role, live_binding = _writer_boundary_fixture()
+    config_key = "slurm.conf"
+    intended = "ClusterName=cluster\nSlurmctldHost=bridge-0"
+    handoff = intended + "\nSlurmctldHost=controller-0"
+    config["data"]["custom.conf"] = "SchedulerParameters=bf_continue"
+    preimage = copy.deepcopy(config)
+    preimage["data"][config_key] = intended
+    config["data"][config_key] = handoff
+    if drift == "other_data":
+        config["data"]["custom.conf"] = "SchedulerParameters=drifted"
+    elif drift == "binary_data":
+        config["binaryData"]["opaque.bin"] = "drifted"
+    journal.update(
+        {
+            "stage": "target-ha-active",
+            "source_configuration": {
+                "config_key": config_key,
+                "intended_slurm_conf": intended,
+                "intended_config_data_sha256": (
+                    migration._controller_bridge_config_map_data_sha256(  # noqa: SLF001
+                        preimage["data"]
+                    )
+                ),
+                "copies": {
+                    "bridge": {
+                        "name": "controller-material",
+                        "uid": "mirrored-config-uid",
+                        "intended_material_sha256": (
+                            migration._controller_bridge_material_fingerprint(  # noqa: SLF001
+                                preimage
+                            )
+                        ),
+                    }
+                },
+            },
+            "target_singleton_takeover": {
+                "bridge_handoff_configuration": {
+                    "schema": "nebius-cxcli/target-bridge-handoff-configuration-v1",
+                    "status": "verified",
+                    "config_map_name": "controller-material",
+                    "config_map_uid": "mirrored-config-uid",
+                    "to_sha256": hashlib.sha256(handoff.encode()).hexdigest(),
+                    "config_sha256": hashlib.sha256(handoff.encode()).hexdigest(),
+                }
+            },
+        }
+    )
+
+    def operation() -> None:
+        migration._revalidate_controller_bridge_mirrored_material(  # noqa: SLF001
+            journal=journal,
+            kube_context="context",
+            command_runner=_writer_boundary_runner(
+                config=config,
+                source_role=source_role,
+                live_binding=live_binding,
+            ),
+        )
+
+    if drift:
+        with pytest.raises(RuntimeError, match="mirrored material identity or content changed"):
+            operation()
+    else:
+        operation()

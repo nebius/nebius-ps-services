@@ -1,0 +1,6 @@
+interface:
+  display_name: "SDLC Workflow Test"
+  short_description: "Verify lightweight or real three-tier SDLC flows"
+  default_prompt: "Use $sdlc-workflow-test with no lifecycle flags for the unchanged lightweight verifier; every explicit --create first destroys the previous exactly owned environment, creates one fresh three-tier Docker application, and launches one isolated verifier-owned Chrome instance whose exact marker gates Computer Use, with optional --keep, --resume, and standalone --destroy."
+policy:
+  allow_implicit_invocation: false

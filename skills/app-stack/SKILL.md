@@ -31,6 +31,8 @@ duplicate specialist workflows inside this skill.
   application.
 - Do not replace `brainstorm` for open-ended ideation, `research` for deep
   technology due diligence, or `design` for a complete solution design.
+- When `design` invokes this skill for a scoped stack decision, return that
+  decision to the active design workflow instead of routing back to `design`.
 - Do not take over isolated framework work when the user has already fixed the
   stack and no stack decision remains.
 - Do not add distributed systems, caches, queues, schedulers, workflow engines,
@@ -121,7 +123,8 @@ evidence. Mark unverified facts instead of guessing.
 Apply the relevant `system-design-rules` categories to data ownership,
 reliability, partial failure, security, privacy, scale, cost, observability,
 recovery, deployment, and team ownership. Use `design` when the request needs a
-complete cross-layer design before implementation.
+complete cross-layer design before implementation and no active `design`
+workflow already owns it.
 
 Explicitly test whether each stateful or distributed component can be removed.
 Prefer a reversible path and record the condition that would reopen the

@@ -273,6 +273,70 @@ def test_init_nebius_sdk_fetches_iam_token_from_cli_when_needed(
     assert "NEBIUS_IAM_TOKEN" not in sdk_auth.os.environ
 
 
+def test_init_nebius_sdk_uses_explicit_cli_impersonation_without_base_token_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.setenv("NEBIUS_PROFILE", "operator-profile")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "base-identity-token")
+    monkeypatch.setenv(
+        "CXCLI_NEBIUS_DELEGATE_ID",
+        "serviceaccount-operator",
+    )
+    calls: list[list[str]] = []
+
+    def _token(*args: object, **kwargs: object) -> object:
+        del kwargs
+        calls.append(list(args[0]))  # type: ignore[arg-type]
+        return type("CP", (), {"stdout": "impersonated-token\n"})()
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _token)
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="test",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "impersonated-token"
+    assert calls == [
+        [
+            "nebius",
+            "iam",
+            "get-access-token",
+            "--profile",
+            "operator-profile",
+            "--impersonate-service-account-id",
+            "serviceaccount-operator",
+            "--format",
+            "text",
+            "--no-browser",
+        ]
+    ]
+
+
+def test_init_nebius_sdk_does_not_drop_explicit_impersonation_when_cli_tokens_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.setenv(
+        "CXCLI_NEBIUS_DELEGATE_ID",
+        "serviceaccount-operator",
+    )
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token exchange must remain disabled"),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to initialize Nebius SDK credentials"):
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="test",
+            allow_cli_token=False,
+        )
+
+
 def test_cli_token_fallback_does_not_mask_unexpected_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -339,6 +403,32 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
     assert sdk.kwargs["parent_id"] == "project-1"
     config = sdk.kwargs["config_reader"]
     assert config.kwargs == {"profile": "dev", "endpoint": "api.example.invalid"}
+
+
+def test_init_nebius_sdk_uses_profile_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("NEBIUS_PROFILE", "codex-agent-project-1")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="test",
+        prefer_operator_auth=True,
+    )
+
+    config = sdk.kwargs["config_reader"]
+    assert config.kwargs == {"profile": "codex-agent-project-1"}
 
 
 def test_init_nebius_sdk_prefer_operator_auth_uses_iam_token_before_runtime_auth(

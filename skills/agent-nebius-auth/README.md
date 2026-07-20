@@ -193,6 +193,9 @@ nebius iam get-access-token --profile codex-agent-<project_id> >/dev/null
 - If the auth hook blocks a command that prints token variables, traces the
   shell, or dumps the environment, keep that command blocked and use bounded
   non-secret status output instead. Safe status and log labels should pass.
+- Public agent-profile selectors, project IDs, and credential-file paths are
+  metadata, not token material. A sibling policy may allow those known names
+  while keeping all other long Nebius assignments fail-closed.
 - Explicitly invoke `$agent-nebius-auth` for setup verification or repair only
   after token minting, the agent profile, the credential file, or a basic
   project-access check actually fails. Do not replace the service-account path

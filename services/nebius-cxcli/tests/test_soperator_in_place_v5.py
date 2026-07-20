@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -214,6 +215,200 @@ def test_safe_surge_uses_spare_capacity_without_unavailable_workers() -> None:
 
     assert desired["strategy"]["max_surge"] == {"count": "3"}
     assert desired["strategy"]["max_unavailable"] == {"count": "0"}
+
+
+def test_worker_drain_rescheduling_guard_is_uid_bound_and_restores_null_affinity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = "security-profiles-operator-system"
+    deployment_name = "security-profiles-operator-webhook"
+    replica_set_name = deployment_name + "-abc"
+    deployment = {
+        "metadata": {
+            "namespace": namespace,
+            "name": deployment_name,
+            "uid": "deployment-uid",
+            "resourceVersion": "1",
+        },
+        "spec": {
+            "replicas": 3,
+            "template": {"spec": {"affinity": None}},
+        },
+        "status": {"updatedReplicas": 3, "availableReplicas": 3},
+    }
+    replica_set = {
+        "metadata": {
+            "namespace": namespace,
+            "name": replica_set_name,
+            "ownerReferences": [{"kind": "Deployment", "name": deployment_name}],
+        }
+    }
+
+    def _pod(name: str, node: str) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "namespace": namespace,
+                "name": name,
+                "uid": name + "-uid",
+                "ownerReferences": [{"kind": "ReplicaSet", "name": replica_set_name}],
+            },
+            "spec": {"nodeName": node},
+            "status": {
+                "phase": "Running",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        }
+
+    pods_payload = {
+        "items": [_pod("webhook-source", "gpu-source"), _pod("webhook-peer", "system-peer")]
+    }
+
+    def _json_command(_runner: Any, args: list[str], **_kwargs: Any) -> Mapping[str, Any]:
+        if "replicasets.apps" in args:
+            return {"items": [copy.deepcopy(replica_set)]}
+        if "deployments.apps" in args:
+            return {"items": [copy.deepcopy(deployment)]}
+        if "deployment" in args:
+            return copy.deepcopy(deployment)
+        raise AssertionError(args)
+
+    monkeypatch.setattr(migration, "_json_from_command", _json_command)
+    patches: list[list[Mapping[str, Any]]] = []
+
+    def _runner(args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        if "patch" in args:
+            patch = json.loads(args[args.index("-p") + 1])
+            patches.append(patch)
+            assert patch[0] == {
+                "op": "test",
+                "path": "/metadata/uid",
+                "value": "deployment-uid",
+            }
+            operation = patch[-1]
+            if operation["op"] == "remove":
+                deployment["spec"]["template"]["spec"].pop("affinity")
+            else:
+                deployment["spec"]["template"]["spec"]["affinity"] = copy.deepcopy(
+                    operation["value"]
+                )
+            deployment["metadata"]["resourceVersion"] = str(
+                int(deployment["metadata"]["resourceVersion"]) + 1
+            )
+        elif "rollout" not in args:
+            raise AssertionError(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    group_state: dict[str, Any] = {}
+    lines = migration._ensure_in_place_worker_drain_rescheduling_guard(  # noqa: SLF001
+        group_state=group_state,
+        group_id="worker-group-id",
+        group_name="worker-0-0",
+        kubernetes_nodes=("gpu-source",),
+        pods_payload=pods_payload,
+        command_runner=_runner,  # type: ignore[arg-type]
+        kube_context="test",
+        checkpoint_writer=None,
+    )
+
+    guarded = deployment["spec"]["template"]["spec"]["affinity"]
+    expression = guarded["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+        "nodeSelectorTerms"
+    ][0]["matchExpressions"][0]
+    assert expression == {
+        "key": "nebius.com/node-group-id",
+        "operator": "NotIn",
+        "values": ["worker-group-id"],
+    }
+    assert group_state["kubernetes_drain_rescheduling_guard"]["status"] == "guarded"
+    assert "fenced 1 Deployment" in lines[0]
+
+    restore_lines = migration._restore_in_place_worker_drain_rescheduling_guard(  # noqa: SLF001
+        group_state=group_state,
+        command_runner=_runner,  # type: ignore[arg-type]
+        kube_context="test",
+        checkpoint_writer=None,
+    )
+
+    assert deployment["spec"]["template"]["spec"]["affinity"] is None
+    assert patches[-1][-1] == {
+        "op": "replace",
+        "path": "/spec/template/spec/affinity",
+        "value": None,
+    }
+    assert group_state["kubernetes_drain_rescheduling_guard"]["status"] == "restored"
+    assert "Restored 1" in restore_lines[0]
+
+    migration._ensure_in_place_worker_drain_rescheduling_guard(  # noqa: SLF001
+        group_state=group_state,
+        group_id="worker-group-id",
+        group_name="worker-0-0",
+        kubernetes_nodes=("gpu-source",),
+        pods_payload=pods_payload,
+        command_runner=_runner,  # type: ignore[arg-type]
+        kube_context="test",
+        checkpoint_writer=None,
+    )
+    assert len(group_state["kubernetes_drain_rescheduling_guard_history"]) == 1
+    assert group_state["kubernetes_drain_rescheduling_guard"]["status"] == "guarded"
+
+
+def test_worker_drain_rescheduling_guard_rejects_single_replica_without_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = "customer"
+    deployment_name = "single"
+    replica_set_name = "single-rs"
+    pod = {
+        "metadata": {
+            "namespace": namespace,
+            "name": "single-pod",
+            "uid": "single-pod-uid",
+            "ownerReferences": [{"kind": "ReplicaSet", "name": replica_set_name}],
+        },
+        "spec": {"nodeName": "gpu-source"},
+        "status": {
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "True"}],
+        },
+    }
+    replica_set = {
+        "metadata": {
+            "namespace": namespace,
+            "name": replica_set_name,
+            "ownerReferences": [{"kind": "Deployment", "name": deployment_name}],
+        }
+    }
+    deployment = {
+        "metadata": {
+            "namespace": namespace,
+            "name": deployment_name,
+            "uid": "single-uid",
+            "resourceVersion": "1",
+        },
+        "spec": {"replicas": 1, "template": {"spec": {}}},
+        "status": {"updatedReplicas": 1, "availableReplicas": 1},
+    }
+
+    def _json_command(_runner: Any, args: list[str], **_kwargs: Any) -> Mapping[str, Any]:
+        if "replicasets.apps" in args:
+            return {"items": [replica_set]}
+        if "deployments.apps" in args:
+            return {"items": [deployment]}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(migration, "_json_from_command", _json_command)
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="no redundant Ready"):
+        migration._ensure_in_place_worker_drain_rescheduling_guard(  # noqa: SLF001
+            group_state={},
+            group_id="worker-group-id",
+            group_name="worker-0-0",
+            kubernetes_nodes=("gpu-source",),
+            pods_payload={"items": [pod]},
+            command_runner=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
+            kube_context="test",
+            checkpoint_writer=None,
+        )
 
 
 def test_in_place_batch_impact_reports_aggregate_before_dispatch() -> None:
@@ -449,6 +644,85 @@ def test_service_role_replacement_rechecks_slot_b_and_persistent_mounts(
     ]
 
 
+def test_service_role_health_reuses_same_invocation_proof_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"rootfs": 0, "available": 0, "cluster": 0, "aliases": 0, "mounts": 0}
+    monkeypatch.setattr(migration, "_patch_target_values_for_compute", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        migration,
+        "active_passive_jail_rootfs_slots",
+        lambda _values: SimpleNamespace(
+            active_slot="slot-b",
+            passive_slot="slot-a",
+            active_pvc="slot-b-pvc",
+        ),
+    )
+
+    def _rootfs(**_kwargs: Any) -> list[dict[str, str]]:
+        calls["rootfs"] += 1
+        return [{"name": "controller", "status": "verified"}]
+
+    def _available(**_kwargs: Any) -> None:
+        calls["available"] += 1
+
+    def _cluster(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        calls["cluster"] += 1
+        return {"metadata": {"name": "external-cluster"}}
+
+    def _aliases(**_kwargs: Any) -> list[dict[str, str]]:
+        calls["aliases"] += 1
+        return [{"name": "controller", "status": "verified"}]
+
+    def _mounts(**_kwargs: Any) -> tuple[dict[str, str], ...]:
+        calls["mounts"] += 1
+        return ({"name": "home", "status": "passed"},)
+
+    monkeypatch.setattr(migration, "_verify_target_rootfs_handoff_consumers", _rootfs)
+    monkeypatch.setattr(migration, "_wait_for_target_slurmcluster_available", _available)
+    monkeypatch.setattr(migration, "_json_from_command", _cluster)
+    monkeypatch.setattr(migration, "_verify_target_jail_alias_consumers", _aliases)
+    monkeypatch.setattr(migration, "_live_home_mount_probe_checks", _mounts)
+    checkpoint = {
+        "phase_state": {
+            migration.POPULATE_JAIL_REFRESH_PHASE_ID: {
+                "rootfs_handoff_verification": {
+                    "status": "verified",
+                    "active_slot": "slot-b",
+                }
+            }
+        },
+        "controller_bridge": {"stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value},
+    }
+    phase: dict[str, Any] = {}
+    shared: dict[str, Any] = {}
+
+    for role in ("login", "accounting"):
+        migration._verify_in_place_service_role_replacement_health(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            role=role,
+            payload={},
+            source_report={},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="context",
+            command_runner=SimpleNamespace(),
+            checkpoint_writer=lambda: None,
+            shared_evidence=shared,
+        )
+
+    assert calls == {"rootfs": 1, "available": 1, "cluster": 1, "aliases": 1, "mounts": 1}
+    assert phase["in_place_service_role_health"]["login"]["evidence_source"] == "live"
+    assert (
+        phase["in_place_service_role_health"]["accounting"]["evidence_source"] == "invocation-reuse"
+    )
+    assert (
+        phase["in_place_service_role_health"]["login"]["proof_sha256"]
+        == phase["in_place_service_role_health"]["accounting"]["proof_sha256"]
+    )
+
+
 @pytest.mark.parametrize("field", ["registrations", "catalogs"])
 def test_in_place_accounting_continuity_rejects_exact_evidence_drift(field: str) -> None:
     baseline = {
@@ -498,9 +772,7 @@ def test_in_place_accounting_continuity_allows_monotonic_job_history() -> None:
         "catalogs": {"qos": {"row_count": 1, "sha256": "a" * 64}},
     }
     observed = json.loads(json.dumps(baseline))
-    observed["history"].update(
-        {"jobs": 5, "steps": 2, "completed_jobs": 5, "max_job_id": 6}
-    )
+    observed["history"].update({"jobs": 5, "steps": 2, "completed_jobs": 5, "max_job_id": 6})
 
     migration._verify_in_place_accounting_continuity(  # noqa: SLF001
         baseline=baseline,
@@ -660,8 +932,235 @@ def test_in_place_controller_roll_requires_system_domain_authority(
     assert phase["in_place_authority_transitions"]["controller"]["status"] == "verified"
     assert checkpoint["controller_bridge"]["controller_roles"][1]["role"] == "active"
     assert lines == [
-        "Transferred bridge authority to the system domain before controller replacement."
+        "Transferred bridge authority outside the controller provider domain before replacement."
     ]
+
+
+def test_bridge_primary_authority_uses_exact_login_client_not_cached_controller_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles = [
+        {"pod_name": "bridge-0", "pod_uid": "pod-0"},
+        {"pod_name": "bridge-1", "pod_uid": "pod-1"},
+    ]
+    exact_calls: list[tuple[str, ...]] = []
+
+    def _exact_login(**kwargs: Any) -> SimpleNamespace:
+        exact_calls.append(tuple(kwargs["args"]))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=("Slurmctld(primary) at bridge-0 is UP\nSlurmctld(backup) at bridge-1 is UP\n"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login_once", _exact_login)
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: pytest.fail("cached read-only controller route must not be used"),
+    )
+
+    active, standby = migration._controller_bridge_primary_role_from_ping(  # noqa: SLF001
+        journal={"controller_roles": roles},
+        command_runner=lambda args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        kube_context="context",
+    )
+
+    assert active is roles[0]
+    assert standby is roles[1]
+    assert exact_calls == [("scontrol", "ping")]
+
+
+def test_in_place_controller_roll_resumes_setup_after_manager_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = {
+        "pod_name": "bridge-1",
+        "pod_uid": "system-pod",
+        "node_uid": "system-node",
+        "node_group_id": "system-group",
+        "role": "active",
+    }
+    controller = {
+        "pod_name": "bridge-0",
+        "pod_uid": "controller-pod",
+        "node_uid": "controller-node",
+        "node_group_id": "controller-group",
+        "role": "standby",
+    }
+    phase = {"in_place_target_manager_pause": {"status": "verified"}}
+    calls: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_verify_in_place_target_native_controller_ha",
+        lambda **_kwargs: pytest.fail("manager pause alone is not a completed native HA proof"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: calls.append("clients") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_target_controller_command_gate",
+        lambda **_kwargs: calls.append("gate") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_journaled_controller_bridge_exclusivity",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_primary_role_from_ping",
+        lambda **_kwargs: (system, controller),
+    )
+
+    lines = migration._ensure_in_place_bridge_authority_outside_provider_domain(  # noqa: SLF001
+        checkpoint={"controller_bridge": {"controller_roles": [controller, system]}},
+        phase=phase,
+        role="controller",
+        planned_groups=(
+            {"role": "controller", "id": "controller-group"},
+            {"role": "system", "id": "system-group"},
+        ),
+        target_ref="target",
+        command_runner=lambda args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        kube_context="context",
+        checkpoint_writer=lambda: None,
+    )
+
+    assert calls == ["clients", "gate"]
+    assert lines == [
+        "Bridge authority is outside the controller provider domain before replacement."
+    ]
+
+
+def test_dedicated_bridge_authority_proof_is_reused_within_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = {
+        "pod_name": "bridge-0",
+        "pod_uid": "pod-0",
+        "node_uid": "node-0",
+        "node_group_id": "dedicated-a",
+        "role": "active",
+        "image": "controller@sha256:" + "a" * 64,
+    }
+    standby = {
+        "pod_name": "bridge-1",
+        "pod_uid": "pod-1",
+        "node_uid": "node-1",
+        "node_group_id": "dedicated-b",
+        "role": "standby",
+        "image": "controller@sha256:" + "a" * 64,
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: calls.append("clients") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_target_controller_command_gate",
+        lambda **_kwargs: calls.append("gate") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_journaled_controller_bridge_exclusivity",
+        lambda **_kwargs: calls.append("exclusivity"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_primary_role_from_ping",
+        lambda **_kwargs: (active, standby),
+    )
+    checkpoint = {"controller_bridge": {"controller_roles": [active, standby]}}
+    phase: dict[str, Any] = {}
+    shared: dict[str, Any] = {}
+    common = {
+        "checkpoint": checkpoint,
+        "phase": phase,
+        "planned_groups": (
+            {"role": "controller", "id": "controller-group"},
+            {"role": "system", "id": "system-group"},
+        ),
+        "target_ref": "target",
+        "command_runner": lambda args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+        "kube_context": "context",
+        "checkpoint_writer": lambda: None,
+        "shared_evidence": shared,
+    }
+
+    migration._ensure_in_place_bridge_authority_outside_provider_domain(  # noqa: SLF001
+        **common,
+        role="controller",
+    )
+    lines = migration._ensure_in_place_bridge_authority_outside_provider_domain(  # noqa: SLF001
+        **common,
+        role="system",
+    )
+
+    assert calls == ["clients", "gate", "exclusivity"]
+    assert "invocation-scoped" in lines[0]
+    assert phase["in_place_authority_transitions"]["system"]["evidence_source"] == (
+        "invocation-reuse"
+    )
+
+
+def test_post_roll_rebind_accepts_exact_dedicated_bridge_domains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = {
+        "pod_name": "bridge-0",
+        "pod_uid": "pod-0",
+        "node_uid": "node-0",
+        "node_group_id": "dedicated-bridge-a",
+    }
+    standby = {
+        "pod_name": "bridge-1",
+        "pod_uid": "pod-1",
+        "node_uid": "node-1",
+        "node_group_id": "dedicated-bridge-b",
+    }
+    proofs: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_prove_journaled_controller_bridge_exclusivity",
+        lambda **kwargs: proofs.append(kwargs["proof_label"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_primary_role_from_ping",
+        lambda **_kwargs: (active, standby),
+    )
+    phase: dict[str, Any] = {}
+
+    lines = migration._rebind_in_place_bridge_domain_after_provider_roll(  # noqa: SLF001
+        checkpoint={
+            "controller_bridge": {
+                "controller_roles": [active, standby],
+            }
+        },
+        phase=phase,
+        role="controller",
+        rolled_group_id="main-controller-group",
+        command_runner=lambda args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        kube_context="context",
+        checkpoint_writer=lambda: None,
+    )
+
+    assert lines == [
+        "Dedicated bridge authority remained outside the rolled controller provider domain."
+    ]
+    assert proofs == ["post-controller-replacement dedicated bridge authority"]
+    assert (
+        phase["in_place_service_role_health"]["controller"]["bridge_rebind"]["status"]
+        == "verified-dedicated-bridge"
+    )
 
 
 def test_in_place_controller_roll_reasserts_reconciled_target_command_gate(
@@ -714,15 +1213,205 @@ def test_in_place_controller_roll_reasserts_reconciled_target_command_gate(
 
     patch_command = next(command for command in commands if "patch" in command)
     patch_payload = json.loads(patch_command[-1])
-    expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"][
-        "slurmctld"
-    ]
+    expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
     assert patch_payload["metadata"]["resourceVersion"] == "42"
     assert patch_payload["spec"]["slurmNodes"]["controller"]["slurmctld"] == expected
-    assert (
-        phase["in_place_target_controller_command_gate"]["status"]
-        == "slurmcluster-accepted"
+    assert phase["in_place_target_controller_command_gate"]["status"] == "slurmcluster-accepted"
+
+
+def test_in_place_controller_roll_rearms_gate_for_a_later_bridge_owned_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-source",
+                "source_restart_prohibited": True,
+            },
+            "target_singleton_takeover": {"command_gate_applied": False},
+        }
+    }
+    phase: dict[str, Any] = {}
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": {
+                "uid": "cluster-uid",
+                "resourceVersion": "42",
+            },
+            "spec": {
+                "slurmNodes": {
+                    "controller": {
+                        "slurmctld": {
+                            "command": ["slurmctld"],
+                            "args": [],
+                        }
+                    }
+                }
+            },
+        },
     )
+    commands: list[tuple[str, ...]] = []
+
+    def _runner(args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        commands.append(tuple(args))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="reasserted the exact inert target controller command gate",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target",
+            command_runner=_runner,
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    assert any("patch" in command for command in commands)
+    assert (
+        checkpoint["controller_bridge"]["target_singleton_takeover"]["command_gate_applied"]
+        is False
+    )
+    assert phase["in_place_target_controller_command_gate"]["status"] == "slurmcluster-accepted"
+
+
+def test_in_place_controller_roll_uses_admission_window_while_manager_is_paused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = {
+        "controller_bridge": {
+            "target_singleton_takeover": {"command_gate_applied": True},
+        }
+    }
+    phase: dict[str, Any] = {
+        "in_place_target_manager_pause": {"status": "verified"},
+    }
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": {
+                "uid": "cluster-uid",
+                "resourceVersion": "42",
+            },
+            "spec": {
+                "slurmNodes": {
+                    "controller": {
+                        "slurmctld": {
+                            "command": ["slurmctld"],
+                            "args": [],
+                        }
+                    }
+                }
+            },
+        },
+    )
+    admission_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_patch_in_place_slurmcluster_during_manager_pause",
+        lambda **kwargs: admission_calls.append(kwargs),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="reasserted the exact inert target controller command gate",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target",
+            command_runner=lambda args, **_kwargs: pytest.fail(
+                f"unexpected direct command: {args}"
+            ),
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    assert len(admission_calls) == 1
+    assert admission_calls[0]["target_uid"] == "cluster-uid"
+    assert admission_calls[0]["target_resource_version"] == "42"
+    expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+    assert admission_calls[0]["spec_patch"]["slurmNodes"]["controller"]["slurmctld"] == expected
+
+
+def test_in_place_controller_roll_activates_one_exact_gated_workload_replica(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = {
+        "controller_bridge": {
+            "target_singleton_takeover": {"command_gate_applied": True},
+        }
+    }
+    phase: dict[str, Any] = {}
+    expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+    resources = iter(
+        (
+            {
+                "metadata": {"uid": "cluster-uid", "resourceVersion": "42"},
+                "spec": {"slurmNodes": {"controller": {"slurmctld": expected}}},
+            },
+            {
+                "metadata": {
+                    "uid": "workload-uid",
+                    "resourceVersion": "84",
+                    "ownerReferences": [
+                        {"controller": True, "uid": "cluster-uid"},
+                    ],
+                },
+                "spec": {
+                    "replicas": 0,
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {"name": "slurmctld", **expected},
+                            ]
+                        }
+                    },
+                },
+            },
+        )
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: next(resources),
+    )
+    patches: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_patch_namespace_resource",
+        lambda **kwargs: patches.append(kwargs),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="activated one exact inert target controller replica",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target",
+            command_runner=lambda args, **_kwargs: pytest.fail(
+                f"unexpected direct command: {args}"
+            ),
+            kube_context="context",
+            checkpoint_writer=lambda: None,
+        )
+
+    assert len(patches) == 1
+    assert patches[0]["resource"] == "statefulsets.apps.kruise.io/controller"
+    assert patches[0]["patch"] == {
+        "metadata": {"uid": "workload-uid", "resourceVersion": "84"},
+        "spec": {"replicas": 1},
+    }
+    assert phase["in_place_target_controller_command_gate"]["status"] == ("workload-scale-accepted")
 
 
 def test_in_place_singleton_gate_removal_uses_exact_admission_window(
@@ -814,9 +1503,7 @@ def test_in_place_singleton_gate_removal_recovers_lost_patch_response(
         "metadata": {"uid": "target-uid", "resourceVersion": "42"},
         "spec": {
             "slurmNodes": {
-                "controller": {
-                    "slurmctld": {"image": "example.invalid/controller:target"}
-                }
+                "controller": {"slurmctld": {"image": "example.invalid/controller:target"}}
             }
         },
     }
@@ -889,9 +1576,7 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
         "in_place_target_manager_pause": {"original_replicas": 1},
     }
     checkpoint = {
-        "controller_bridge": {
-            "target_singleton_takeover": {"command_gate_applied": True}
-        }
+        "controller_bridge": {"target_singleton_takeover": {"command_gate_applied": True}}
     }
     monkeypatch.setattr(
         migration,
@@ -934,8 +1619,7 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
     assert phase["in_place_target_manager_pause"]["status"] == "restored"
     assert removed == ["gate"]
     assert any(
-        command[-2:] == ("deployment/soperator-manager", "--replicas=1")
-        for command in commands
+        command[-2:] == ("deployment/soperator-manager", "--replicas=1") for command in commands
     )
     assert lines
 
@@ -943,17 +1627,13 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
 def test_in_place_completed_service_role_skips_retired_ha_revalidation() -> None:
     assert migration._in_place_service_role_authority_finalized(  # noqa: SLF001
         phase={
-            "in_place_target_native_controller_ha": {
-                "cleanup_status": "singleton-config-accepted"
-            }
+            "in_place_target_native_controller_ha": {"cleanup_status": "singleton-config-accepted"}
         },
         group_state={"status": "completed"},
     )
     assert not migration._in_place_service_role_authority_finalized(  # noqa: SLF001
         phase={
-            "in_place_target_native_controller_ha": {
-                "cleanup_status": "singleton-config-accepted"
-            }
+            "in_place_target_native_controller_ha": {"cleanup_status": "singleton-config-accepted"}
         },
         group_state={"status": "provider-complete-health-pending"},
     )
@@ -1095,6 +1775,205 @@ def test_in_place_compute_accepts_verified_slot_switch_and_persistent_mounts(
         checkpoint=checkpoint,
         planned_groups=(),
     )
+
+
+def test_in_place_compute_reuses_completed_segment_jail_handoff() -> None:
+    populate = {
+        "completed_at": "2026-07-13T00:00:00Z",
+        "active_slot": "slot-b",
+        "rollback_slot": "legacy-rootfs",
+        "rootfs_slots": {
+            "active_slot": "legacy-rootfs",
+            "passive_slot": "slot-b",
+        },
+        "rootfs_handoff_verification": {
+            "status": "verified",
+            "active_slot": "slot-b",
+        },
+        "persistent_jail_mounts": {"status": "verified"},
+    }
+    checkpoint = {
+        "phase_state": {},
+        "completed_segment_ids": ["segment-1"],
+        "segment_state": {
+            "segment-1": {
+                "completed_at": "2026-07-14T00:00:00Z",
+                "completed_phases": [migration.POPULATE_JAIL_REFRESH_PHASE_ID],
+                "operation_evidence": {
+                    "phase_state": {
+                        migration.POPULATE_JAIL_REFRESH_PHASE_ID: populate,
+                    }
+                },
+            }
+        },
+    }
+
+    assert migration._accepted_populate_jail_phase_state(checkpoint) == populate  # noqa: SLF001
+    migration._require_in_place_jail_slot_switch(  # noqa: SLF001
+        checkpoint=checkpoint,
+        planned_groups=(),
+    )
+
+
+def test_in_place_runtime_identity_is_journaled_before_slurm_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bindings = {
+        "worker-0": {
+            "pod_uid": "worker-pod-uid",
+            "instance_id": "computeinstance-new",
+            "node_addr": "worker-0.cluster-nodeset-svc.soperator.svc.cluster.local",
+        }
+    }
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_target_worker_pod_runtime_bindings",
+        lambda **_kwargs: bindings,
+    )
+
+    def reconcile(**kwargs: Any) -> list[str]:
+        calls.append(kwargs)
+        return ["worker-0 runtime identity aligned"]
+
+    monkeypatch.setattr(migration, "_reconcile_slurm_worker_runtime_identity", reconcile)
+    monkeypatch.setattr(
+        migration,
+        "_slurm_worker_runtime_identity_snapshot",
+        lambda **_kwargs: {
+            "worker-0": {
+                "instance_id": "computeinstance-new",
+                "node_addr": "worker-0.cluster-nodeset-svc.soperator.svc.cluster.local",
+            }
+        },
+    )
+    phase: dict[str, Any] = {}
+    writes: list[bool] = []
+
+    lines = migration._ensure_in_place_slurm_worker_runtime_identity(  # noqa: SLF001
+        phase=phase,
+        command_runner=SimpleNamespace(),
+        kube_context="context",
+        target_ref="cluster",
+        checkpoint_writer=lambda: writes.append(True),
+    )
+
+    journal = phase["pre_rollout_worker_runtime_identity"]
+    assert journal["status"] == "verified"
+    assert journal["bindings"] == bindings
+    assert calls[0]["via_login"] is True
+    assert calls[0]["resume_not_responding"] is True
+    assert calls[0]["worker_instances"] == {"worker-0": "computeinstance-new"}
+    assert len(writes) == 2
+    assert "stable per-worker service addresses" in lines[0]
+
+
+def test_pre_rollout_runtime_identity_resumes_only_not_responding_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scripts: list[str] = []
+
+    def exec_login(**kwargs: Any) -> SimpleNamespace:
+        scripts.append(str(kwargs["args"][-1]))
+        return SimpleNamespace(returncode=0, stdout="worker-1 State DOWN -> RESUME\n", stderr="")
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login", exec_login)
+
+    lines = migration._reconcile_slurm_worker_runtime_identity(  # noqa: SLF001
+        command_runner=SimpleNamespace(),
+        kube_context="context",
+        target_ref="cluster",
+        worker_instances={"worker-1": "computeinstance-current"},
+        via_login=True,
+        resume_not_responding=True,
+    )
+
+    assert lines == ["worker-1 State DOWN -> RESUME"]
+    assert '"${current_state}" == *NOT_RESPONDING*' in scripts[0]
+    assert 'scontrol update NodeName="${node}" State=RESUME' in scripts[0]
+
+
+def test_later_segment_binds_fresh_provider_resource_version() -> None:
+    live = _node_group(count=2)
+    live["status"] = {
+        "ready_node_count": 2,
+        "target_node_count": 2,
+        "node_count": 2,
+        "outdated_node_count": 0,
+    }
+    planned_group = {
+        "source": {
+            "kubernetes_version": "1.31",
+            "os": "ubuntu22.04",
+            "drivers_preset": "cuda12.8",
+        },
+        "provider_identity": {
+            "resource_uid": "mk8snodegroup-worker-a",
+            "resource_version": 1,
+            "reservation_policy": "",
+            "reservation_ids": [],
+            "failure_domains": [],
+            "gpu_cluster_id": "",
+        },
+    }
+    observed = {
+        **planned_group["provider_identity"],
+        "resource_version": 17,
+    }
+    group_state: dict[str, Any] = {}
+
+    accepted = migration._bind_in_place_segment_provider_identity(  # noqa: SLF001
+        checkpoint={"completed_segment_ids": ["segment-1"]},
+        group_state=group_state,
+        planned_group=planned_group,
+        observed_provider_identity=observed,
+        live=live,
+        group_name="worker-a",
+        provider_operation_journaled=False,
+    )
+
+    assert accepted["resource_version"] == 17
+    assert group_state["segment_start_provider_identity"] == observed
+
+
+def test_first_segment_rejects_unaccepted_provider_resource_version() -> None:
+    live = _node_group(count=2)
+    live["status"] = {
+        "ready_node_count": 2,
+        "target_node_count": 2,
+        "node_count": 2,
+        "outdated_node_count": 0,
+    }
+    planned_group = {
+        "source": {
+            "kubernetes_version": "1.31",
+            "os": "ubuntu22.04",
+            "drivers_preset": "cuda12.8",
+        },
+        "provider_identity": {
+            "resource_uid": "mk8snodegroup-worker-a",
+            "resource_version": 1,
+            "reservation_policy": "",
+            "reservation_ids": [],
+            "failure_domains": [],
+            "gpu_cluster_id": "",
+        },
+    }
+    observed = {
+        **planned_group["provider_identity"],
+        "resource_version": 17,
+    }
+
+    with pytest.raises(RuntimeError, match="identity drifted"):
+        migration._bind_in_place_segment_provider_identity(  # noqa: SLF001
+            checkpoint={"completed_segment_ids": []},
+            group_state={},
+            planned_group=planned_group,
+            observed_provider_identity=observed,
+            live=live,
+            group_name="worker-a",
+            provider_operation_journaled=False,
+        )
 
 
 def test_replacement_node_uid_proof_requires_ready_nodes(monkeypatch: pytest.MonkeyPatch) -> None:

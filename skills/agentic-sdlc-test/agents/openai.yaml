@@ -1,6 +1,0 @@
-interface:
-  display_name: "Agentic SDLC Test"
-  short_description: "Verify lightweight or real three-tier SDLC flows"
-  default_prompt: "Use $agentic-sdlc-test with no lifecycle flags for the unchanged lightweight verifier; use explicit --create, optional --keep, or standalone --destroy only when I request the owned three-tier Docker application and computer-use GUI UAT."
-policy:
-  allow_implicit_invocation: false

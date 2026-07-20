@@ -120,6 +120,8 @@ For should-trigger prompts, verify that the result:
 - stops before unconfirmed live, production, destructive, credential, or paid
   external-service mutation;
 - coordinates narrow specialist skills only when implementation is requested.
+- returns a scoped stack decision to an active `design` workflow instead of
+  recursively handing the full request back to `design`.
 
 ## Manual Runtime Check
 

@@ -9,6 +9,7 @@ import pytest
 
 from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.soperator_controller_bridge import (
+    CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
     CONTROLLER_BRIDGE_JAIL_PVC,
     CONTROLLER_BRIDGE_JWT_MATERIAL_CONTRACT_SCHEMA,
     CONTROLLER_BRIDGE_JWT_MATERIAL_PROOF_SCHEMA,
@@ -163,12 +164,13 @@ def _client_propagation_proof(
     controller_hosts: list[str],
     roles: tuple[str, str],
     digest: str,
+    cluster_name: str = "old-cluster",
 ) -> dict[str, object]:
     return {
         "schema": "nebius-cxcli-controller-client-propagation/v1",
         "status": "verified",
         "proof_stage": proof_stage,
-        "cluster_name": "old-cluster",
+        "cluster_name": cluster_name,
         "controller_hosts": controller_hosts,
         "timeouts": {
             "SlurmdTimeout": "3600" if roles[0] == "source-login" else "",
@@ -338,8 +340,8 @@ def _install_jwt_material_proof(journal: dict[str, object]) -> None:
     destination_wiring_sha256 = "5" * 64
     jwt_secret_binding = {
         "namespace": binding["namespace"],
-        "name": binding["name"],
-        "uid": binding["uid"],
+        "name": "target-slurm-jwt",
+        "uid": "target-slurm-jwt-uid",
     }
     target_ref = "target-cluster"
     takeover["target_ref"] = target_ref
@@ -351,6 +353,18 @@ def _install_jwt_material_proof(journal: dict[str, object]) -> None:
         "content_sha256": content_sha256,
         "source_secret_bindings": [binding],
         "captured_at": "2026-07-12T10:00:30Z",
+    }
+    takeover["target_jwt_secret_handoff"] = {
+        "schema": "nebius-cxcli/target-jwt-secret-handoff-v1",
+        "status": "verified",
+        "source_secret_name": binding["name"],
+        "source_secret_uid": binding["uid"],
+        "target_secret_name": jwt_secret_binding["name"],
+        "target_secret_uid": jwt_secret_binding["uid"],
+        "data_key": "jwt_hs256.key",
+        "key_sha256": live_key_sha256,
+        "intent_at": "2026-07-12T10:18:30Z",
+        "verified_at": "2026-07-12T10:18:31Z",
     }
     takeover["jwt_material_preflight"] = {
         "schema": migration.CONTROLLER_BRIDGE_JWT_MATERIAL_PREFLIGHT_SCHEMA,
@@ -1162,9 +1176,12 @@ def test_source_and_final_controller_configs_have_exact_ordered_hosts() -> None:
         "cxcli-soperator-upgrade-bridge.svc)",
     ]
 
-    final = final_singleton_controller_config(bridged)
+    final = final_singleton_controller_config(
+        bridged,
+        target_host="controller-0(target-cluster-controller-svc)",
+    )
     assert [line for line in final.splitlines() if line.startswith("SlurmctldHost=")] == [
-        "SlurmctldHost=controller-0"
+        "SlurmctldHost=controller-0(target-cluster-controller-svc)"
     ]
 
     target_bridge = bridge_only_controller_config(
@@ -1437,7 +1454,7 @@ def _cleaned_journal() -> dict[str, object]:
             },
         }
     )
-    handoff_hosts = [
+    source_handoff_hosts = [
         line.split("=", 1)[1]
         for line in source_controller_config_with_bridge_hosts(
             "ClusterName=old-cluster\nSlurmctldHost=controller-0\n"
@@ -1509,30 +1526,37 @@ def _cleaned_journal() -> dict[str, object]:
         },
         "client_propagation": _client_propagation_proof(
             proof_stage="before-source-fence",
-            controller_hosts=handoff_hosts,
+            controller_hosts=source_handoff_hosts,
             roles=("source-login", "source-worker"),
             digest="8" * 64,
         ),
     }
     journal["target_singleton_takeover"].update(
         {
+            "target_ref": "target-cluster",
             "controller_pod_uid": "target-controller-pod-uid",
             "controller_workload_uid": "target-controller-workload-uid",
             "final_config_map_name": "slurm-config",
+            "target_state_save_location": "/var/spool/slurmctld",
             "state_loaded": True,
             "only_primary_proven": True,
             "final_slurmctld_host_count": 1,
             "client_handoff_propagation": _client_propagation_proof(
                 proof_stage="before-target-takeover",
-                controller_hosts=handoff_hosts,
+                controller_hosts=[
+                    *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+                    "controller-0(target-cluster-controller-svc)",
+                ],
                 roles=("target-login", "target-worker"),
                 digest="9" * 64,
+                cluster_name="target-cluster",
             ),
             "final_client_propagation": _client_propagation_proof(
                 proof_stage="final-target-singleton",
-                controller_hosts=["controller-0"],
+                controller_hosts=["controller-0(target-cluster-controller-svc)"],
                 roles=("target-login", "target-worker"),
                 digest="0" * 64,
+                cluster_name="target-cluster",
             ),
         }
     )
@@ -1621,6 +1645,11 @@ def _cleaned_journal() -> dict[str, object]:
                 "Namespace": "2026-07-12T10:23:00Z",
                 "PersistentVolume": "2026-07-12T10:25:00Z",
             }[str(item["kind"])],
+            "accepted_at": {
+                "PersistentVolumeClaim": "2026-07-12T10:21:30Z",
+                "Namespace": "2026-07-12T10:23:30Z",
+                "PersistentVolume": "2026-07-12T10:25:30Z",
+            }[str(item["kind"])],
             "absent_at": {
                 "PersistentVolumeClaim": "2026-07-12T10:22:00Z",
                 "Namespace": "2026-07-12T10:24:00Z",
@@ -1682,7 +1711,7 @@ def _cleaned_journal() -> dict[str, object]:
                 "pvc_uid": "target-pvc-uid",
                 "pv_name": "controller-spool-pv",
                 "pv_uid": "target-pv-uid",
-                "state_path": "/mnt/controller-spool/current",
+                "state_path": "/var/spool/slurmctld",
             },
             "proof_checked_at": "2026-07-12T10:27:00Z",
             "completed_at": "2026-07-12T10:28:00Z",
@@ -1714,11 +1743,39 @@ def test_cleaned_bridge_journal_requires_exact_resource_and_node_group_absence()
         validate_bridge_journal(journal)
 
 
+def test_bridge_journal_accepts_interrupted_verified_jwt_handoff_status_repair() -> None:
+    journal = _cleaned_journal()
+    journal["target_singleton_takeover"]["target_jwt_secret_handoff"]["status"] = "dispatching"
+
+    validate_bridge_journal(journal)
+
+
+def test_bridge_journal_rejects_unverified_dispatching_jwt_handoff_with_preflight() -> None:
+    journal = _cleaned_journal()
+    handoff = journal["target_singleton_takeover"]["target_jwt_secret_handoff"]
+    handoff["status"] = "dispatching"
+    handoff.pop("verified_at")
+
+    with pytest.raises(ValueError, match="not handoff-bound"):
+        validate_bridge_journal(journal)
+
+
 def test_cleaned_bridge_journal_requires_exact_state_and_jail_retain_proofs() -> None:
     journal = _cleaned_journal()
     journal["cleanup"]["bridge_storage_bindings"]["jail"]["reclaim_policy"] = "Delete"
 
     with pytest.raises(ValueError, match="state or Jail Retain storage proof drifted"):
+        validate_bridge_journal(journal)
+
+
+def test_cleaned_bridge_journal_binds_target_state_path_not_bridge_mount_path() -> None:
+    journal = _cleaned_journal()
+
+    assert journal["state_manifest"]["stable_path"] == "/mnt/controller-spool/current"
+    validate_bridge_journal(journal)
+
+    journal["cleanup"]["target_state_binding"]["state_path"] = "/var/spool/changed"
+    with pytest.raises(ValueError, match="target state path changed"):
         validate_bridge_journal(journal)
 
 
@@ -1735,6 +1792,22 @@ def test_cleaned_bridge_journal_enforces_pvc_namespace_pv_delete_order() -> None
     journal["cleanup"]["kubernetes_operations"][key]["intent_at"] = "2026-07-12T10:23:30Z"
 
     with pytest.raises(ValueError, match="both PVs after"):
+        validate_bridge_journal(journal)
+
+
+def test_cleaned_bridge_journal_requires_pvc_acceptance_before_namespace() -> None:
+    journal = _cleaned_journal()
+    state_pvc = next(
+        item
+        for item in journal["kubernetes_resources"]
+        if item["kind"] == "PersistentVolumeClaim" and item["name"] == CONTROLLER_BRIDGE_STATE_PVC
+    )
+    key = "|".join(
+        str(state_pvc[field]) for field in ("api_version", "kind", "namespace", "name", "uid")
+    )
+    journal["cleanup"]["kubernetes_operations"][key]["accepted_at"] = "2026-07-12T10:23:30Z"
+
+    with pytest.raises(ValueError, match="accept both PVC deletes before"):
         validate_bridge_journal(journal)
 
 
@@ -1778,6 +1851,167 @@ def test_handoff_validated_journal_requires_final_client_propagation() -> None:
 
     with pytest.raises(ValueError, match="final singleton client propagation"):
         validate_bridge_journal(journal)
+
+
+def test_bridge_fenced_journal_accepts_interrupted_singleton_client_recovery() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.BRIDGE_FENCED.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {"state": "accepted"}
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+
+    validate_bridge_journal(journal)
+
+
+def test_target_singleton_journal_accepts_interrupted_client_recovery() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.TARGET_SINGLETON_ACTIVE.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {"state": "accepted"}
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+
+    validate_bridge_journal(journal)
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [BridgeStage.HANDOFF_VALIDATED.value, BridgeStage.CLEANED.value],
+)
+def test_later_journal_accepts_proven_interrupted_client_recovery(stage: str) -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = stage
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {"state": "accepted"}
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+
+    validate_bridge_journal(journal)
+
+
+def test_bridge_fenced_journal_accepts_monotonic_singleton_revalidation_reentry() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.BRIDGE_FENCED.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {
+        "state": "dispatching",
+        "accepted_at": "2026-07-12T10:18:00Z",
+        "pod_uid": "controller-pod-uid",
+        "node_name": "controller-node",
+        "ungate_required": False,
+    }
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+    journal["authority"]["owner"] = "target-singleton"
+    journal["fencing"]["bridge"]["proven"] = True
+
+    validate_bridge_journal(journal)
+
+
+def test_bridge_fenced_journal_accepts_fenced_target_bridge_authority_reentry() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.BRIDGE_FENCED.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {
+        "state": "accepted",
+        "accepted_at": "2026-07-12T10:18:00Z",
+        "pod_uid": "controller-pod-uid",
+        "node_name": "controller-node",
+        "ungate_required": False,
+    }
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+    takeover.update(
+        {
+            "bridge_authority_epoch": "bridge-target-epoch",
+            "target_stop_attempt": 1,
+            "target_stop_pods": [
+                {
+                    "pod_uid": "controller-pod-uid",
+                    "node_name": "controller-node",
+                    "node_uid": "controller-node-uid",
+                }
+            ],
+            "target_runtime_fence": [_runtime_fence("controller-node")],
+            "recovery_pre_authority_runtime_fence": [
+                _runtime_fence("controller-node"),
+                _runtime_fence("bridge-node-0"),
+                _runtime_fence("bridge-node-1"),
+            ],
+            "controller_pod_uid": "",
+            "controller_workload_uid": "",
+            "jwt_material_proof": {},
+            "jwt_material_proof_cleared_at": "2026-07-12T10:20:00Z",
+        }
+    )
+    journal["controller_roles"] = [
+        {"node_uid": "bridge-node-0-uid"},
+        {"node_uid": "bridge-node-1-uid"},
+    ]
+    journal["authority"].update(
+        {
+            "owner": "bridge-target",
+            "epoch": "bridge-target-epoch",
+        }
+    )
+
+    validate_bridge_journal(journal)
 
 
 @pytest.mark.parametrize(

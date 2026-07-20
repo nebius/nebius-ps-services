@@ -208,6 +208,33 @@ class PromptWorkspaceTests(unittest.TestCase):
                     self.intake(prompt)
                 self.assertEqual(caught.exception.code, "PROMPT_SENSITIVE_INPUT")
 
+    def test_public_nebius_metadata_is_not_secret_input(self) -> None:
+        prefix = "NEBIUS" + "_"
+        assignments = (
+            prefix + "PROFILE = codex-agent-project-1234567890",
+            prefix + "PROJECT_ID = project-1234567890",
+            prefix
+            + "AUTH_CREDENTIALS_FILE = "
+            + "/tmp/codex-agent-authkey.project-1234567890.json",
+        )
+
+        for assignment in assignments:
+            with self.subTest(variable=assignment.split(" ", 1)[0]):
+                self.assertFalse(workspace.contains_secret(assignment))
+
+    def test_public_nebius_metadata_cannot_mask_secret_input(self) -> None:
+        prefix = "NEBIUS" + "_"
+        text = (
+            prefix
+            + "PROFILE = codex-agent-project-1234567890 "
+            + prefix
+            + "IAM_"
+            + "TOKEN = "
+            + "x" * 32
+        )
+
+        self.assertTrue(workspace.contains_secret(text))
+
     def test_snapshot_tamper_fails_closed(self) -> None:
         prompt = self.prompt_path()
         first = self.intake(prompt)

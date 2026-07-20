@@ -34,9 +34,11 @@ from prompt_workspace_intake import route_project_prompt  # noqa: E402
 from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
     advance_batch,
+    arm_task,
     cleanup_wave,
     dispatch_wave,
     finalize_run,
+    heartbeat_task,
     integrate_wave,
     plan_waves,
     prepare_wave,
@@ -44,6 +46,7 @@ from prompt_workspace_waves import (  # noqa: E402
     recover_task,
     replan_waves,
     start_task,
+    watch_task,
 )
 from prompt_workspace_runs import (  # noqa: E402
     initialize_project_workspace,
@@ -69,6 +72,7 @@ __all__ = [
     "PromptWorkspaceError",
     "accept_task_result",
     "advance_batch",
+    "arm_task",
     "cleanup_wave",
     "create_prompt",
     "init_workspace",
@@ -78,6 +82,7 @@ __all__ = [
     "project_workspace_manifest",
     "dispatch_wave",
     "finalize_run",
+    "heartbeat_task",
     "integrate_wave",
     "plan_waves",
     "prepare_wave",
@@ -93,6 +98,7 @@ __all__ = [
     "verify_command",
     "verify_run",
     "verify_workspace",
+    "watch_task",
 ]
 
 
@@ -235,6 +241,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_start.add_argument("--run-id", required=True)
     task_start.add_argument("--task-id", required=True)
     task_start.add_argument("--assignment-sha256", required=True)
+
+    task_arm = subparsers.add_parser(
+        "task-arm", help="Internal: arm one available worker slot."
+    )
+    add_common_workspace(task_arm)
+    task_arm.add_argument("--run-id", required=True)
+    task_arm.add_argument("--task-id", required=True)
+
+    task_heartbeat = subparsers.add_parser(
+        "task-heartbeat", help="Internal: record bounded worker progress."
+    )
+    add_common_workspace(task_heartbeat)
+    task_heartbeat.add_argument("--run-id", required=True)
+    task_heartbeat.add_argument("--task-id", required=True)
+    task_heartbeat.add_argument("--assignment-sha256", required=True)
+    task_heartbeat.add_argument(
+        "--phase",
+        required=True,
+        choices=(
+            "preflight",
+            "implementing",
+            "validating",
+            "reviewing",
+            "committing",
+            "reporting",
+        ),
+    )
+
+    task_watch = subparsers.add_parser(
+        "task-watch", help="Internal: evaluate one worker liveness budget."
+    )
+    add_common_workspace(task_watch)
+    task_watch.add_argument("--run-id", required=True)
+    task_watch.add_argument("--task-id", required=True)
 
     task_recover = subparsers.add_parser(
         "task-recover", help="Internal: transfer one interrupted worker task."
@@ -398,10 +438,22 @@ def main(argv: list[str]) -> int:
             result = dispatch_wave(args.workspace, args.run_id, args.contract_commit)
         elif args.command == "batch-advance":
             result = advance_batch(args.workspace, args.run_id)
+        elif args.command == "task-arm":
+            result = arm_task(args.workspace, args.run_id, args.task_id)
         elif args.command == "task-start":
             result = start_task(
                 args.workspace, args.run_id, args.task_id, args.assignment_sha256
             )
+        elif args.command == "task-heartbeat":
+            result = heartbeat_task(
+                args.workspace,
+                args.run_id,
+                args.task_id,
+                args.assignment_sha256,
+                args.phase,
+            )
+        elif args.command == "task-watch":
+            result = watch_task(args.workspace, args.run_id, args.task_id)
         elif args.command == "task-recover":
             result = recover_task(
                 args.workspace,

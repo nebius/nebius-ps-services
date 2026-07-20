@@ -37,6 +37,9 @@ local Codex home.
   that merely contains a shell command is not executed and remains governed by
   patch target, secret, and spec checks. Ordinary outbound network commands are
   not restricted by the hook unless they match one of those unsafe checks.
+  Public Nebius profile, project, and credential-file path assignments are
+  metadata rather than secret material. All other long Nebius assignments,
+  including token material, remain fail-closed.
 - An active run also covers coordinator-registered integration and worker
   worktrees outside the original checkout. The hook verifies canonical Git
   root/common directory, branch, and recorded HEAD before sensitive Git actions.

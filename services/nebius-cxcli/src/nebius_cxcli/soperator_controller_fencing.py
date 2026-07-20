@@ -454,8 +454,14 @@ def controller_runtime_census_pod(
                         "runAsUser": 0,
                     },
                     "resources": {
-                        "requests": {"cpu": "5m", "memory": "16Mi"},
-                        "limits": {"cpu": "100m", "memory": "64Mi"},
+                        # The fail-closed host census reads mountinfo for every
+                        # stable process.  A 100m CPU cap made that bounded
+                        # proof take several minutes on otherwise idle bridge
+                        # nodes and routinely consumed most of its readiness
+                        # deadline.  Keep the Pod small at admission while
+                        # allowing the short-lived scan to burst to one core.
+                        "requests": {"cpu": "100m", "memory": "16Mi"},
+                        "limits": {"cpu": "1", "memory": "64Mi"},
                     },
                 }
             ],
@@ -704,8 +710,12 @@ def controller_runtime_fence_pod(
                         "runAsUser": 0,
                     },
                     "resources": {
-                        "requests": {"cpu": "5m", "memory": "16Mi"},
-                        "limits": {"cpu": "100m", "memory": "64Mi"},
+                        # This fence performs the same complete host /proc and
+                        # mountinfo scan as the census.  Let the short-lived
+                        # verifier burst instead of CPU-throttling a safety
+                        # proof until its five-minute readiness deadline.
+                        "requests": {"cpu": "100m", "memory": "16Mi"},
+                        "limits": {"cpu": "1", "memory": "64Mi"},
                     },
                 }
             ],

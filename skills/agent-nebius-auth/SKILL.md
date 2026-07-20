@@ -219,6 +219,9 @@ denial, confirm whether the command actually prints token variables, enables
 shell tracing, or dumps the environment; safe status and log output should not
 require a workaround. For a separate policy hook, inspect that hook's reason
 independently because current Codex runs matching command hooks concurrently.
+Public agent-profile selectors, project IDs, and credential-file paths are not
+token material and must not be rejected merely because their variable names
+start with `NEBIUS_`; all other long Nebius assignments remain fail-closed.
 Only when token minting, the agent CLI profile, the credential file, or a basic
 project-access check actually fails should the operator explicitly invoke
 `$agent-nebius-auth` to verify or repair setup. Never replace the agent profile

@@ -16,6 +16,8 @@ task must contain:
 - write claims using `exact: repo/path` or `prefix: repo/directory`;
 - conflict domains using `class:stable-key`;
 - focused validation, end-to-end validation, and done criteria.
+- every prompt/repository constraint applicable to that worker, repeated in
+  rollback/stop context rather than left only in the parent prompt.
 
 Combine overlapping work before IDs lock when one worker can produce one
 coherent result. Otherwise add an explicit dependency and serialize it. Never
@@ -87,25 +89,67 @@ available capacity. If native agents are unavailable, start fresh sequential
 `codex exec` workers in the same isolated worktrees. Never let the coordinator
 implement worker tasks. After one worker fails, stop dispatching new batch
 members but allow already-active workers to finish and report.
+Give each worker only its immutable assignment and incoming handoff; do not
+inherit the coordinator transcript or unrelated conversation history. The
+coordinator invokes private `task-arm` only after a real worker slot is
+available, then spawns the worker immediately. Queued assignments remain
+unarmed without consuming a deadline. The worker reads its assignment and
+makes `task-start` the first private transition after verifying immediate
+Git/cwd identity. It invokes the assignment's exact `helper_path` with its
+`workspace_manifest` and passes the embedded `assignment_sha256` unchanged;
+`task-start` performs authoritative canonical digest validation, so workers do
+not recompute it with ad hoc JSON. The worker reads the incoming handoff and
+does deeper preflight only afterward. An armed worker must reach `task-start`
+within 60 seconds.
 
 Each worker must:
 
-1. Read its immutable assignment and verify its digest.
-2. Verify the incoming-handoff path and digest, then verify absolute cwd, real worktree root, branch, exact base SHA, clean state,
-   scope, claims, and conflict domains.
-3. Stop with `REPLAN_REQUIRED` before editing if an undeclared path or domain
+1. Read its immutable assignment; verify absolute cwd, real worktree root,
+   branch, exact base SHA, and clean state; invoke `task-start` as its first
+   private transition through the embedded helper/workspace paths, passing the
+   embedded digest unchanged for the helper's canonical validation.
+2. Verify the incoming-handoff path and digest, then verify scope, claims, and
+   conflict domains before deeper preflight.
+3. Enforce the assignment's canonical worker guardrails. Stay inside the
+   assigned worktree/private Task Implementer state. Installed Codex skill
+   instructions/helpers and standard local executables are read/execute-only as
+   required by the assignment and must never be modified. Do not intentionally
+   write other filesystem paths or access network, credentials, external
+   services, or live runtimes unless the immutable assignment explicitly
+   authorizes that exact action.
+4. Invoke private `task-heartbeat` at least every 30 seconds with the current
+   phase. Dependency-free `standard` tasks warn at 240 seconds and stop at 300
+   seconds without claimed progress; dependent `integration` tasks warn at 360
+   seconds and stop at 420 seconds. A heartbeat becomes hard-stale at 240
+   seconds. Invoke each heartbeat directly; never
+   create a background process or autonomous heartbeat loop. Treat the
+   assignment and incoming handoff as complete task context; do not reread the
+   full prompt or coordinator-only state.
+   Invoke `task-start` exactly once. Only mutations inside immutable write
+   claims count as progress; any other mutation stops with
+   `WORKER_SCOPE_VIOLATION`.
+5. Stop with `REPLAN_REQUIRED` before editing if an undeclared path or domain
    is needed.
-4. Implement exactly one task without touching the primary checkout, shared
+6. Implement exactly one task without touching the primary checkout, shared
    handoff/spec/docs, other refs/worktrees, Git maintenance, or external state.
-5. Run focused and end-to-end validation.
-6. Invoke `code-review`, fix safe scoped findings, and revalidate.
-7. Invoke `$commit` exactly once. The task branch must contain exactly one
+7. Run focused and end-to-end validation.
+8. Invoke `code-review`, fix safe scoped findings, and revalidate.
+9. Invoke `$commit` exactly once. The task branch must contain exactly one
    direct-child commit from the common contract base.
-8. Write one private result with assignment digest, status, commit, exact paths,
+10. Write one private result with assignment digest, status, commit, exact paths,
    summary, decisions, open risks, validation, end-to-end evidence, and review
    evidence. Stop. Never reuse this worker session for another task.
 
 Task `committed` means ready for integration, not done.
+
+From dispatch onward, the coordinator invokes private `task-watch` every 30
+seconds. `WORKER_PRESTART_TIMEOUT`, `WORKER_PRESTART_MUTATION`,
+`WORKER_STALLED`, `WORKER_READ_ONLY_TIMEOUT`, or `WORKER_TIMEOUT` requires
+immediate interruption, stopped-status confirmation, and explicit recovery or
+blocking. Treat `WORKER_SCOPE_VIOLATION` the same way. Never silently wait or
+blind-retry no-progress work.
+At the profile-specific `READ_ONLY_DEADLINE_NEAR`, require an immediate
+claimed-file edit or blocker before the hard cutoff.
 
 ## Verifying And Integrating
 
@@ -187,8 +231,17 @@ Idempotent retries re-observe exact refs and worktrees. They never recreate a
 foreign collision, duplicate a commit/merge, overwrite a divergent immutable
 assignment/result, or force cleanup.
 
+Before resources exist, replanning replaces the active planned tail in the
+coordinator schedule. Completed waves remain indexed; superseded planned wave
+files are retained as blocked history but are not part of final completion or
+semantic validation. After the final wave is promoted and cleaned, integration
+review may append a newly discovered isolated correction tail before
+finalization.
+
 For an interrupted running task, require explicit confirmation that the old
-worker stopped before transferring the locked assignment to a fresh session.
+worker stopped, then have the fresh replacement worker invoke `task-recover`
+from its assigned scope cwd as its first transition. The coordinator must not
+invoke recovery for it because session ownership binds to the caller.
 Recovery accepts only the locked base, one direct-child commit, and dirty paths
 inside the assignment claims. A blocked task or undeclared path stays retained
 for operator-directed recovery; do not delete or replace unmerged evidence.

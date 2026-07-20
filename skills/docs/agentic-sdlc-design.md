@@ -83,8 +83,10 @@ private local run state, selects one current feature, and returns exactly one
 next recommended skill.
 
 All `sdlc-*` skills set `allow_implicit_invocation: false` in
-`agents/openai.yaml`. Operators and continuation prompts enter the workflow
-explicitly through `$sdlc-start run <prompt-path-or-unique-filename>`, and the coordinator records the next
+`agents/openai.yaml`. The external `sdlc-workflow-test` verifier is the sole
+non-phase exception to the prefix convention. Operators and continuation
+prompts enter the workflow explicitly through
+`$sdlc-start run <prompt-path-or-unique-filename>`, and the coordinator records the next
 recommended phase skill in local state. This keeps workflow phases from being
 selected by ordinary prompt matching outside an active Agentic SDLC run.
 
@@ -483,9 +485,9 @@ environment blockers.
 
 ## Workflow Verification
 
-`agentic-sdlc-test` is the external verification skill for this workflow. It is
-not an SDLC phase and does not use the `sdlc-` prefix. Use it to verify the
-workflow against this design, inspect global `sdlc-*` skill discovery, check
+`sdlc-workflow-test` is the external verification skill for this workflow. It is
+not an SDLC phase despite its requested `sdlc-` prefix. Use it to verify the
+workflow against this design, inspect required phase-skill discovery, check
 hook configuration, run disposable PreToolUse and Stop hook fixture tests, and
 write a verification report to `~/.codex/sdlc-verification/report.md`. Its
 no-flag behavior remains the lightweight verifier. Explicit `--create`,
@@ -532,25 +534,25 @@ Use the quick preflight when the SDLC skills, hook source, hook configuration,
 or this design document changed and you need a safe readiness check:
 
 ```text
-$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+$sdlc-workflow-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 ```
 
 The skill runs the deterministic helper from the skills repository:
 
 ```bash
-python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
+python3 sdlc-workflow-test/scripts/verify_agentic_sdlc.py
 ```
 
 The preflight must verify and record:
 
-- global `sdlc-*` skill folders, `SKILL.md` front matter, and explicit-only
+- global required phase-skill folders, `SKILL.md` front matter, and explicit-only
   `agents/openai.yaml` invocation policy
 - `sdlc-auto-steering` and `sdlc-update-documents` discovery, metadata, and
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
 - installed `worktree` availability and source-installed parity for every
-  required SDLC skill, `worktree`, and `agentic-sdlc-test`
+  required SDLC skill, `worktree`, and `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
   rename/lifecycle; execution scope, sessions, `task-recover`, resource-free
   `replan-future`, secret gates, and sequential fallback; Task Implementer
@@ -573,7 +575,7 @@ The preflight must verify and record:
 - Stop continuation cases through `sdlc-start`
 - disposable-project creation and private-state staging checks
 - private `verification-context.json` creation for the exact nested selected
-  project and optional `agentic-sdlc/verification-live-results-v1` ingestion;
+  project and optional `agentic-sdlc/verification-live-results-v3` ingestion;
   the preserved context owns the baseline identity, and committed changes must
   remain inside the selected project without private SDLC state
 - private `0700` verification-root permissions and ownership, a remote-free
@@ -676,8 +678,8 @@ After the happy path, verify these recovery behaviors:
   then confirm `sdlc-auto-steering` records each immutable revision and routes product-truth
   changes to the owning skill before implementation treats them as true
 - confirm clearing steering allows resume
-- run optional GUI or TUI smoke checks only against harmless local disposable
-  targets when the required harness is available
+- run GUI or TUI checks only against harmless local disposable targets; both
+  are required when claiming the exact 20-skill verification matrix passed
 
 The full workflow test must not call `create-pr`, `review-pr`, or
 `sdlc-merge-pr` against a real remote. Merge remains outside verification
@@ -689,15 +691,24 @@ The real-life profile is opt-in and separate from the preceding lightweight
 fixture:
 
 ```text
-$agentic-sdlc-test --create
-$agentic-sdlc-test --create --keep
-$agentic-sdlc-test --destroy
+$sdlc-workflow-test --create
+$sdlc-workflow-test --create --keep
+$sdlc-workflow-test --destroy
 ```
 
 `--keep` is valid only with `--create`; create and destroy are mutually
 exclusive. There is one active three-tier application per verification root.
-A second create fails without mutation, and repeated standalone destroy returns
-`ALREADY_DESTROYED`.
+Every create first destroys the previous active exactly owned environment and
+then creates a fresh lifecycle. If project safety, resource ownership, or
+cleanup cannot be proven, replacement stops without starting another stack.
+Cleanup covers both recorded IDs and resources discovered through the exact
+verification-ID and Compose-project labels, including an interrupted run that
+created Docker resources before persisting its inventory.
+Every subsequent private lifecycle mutation and every Docker Compose action
+must carry the immutable verification ID returned by prepare. The helper holds
+the lifecycle lock through each Compose action, fixes the Compose project and
+project directory, and rejects stale generations before mutation.
+Repeated standalone destroy returns `ALREADY_DESTROYED`.
 
 Create first runs the unchanged deterministic preflight. It then prepares one
 owned project and uses only `$sdlc-start workspace init <project-folder>` and
@@ -730,38 +741,40 @@ separate explicitly authorized action. The UAT must refresh accessibility state
 after every successful action; reject blank input; create, refresh, complete,
 and filter a unique task; correlate the same record through GUI, API, and
 PostgreSQL; restart services
-without deleting the volume; and prove persistence. Edge is primary and Chrome
-is a recorded fallback. Browser or Playwright evidence cannot substitute for a
+without deleting the volume; and prove persistence. The verifier launches one
+fresh Google Chrome process group with an isolated verifier-owned profile and
+verification-ID marker; existing Chrome instances are never selected or
+closed. Computer Use must expose that marker before every action. Browser or
+Playwright evidence cannot substitute for a
 required computer-use harness, and screenshots alone cannot establish PASS.
 
-Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v1`; semantic evidence
-uses `agentic-sdlc/three-tier-results-v1`. Reports include logical/container
+Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v3`; semantic evidence
+uses `agentic-sdlc/three-tier-results-v2`. Reports include structured Computer
+Use readiness attempts, an explicit 20-skill evidence matrix, logical/container
 layer inventory, tool/browser versions, project/report paths, resolved web/API/
 health endpoints, internal database endpoint, baseline/promoted SHAs, phase and
 test outcomes, exact resource IDs, UAT, and cleanup/retention status. Reports
 omit prompts, raw logs, credentials, database contents, and screenshot content.
 
-Default create closes only its dedicated test tab and, after success or
+Default create closes only its exact verifier-owned Chrome process group and, after success or
 failure, removes its exact project, private state/raw evidence, containers,
-network, database volume, and built web image. If the shared Computer Use
-service is unhealthy and cannot safely close the dedicated tab, cleanup fails
-closed before Docker deletion, retains the owned runtime as `CLEANUP_FAILED`,
-and requires separately authorized recovery. Any cleanup failure makes the run
-FAIL and leaves resumable state. Create plus keep retains those resources and
-the dedicated tab. Standalone destroy validates the root, lifecycle, exact
-paths, verification ID, Compose project, and both labels on every present
-resource before removal. It retains sanitized reports and lifecycle history
-and never removes Docker, shared/base images, unrelated resources, a browser
-application, or unrelated tabs.
+network, database volume, and built web image. Chrome identity ambiguity fails
+closed before Docker deletion and retains resumable `CLEANUP_FAILED` state.
+Create plus keep retains those resources and the dedicated Chrome instance.
+Standalone destroy validates the root, lifecycle, exact browser process/profile
+identity, paths, verification ID, Compose project, and both labels on every
+present Docker alias. It canonicalizes and deduplicates resource identities,
+preserves cumulative retry results, and never removes Docker, shared/base
+images, unrelated resources, or an existing browser instance.
 
 ### Report interpretation
 
 The report status means:
 
-- `PASS`: all required deterministic capabilities and the seven live lanes
-  (golden path, idempotency, change request, failure routing, auto-steering,
-  documentation update, and steering continuation) passed; optional GUI or TUI
-  smoke checks may be `NOT APPLICABLE`.
+- `PASS`: all required deterministic capabilities, the seven live lanes, and
+  the exact 20-skill matrix passed. GUI and TUI evidence is required for an
+  all-skill PASS; unavailable harnesses keep the result PARTIAL rather than
+  creating synthetic `NOT APPLICABLE` success.
 - `PARTIAL`: no required check failed, but optional hook registration or one or
   more live lanes are missing or partial.
 - `FAIL`: any required deterministic check, configured hook safety/parity
@@ -787,7 +800,7 @@ responsible layer:
 - update `sdlc-start/assets/hooks/` when the guardrail source is wrong
 - sync installed hooks only through the approved hook installer flow after
   source fixes are reviewed
-- rerun `$agentic-sdlc-test` after every fix
+- rerun `$sdlc-workflow-test` after every fix
 
 Do not update the report to hide a real failure. The report is evidence, not
 the contract.

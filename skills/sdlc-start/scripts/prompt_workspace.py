@@ -62,7 +62,10 @@ SECRET_PATTERNS = (
     re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
     re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
     re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"\bNEBIUS_[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"),
+    re.compile(
+        r"\bNEBIUS_(?!(?:PROFILE|PROJECT_ID|AUTH_CREDENTIALS_FILE)\b)"
+        r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"
+    ),
     re.compile(r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"),
     re.compile(r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)"),
     re.compile(

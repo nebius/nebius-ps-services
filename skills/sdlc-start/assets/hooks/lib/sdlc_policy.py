@@ -107,7 +107,8 @@ def contains_secret(text: str) -> bool:
         r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}",
         r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}",
         r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}",
-        r"\bNEBIUS_[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
+        r"\bNEBIUS_(?!(?:PROFILE|PROJECT_ID|AUTH_CREDENTIALS_FILE)\b)"
+        r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)",
         r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}",

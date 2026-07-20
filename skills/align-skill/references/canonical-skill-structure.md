@@ -188,8 +188,8 @@ Set `allow_implicit_invocation` from the skill contract:
 - `false`: skills that must be explicitly requested by the user or a workflow
   coordinator, including Git commit/push/PR/merge flows, release/publish flows,
   auth or local setup, high-risk security mutation, container attachment,
-  external MCP installation, workflow verification harnesses, and all `sdlc-*`
-  Agentic SDLC phase skills.
+  external MCP installation, workflow verification harnesses, and all Agentic
+  SDLC phase skills.
 
 If `SKILL.md` says the skill should run only after an explicit request, reflect
 that in `agents/openai.yaml`; do not rely on prose alone. If the policy is
@@ -253,6 +253,9 @@ For this profile:
 - SDLC-only skill descriptions must start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery makes the
   workflow boundary explicit.
+- `sdlc-workflow-test` is the explicit external-verifier exception to the
+  prefix convention: its description must state that it runs outside the
+  Agentic SDLC workflow.
 - Do not keep unprefixed aliases or compatibility wrapper folders for renamed
   SDLC-only skills unless the user explicitly requests a compatibility layer.
 

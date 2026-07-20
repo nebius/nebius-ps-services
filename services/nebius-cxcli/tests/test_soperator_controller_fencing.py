@@ -103,6 +103,10 @@ def test_runtime_fence_pod_uses_dedicated_privileged_host_pid_boundary() -> None
     assert "| awk" not in script
     assert "hostPath" not in repr(pod)
     assert pod["metadata"]["labels"][CONTROLLER_FENCE_LABEL] == "true"
+    assert container["resources"] == {
+        "requests": {"cpu": "100m", "memory": "16Mi"},
+        "limits": {"cpu": "1", "memory": "64Mi"},
+    }
 
 
 def test_inspector_namespace_is_dedicated_privileged_and_network_denied() -> None:
@@ -151,6 +155,10 @@ def test_runtime_census_pod_binds_host_pid_scan_to_exact_cri_identity() -> None:
     assert "volumes" not in pod["spec"]
     assert "securityContext" not in pod["spec"]
     container = pod["spec"]["containers"][0]
+    assert container["resources"] == {
+        "requests": {"cpu": "100m", "memory": "16Mi"},
+        "limits": {"cpu": "1", "memory": "64Mi"},
+    }
     assert container["securityContext"] == {
         "privileged": True,
         "readOnlyRootFilesystem": True,
@@ -777,6 +785,13 @@ def test_authority_node_revalidation_rejects_full_set_additions_and_removals(
             "node_resource_version": "11",
             "provider_id": "nebius://compute/controller-node-0",
             "system_uuid": "system-controller-node-0",
+            "node_identity_sha256": migration._controller_runtime_node_identity_sha256(  # noqa: SLF001
+                {
+                    "node_uid": "uid-controller-node-0",
+                    "provider_id": "nebius://compute/controller-node-0",
+                    "system_uuid": "system-controller-node-0",
+                }
+            ),
         },
     )
 
@@ -786,6 +801,47 @@ def test_authority_node_revalidation_rejects_full_set_additions_and_removals(
             kube_context="test-context",
             command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
         )
+
+
+def test_runtime_fence_node_revalidation_accepts_unrelated_live_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def node(name: str) -> dict[str, object]:
+        return {
+            "metadata": {"name": name, "uid": f"uid-{name}", "resourceVersion": "12"},
+            "spec": {"providerID": f"nebius://compute/{name}"},
+            "status": {"nodeInfo": {"systemUUID": f"system-{name}"}},
+        }
+
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {"items": [node("controller-node-0"), node("unrelated-worker")]},
+    )
+    fence = (
+        {
+            "node_name": "controller-node-0",
+            "node_uid": "uid-controller-node-0",
+            "node_resource_version": "11",
+            "provider_id": "nebius://compute/controller-node-0",
+            "system_uuid": "system-controller-node-0",
+            "node_identity_sha256": migration._controller_runtime_node_identity_sha256(  # noqa: SLF001
+                {
+                    "node_uid": "uid-controller-node-0",
+                    "provider_id": "nebius://compute/controller-node-0",
+                    "system_uuid": "system-controller-node-0",
+                }
+            ),
+        },
+    )
+
+    observed = migration._revalidate_controller_runtime_fence_nodes(  # noqa: SLF001
+        node_fence=fence,
+        kube_context="test-context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
+    )
+
+    assert [item["node_name"] for item in observed] == ["controller-node-0"]
 
 
 def test_runtime_census_partial_bulk_apply_always_deletes_exact_inspector_pods(
@@ -843,6 +899,53 @@ def test_runtime_census_partial_bulk_apply_always_deletes_exact_inspector_pods(
     assert delete[delete.index("-n") + 1] == CONTROLLER_INSPECTOR_NAMESPACE
     assert applied_names[0] in delete
     assert "--wait=true" in delete
+
+
+def test_runtime_census_log_read_retries_transient_malformed_transport_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _census_target()
+    valid = "\n".join(
+        (
+            f"schema={CONTROLLER_CENSUS_SCHEMA}",
+            f"node_name={target.node_name}",
+            f"node_uid={target.node_uid}",
+            "expected_process_count=0",
+            "slurmctld_count=0",
+            "matched_expected_process_count=0",
+            "unexpected_process_count=0",
+            "missing_expected_process_count=0",
+            "ambiguous_process_count=0",
+            "inspected_process_count=1",
+            "unreadable_process_count=0",
+            f"expected_bindings_sha256={target.expected_bindings_sha256}",
+            "",
+        )
+    )
+    outputs = iter(("transient proxy output", valid))
+    commands: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        commands.append(command)
+        return migration.SoperatorMigrationCommandResult(command, 0, next(outputs), "")
+
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    evidence = migration._collect_controller_runtime_census_evidence(  # noqa: SLF001
+        pod_name="census-pod",
+        target=target,
+        proof_label="test census",
+        kube_context="test-context",
+        command_runner=runner,
+    )
+
+    assert evidence.exclusive is True
+    assert len(commands) == 2
+    assert all("--request-timeout=20s" in command for command in commands)
 
 
 def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
@@ -997,3 +1100,125 @@ def test_fresh_runtime_fence_attempt_does_not_reuse_verified_resume_evidence(
     ]
     assert len(creation_waits) == 4
     assert all("--timeout=2m" in command for command in creation_waits)
+
+
+def test_runtime_fence_batches_independent_node_inspectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets = (
+        _target(),
+        ControllerFenceTarget(
+            node_name="controller-node-1",
+            node_uid="node-uid-1",
+            state_markers=("pvc-uid-0", "/mnt/controller-spool/current"),
+        ),
+    )
+    journal: dict[str, object] = {
+        "namespace": "cxcli-soperator-upgrade-bridge",
+        "campaign_fingerprint": "e" * 64,
+        "runtime_fence_proofs": [],
+    }
+    applied_pods: dict[str, dict[str, object]] = {}
+    applied_batches: list[tuple[str, ...]] = []
+    commands: list[tuple[str, ...]] = []
+
+    def node(node_name: str) -> dict[str, object]:
+        suffix = node_name.rsplit("-", 1)[-1]
+        return {
+            "metadata": {
+                "name": node_name,
+                "uid": f"node-uid-{suffix}",
+                "resourceVersion": "11",
+            },
+            "spec": {"providerID": f"nebius://compute/{node_name}"},
+            "status": {"nodeInfo": {"systemUUID": f"system-uuid-{node_name}"}},
+        }
+
+    def apply_objects(**kwargs: object) -> None:
+        objects = kwargs["objects"]
+        assert isinstance(objects, tuple)
+        applied_batches.append(tuple(str(item["metadata"]["name"]) for item in objects))
+        for item in objects:
+            pod = copy.deepcopy(item)
+            metadata = pod["metadata"]
+            assert isinstance(metadata, dict)
+            pod_name = str(metadata["name"])
+            metadata["uid"] = f"uid-{pod_name}"
+            pod["status"] = {
+                "phase": "Running",
+                "containerStatuses": [{"name": "inspector", "ready": True}],
+            }
+            applied_pods[pod_name] = pod
+
+    def json_from_command(
+        _runner: object,
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        command = tuple(args)
+        if "node" in command:
+            return node(command[command.index("node") + 1])
+        pod_name = command[command.index("pod") + 1]
+        return copy.deepcopy(applied_pods[pod_name])
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: object,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        commands.append(command)
+        if "logs" not in command:
+            return migration.SoperatorMigrationCommandResult(command, 0, "", "")
+        pod_name = command[command.index("logs") + 1].removeprefix("pod/")
+        pod = applied_pods[pod_name]
+        node_name = str(pod["spec"]["nodeName"])
+        target = next(item for item in targets if item.node_name == node_name)
+        output = "\n".join(
+            (
+                f"schema={CONTROLLER_FENCE_SCHEMA}",
+                f"node_name={target.node_name}",
+                f"node_uid={target.node_uid}",
+                "slurmctld_count=0",
+                "writable_state_mount_count=0",
+                "inspected_process_count=42",
+                "unreadable_process_count=0",
+                f"marker_sha256={controller_fence_marker_sha256(target.state_markers)}",
+            )
+        )
+        return migration.SoperatorMigrationCommandResult(command, 0, output, "")
+
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (False, {}),
+    )
+    monkeypatch.setattr(migration, "_kubectl_apply_objects", apply_objects)
+    monkeypatch.setattr(migration, "_json_from_command", json_from_command)
+
+    results = migration._prove_controller_runtime_fence(  # noqa: SLF001
+        journal=journal,
+        boundary="cluster-wide-pre-scale",
+        targets=targets,
+        image="registry.example/controller@sha256:" + "f" * 64,
+        kube_context="test-context",
+        command_runner=runner,
+        checkpoint_writer=lambda: None,
+        fresh_attempt=True,
+    )
+
+    assert {item["node_name"] for item in results} == {
+        "controller-node-0",
+        "controller-node-1",
+    }
+    assert len(applied_batches) == 1
+    assert len(applied_batches[0]) == 2
+    creation_waits = [
+        command for command in commands if "wait" in command and "--for=create" in command
+    ]
+    readiness_waits = [
+        command for command in commands if "wait" in command and "--for=condition=Ready" in command
+    ]
+    assert len(creation_waits) == 1
+    assert len(readiness_waits) == 1
+    assert sum(item.startswith("pod/") for item in creation_waits[0]) == 2
+    assert sum(item.startswith("pod/") for item in readiness_waits[0]) == 2

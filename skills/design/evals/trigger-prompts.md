@@ -18,8 +18,9 @@ the auth boundary decision, compare options, and give me a /plan handoff.
 
 ```text
 There is no code yet. Use research for the stack and requirement due diligence,
-then use system-design-rules to check the API, data, reliability, security,
-observability, and rollout choices before the /plan handoff.
+use app-stack to select the frontend, API, backend, database, and deployment
+technologies, then use system-design-rules to check the API, data, reliability,
+security, observability, and rollout choices before the /plan handoff.
 ```
 
 ```text
@@ -37,6 +38,25 @@ Design this three-layer app feature before implementation. Show the vertical
 slice from frontend through API to database, then create the /plan handoff.
 ```
 
+```text
+Design a new multi-tier application. Use app-stack for the technology choices
+across the web frontend, API, service runtime, and database, then return to the
+complete design and /plan handoff.
+```
+
+```text
+Design a feature for this established application using its approved React,
+FastAPI, and PostgreSQL stack. Do not reconsider the stack.
+```
+
+This should use `design` but skip `app-stack` because no stack decision remains.
+
+```text
+Design this modernization. Keep the approved frontend and API stack, but use
+app-stack to decide whether the data layer should remain on the current database
+or move to a different database technology.
+```
+
 ## Should Not Trigger
 
 ```text
@@ -50,6 +70,14 @@ Review this ADR against our architecture checklist.
 ```
 
 Use `system-design-rules` for checklist-style design review.
+
+```text
+Choose the smallest technology stack for this application and classify which
+components are required, conditional, deferred, or rejected.
+```
+
+Use `app-stack` directly because the user requested a stack decision, not a
+complete solution design and `/plan` handoff.
 
 ```text
 Run the Agentic SDLC workflow and update docs/design.md for FEAT-123.
@@ -76,13 +104,16 @@ where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `design` or produce a response that
   follows its design workflow, routes substantial due diligence through
-  `research`, applies `system-design-rules` for non-trivial solution decisions,
-  and ends with a `/plan` handoff.
+  `research`, routes undecided application-stack or layer technology choices
+  through `app-stack`, applies `system-design-rules` for non-trivial solution
+  decisions, and ends with a `/plan` handoff.
+- Fixed-stack design prompts should remain in `design` without reopening the
+  technology decision through `app-stack`.
 - Should-not-trigger prompts should route to brainstorming, checklist review,
-  Agentic SDLC, implementation, or PR workflows.
+  stack selection, Agentic SDLC, implementation, or PR workflows.
 - If `design` steals open-ended ideation, SDLC-owned design artifacts,
-  implementation, or checklist-only reviews, narrow the front matter
-  `description` before changing the workflow body.
+  stack-selection-only prompts, implementation, or checklist-only reviews,
+  narrow the front matter `description` before changing the workflow body.
 
 Report runtime activation as observed only after this check. Otherwise report
 trigger readiness from metadata and static validation only.

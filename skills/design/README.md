@@ -3,19 +3,21 @@
 `design` is an implicit, non-SDLC skill for software design before
 implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
-`research` when available, applies `system-design-rules` to non-trivial
-solution decisions, chooses components and boundaries, compares alternatives,
-designs vertical end-to-end slices for serial multi-layer applications, and
-produces a Codex `/plan` handoff.
+`research` when available, routes undecided application-stack and layer
+technology choices through `app-stack`, applies `system-design-rules` to
+non-trivial solution decisions, chooses components and boundaries, compares
+alternatives, designs vertical end-to-end slices for serial multi-layer
+applications, and produces a Codex `/plan` handoff.
 
 ## Files
 
-- `SKILL.md`: runtime workflow, six-phase process, boundaries, guardrails, and
+- `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/design-workflow.md`: detailed phase checklist, `research`
-  handoff guidance, `system-design-rules` decision-review guidance, depth
-  guidance, vertical-slice strategy, and `/plan` handoff template.
+  and `app-stack` handoff guidance, `system-design-rules` decision-review
+  guidance, depth guidance, vertical-slice strategy, and `/plan` handoff
+  template.
 - `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
 
 ## Boundaries
@@ -25,6 +27,11 @@ produces a Codex `/plan` handoff.
 - Use `research` for substantial topic, feature-requirement, product,
   standard, architecture-pattern, or technology due diligence needed by the
   design.
+- Use `app-stack` when the application stack or technology for a frontend,
+  client, API, backend, data, asynchronous-work, deployment, or observability
+  layer is undecided or being reconsidered. Skip it when the stack is fixed.
+- Use `app-stack` directly when the user wants only a stack decision rather
+  than a complete design and `/plan` handoff.
 - Use `system-design-rules` inside `design` for standard, deep,
   architecture-heavy, ADR-like, or hard-to-reverse solution decisions before
   finalizing the `/plan`.

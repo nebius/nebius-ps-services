@@ -406,7 +406,10 @@ def _classify_external_intentional_deltas(
     *,
     target_ref: str,
     namespace: str = "soperator",
+    before_state: ProtectedCustomerState | None = None,
     after_state: ProtectedCustomerState | None = None,
+    jail_storage_handoff: Mapping[str, Any] | None = None,
+    transition_handoff: Mapping[str, Any] | None = None,
     open_metrics_handoff: Mapping[str, Any] | None = None,
     open_metrics_handoff_verified: bool = False,
     open_metrics_comparison_hashes_match: bool = False,
@@ -420,9 +423,23 @@ def _classify_external_intentional_deltas(
             )
             or _is_external_accounting_config_successor_delta(
                 delta,
+                before_state=before_state,
                 after_state=after_state,
                 target_ref=target_ref,
                 namespace=namespace,
+            )
+            or _is_external_verified_jail_storage_handoff_delta(
+                delta,
+                before_state=before_state,
+                after_state=after_state,
+                namespace=namespace,
+                handoff=jail_storage_handoff,
+            )
+            or _is_external_checkpointed_transition_delta(
+                delta,
+                target_ref=target_ref,
+                namespace=namespace,
+                handoff=transition_handoff,
             )
             or _is_external_restored_open_metrics_delta(
                 delta,
@@ -440,9 +457,125 @@ def _classify_external_intentional_deltas(
     )
 
 
+def _verified_external_jail_storage_successor(
+    *,
+    before_state: ProtectedCustomerState | None,
+    after_state: ProtectedCustomerState,
+    namespace: str,
+    handoff: Mapping[str, Any] | None,
+) -> tuple[str, str] | None:
+    proof = handoff if isinstance(handoff, Mapping) else {}
+    verification = proof.get("rootfs_handoff_verification")
+    verification_map = verification if isinstance(verification, Mapping) else {}
+    legacy_name = str(proof.get("legacy_jail_pvc", "") or "").strip()
+    active_name = str(verification_map.get("active_pvc", "") or "").strip()
+    if (
+        before_state is None
+        or not str(proof.get("completed_at", "") or "").strip()
+        or str(verification_map.get("status", "") or "").strip() not in {"verified", "passed"}
+        or not legacy_name
+        or not active_name
+        or legacy_name == active_name
+    ):
+        return None
+    before_pvcs = _items_by_name(before_state.sections.get("pvcs"))
+    after_pvcs = _items_by_name(after_state.sections.get("pvcs"))
+    legacy_resource = f"{namespace}/{legacy_name}"
+    active_resource = f"{namespace}/{active_name}"
+    legacy_before = before_pvcs.get(legacy_resource)
+    active_before = before_pvcs.get(active_resource)
+    active_after = after_pvcs.get(active_resource)
+    if (
+        legacy_before is None
+        or active_before is None
+        or active_after is None
+        or legacy_resource in after_pvcs
+        or str(active_after.get("phase", "") or "") != "Bound"
+        or _storage_quantity_gib(active_after.get("request_storage"))
+        < _storage_quantity_gib(legacy_before.get("request_storage"))
+    ):
+        return None
+    return legacy_resource, active_resource
+
+
+def _is_external_verified_jail_storage_handoff_delta(
+    delta: Mapping[str, Any],
+    *,
+    before_state: ProtectedCustomerState | None,
+    after_state: ProtectedCustomerState | None,
+    namespace: str,
+    handoff: Mapping[str, Any] | None,
+) -> bool:
+    if after_state is None:
+        return False
+    successor = _verified_external_jail_storage_successor(
+        before_state=before_state,
+        after_state=after_state,
+        namespace=namespace,
+        handoff=handoff,
+    )
+    return bool(
+        successor
+        and str(delta.get("kind", "") or "") == "pvcs"
+        and str(delta.get("resource", "") or "") == successor[0]
+        and str(delta.get("field", "") or "") == "presence"
+        and str(delta.get("before", "") or "") == "present"
+        and str(delta.get("after", "") or "") == "absent"
+    )
+
+
+def _is_external_checkpointed_transition_delta(
+    delta: Mapping[str, Any],
+    *,
+    target_ref: str,
+    namespace: str,
+    handoff: Mapping[str, Any] | None,
+) -> bool:
+    proof = handoff if isinstance(handoff, Mapping) else {}
+    if (
+        str(proof.get("status", "") or "") != "verified"
+        or str(proof.get("stage", "") or "") != "source-ha-active"
+        or str(proof.get("authority_owner", "") or "") != "bridge-source"
+        or str(proof.get("manager_pause_status", "") or "") != "verified"
+        or str(proof.get("client_propagation_status", "") or "") != "verified"
+    ):
+        return False
+    kind = str(delta.get("kind", "") or "")
+    resource = str(delta.get("resource", "") or "")
+    field = str(delta.get("field", "") or "")
+    if (
+        kind == "configmaps"
+        and resource == f"{namespace}/{target_ref}-slurm-configs"
+        and field == "data_sha256_by_key"
+    ):
+        return True
+    if (
+        kind == "secrets"
+        and resource.startswith(f"{namespace}/sh.helm.release.v1.soperator.v")
+        and field in {"data_sha256_by_key", "labels"}
+    ):
+        return True
+    if (
+        kind == "slurm_runtime"
+        and field == "slurm_partitions"
+        and bool(proof.get("partition_pause_verified"))
+    ):
+        return True
+    return bool(
+        kind == "slurmclusters"
+        and resource == f"{namespace}/{target_ref}"
+        and field
+        in {
+            "spec_hash",
+            "spec_hash_without_controller_open_metrics_enabled",
+        }
+    )
+
+
 def _is_external_accounting_config_successor_delta(
     delta: Mapping[str, Any],
     *,
+    before_state: ProtectedCustomerState | None,
     after_state: ProtectedCustomerState | None,
     target_ref: str,
     namespace: str,
@@ -450,11 +583,18 @@ def _is_external_accounting_config_successor_delta(
     if after_state is None:
         return False
     field = str(delta.get("field", "") or "")
+    kind = str(delta.get("kind", "") or "")
+    resource = str(delta.get("resource", "") or "")
+    legacy_resource = f"{namespace}/soperator-acct-db-config-default"
+    successor_resource = f"{namespace}/{target_ref}-acct-db-config-default"
     if (
-        str(delta.get("kind", "") or "") != "configmaps"
-        or str(delta.get("resource", "") or "")
-        != f"{namespace}/soperator-acct-db-config-default"
+        kind != "configmaps"
         or field != "data_sha256_by_key"
+        or resource
+        not in {
+            legacy_resource,
+            successor_resource,
+        }
     ):
         return False
     configmaps = _items_by_name(after_state.sections.get("configmaps"))
@@ -464,7 +604,7 @@ def _is_external_accounting_config_successor_delta(
         return False
     legacy_contract = legacy.get(field)
     successor_contract = successor.get(field)
-    if bool(
+    if resource == legacy_resource and bool(
         isinstance(legacy_contract, Mapping)
         and legacy_contract
         and legacy_contract == successor_contract
@@ -479,10 +619,34 @@ def _is_external_accounting_config_successor_delta(
     workloads = after_state.sections.get("workloads")
     statefulsets = workloads.get("statefulsets") if isinstance(workloads, Mapping) else None
     statefulsets_by_name = _items_by_name(statefulsets)
+    if resource == legacy_resource:
+        return bool(
+            isinstance(successor_contract, Mapping)
+            and successor_contract
+            and delta.get("before") == _summary_value(successor_contract)
+            and f"{namespace}/soperator-acct-db" not in statefulsets_by_name
+            and f"{namespace}/{target_ref}-acct-db" in statefulsets_by_name
+        )
+
+    # During external chart takeover, the retired cluster-wide MariaDB
+    # operator and the target chart's namespaced operator can briefly
+    # reconcile the target-generated default ConfigMap with different
+    # version defaults.  Accept that target-side generated drift only when
+    # the untouched legacy ConfigMap still proves the exact pre-upgrade
+    # contract and ownership has already moved to the target StatefulSet.
+    if before_state is None:
+        return False
+    before_configmaps = _items_by_name(before_state.sections.get("configmaps"))
+    before_successor = before_configmaps.get(successor_resource)
+    before_successor_contract = (
+        before_successor.get(field) if isinstance(before_successor, Mapping) else None
+    )
     return bool(
-        isinstance(successor_contract, Mapping)
-        and successor_contract
-        and delta.get("before") == _summary_value(successor_contract)
+        isinstance(before_successor_contract, Mapping)
+        and before_successor_contract
+        and isinstance(legacy_contract, Mapping)
+        and legacy_contract == before_successor_contract
+        and delta.get("before") == _summary_value(legacy_contract)
         and f"{namespace}/soperator-acct-db" not in statefulsets_by_name
         and f"{namespace}/{target_ref}-acct-db" in statefulsets_by_name
     )
@@ -954,6 +1118,8 @@ def run_post_upgrade_fast_verification(
     source_payload: Mapping[str, Any] | None = None,
     terraform_plan_command: Sequence[str] | None = None,
     external_cluster: bool = False,
+    external_jail_storage_handoff: Mapping[str, Any] | None = None,
+    external_transition_handoff: Mapping[str, Any] | None = None,
     external_open_metrics_handoff: Mapping[str, Any] | None = None,
     managed_chart_upgrade: bool = False,
     managed_node_template_upgrade: bool = False,
@@ -970,7 +1136,13 @@ def run_post_upgrade_fast_verification(
     )
     checks: list[dict[str, Any]] = [
         _pod_phase_check(after_state),
-        _pvc_check(before_state, after_state),
+        _pvc_check(
+            before_state,
+            after_state,
+            external_jail_storage_handoff=(
+                external_jail_storage_handoff if external_cluster else None
+            ),
+        ),
         _home_mount_check(before_state, after_state),
         _activechecks_check(before_state, after_state),
         _observability_check(after_state),
@@ -1014,7 +1186,10 @@ def run_post_upgrade_fast_verification(
                 comparison,
                 target_ref=target_ref,
                 namespace=namespace,
+                before_state=before_state,
                 after_state=after_state,
+                jail_storage_handoff=external_jail_storage_handoff,
+                transition_handoff=external_transition_handoff,
                 open_metrics_handoff=external_open_metrics_handoff,
                 open_metrics_handoff_verified=open_metrics_handoff_verified,
                 open_metrics_comparison_hashes_match=(open_metrics_comparison_hashes_match),
@@ -1470,6 +1645,7 @@ def _sanitize_pods(payload: Mapping[str, Any]) -> dict[str, Any]:
         owner_refs = metadata.get("ownerReferences")
         containers = status.get("containerStatuses")
         init_containers = status.get("initContainerStatuses")
+        containers_ready = _container_statuses_ready(containers)
         items.append(
             {
                 **_resource_identity(item, kind="Pod"),
@@ -1477,6 +1653,7 @@ def _sanitize_pods(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "owners": _owner_refs(owner_refs),
                 "node_name": str(spec.get("nodeName", "") or ""),
                 "restart_count": _restart_count(containers) + _restart_count(init_containers),
+                "containers_ready": containers_ready,
                 "waiting_reasons": sorted(
                     {
                         reason
@@ -1965,7 +2142,13 @@ def _named_resource_deltas(section: str, before: Any, after: Any) -> list[Protec
             )
             continue
         for field in sorted(set(before_item) | set(after_item)):
-            if field in {"status_phase", "conditions", "ready_replicas", "available_replicas"}:
+            if field in {
+                "status_phase",
+                "conditions",
+                "ready_replicas",
+                "available_replicas",
+                "containers_ready",
+            }:
                 continue
             if _stable_hash(before_item.get(field)) == _stable_hash(after_item.get(field)):
                 continue
@@ -2144,7 +2327,7 @@ def _pod_phase_check(state: ProtectedCustomerState) -> dict[str, Any]:
             "summary": "No Soperator namespace pods were discovered.",
         }
     failed: list[str] = []
-    high_restarts: list[str] = []
+    stable_high_restarts: list[str] = []
     for name, pod in items.items():
         phase = str(pod.get("phase", "") or "").lower()
         reasons = {str(reason) for reason in pod.get("waiting_reasons", []) or []}
@@ -2152,10 +2335,11 @@ def _pod_phase_check(state: ProtectedCustomerState) -> dict[str, Any]:
             phase in _UNAVAILABLE_STATUSES
             or phase not in {"running", "succeeded"}
             or reasons & _BAD_WAITING_REASONS
+            or pod.get("containers_ready") is False
         ):
             failed.append(name)
-        if int(pod.get("restart_count") or 0) >= 10:
-            high_restarts.append(name)
+        elif int(pod.get("restart_count") or 0) >= 10:
+            stable_high_restarts.append(name)
     if failed:
         return {
             "name": "pods-running-or-completed",
@@ -2163,23 +2347,24 @@ def _pod_phase_check(state: ProtectedCustomerState) -> dict[str, Any]:
             "summary": "Pod health failed for: " + ", ".join(failed[:20]),
             "failed_pods": failed,
         }
-    if high_restarts:
-        return {
-            "name": "pods-running-or-completed",
-            "status": "failed",
-            "summary": "High restart count after upgrade for: " + ", ".join(high_restarts[:20]),
-            "failed_pods": high_restarts,
-        }
+    restart_summary = ""
+    if stable_high_restarts:
+        restart_summary = (
+            " Historical high restart count is retained for audit, but the affected "
+            "pod(s) are currently Running and Ready: " + ", ".join(stable_high_restarts[:20]) + "."
+        )
     return {
         "name": "pods-running-or-completed",
         "status": "passed",
-        "summary": f"{len(items)} pod(s) are Running or Succeeded.",
+        "summary": f"{len(items)} pod(s) are Running or Succeeded." + restart_summary,
     }
 
 
 def _pvc_check(
     before_state: ProtectedCustomerState | None,
     after_state: ProtectedCustomerState,
+    *,
+    external_jail_storage_handoff: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     before_pvcs = _items_by_name(before_state.sections.get("pvcs")) if before_state else {}
     after_pvcs = _items_by_name(after_state.sections.get("pvcs"))
@@ -2193,9 +2378,17 @@ def _pvc_check(
     missing: list[str] = []
     bad_phase: list[str] = []
     reduced: list[str] = []
+    jail_successor = _verified_external_jail_storage_successor(
+        before_state=before_state,
+        after_state=after_state,
+        namespace=after_state.namespace,
+        handoff=external_jail_storage_handoff,
+    )
     for name in expected_names:
         after = after_pvcs.get(name)
         if after is None:
+            if jail_successor and name == jail_successor[0]:
+                continue
             missing.append(name)
             continue
         if str(after.get("phase", "") or "") != "Bound":
@@ -2218,10 +2411,16 @@ def _pvc_check(
             "status": "failed",
             "summary": "; ".join(failures),
         }
+    summary = f"{len(expected_names)} protected PVC(s) exist, are Bound, and did not shrink."
+    if jail_successor:
+        summary += (
+            " Verified Jail rootfs successor "
+            f"{jail_successor[1]} replaces retired {jail_successor[0]}."
+        )
     return {
         "name": "protected-pvcs-restored",
         "status": "passed",
-        "summary": f"{len(expected_names)} protected PVC(s) exist, are Bound, and did not shrink.",
+        "summary": summary,
     }
 
 
@@ -2558,6 +2757,15 @@ def _restart_count(statuses: Any) -> int:
         with suppress(Exception):
             total += int(item.get("restartCount") or 0)
     return total
+
+
+def _container_statuses_ready(statuses: Any) -> bool | None:
+    if not isinstance(statuses, list) or not statuses:
+        return None
+    observed = [item for item in statuses if isinstance(item, Mapping)]
+    if not observed:
+        return None
+    return all(item.get("ready") is True for item in observed)
 
 
 def _waiting_reasons(statuses: Any) -> tuple[str, ...]:

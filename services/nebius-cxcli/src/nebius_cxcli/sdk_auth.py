@@ -85,9 +85,7 @@ class _ManagedSdkEventLoop:
             if pending:
                 for task in pending:
                     task.cancel()
-                self.loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self.loop.run_until_complete(self.loop.shutdown_asyncgens())
             asyncio.set_event_loop(None)
             self.loop.close()
@@ -211,13 +209,26 @@ def suppress_expected_sdk_retry_logs():
         request_logger.removeFilter(request_filter)
 
 
-def _ensure_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:
-    token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
-    if token:
-        return token
+def _ensure_iam_token_from_cli(
+    *,
+    profile: str | None = None,
+    timeout_seconds: int = 30,
+) -> str | None:
+    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
+    if not impersonate_service_account_id:
+        token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
+        if token:
+            return token
+    args = ["nebius", "iam", "get-access-token"]
+    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
+    if profile_value:
+        args.extend(("--profile", profile_value))
+    if impersonate_service_account_id:
+        args.extend(("--impersonate-service-account-id", impersonate_service_account_id))
+    args.extend(("--format", "text", "--no-browser"))
     try:
         cp = subprocess.run(
-            ["nebius", "iam", "get-access-token", "--format", "text"],
+            args,
             check=True,
             capture_output=True,
             text=True,
@@ -250,6 +261,7 @@ def init_nebius_sdk(
             'Install dependencies with `pip install -e ".[dev]"`.'
         ) from exc
 
+    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE")) or None
     endpoint_value = _as_text(endpoint) or _as_text(os.environ.get("NEBIUS_ENDPOINT")) or None
 
     def _sdk_kwargs(**base: object) -> dict[str, object]:
@@ -270,6 +282,7 @@ def init_nebius_sdk(
         return _attach_managed_sdk_event_loop(sdk, manager)
 
     last_auth_error: Exception | None = None
+    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
 
     def _sdk_from_credentials_file() -> object | None:
         credentials_file = _as_text(os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"))
@@ -302,7 +315,7 @@ def init_nebius_sdk(
         return _create_sdk(credentials=iam_token)
 
     def _sdk_from_cli_token() -> object | None:
-        iam_token = _ensure_iam_token_from_cli()
+        iam_token = _ensure_iam_token_from_cli(profile=profile_value)
         if not iam_token:
             return None
         return _create_sdk(credentials=iam_token)
@@ -321,8 +334,8 @@ def init_nebius_sdk(
             return None
 
         config_kwargs: dict[str, object] = {}
-        if profile:
-            config_kwargs["profile"] = profile
+        if profile_value:
+            config_kwargs["profile"] = profile_value
         if endpoint_value:
             config_kwargs["endpoint"] = endpoint_value
         if config_file is not None:
@@ -354,7 +367,11 @@ def init_nebius_sdk(
             and path.is_file()
         )
 
-    if prefer_operator_auth:
+    if impersonate_service_account_id:
+        # Impersonation is an explicit identity boundary. Never fall back to the
+        # base credentials or profile if token exchange is unavailable.
+        auth_attempts = [_sdk_from_cli_token] if allow_cli_token else []
+    elif prefer_operator_auth:
         auth_attempts = []
         if _has_codex_agent_credentials_file():
             auth_attempts.append(_sdk_from_credentials_file)

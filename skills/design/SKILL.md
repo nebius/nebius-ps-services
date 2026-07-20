@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, apply `system-design-rules` to standard/deep solution decisions, choose components and architecture, design vertical end-to-end slices for serial multi-layer applications, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route due diligence through `research` when available, route undecided or reconsidered application-stack and layer technology choices through `app-stack`, apply `system-design-rules` to standard/deep solution decisions, design vertical end-to-end slices, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a complete design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, stack-selection-only requests, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
 ---
 
 # Design
@@ -17,8 +17,9 @@ codebase yet.
 - Designing a new feature against an existing repository.
 - Designing a new application, service, CLI, workflow, API, UI, data model, or
   integration before code exists.
-- Choosing components, technologies, boundaries, data flow, control flow,
-  validation strategy, rollout, and operational concerns.
+- Choosing components, boundaries, data flow, control flow, validation
+  strategy, rollout, and operational concerns, with application-stack choices
+  delegated to `app-stack` when they are not already fixed.
 - Designing applications whose frontend, API, service, data, or infrastructure
   layers are connected in a serial end-to-end flow.
 - Producing a final `/plan` handoff that another Codex run can execute.
@@ -33,6 +34,8 @@ codebase yet.
   `brainstorm` for chat-only exploration.
 - Do not use as a checklist-only review of an existing architecture proposal;
   use `system-design-rules` when the design exists and needs evaluation.
+- Do not use for a stack-selection-only request that does not need a complete
+  solution design and `/plan`; use `app-stack` directly.
 - Do not use inside an active Agentic SDLC workflow unless the coordinator
   routes here explicitly. Use `sdlc-create-design` and `sdlc-create-plan` for
   SDLC-owned `docs/design.md` and locked feature plans.
@@ -67,6 +70,10 @@ and research-backed technology choices.
 Read `references/design-workflow.md` for medium or deep designs, greenfield
 applications, multiple unfamiliar technologies, unclear architecture choices,
 or any design that will become a committed document.
+
+When the application stack or a technology choice for any application layer is
+undecided or under review, use `app-stack` and follow its required reads. Do not
+copy its selection framework into this skill.
 
 ## Workflow
 
@@ -113,7 +120,27 @@ Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,
 and unknowns. Mark anything unverified instead of treating it as fact.
 
-### Phase 4: Design Solution
+### Phase 4: Use `app-stack` For Stack Decisions
+
+Use `app-stack` when the design must select, review, simplify, or modernize the
+application stack, including choices for frontend or client, web server, API
+framework and runtime, backend service, data and database layer, asynchronous
+work, deployment, or observability. This applies to a whole greenfield stack
+and to one unresolved layer in an otherwise established system.
+
+Give `app-stack` the requirements, quality attributes, brownfield constraints,
+team and operational context, and relevant research evidence. Let it own the
+technology comparison, smallest justified stack, component status, rationale,
+and revisit triggers. Bring its decision back into `design` for cross-layer
+interfaces, data and control flow, failure handling, rollout, and `/plan`.
+Treat this as a scoped adviser handoff; do not transfer the complete design or
+re-enter `design` recursively.
+
+Skip `app-stack` when the applicable technologies are already approved and no
+stack choice is being reconsidered. Record that fixed-stack boundary instead
+of reopening the decision.
+
+### Phase 5: Design Solution
 
 Design the smallest solution that satisfies the requirements and fits the
 existing system. Define:
@@ -138,7 +165,7 @@ For brownfield work, name the exact integration points and files or modules
 likely to change. For greenfield work, name the initial project structure and
 bootstrap sequence at a design level.
 
-### Phase 5: Apply `system-design-rules` And Evaluate Alternatives
+### Phase 6: Apply `system-design-rules` And Evaluate Alternatives
 
 Before finalizing a standard, deep, architecture-heavy, ADR-like, or otherwise
 hard-to-reverse design, use `system-design-rules` when it is installed and
@@ -157,13 +184,14 @@ one simpler or more conservative alternative when meaningful. Explain what each
 option improves, worsens, costs, risks, and when to revisit it. Prefer
 reversible choices when evidence is weak.
 
-### Phase 6: Create Implementation Plan
+### Phase 7: Create Implementation Plan
 
 Use the Codex `/plan` command when available. The plan handoff must include:
 
 - final design summary
 - selected option and rejected alternatives
 - assumptions and unresolved questions
+- `app-stack` decision or fixed-stack/skipped rationale
 - `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
 - vertical slice order and any prerequisite foundation steps
@@ -219,6 +247,8 @@ short answer is explicitly requested:
 - Requirements summary and assumptions.
 - Existing-system findings or greenfield statement.
 - Research findings with official source links or clear unverified markers.
+- `app-stack` decision for undecided or reconsidered stack choices, or the
+  fixed-stack/skipped rationale.
 - `system-design-rules` findings for non-trivial designs, or why that review
   was not needed.
 - Recommended design with components, technologies, boundaries, data/control
@@ -230,7 +260,6 @@ short answer is explicitly requested:
 ## References
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
-  brownfield and greenfield paths, `research` handoff guidance,
-  `system-design-rules` decision review guidance, and `/plan` handoff
-  template.
+  brownfield and greenfield paths, `research` and `app-stack` handoff guidance,
+  `system-design-rules` decision review guidance, and `/plan` handoff template.
 - Use `evals/trigger-prompts.md` when reviewing or tuning trigger readiness.

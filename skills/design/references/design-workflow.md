@@ -72,9 +72,37 @@ For each technology, capture design-relevant facts:
 If a fact cannot be verified from official docs, say that it is unverified and
 avoid making it a hard design dependency.
 
-### 4. Design Solution
+### 4. Use `app-stack` For Stack Decisions
 
-Build the design from behavior and constraints before selecting tools. Define:
+When the application stack or any layer's technology is undecided, being
+reviewed, or being modernized, use `app-stack` before completing the solution
+design. Examples include selecting the frontend or client approach, web or API
+server, framework, and runtime, backend service technology, database or other
+data stores, asynchronous execution, deployment model, and observability stack.
+
+Pass only decision-relevant context:
+
+- application archetype, user journeys, and acceptance criteria
+- quality attributes and external constraints
+- current brownfield stack, locked decisions, and migration cost
+- team skills, operational ownership, deployment environment, and budget
+- research evidence and unresolved version-sensitive facts
+
+Use the returned stack decision as an input to the design. Preserve its
+required, conditional, deferred, and rejected classifications plus revisit
+triggers. `design` remains responsible for the complete solution boundaries,
+cross-layer contracts, flows, failure behavior, validation, rollout, and plan.
+The handoff is scoped: `app-stack` returns the stack decision to the active
+`design` workflow instead of starting another complete-design handoff.
+
+If all applicable technologies are already approved and the request does not
+reconsider them, state that the design follows the fixed stack and skip
+`app-stack`.
+
+### 5. Design Solution
+
+Build the detailed solution from behavior and constraints using the selected or
+fixed stack. Define:
 
 - component boundaries and responsibilities
 - technology choices and why each one is necessary
@@ -106,7 +134,7 @@ Brownfield designs should name likely files/modules and how the design fits the
 existing architecture. Greenfield designs should name the initial project
 shape, runtime, framework, storage, deployment target, and bootstrap order.
 
-### 5. Apply `system-design-rules` And Evaluate Alternatives
+### 6. Apply `system-design-rules` And Evaluate Alternatives
 
 For standard, deep, architecture-heavy, ADR-like, cross-boundary, or
 hard-to-reverse designs, use `system-design-rules` when it is installed and
@@ -138,7 +166,7 @@ Compare options only at the depth needed for the decision. Include:
 For each option, state what improves, what worsens, cost, risk, operational
 burden, migration effort, reversibility, and revisit trigger.
 
-### 6. Create Implementation Plan
+### 7. Create Implementation Plan
 
 The final design should be ready for Codex `/plan`. The plan content should be
 specific enough that implementation can start without re-deciding architecture.
@@ -165,6 +193,8 @@ Assumptions And Open Questions:
 
 Design Review:
 - `research` used/skipped: ...
+- `app-stack` used/skipped: ...
+- selected stack or fixed-stack boundary: ...
 - `system-design-rules` used/skipped: ...
 - Checklist findings that changed the design: ...
 
@@ -226,5 +256,10 @@ ownership, new platform, or costly rollback.
 - Design needs substantial topic, feature-requirement, product, standard, or
   technology due diligence: use `research`, then return to `design` for
   synthesis and `/plan` handoff.
+- Design needs to select or reconsider the application stack or technology for
+  any layer: use `app-stack`, then return to `design` for cross-layer synthesis
+  and `/plan` handoff.
+- The application stack is approved and no stack decision remains: keep the
+  fixed stack and continue `design` without `app-stack`.
 - Design exposes changed docs or contracts after implementation: run `align` on
   the changed surfaces.

@@ -185,17 +185,25 @@ def test_remote_capture_retries_use_operation_tokens_and_owned_cleanup() -> None
     )
 
     assert "transfer_token" in precopy
+    assert 'f"{epoch}.{transfer_token}.precopy.tar"' in precopy
+    assert 'f"{epoch}.{transfer_token}.precopy.snar"' in precopy
     assert 'rm -f -- "$archive" "$snapshot" "$complete"' in precopy
     assert "test ! -L" in staging
     assert "rm -rf --" in staging
     assert "_bridge_tree_manifest_transient_cleanup_script" in staging
     assert "delta_token" in cold_copy
+    assert 'f"{epoch}.{delta_token}.cold-delta.tar"' in cold_copy
+    assert 'f"{epoch}.{delta_token}.cold.snar"' in cold_copy
     assert 'condition="create"' in cold_copy
     assert '"capture_mode": "full-cold-posix-v1"' in cold_copy
     assert "tar --format=posix" in cold_copy
     assert "cp {shlex.quote(remote_baseline)}" not in cold_copy
     assert "cp -a --reflink=auto" not in cold_copy
     assert 'rm -f -- "$delta" "$snapshot"' in cold_copy
+    assert "controller-bridge-current-link-promotion-v1" in cold_copy
+    assert "observed_current_target not in" in cold_copy
+    assert 'test "$observed" = "$preimage"' in cold_copy
+    assert 'mv -T "$temporary" /shared/current' in cold_copy
 
 
 def test_bridge_tree_manifest_uses_destination_representable_mtime_precision() -> None:
@@ -293,7 +301,7 @@ def test_target_version_bridge_uses_the_journaled_source_state_mount() -> None:
             ),
         )
 
-    name, rendered = migration._controller_bridge_target_config(  # noqa: SLF001
+    name, rendered, target_state_path = migration._controller_bridge_target_config(  # noqa: SLF001
         journal=journal,
         values={"clusterName": "cluster"},
         target_ref="cluster",
@@ -304,6 +312,7 @@ def test_target_version_bridge_uses_the_journaled_source_state_mount() -> None:
     assert name == "cluster-slurm-configs"
     assert "StateSaveLocation=/var/spool/slurmctld" in rendered
     assert "StateSaveLocation=/mnt/controller-spool/current" not in rendered
+    assert target_state_path == "/mnt/controller-spool/current"
 
 
 def test_target_version_bridge_accepts_checkpointed_target_cluster_name_change() -> None:
@@ -328,7 +337,7 @@ def test_target_version_bridge_accepts_checkpointed_target_cluster_name_change()
             ),
         )
 
-    name, rendered = migration._controller_bridge_target_config(  # noqa: SLF001
+    name, rendered, target_state_path = migration._controller_bridge_target_config(  # noqa: SLF001
         journal=journal,
         values={"clusterName": "target-cluster"},
         target_ref="target-cluster",
@@ -339,6 +348,7 @@ def test_target_version_bridge_accepts_checkpointed_target_cluster_name_change()
     assert name == "target-cluster-slurm-configs"
     assert "ClusterName=target-cluster" in rendered
     assert "StateSaveLocation=/var/spool/slurmctld" in rendered
+    assert target_state_path == "/target/state"
 
 
 def test_target_version_bridge_preserves_missing_source_partitions_paused() -> None:
@@ -371,7 +381,7 @@ def test_target_version_bridge_preserves_missing_source_partitions_paused() -> N
             ),
         )
 
-    _name, rendered = migration._controller_bridge_target_config(  # noqa: SLF001
+    _name, rendered, target_state_path = migration._controller_bridge_target_config(  # noqa: SLF001
         journal=journal,
         values={"clusterName": "target-cluster"},
         target_ref="target-cluster",
@@ -382,6 +392,7 @@ def test_target_version_bridge_preserves_missing_source_partitions_paused() -> N
     assert "PartitionName=gpu Nodes=worker Default=YES State=UP" in rendered
     assert "PartitionName=main Nodes=ALL Default=NO State=DOWN PriorityTier=10" in rendered
     assert "PartitionName=hidden Nodes=ALL Hidden=YES State=DOWN Default=NO" in rendered
+    assert target_state_path == "/target/state"
 
 
 def test_target_version_bridge_rejects_duplicate_partition_definitions() -> None:
@@ -579,7 +590,11 @@ def test_target_jailed_config_stager_binds_config_map_pvc_and_digest(
             )
         return _result(args)
 
-    monkeypatch.setattr(migration, "_kubectl_wait", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_controller_bridge_stager_ready_or_terminal",
+        lambda **_kwargs: None,
+    )
 
     migration._stage_controller_bridge_jailed_config(  # noqa: SLF001
         journal=journal,
@@ -732,6 +747,11 @@ def test_accepted_target_with_source_jailed_config_is_fenced_staged_and_restarte
     monkeypatch.setattr(
         migration,
         "_revalidate_controller_runtime_census_nodes",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_runtime_fence_nodes",
         lambda **_kwargs: [],
     )
     monkeypatch.setattr(
@@ -1080,12 +1100,22 @@ def test_source_authority_rollback_requires_a_fresh_three_node_fence(
     monkeypatch.setattr(
         migration,
         "_prove_controller_bridge_shared_mount",
-        lambda **_kwargs: None,
+        lambda **_kwargs: {},
     )
     monkeypatch.setattr(
         migration,
         "_ensure_controller_bridge_target_jailed_config",
         lambda **kwargs: int(kwargs["target_replicas"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_controller_bridge_source_jailed_config",
+        lambda **kwargs: int(kwargs["replicas"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_container_name",
+        lambda *_args, **_kwargs: "slurmctld",
     )
     monkeypatch.setattr(
         migration,
@@ -1095,6 +1125,11 @@ def test_source_authority_rollback_requires_a_fresh_three_node_fence(
     monkeypatch.setattr(
         migration,
         "_revalidate_controller_runtime_census_nodes",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_runtime_fence_nodes",
         lambda **_kwargs: [],
     )
     authority_targets: list[str] = []
@@ -1112,7 +1147,7 @@ def test_source_authority_rollback_requires_a_fresh_three_node_fence(
 
     def prove_runtime_fence(**kwargs: Any) -> list[dict[str, object]]:
         runtime_fence_target_sets.append({target.node_name for target in kwargs["targets"]})
-        if dirty_rollback_fence and len(runtime_fence_target_sets) == 3:
+        if dirty_rollback_fence and len(runtime_fence_target_sets) == 2:
             raise migration.SoperatorMigrationPhasePending(
                 "dirty bridge node blocks source authority rollback"
             )
@@ -1155,7 +1190,7 @@ def test_source_authority_rollback_requires_a_fresh_three_node_fence(
     assert journal["authority"]["source_restart_prohibited"] is False
     assert (
         runtime_fence_target_sets
-        == [{"source-controller-node", "bridge-node-0", "bridge-node-1"}] * 3
+        == [{"source-controller-node", "bridge-node-0", "bridge-node-1"}] * 2
     )
     if dirty_rollback_fence:
         assert authority_targets == ["bridge-source"]
@@ -1215,12 +1250,22 @@ def test_source_scale_ambiguous_response_with_live_writers_permanently_fences_so
     monkeypatch.setattr(
         migration,
         "_prove_controller_bridge_shared_mount",
-        lambda **_kwargs: None,
+        lambda **_kwargs: {},
     )
     monkeypatch.setattr(
         migration,
         "_ensure_controller_bridge_target_jailed_config",
         lambda **kwargs: int(kwargs["target_replicas"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_controller_bridge_source_jailed_config",
+        lambda **kwargs: int(kwargs["replicas"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_container_name",
+        lambda *_args, **_kwargs: "slurmctld",
     )
     monkeypatch.setattr(
         migration,
@@ -1230,6 +1275,11 @@ def test_source_scale_ambiguous_response_with_live_writers_permanently_fences_so
     monkeypatch.setattr(
         migration,
         "_revalidate_controller_runtime_census_nodes",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_runtime_fence_nodes",
         lambda **_kwargs: [],
     )
     monkeypatch.setattr(
@@ -1632,6 +1682,7 @@ def _run_target_writer_scale_transport_failure(
         lambda **_kwargs: (
             "target-config",
             rendered_target_config if accepted_resume_config_drift else target_config,
+            "/var/spool/slurmctld",
         ),
     )
     monkeypatch.setattr(
@@ -1667,7 +1718,7 @@ def _run_target_writer_scale_transport_failure(
     monkeypatch.setattr(
         migration,
         "_prove_controller_bridge_shared_mount",
-        lambda **_kwargs: None,
+        lambda **_kwargs: {},
     )
     monkeypatch.setattr(
         migration,

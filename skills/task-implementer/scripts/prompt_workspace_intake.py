@@ -301,7 +301,7 @@ def route_project_prompt(
                             "RUN_STATE_INVALID", "completed run handoff is missing"
                         )
                     # Completed prompt history is readable only when its
-                    # canonical v3 execution state validates.
+                    # canonical v4 execution state validates.
                     load_coordinator_state(latest_dir)
                 if (
                     str(verified["status"]) == "done"

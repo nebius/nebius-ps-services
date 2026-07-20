@@ -11053,9 +11053,7 @@ def test_soperator_onboard_rejects_invalid_existing_config_before_discovery(
         target_k8s_version="1.34",
     )
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    payload["deploy"]["targets"][0]["soperator_onboarding"][
-        "support_override_used"
-    ] = False
+    payload["deploy"]["targets"][0]["soperator_onboarding"]["support_override_used"] = False
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     monkeypatch.setattr(
         cli_module,
@@ -14817,12 +14815,12 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
-    assert "Login SSH continuity: unconditional voluntary handoff" in result.output
+    assert "Login SSH continuity: protected explicit handoff" in result.output
     assert "source login Pod, node, host-key identity, shell process, and TCP connection" in (
         result.output
     )
     assert "remains pending indefinitely" in result.output
-    assert "there is no timeout or forced disconnect" in result.output
+    assert "with no timeout or forced disconnect" in result.output
     assert "Existing TCP sessions are not migrated between Pods" in result.output
     assert "Slurm job policy: preserve" in result.output
     assert "Slurm job policy: interactive" not in result.output
@@ -16012,7 +16010,8 @@ def test_ext_soperator_upgrade_dry_run_uses_discovery_spinner(
         (
             "status",
             "[cyan]Refreshing external Soperator discovery and Nebius provider "
-            "inventory for external-cluster...[/cyan]",
+            "inventory for external-cluster; the bounded provider, Kubernetes, Slurm, "
+            "and GPU probes can take several minutes...[/cyan]",
             "dots",
         ),
         "enter",

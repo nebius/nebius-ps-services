@@ -23801,6 +23801,7 @@ def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
         captured["init_kwargs"] = kwargs
         return FakeSdk()
 
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
     monkeypatch.setattr(cli, "init_nebius_sdk", _init_nebius_sdk)
 
     spec = cli._mk8s_cluster_handoff_spec_for_identity(
@@ -23814,6 +23815,62 @@ def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
     assert captured["request_id"] == "mk8scluster-123"
     assert captured["init_kwargs"]["parent_id"] == "project-456"
     assert captured["closed"] is True
+
+
+def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    class FakeSdk:
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            calls.append("close")
+
+    class FakeGetClusterRequest:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    cluster = SimpleNamespace(
+        metadata=SimpleNamespace(name="private-cluster"),
+        status=SimpleNamespace(
+            control_plane=SimpleNamespace(
+                endpoints=SimpleNamespace(public_endpoint="https://public.example.invalid"),
+                auth=SimpleNamespace(cluster_ca_certificate="FAKE-CA"),
+            )
+        ),
+    )
+
+    class FakeClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            pass
+
+        def get(self, request: object) -> object:
+            return SimpleNamespace(wait=lambda: cluster)
+
+    v1_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    v1_module.ClusterServiceClient = FakeClusterServiceClient
+    v1_module.GetClusterRequest = FakeGetClusterRequest
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", v1_module)
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "_runtime_auth_cache_load",
+        lambda *, project_id, client_name: calls.append((project_id, client_name)) or True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "init_nebius_sdk",
+        lambda **_kwargs: calls.append("sdk") or FakeSdk(),
+    )
+
+    cli._mk8s_cluster_handoff_spec_for_identity(
+        project_id="project-456",
+        client_name="client-a",
+        cluster_id="mk8scluster-123",
+        access="external",
+    )
+
+    assert calls[:2] == [("project-456", "client-a"), "sdk"]
 
 
 def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_local_copy(

@@ -1,6 +1,6 @@
 interface:
   display_name: "Design"
   short_description: "Design software solutions before implementation"
-  default_prompt: "Use $design to understand requirements, inspect the existing system, route missing topic, requirement, and technology research through $research when available, apply $system-design-rules to non-trivial design decisions, design vertical end-to-end slices for serial multi-layer applications, compare alternatives, and create a /plan handoff."
+  default_prompt: "Use $design to understand requirements, inspect the existing system, route missing due diligence through $research, use $app-stack when application-stack or layer technology choices are undecided or under review, apply $system-design-rules to non-trivial design decisions, design vertical end-to-end slices, compare alternatives, and create a /plan handoff."
 policy:
   allow_implicit_invocation: true

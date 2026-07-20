@@ -10,6 +10,7 @@ import pytest
 from nebius_cxcli.soperator_upgrade_safety import (
     ProtectedCustomerState,
     _classify_external_intentional_deltas,
+    _pvc_check,
     build_stage_fast_verification_payload,
     capture_protected_customer_state,
     compare_protected_customer_state,
@@ -39,6 +40,8 @@ class _Runner:
         include_accounting_pvc: bool = True,
         pod_phase: str = "Running",
         waiting_reason: str = "",
+        pod_restart_count: int = 0,
+        pod_ready: bool | None = True,
         activecheck: dict[str, Any] | None = None,
         home_mount: str = "nfs.example:/home on /home type nfs4 (rw)",
     ) -> None:
@@ -48,6 +51,8 @@ class _Runner:
         self.include_accounting_pvc = include_accounting_pvc
         self.pod_phase = pod_phase
         self.waiting_reason = waiting_reason
+        self.pod_restart_count = pod_restart_count
+        self.pod_ready = pod_ready
         self.activecheck = activecheck
         self.home_mount = home_mount
         self.calls: list[tuple[str, ...]] = []
@@ -107,7 +112,12 @@ class _Runner:
             "status": {
                 "phase": self.pod_phase,
                 "containerStatuses": [
-                    {"name": "login", "restartCount": 0, "state": container_state}
+                    {
+                        "name": "login",
+                        "restartCount": self.pod_restart_count,
+                        "ready": self.pod_ready,
+                        "state": container_state,
+                    }
                 ],
             },
         }
@@ -1024,6 +1034,41 @@ def test_fast_verification_fails_for_pending_or_crashloop_pod() -> None:
     )
 
 
+def test_fast_verification_accepts_historical_restarts_when_pod_is_currently_ready() -> None:
+    before = _capture(_Runner())
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(pod_restart_count=17, pod_ready=True),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    pod_check = next(
+        check for check in result.checks if check["name"] == "pods-running-or-completed"
+    )
+    assert pod_check["status"] == "passed"
+    assert "Historical high restart count" in pod_check["summary"]
+
+
+def test_fast_verification_rejects_running_pod_when_container_is_not_ready() -> None:
+    before = _capture(_Runner())
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(pod_restart_count=17, pod_ready=False),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    pod_check = next(
+        check for check in result.checks if check["name"] == "pods-running-or-completed"
+    )
+    assert pod_check["status"] == "failed"
+
+
 def test_pvc_size_reduction_fails_fast_verification() -> None:
     before = _capture(_Runner(pvc_storage="100Gi"))
     result = run_post_upgrade_fast_verification(
@@ -1160,8 +1205,7 @@ def test_external_jail_home_subpath_mount_change_is_intentional() -> None:
 
     assert result.status == "passed"
     assert any(
-        check["name"] == "home-mounted" and check["status"] == "passed"
-        for check in result.checks
+        check["name"] == "home-mounted" and check["status"] == "passed" for check in result.checks
     )
 
 
@@ -1369,6 +1413,106 @@ def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift
         assert delta["approval_required"] is True
 
 
+def test_external_verified_jail_successor_replaces_retired_legacy_pvc() -> None:
+    def state(names: list[str]) -> ProtectedCustomerState:
+        return ProtectedCustomerState(
+            target_ref="soperator-cluster",
+            namespace="soperator",
+            captured_at="2026-07-19T00:00:00Z",
+            sections={
+                "pvcs": {
+                    "available": True,
+                    "items": [
+                        {
+                            "kind": "PersistentVolumeClaim",
+                            "namespace": "soperator",
+                            "name": name,
+                            "phase": "Bound",
+                            "request_storage": "512Gi",
+                        }
+                        for name in names
+                    ],
+                }
+            },
+        )
+
+    before = state(["jail-pvc", "jail-rootfs-slot-b-pvc"])
+    after = state(["jail-rootfs-slot-b-pvc"])
+    handoff = {
+        "completed_at": "2026-07-19T00:01:00Z",
+        "legacy_jail_pvc": "jail-pvc",
+        "rootfs_handoff_verification": {
+            "status": "verified",
+            "active_pvc": "jail-rootfs-slot-b-pvc",
+        },
+    }
+
+    check = _pvc_check(before, after, external_jail_storage_handoff=handoff)
+    classified = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=after),
+        target_ref="soperator-cluster",
+        before_state=before,
+        after_state=after,
+        jail_storage_handoff=handoff,
+    )
+
+    assert check["status"] == "passed"
+    delta = classified["deltas"][0]
+    assert delta["classification"] == "intentional_upgrade"
+    assert delta["approval_required"] is False
+    assert classified["blocked_count"] == 0
+
+
+def test_external_verified_bridge_transition_classifies_only_owned_temporary_drift() -> None:
+    transition = {
+        "status": "verified",
+        "stage": "source-ha-active",
+        "authority_owner": "bridge-source",
+        "manager_pause_status": "verified",
+        "client_propagation_status": "verified",
+        "partition_pause_verified": True,
+    }
+    comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 2,
+        "deltas": [
+            {
+                "kind": "slurm_runtime",
+                "resource": "slurm-runtime",
+                "field": "slurm_partitions",
+                "before": "before",
+                "after": "after",
+                "classification": "remediation_required",
+                "approval_required": True,
+            },
+            {
+                "kind": "configmaps",
+                "resource": "soperator/customer-config",
+                "field": "data_sha256_by_key",
+                "before": "before",
+                "after": "after",
+                "classification": "remediation_required",
+                "approval_required": True,
+            },
+        ],
+    }
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="soperator-cluster",
+        transition_handoff=transition,
+    )
+
+    by_resource = {delta["resource"]: delta for delta in classified["deltas"]}
+    assert by_resource["slurm-runtime"]["classification"] == "intentional_upgrade"
+    assert by_resource["soperator/customer-config"]["classification"] == ("remediation_required")
+    assert classified["approval_required_count"] == 1
+
+
 def test_external_accounting_config_delta_requires_exact_target_successor_contract() -> None:
     target_ref = "cxcli-ext-upg-1223b"
 
@@ -1414,6 +1558,7 @@ def test_external_accounting_config_delta_requires_exact_target_successor_contra
     classified = _classify_external_intentional_deltas(
         compare_protected_customer_state(before=before, after=matching_after),
         target_ref=target_ref,
+        before_state=before,
         after_state=matching_after,
     )
     matching_delta = next(
@@ -1429,6 +1574,7 @@ def test_external_accounting_config_delta_requires_exact_target_successor_contra
     mismatched = _classify_external_intentional_deltas(
         compare_protected_customer_state(before=before, after=mismatched_after),
         target_ref=target_ref,
+        before_state=before,
         after_state=mismatched_after,
     )
     mismatched_delta = next(
@@ -1502,6 +1648,7 @@ def test_external_accounting_config_delta_accepts_retired_legacy_reconciliation(
     classified = _classify_external_intentional_deltas(
         compare_protected_customer_state(before=before, after=retired_after),
         target_ref=target_ref,
+        before_state=before,
         after_state=retired_after,
     )
     matching_delta = next(
@@ -1521,6 +1668,7 @@ def test_external_accounting_config_delta_accepts_retired_legacy_reconciliation(
     rejected = _classify_external_intentional_deltas(
         compare_protected_customer_state(before=before, after=source_still_live),
         target_ref=target_ref,
+        before_state=before,
         after_state=source_still_live,
     )
     rejected_delta = next(
@@ -1531,6 +1679,82 @@ def test_external_accounting_config_delta_accepts_retired_legacy_reconciliation(
     )
     assert rejected_delta["classification"] == "remediation_required"
     assert rejected_delta["approval_required"] is True
+
+
+def test_external_accounting_target_config_delta_accepts_verified_takeover() -> None:
+    target_ref = "cxcli-ext-upg-1223b"
+
+    def state(*, successor_hash: str, source_live: bool) -> ProtectedCustomerState:
+        statefulsets = [f"{target_ref}-acct-db"]
+        if source_live:
+            statefulsets.append("soperator-acct-db")
+        return ProtectedCustomerState(
+            target_ref=target_ref,
+            namespace="soperator",
+            captured_at="2026-07-18T00:00:00Z",
+            sections={
+                "configmaps": {
+                    "available": True,
+                    "items": [
+                        {
+                            "kind": "ConfigMap",
+                            "namespace": "soperator",
+                            "name": "soperator-acct-db-config-default",
+                            "data_sha256_by_key": {"0-default.cnf": "protected"},
+                        },
+                        {
+                            "kind": "ConfigMap",
+                            "namespace": "soperator",
+                            "name": f"{target_ref}-acct-db-config-default",
+                            "data_sha256_by_key": {"0-default.cnf": successor_hash},
+                        },
+                    ],
+                },
+                "workloads": {
+                    "statefulsets": {
+                        "available": True,
+                        "items": [
+                            {
+                                "kind": "StatefulSet",
+                                "namespace": "soperator",
+                                "name": name,
+                            }
+                            for name in statefulsets
+                        ],
+                    }
+                },
+            },
+        )
+
+    before = state(successor_hash="protected", source_live=True)
+    after = state(successor_hash="operator-default", source_live=False)
+    classified = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=after),
+        target_ref=target_ref,
+        before_state=before,
+        after_state=after,
+    )
+    target_delta = next(
+        delta
+        for delta in classified["deltas"]
+        if delta["resource"] == f"soperator/{target_ref}-acct-db-config-default"
+    )
+    assert target_delta["classification"] == "intentional_upgrade"
+    assert target_delta["approval_required"] is False
+
+    source_still_live = state(successor_hash="operator-default", source_live=True)
+    rejected = _classify_external_intentional_deltas(
+        compare_protected_customer_state(before=before, after=source_still_live),
+        target_ref=target_ref,
+        before_state=before,
+        after_state=source_still_live,
+    )
+    rejected_delta = next(
+        delta
+        for delta in rejected["deltas"]
+        if delta["resource"] == f"soperator/{target_ref}-acct-db-config-default"
+    )
+    assert rejected_delta["classification"] == "remediation_required"
 
 
 def test_helmrelease_suspended_state_drift_is_detected() -> None:

@@ -278,6 +278,49 @@ class HookTestCase(unittest.TestCase):
         )
         self.assertEqual(result, {})
 
+    def test_pretool_allows_public_nebius_metadata_assignments(self) -> None:
+        prefix = "NEBIUS" + "_"
+        commands = (
+            prefix
+            + "PROFILE="
+            + "codex-agent-project-1234567890 nebius iam project get",
+            prefix + "PROJECT_ID=" + "project-1234567890 command true",
+            prefix
+            + "AUTH_CREDENTIALS_FILE="
+            + "/tmp/codex-agent-authkey.project-1234567890.json command true",
+        )
+
+        for command in commands:
+            with self.subTest(variable=command.split("=", 1)[0]):
+                result = run_hook(
+                    PRE_TOOL, self.pre_payload("Bash", command), self.codex_home
+                )
+                self.assertEqual(result, {})
+
+    def test_pretool_nebius_metadata_cannot_mask_secret_assignment(self) -> None:
+        prefix = "NEBIUS" + "_"
+        command = (
+            prefix
+            + "PROFILE=codex-agent-project-1234567890 "
+            + prefix
+            + "IAM_"
+            + "TOKEN="
+            + "x" * 32
+            + " command true"
+        )
+
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+
+        self.assert_denied(result, "secret")
+
+    def test_pretool_denies_unknown_nebius_assignment(self) -> None:
+        prefix = "NEBIUS" + "_"
+        command = prefix + "RUNTIME_VALUE=" + "x" * 32 + " command true"
+
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+
+        self.assert_denied(result, "secret")
+
     def test_pretool_allows_project_patch(self) -> None:
         patch = (
             "*** Begin Patch\n*** Add File: src/new.py\n+print('ok')\n*** End Patch\n"

@@ -1,0 +1,114 @@
+# Task Implementer Test: Multi-Tier Migration
+
+## Ask
+
+This is a disposable verifier-owned local project. Migrate the seeded
+single-process task board into a three-tier application and complete the whole
+request through Task Implementer.
+
+Generation: `{{GENERATION_ID}}`
+Compose project: `{{COMPOSE_PROJECT}}`
+Web bind: Docker-assigned port on `127.0.0.1`
+
+Requirements:
+
+1. Define exactly three Compose services named `frontend`, `api`, and `db`.
+   Build a browser frontend under `app/frontend/` that lists, creates, and
+   updates tasks through the API.
+2. Build an HTTP API under `app/api/` with create, list, update, and health
+   endpoints.
+3. Persist tasks in PostgreSQL with schema/bootstrap content under
+   `app/database/`.
+4. Add the integration/runtime slice only after those tier tasks: own
+   `compose.yaml`, runtime checks, end-to-end tests, and shared runtime docs.
+   Write `compose.yaml` using strict JSON syntax with long-form port and mount
+   objects so the verifier can validate it before Docker parses it.
+5. Publish only frontend container port `80`, using long-form syntax with
+   `host_ip` exactly `127.0.0.1` and no `published` field so Docker assigns the
+   host port atomically. Do not publish the API or PostgreSQL.
+6. Label every Compose service, network, volume, and locally built image with
+   `org.openai.task-implementer-test.generation={{GENERATION_ID}}`.
+   In each Compose `build.labels` map, also label the locally built image with
+   `org.openai.task-implementer-test.compose-project={{COMPOSE_PROJECT}}`.
+   These two exact build labels are the verifier's image-ownership proof.
+7. Keep frontend, API, and database write claims disjoint in the first logical
+   wave. Make integration/runtime depend on all three.
+8. Use one reviewed direct-child commit per worker, stable-order integration,
+   verified fast-forward promotion, combined validation, and final alignment.
+9. Finish with a clean named branch, passing tests, no temporary Task
+   Implementer refs/worktrees, and an unchanged-prompt rerun that returns
+   `ALREADY_COMPLETE`.
+10. Use PostgreSQL database, user, and disposable local password `task_test`.
+    Store tasks in a `tasks` table with integer `id`, text `title`, and boolean
+    `completed` fields. Proxy the API under the frontend `/api` path and expose
+    create/list/update task endpoints there.
+11. Use long-form `build` objects for `frontend` and `api` and do not give
+    either service an explicit `image` tag. Use exactly `postgres:16-alpine`
+    for `db`, without a build. Do not set `container_name` on any service.
+    Attach every service to exactly one explicitly declared,
+    generation-labelled network using long-form object-map syntax with an empty
+    options object, and declare exactly one generation-labelled named volume
+    for PostgreSQL. Network list syntax is not accepted. Do not add symlinks
+    anywhere in the project.
+12. Keep the Compose model on the verifier's allowlisted subset. At top level,
+    use only `services`, `networks`, and `volumes`. Service definitions may use
+    only `build`, `depends_on`, `environment`, `healthcheck`, `image`, `labels`,
+    `networks`, `ports`, `restart`, and `volumes`. Build definitions must
+    contain exactly `context`, `dockerfile`, and `labels`; do not use includes,
+    extends, label files, external build inputs, cache options, entitlements,
+    privileged build settings, or custom resource names.
+
+## Outcome
+
+A clean, locally testable frontend/API/PostgreSQL task board exists on the
+promoted fixture branch, with complete Task Implementer orchestration evidence.
+No live service has been started by Task Implementer.
+
+## Context
+
+The current project is a remote-free brownfield seed owned by
+`task-implementer-test`. The verifier will validate and launch the runtime only
+after Task Implementer finishes promotion and cleanup.
+
+## Constraints
+
+- Do not push, publish, add or use a remote, read user credentials, or touch
+  files outside this repository and the isolated Task Implementer private
+  state.
+- Do not use host networking, host PID/IPC, privileged mode, added
+  capabilities, devices, bind mounts, external networks, or external volumes.
+- Do not run Docker, Docker Compose, containers, or live services.
+- Do not expose prompt bodies, private orchestration state, credentials, or raw
+  logs in committed files.
+
+## Acceptance criteria
+
+- [ ] The first logical wave has disjoint frontend, API, and database tasks.
+- [ ] A dependent integration/runtime task owns Compose and end-to-end wiring.
+- [ ] The strict Compose model and project tests pass without starting Docker.
+- [ ] Worker isolation, reviewed commits, ordered integration, ff-only
+  promotion, cleanup, and final alignment evidence are complete.
+- [ ] The final branch is clean and the unchanged prompt returns
+  `ALREADY_COMPLETE`.
+
+## Verification
+
+- Run frontend, API, database, and integration unit/contract tests that do not
+  start containers.
+- Validate `compose.yaml` as strict JSON without launching Docker.
+- Run the repository's final changed-surface alignment gate.
+
+## Non-goals
+
+- Production deployment, cloud resources, remote Git operations, publication,
+  real credentials, browser automation, and any non-loopback exposure.
+
+## References
+
+- `README.md`
+- `docs/requirements.md`
+- `docs/design.md`
+
+## Steering
+
+Do not add steering during the canonical verifier run.

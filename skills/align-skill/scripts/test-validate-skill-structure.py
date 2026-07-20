@@ -318,6 +318,27 @@ def test_sdlc_only_name_and_description_contract() -> None:
         )
 
 
+def test_sdlc_workflow_test_external_verifier_exception() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "sdlc-workflow-test",
+            "sdlc-workflow-test",
+            description=(
+                "Use only when explicitly asked, outside the Agentic SDLC "
+                "workflow, to verify the workflow."
+            ),
+            allow_implicit_invocation="false",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
 def test_missing_openai_metadata_policy_fails() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -525,6 +546,7 @@ def main() -> int:
         test_stateful_workflow_profile_passes_complete_sections,
         test_stateful_workflow_profile_missing_heading_fails,
         test_sdlc_only_name_and_description_contract,
+        test_sdlc_workflow_test_external_verifier_exception,
         test_missing_openai_metadata_policy_fails,
         test_wrong_openai_metadata_path_fails,
         test_invocation_policy_contract_fails_for_wrong_value,

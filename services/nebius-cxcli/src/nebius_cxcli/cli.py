@@ -492,11 +492,13 @@ from .soperator_migration import (
     _active_slurm_held_job_operations,
     _bind_passive_populate_job_checkpoint,
     _bind_passive_populate_pvc_uid,
+    _campaign_final_health_scope,
     _checkpoint_mutating_progress_started,
     _checkpoint_slurm_action_journal_for_job_control,
     _checkpoint_slurm_held_job_operations,
     _checkpoint_write_lock,
     _cleanup_controller_bridge_after_final_health,
+    _controller_singleton_handoff_boundary_active,
     _ensure_passive_populate_job,
     _ensure_persistent_migration_login_hold_allowed,
     _ensure_persistent_migration_writer_hold_intact_after_copy,
@@ -548,6 +550,8 @@ from .soperator_migration import (
     legacy_soperator_migration_checkpoint_path,
     normalize_external_login_session_policy,
     old_soperator_migration_checkpoint_path,
+    reconcile_completed_soperator_migration_final_helm_state,
+    reconcile_completed_soperator_migration_final_worker_runtime_identity,
     record_live_satisfied_soperator_upgrade_campaign_segment,
     record_soperator_migration_backup_binding,
     record_soperator_migration_backup_compensation,
@@ -25947,6 +25951,7 @@ def _locked_upgrade_path_from_report(
     jail_rootfs = version_decision.get("jail_rootfs")
     if not isinstance(jail_rootfs, Mapping):
         jail_rootfs = {}
+    jail_rootfs = dict(copy.deepcopy(to_plain_data(jail_rootfs)))
     jail_refresh_required = jail_rootfs.get("refresh_required") is True
     if not (set(action_ids) & _SOPERATOR_MIGRATION_ACTIONS) and jail_refresh_required:
         action_ids = (*action_ids, ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE)
@@ -25971,6 +25976,28 @@ def _locked_upgrade_path_from_report(
     support_status = _non_empty_text(support_finding.get("status"))
     recommended_order = _soperator_discovery_support_recommended_order(report)
     soperator_after_k8s_min = _non_empty_text(recommended_order.get("soperator_after_k8s_min"))
+    fresh_install = bool(
+        _non_empty_text(onboarding.get("state")) == "no-soperator-detected"
+        and "install-soperator" in set(action_ids)
+    )
+    if fresh_install:
+        provider_cluster = _mapping_path_value(snapshot or {}, "provider.mk8s_cluster")
+        provider_current_k8s = (
+            _non_empty_text(provider_cluster.get("control_plane_version"))
+            if isinstance(provider_cluster, Mapping)
+            else ""
+        )
+        current_k8s = current_k8s or provider_current_k8s
+        if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE not in set(action_ids):
+            target_k8s = current_k8s
+        else:
+            target_k8s = target_k8s or current_k8s
+        support_status = support_status or "supported"
+        support_rule_id = support_rule_id or "fresh-install-current-catalog"
+        if not _non_empty_text(jail_rootfs.get("current_image")):
+            jail_rootfs["current_image"] = _non_empty_text(jail_rootfs.get("target_image"))
+            jail_rootfs["current_version"] = _non_empty_text(jail_rootfs.get("target_version"))
+            jail_rootfs["current_source"] = "not-installed-catalog-baseline"
     live_chart = _soperator_discovery_live_chart_version(report)
     source_chart = live_chart or _non_empty_text(
         _mapping_path_value(version_decision, "soperator_chart.current_version")
@@ -52720,6 +52747,11 @@ def _mk8s_cluster_handoff_spec_for_identity(
 
     normalized_project_id = str(project_id or "").strip()
     normalized_client_name = str(client_name or "").strip()
+    if not _runtime_auth_env_available() and normalized_project_id and normalized_client_name:
+        _runtime_auth_cache_load(
+            project_id=normalized_project_id,
+            client_name=normalized_client_name,
+        )
     endpoint_override = _non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None
     sdk = init_nebius_sdk(
         parent_id=normalized_project_id or None,
@@ -59064,8 +59096,9 @@ def _external_soperator_completed_campaign_final_health_conflicts(
         raise RuntimeError(
             f"recovery-required: completed campaign final-health projection failed: {exc}"
         ) from exc
+    health_campaign = _campaign_final_health_scope(campaign, journal)
     return external_soperator_final_health_conflicts(
-        campaign=campaign,
+        campaign=health_campaign,
         snapshot=snapshot,
         effective_node_groups=effective_groups,
     )
@@ -65931,6 +65964,11 @@ def ext_soperator_jobs_command(
         "upgrade --execute --approve command until it is complete. The v5 operation "
         "journal never supplies a missing desired path. Unsupported campaigns and "
         "non-v5 journals fail closed; external upgrade has no support-policy override. "
+        "A completed --execute --approve replay repairs exact Slurm worker runtime "
+        "identity before discovery when needed, revalidates the checkpoint-proven target "
+        "SlurmCluster, retires only exact Flux-owned source auxiliary Helm resources, "
+        "and refreshes the final report. Full discovery runs bounded provider, Kubernetes, "
+        "Slurm, accounting, and GPU probes and can take several minutes. "
         "After completion, rerun the "
         "idempotent onboard command only to check for and accept a later campaign."
     ),
@@ -66261,46 +66299,94 @@ def soperator_external_upgrade_command(
             if slurm_scheduling_pause is None
             else bool(slurm_scheduling_pause)
         )
+        resume_checkpoint = _locked_upgrade_checkpoint_payload(
+            config_path=config_path,
+            target_ref=target_ref,
+            payload_or_config=effective_payload,
+        )
         resume_slurmcluster_identity_scope = _external_soperator_resume_slurmcluster_identity_scope(
-            _locked_upgrade_checkpoint_payload(
-                config_path=config_path,
-                target_ref=target_ref,
-                payload_or_config=effective_payload,
-            ),
+            resume_checkpoint,
             target_ref=target_ref,
         )
-        with _command_status(
-            "[cyan]Refreshing external Soperator discovery and Nebius provider "
-            f"inventory for {target_ref}...[/cyan]"
-        ):
-            discovery_path = _run_external_soperator_discovery_command(
-                config_path=config_path,
-                payload=effective_payload,
-                target_ref=target_ref,
-                cluster_id=None,
-                kube_context=None,
-                access="external",
-                output_dir=None,
-                namespace=None,
-                release_name=None,
-                to_chart_version=_non_empty_text(effective_onboarding.get("target_version")),
-                to_k8s_version=(
-                    _non_empty_text(node_template_target.get("target_k8s_version"))
-                    or _non_empty_text(node_template_target.get("k8s_version"))
-                    or _non_empty_text(node_template_target.get("version"))
-                ),
-                to_os=(
-                    _non_empty_text(node_template_target.get("target_os"))
-                    or _non_empty_text(node_template_target.get("os"))
-                ),
-                to_gpu_stack_preset=(
-                    _non_empty_text(node_template_target.get("target_gpu_stack_preset"))
-                    or _non_empty_text(node_template_target.get("gpu_stack_preset"))
-                ),
-                redaction="local",
-                slurmcluster_identity_scope=resume_slurmcluster_identity_scope,
+        if current_segment is None and execute and approve:
+            if resume_checkpoint is None:
+                raise RuntimeError(
+                    "recovery-required: completed campaign final verification requires "
+                    "the exact operation journal."
+                )
+            worker_identity_proof = (
+                reconcile_completed_soperator_migration_final_worker_runtime_identity(
+                    checkpoint_path=soperator_migration_checkpoint_path(
+                        config_path,
+                        target_ref,
+                        payload_or_config=effective_payload,
+                    ),
+                    target_ref=target_ref,
+                    campaign_fingerprint=_locked_upgrade_path_fingerprint(locked_upgrade_path),
+                    kube_context=lease_kube_context,
+                    mutation_guard=(
+                        cluster_lease.assert_held if cluster_lease is not None else None
+                    ),
+                )
             )
-        console.print(f"External Soperator discovery refreshed: {discovery_path}", soft_wrap=True)
+            console.print(
+                "Completed campaign Slurm worker runtime identity "
+                + (
+                    "reconciled and verified before fresh discovery."
+                    if worker_identity_proof.get("reconciled") is True
+                    else "verified before fresh discovery; no Slurm change was required."
+                ),
+                soft_wrap=True,
+            )
+        if resume_checkpoint is not None and _controller_singleton_handoff_boundary_active(
+            resume_checkpoint
+        ):
+            discovery_path = source_soperator_discovery_report_path(
+                config_path.parent,
+                target_ref,
+                payload_or_config=effective_payload,
+            )
+            console.print(
+                "External Soperator discovery refresh deferred during the checkpointed "
+                f"controller handoff; reusing {discovery_path}",
+                soft_wrap=True,
+            )
+        else:
+            with _command_status(
+                "[cyan]Refreshing external Soperator discovery and Nebius provider "
+                f"inventory for {target_ref}; the bounded provider, Kubernetes, Slurm, "
+                "and GPU probes can take several minutes...[/cyan]"
+            ):
+                discovery_path = _run_external_soperator_discovery_command(
+                    config_path=config_path,
+                    payload=effective_payload,
+                    target_ref=target_ref,
+                    cluster_id=None,
+                    kube_context=None,
+                    access="external",
+                    output_dir=None,
+                    namespace=None,
+                    release_name=None,
+                    to_chart_version=_non_empty_text(effective_onboarding.get("target_version")),
+                    to_k8s_version=(
+                        _non_empty_text(node_template_target.get("target_k8s_version"))
+                        or _non_empty_text(node_template_target.get("k8s_version"))
+                        or _non_empty_text(node_template_target.get("version"))
+                    ),
+                    to_os=(
+                        _non_empty_text(node_template_target.get("target_os"))
+                        or _non_empty_text(node_template_target.get("os"))
+                    ),
+                    to_gpu_stack_preset=(
+                        _non_empty_text(node_template_target.get("target_gpu_stack_preset"))
+                        or _non_empty_text(node_template_target.get("gpu_stack_preset"))
+                    ),
+                    redaction="local",
+                    slurmcluster_identity_scope=resume_slurmcluster_identity_scope,
+                )
+            console.print(
+                f"External Soperator discovery refreshed: {discovery_path}", soft_wrap=True
+            )
         source_report = _load_soperator_source_discovery_report(
             config_path=config_path,
             target_ref=target_ref,
@@ -66483,6 +66569,24 @@ def soperator_external_upgrade_command(
                     "but protected-state validation is absent or did not pass. No mutation "
                     "was attempted and the campaign was not rewritten."
                 )
+            if execute and approve:
+                helm_state_lines = reconcile_completed_soperator_migration_final_helm_state(
+                    config_path=config_path,
+                    checkpoint_path=soperator_migration_checkpoint_path(
+                        config_path,
+                        target_ref,
+                        payload_or_config=payload,
+                    ),
+                    target_ref=target_ref,
+                    campaign_fingerprint=_locked_upgrade_path_fingerprint(locked_upgrade_path),
+                    campaign=locked_upgrade_path,
+                    kube_context=lease_kube_context,
+                    mutation_guard=(
+                        cluster_lease.assert_held if cluster_lease is not None else None
+                    ),
+                )
+                for line in helm_state_lines:
+                    console.print(f"Completed campaign Helm verification: {line}", soft_wrap=True)
             for line in _locked_upgrade_path_plan_lines(
                 config_path=config_path,
                 target_ref=target_ref,

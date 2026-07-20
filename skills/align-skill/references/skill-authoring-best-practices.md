@@ -48,6 +48,8 @@ this reference:
 - Prefix skills that are strictly internal to the Agentic SDLC workflow with
   `sdlc-`; use `sdlc-start` for the coordinator. Their descriptions must start
   with `Use only as part of the Agentic SDLC workflow;`.
+- Treat `sdlc-workflow-test` as the deliberate external-verifier exception: it
+  uses the requested `sdlc-` name but must say that it runs outside the workflow.
 - Set `policy.allow_implicit_invocation: false` for `sdlc-*` skills and other
   skills that must be explicitly requested, such as Git commit/push/PR/merge,
   publish/release, auth/setup, high-risk security mutation, container

@@ -33,6 +33,12 @@ from prompt_workspace_execution import (
     RESULT_SCHEMA,
     SHA_RE,
     TASK_PLANE_SCHEMA,
+    WORKER_GUARDRAILS,
+    WORKER_HEARTBEAT_SECONDS,
+    WORKER_MAX_SECONDS,
+    WORKER_PHASES,
+    WORKER_START_SECONDS,
+    WORKER_STALL_SECONDS,
     TASK_ID_RE,
     TASK_STATES,
     WAVE_SCHEMA,
@@ -45,6 +51,7 @@ from prompt_workspace_execution import (
     orchestration_dir,
     parse_task_plans,
     sha256_json,
+    worker_liveness_profile,
 )
 from prompt_workspace_interop import (
     acquire_interop,
@@ -73,6 +80,20 @@ def _utc(clock: Callable[[], datetime]) -> str:
             "EXECUTION_STATE_INVALID", "wave clock must be timezone-aware"
         )
     return iso_seconds(value)
+
+
+def _time_value(value: object, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise PromptWorkspaceError("EXECUTION_STATE_INVALID", f"{label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", f"{label} is invalid"
+        ) from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise PromptWorkspaceError("EXECUTION_STATE_INVALID", f"{label} is invalid")
+    return parsed
 
 
 def _run_dir(workspace: dict[str, object], run_id: str) -> Path:
@@ -391,10 +412,7 @@ def _incoming_handoff_path(run_dir: Path, wave_id: str, task_id: str) -> Path:
             "EXECUTION_STATE_INVALID", "incoming handoff identity is invalid"
         )
     return (
-        orchestration_dir(run_dir)
-        / "incoming-handoffs"
-        / wave_id
-        / f"{task_id}.json"
+        orchestration_dir(run_dir) / "incoming-handoffs" / wave_id / f"{task_id}.json"
     )
 
 
@@ -424,6 +442,11 @@ def _load_task_plane(run_dir: Path, wave_id: str, task_id: str) -> dict[str, obj
         "assignment_sha256",
         "worker_session_sha256",
         "worker_session_sha256_history",
+        "dispatched_at",
+        "started_at",
+        "last_heartbeat_at",
+        "heartbeat_sequence",
+        "heartbeat_phase",
         "result_sha256",
         "commit",
         "created_at",
@@ -437,6 +460,20 @@ def _load_task_plane(run_dir: Path, wave_id: str, task_id: str) -> dict[str, obj
         or value.get("task_id") != task_id
         or value.get("state") not in TASK_STATES
         or not isinstance(value.get("worker_session_sha256_history"), list)
+        or not isinstance(value.get("heartbeat_sequence"), int)
+        or value["heartbeat_sequence"] < 0
+        or value.get("heartbeat_phase") not in {None, *WORKER_PHASES}
+        or (
+            value.get("state") == "running"
+            and (
+                value.get("dispatched_at") is None
+                or not isinstance(value.get("dispatched_at"), str)
+                or value.get("started_at") is None
+                or value.get("last_heartbeat_at") is None
+                or value.get("heartbeat_phase") is None
+                or value["heartbeat_sequence"] < 1
+            )
+        )
         or len(value["worker_session_sha256_history"])
         != len(set(value["worker_session_sha256_history"]))
         or any(
@@ -453,6 +490,9 @@ def _load_task_plane(run_dir: Path, wave_id: str, task_id: str) -> dict[str, obj
         )
     ):
         raise PromptWorkspaceError("EXECUTION_STATE_INVALID", "task plane is invalid")
+    for field in ("dispatched_at", "started_at", "last_heartbeat_at"):
+        if value.get(field) is not None:
+            _time_value(value[field], f"task plane {field}")
     return value
 
 
@@ -474,7 +514,9 @@ def _task_record(task: TaskPlan) -> dict[str, object]:
         "design_id": task.design_id,
         "goal": task.goal,
         "plan": task.plan,
+        "implementation_steps": task.implementation_steps,
         "validation": task.validation,
+        "end_to_end_validation": task.end_to_end_validation,
         "done_criteria": task.done_criteria,
         "rollback_notes": task.rollback_notes,
         "stop_conditions": task.stop_conditions,
@@ -552,6 +594,8 @@ def _validated_assignment(path: Path) -> dict[str, object]:
         "branch",
         "worktree",
         "scope_cwd",
+        "workspace_manifest",
+        "helper_path",
         "result_path",
         "write_claims",
         "conflict_domains",
@@ -559,10 +603,20 @@ def _validated_assignment(path: Path) -> dict[str, object]:
         "design_id",
         "goal",
         "plan",
+        "implementation_steps",
         "validation",
+        "end_to_end_validation",
         "done_criteria",
         "rollback_notes",
         "stop_conditions",
+        "worker_guardrails",
+        "start_seconds",
+        "heartbeat_seconds",
+        "worker_profile",
+        "read_only_warning_seconds",
+        "read_only_seconds",
+        "stall_seconds",
+        "max_worker_seconds",
         "dependencies",
         "incoming_handoff_path",
         "incoming_handoff_sha256",
@@ -586,7 +640,11 @@ def _validated_assignment(path: Path) -> dict[str, object]:
 
 
 def _validated_incoming_handoff(path: Path) -> dict[str, object]:
-    if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != 0o600:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or stat.S_IMODE(path.stat().st_mode) != 0o600
+    ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "incoming handoff path or mode is invalid"
         )
@@ -636,7 +694,9 @@ def _predecessor_record(
         return None
     wave_id, _ = located
     assignment = _validated_assignment(_assignment_path(run_dir, wave_id, dependency))
-    result = load_json_object(_result_path(run_dir, wave_id, dependency), "worker result")
+    result = load_json_object(
+        _result_path(run_dir, wave_id, dependency), "worker result"
+    )
     plane = _load_task_plane(run_dir, wave_id, dependency)
     unsigned_result = {
         key: value for key, value in result.items() if key != "result_sha256"
@@ -684,9 +744,7 @@ def _build_incoming_handoff(
         if item["wave_id"] == wave_id
     )
     for prior_wave in coordinator["waves"][:current_wave_index]:
-        predecessor_ids.extend(
-            str(item["task_id"]) for item in prior_wave["tasks"]
-        )
+        predecessor_ids.extend(str(item["task_id"]) for item in prior_wave["tasks"])
     current_wave = coordinator["waves"][current_wave_index]
     task_batch_index = next(
         index
@@ -747,7 +805,9 @@ def _validate_assignment_handoff(
     wave_id: str,
     task: dict[str, object],
 ) -> dict[str, object]:
-    path = Path(required_string(assignment, "incoming_handoff_path", "worker assignment"))
+    path = Path(
+        required_string(assignment, "incoming_handoff_path", "worker assignment")
+    )
     handoff = _validated_incoming_handoff(path)
     if handoff.get("handoff_sha256") != assignment.get("incoming_handoff_sha256"):
         raise PromptWorkspaceError(
@@ -796,6 +856,8 @@ def _validate_assignment_context(
     expected_worktree = Path(str(wave["integration_worktree"])).parent / task_id
     scope = required_string(workspace, "scope", "workspace manifest")
     expected_scope = expected_worktree if scope == "." else expected_worktree / scope
+    expected_workspace = run_dir.parent.parent / "workspace.json"
+    expected_helper = Path(__file__).resolve().with_name("prompt_workspace.py")
     expected_result = _result_path(run_dir, wave_id, task_id)
     expected_branch = _temporary_branch(workspace, run_dir.name, wave_id, task_id)
     task = next(
@@ -806,6 +868,7 @@ def _validate_assignment_context(
         ),
         None,
     )
+    liveness = worker_liveness_profile(task["dependencies"] if task else [])
     if task is None or any(
         (
             assignment.get("run_id") != run_dir.name,
@@ -817,6 +880,10 @@ def _validate_assignment_context(
             != expected_worktree.resolve(),
             Path(str(assignment.get("scope_cwd"))).resolve()
             != expected_scope.resolve(),
+            Path(str(assignment.get("workspace_manifest"))).resolve()
+            != expected_workspace.resolve(),
+            Path(str(assignment.get("helper_path"))).resolve()
+            != expected_helper.resolve(),
             Path(str(assignment.get("result_path"))).resolve()
             != expected_result.resolve(),
             assignment.get("write_claims") != task["write_claims"],
@@ -825,10 +892,21 @@ def _validate_assignment_context(
             assignment.get("design_id") != task["design_id"],
             assignment.get("goal") != task["goal"],
             assignment.get("plan") != task["plan"],
+            assignment.get("implementation_steps") != task["implementation_steps"],
             assignment.get("validation") != task["validation"],
+            assignment.get("end_to_end_validation") != task["end_to_end_validation"],
             assignment.get("done_criteria") != task["done_criteria"],
             assignment.get("rollback_notes") != task["rollback_notes"],
             assignment.get("stop_conditions") != task["stop_conditions"],
+            assignment.get("worker_guardrails") != WORKER_GUARDRAILS,
+            assignment.get("start_seconds") != WORKER_START_SECONDS,
+            assignment.get("heartbeat_seconds") != WORKER_HEARTBEAT_SECONDS,
+            assignment.get("worker_profile") != liveness["worker_profile"],
+            assignment.get("read_only_warning_seconds")
+            != liveness["read_only_warning_seconds"],
+            assignment.get("read_only_seconds") != liveness["read_only_seconds"],
+            assignment.get("stall_seconds") != WORKER_STALL_SECONDS,
+            assignment.get("max_worker_seconds") != WORKER_MAX_SECONDS,
             assignment.get("dependencies") != task["dependencies"],
             Path(str(assignment.get("incoming_handoff_path"))).resolve()
             != _incoming_handoff_path(run_dir, wave_id, task_id).resolve(),
@@ -927,6 +1005,11 @@ def plan_waves(
                         "assignment_sha256": None,
                         "worker_session_sha256": None,
                         "worker_session_sha256_history": [],
+                        "dispatched_at": None,
+                        "started_at": None,
+                        "last_heartbeat_at": None,
+                        "heartbeat_sequence": 0,
+                        "heartbeat_phase": None,
                         "result_sha256": None,
                         "commit": None,
                         "created_at": created,
@@ -973,19 +1056,42 @@ def replan_waves(
     workspace = verify_workspace(manifest_path)
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
-        run_dir, coordinator, active = _coordinator_and_wave(workspace, run_id)
+        run_dir = _run_dir(workspace, run_id)
+        coordinator = load_coordinator_state(run_dir)
+        if coordinator is None:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "run has no v4 coordinator"
+            )
+        active_wave = coordinator.get("active_wave")
+        if coordinator["status"] == "running" and isinstance(active_wave, str):
+            active = _load_wave(run_dir, active_wave)
+        elif (
+            coordinator["status"] == "done"
+            and active_wave is None
+            and coordinator["waves"]
+        ):
+            active = _load_wave(run_dir, str(coordinator["waves"][-1]["wave_id"]))
+        else:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "run has no replannable wave boundary"
+            )
         interop = _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
-        if active["status"] != "planned":
+        append_after_done = active["status"] == "done"
+        if active["status"] not in {"planned", "done"}:
             raise PromptWorkspaceError(
                 "STEERING_QUEUED_AFTER_WAVE",
-                "only a resource-free planned wave can be replaced; blocked resources "
-                "must be recovered explicitly",
+                "only a resource-free planned tail can be replaced or a correction "
+                "tail can be appended after a cleaned wave; blocked resources must be "
+                "recovered explicitly",
             )
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        expected_head = _expected_primary_head(
-            run_dir, coordinator, str(active["wave_id"])
-        )
+        if append_after_done:
+            expected_head = required_string(active, "promoted_head", "cleaned wave")
+        else:
+            expected_head = _expected_primary_head(
+                run_dir, coordinator, str(active["wave_id"])
+            )
         if (
             _branch(repo) != coordinator["base_branch"]
             or _head(repo) != expected_head
@@ -1027,7 +1133,6 @@ def replan_waves(
         wave_ids = [f"{prefix}-{index:03d}" for index in range(1, len(waves) + 1)]
         created = _utc(clock)
         root = _worktree_root(manifest_path, workspace, run_id)
-        existing_ids = {str(item["wave_id"]) for item in coordinator["waves"]}
         replacement_records: list[dict[str, object]] = []
         for wave_id, task_records, tasks_in_wave in zip(
             wave_ids, plan, waves, strict=True
@@ -1093,6 +1198,11 @@ def replan_waves(
                     "assignment_sha256": None,
                     "worker_session_sha256": None,
                     "worker_session_sha256_history": [],
+                    "dispatched_at": None,
+                    "started_at": None,
+                    "last_heartbeat_at": None,
+                    "heartbeat_sequence": 0,
+                    "heartbeat_phase": None,
                     "result_sha256": None,
                     "commit": None,
                     "created_at": (
@@ -1127,12 +1237,15 @@ def replan_waves(
             for index, item in enumerate(coordinator["waves"])
             if item["wave_id"] == active["wave_id"]
         )
+        if append_after_done:
+            active_index += 1
         superseded = list(coordinator["waves"][active_index:])
-        coordinator["waves"].extend(
-            record
-            for record in replacement_records
-            if str(record["wave_id"]) not in existing_ids
-        )
+        completed_prefix = [
+            item
+            for item in coordinator["waves"][:active_index]
+            if _load_wave(run_dir, str(item["wave_id"]))["status"] == "done"
+        ]
+        coordinator["waves"] = [*completed_prefix, *replacement_records]
         coordinator["active_wave"] = wave_ids[0]
         coordinator["plan_sha256"] = plan_sha256
         coordinator["status"] = "running"
@@ -1154,7 +1267,7 @@ def _coordinator_and_wave(
     coordinator = load_coordinator_state(run_dir)
     if coordinator is None or coordinator["status"] != "running":
         raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "run has no active v2 coordinator"
+            "EXECUTION_STATE_INVALID", "run has no active coordinator"
         )
     wave_id = coordinator.get("active_wave")
     if not isinstance(wave_id, str):
@@ -1596,6 +1709,10 @@ def dispatch_wave(
                 "branch": branch,
                 "worktree": str(worktree),
                 "scope_cwd": str(scope_cwd),
+                "workspace_manifest": str(manifest_path.expanduser().resolve()),
+                "helper_path": str(
+                    Path(__file__).resolve().with_name("prompt_workspace.py")
+                ),
                 "result_path": str(
                     _result_path(run_dir, str(wave["wave_id"]), task_id)
                 ),
@@ -1605,10 +1722,18 @@ def dispatch_wave(
                 "design_id": task["design_id"],
                 "goal": task["goal"],
                 "plan": task["plan"],
+                "implementation_steps": task["implementation_steps"],
                 "validation": task["validation"],
+                "end_to_end_validation": task["end_to_end_validation"],
                 "done_criteria": task["done_criteria"],
                 "rollback_notes": task["rollback_notes"],
                 "stop_conditions": task["stop_conditions"],
+                "worker_guardrails": WORKER_GUARDRAILS,
+                "start_seconds": WORKER_START_SECONDS,
+                "heartbeat_seconds": WORKER_HEARTBEAT_SECONDS,
+                **worker_liveness_profile(task["dependencies"]),
+                "stall_seconds": WORKER_STALL_SECONDS,
+                "max_worker_seconds": WORKER_MAX_SECONDS,
                 "dependencies": task["dependencies"],
                 "incoming_handoff_path": str(handoff_path),
                 "incoming_handoff_sha256": incoming_handoff["handoff_sha256"],
@@ -1716,6 +1841,70 @@ def _session_was_used(
     return False
 
 
+def arm_task(
+    manifest_path: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    """Start the pre-task-start deadline only when a worker slot is available."""
+
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        assignment = _validated_assignment(
+            _assignment_path(run_dir, str(wave["wave_id"]), task_id)
+        )
+        _validate_assignment_context(
+            assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        active_index = wave.get("active_batch_index")
+        if (
+            not isinstance(active_index, int)
+            or task_id not in wave["batches"][active_index]
+            or wave["batch_states"][active_index] != "active"
+            or wave["status"] != "running"
+            or wave["task_states"].get(task_id) != "assigned"
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task is not queued in the active batch"
+            )
+        plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
+        if (
+            plane["state"] != "assigned"
+            or plane["assignment_sha256"] != assignment["assignment_sha256"]
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task plane is not assignable"
+            )
+        if plane["dispatched_at"] is None:
+            worktree = Path(
+                required_string(assignment, "worktree", "worker assignment")
+            )
+            _verify_linked_worktree(
+                Path(required_string(workspace, "repo_root", "workspace manifest")),
+                worktree,
+                str(assignment["branch"]),
+                expected_head=str(assignment["base_commit"]),
+            )
+            if not _clean(worktree):
+                raise PromptWorkspaceError(
+                    "WORKTREE_CONFLICT", "queued worker worktree is not clean"
+                )
+            dispatched_at = _utc(clock)
+            plane["dispatched_at"] = dispatched_at
+            plane["updated_at"] = dispatched_at
+            _save_task_plane(run_dir, plane)
+        return {
+            "status": "ARMED",
+            "task_id": task_id,
+            "assignment_sha256": assignment["assignment_sha256"],
+            "dispatched_at": plane["dispatched_at"],
+        }
+
+
 def start_task(
     manifest_path: Path,
     run_id: str,
@@ -1759,10 +1948,10 @@ def start_task(
         )
         if (
             wave["status"] != "running"
-            and wave["task_states"].get(task_id) != "running"
+            or wave["task_states"].get(task_id) != "assigned"
         ):
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "blocked wave cannot start a new worker"
+                "EXECUTION_STATE_INVALID", "task-start requires one queued task"
             )
         if (
             assignment.get("schema") != ASSIGNMENT_SCHEMA
@@ -1794,15 +1983,32 @@ def start_task(
                 "WORKTREE_CONFLICT",
                 "worker worktree identity changed before authorization",
             )
-        if wave["task_states"].get(task_id) not in {"assigned", "running"}:
+        if wave["task_states"].get(task_id) != "assigned":
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "task is not assignable"
             )
         worker_session = _session_fingerprint(session_id)
         plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
+        if plane["state"] != "assigned":
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task-start is single-use"
+            )
         if plane["assignment_sha256"] != assignment_sha256:
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "task plane assignment differs"
+            )
+        if plane["dispatched_at"] is None:
+            raise PromptWorkspaceError(
+                "TASK_NOT_ARMED", "coordinator must arm a worker slot before task-start"
+            )
+        started_at = _utc(clock)
+        prestart_elapsed = (
+            _time_value(started_at, "worker start time")
+            - _time_value(plane["dispatched_at"], "worker dispatch time")
+        ).total_seconds()
+        if prestart_elapsed >= WORKER_START_SECONDS:
+            raise PromptWorkspaceError(
+                "WORKER_PRESTART_TIMEOUT", "worker missed the task-start deadline"
             )
         if plane["worker_session_sha256"] not in {None, worker_session}:
             raise PromptWorkspaceError(
@@ -1815,13 +2021,17 @@ def start_task(
                 "one worker session cannot own multiple task planes",
             )
         wave["task_states"][task_id] = "running"
-        wave["updated_at"] = _utc(clock)
+        wave["updated_at"] = started_at
         _save_wave(run_dir, wave)
         plane["state"] = "running"
         plane["worker_session_sha256"] = worker_session
         if not plane["worker_session_sha256_history"]:
             plane["worker_session_sha256_history"].append(worker_session)
-        plane["updated_at"] = _utc(clock)
+        plane["started_at"] = started_at
+        plane["last_heartbeat_at"] = started_at
+        plane["heartbeat_sequence"] = 1
+        plane["heartbeat_phase"] = "preflight"
+        plane["updated_at"] = started_at
         _save_task_plane(run_dir, plane)
         return {"assignment": assignment, "worker_session_sha256": worker_session}
 
@@ -1839,6 +2049,185 @@ def _dirty_paths(repo: Path) -> list[str]:
             item for item in raw.decode("utf-8", errors="strict").split("\0") if item
         )
     return sorted(paths)
+
+
+def _worker_guard_status(
+    assignment: dict[str, object],
+    plane: dict[str, object],
+    *,
+    clock: Callable[[], datetime],
+) -> dict[str, object]:
+    now_text = _utc(clock)
+    now = _time_value(now_text, "worker guard clock")
+    started = _time_value(plane.get("started_at"), "worker start time")
+    heartbeat = _time_value(plane.get("last_heartbeat_at"), "worker heartbeat time")
+    read_only_seconds = int(assignment["read_only_seconds"])
+    warning_seconds = int(assignment["read_only_warning_seconds"])
+    elapsed = max(0, int((now - started).total_seconds()))
+    heartbeat_age = max(0, int((now - heartbeat).total_seconds()))
+    worktree = Path(required_string(assignment, "worktree", "worker assignment"))
+    base = required_string(assignment, "base_commit", "worker assignment")
+    observed_head = _head(worktree)
+    observed_paths = set(_dirty_paths(worktree))
+    if observed_head != base:
+        observed_paths.update(_changed_paths(worktree, base, observed_head))
+    scope_violation = any(
+        not _path_allowed(path, assignment["write_claims"]) for path in observed_paths
+    )
+    progress_observed = bool(observed_paths) and not scope_violation
+    if scope_violation:
+        status = "WORKER_SCOPE_VIOLATION"
+    elif elapsed >= WORKER_MAX_SECONDS:
+        status = "WORKER_TIMEOUT"
+    elif not progress_observed and elapsed >= read_only_seconds:
+        status = "WORKER_READ_ONLY_TIMEOUT"
+    elif heartbeat_age >= WORKER_STALL_SECONDS:
+        status = "WORKER_STALLED"
+    else:
+        status = "ACTIVE"
+    warning = (
+        "READ_ONLY_DEADLINE_NEAR"
+        if status == "ACTIVE" and not progress_observed and elapsed >= warning_seconds
+        else None
+    )
+    return {
+        "status": status,
+        "warning": warning,
+        "elapsed_seconds": elapsed,
+        "heartbeat_age_seconds": heartbeat_age,
+        "progress_observed": progress_observed,
+        "scope_violation": scope_violation,
+        "heartbeat_sequence": plane["heartbeat_sequence"],
+        "heartbeat_phase": plane["heartbeat_phase"],
+        "observed_at": now_text,
+    }
+
+
+def heartbeat_task(
+    manifest_path: Path,
+    run_id: str,
+    task_id: str,
+    assignment_sha256: str,
+    phase: str,
+    *,
+    session_id: str | None = None,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    if phase not in WORKER_PHASES:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "worker heartbeat phase is invalid"
+        )
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        assignment = _validated_assignment(
+            _assignment_path(run_dir, str(wave["wave_id"]), task_id)
+        )
+        _validate_assignment_context(
+            assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        if assignment.get("assignment_sha256") != assignment_sha256:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "worker assignment digest is invalid"
+            )
+        plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
+        if (
+            plane["state"] != "running"
+            or wave["task_states"].get(task_id) != "running"
+            or plane["worker_session_sha256"] != _session_fingerprint(session_id)
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "worker heartbeat ownership is invalid"
+            )
+        scope_cwd = Path(required_string(assignment, "scope_cwd", "worker assignment"))
+        if Path.cwd().resolve() != scope_cwd.resolve():
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "worker heartbeat must run from assigned scope cwd"
+            )
+        status = _worker_guard_status(assignment, plane, clock=clock)
+        if status["status"] != "ACTIVE":
+            raise PromptWorkspaceError(
+                str(status["status"]), "worker liveness budget was exceeded"
+            )
+        plane["last_heartbeat_at"] = status["observed_at"]
+        plane["heartbeat_sequence"] = int(plane["heartbeat_sequence"]) + 1
+        plane["heartbeat_phase"] = phase
+        plane["updated_at"] = status["observed_at"]
+        _save_task_plane(run_dir, plane)
+        status["heartbeat_sequence"] = plane["heartbeat_sequence"]
+        status["heartbeat_phase"] = phase
+        return status
+
+
+def watch_task(
+    manifest_path: Path,
+    run_id: str,
+    task_id: str,
+    *,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        assignment = _validated_assignment(
+            _assignment_path(run_dir, str(wave["wave_id"]), task_id)
+        )
+        _validate_assignment_context(
+            assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
+        state = plane["state"]
+        if state == "assigned" and wave["task_states"].get(task_id) == "assigned":
+            observed_at = _utc(clock)
+            worktree = Path(
+                required_string(assignment, "worktree", "worker assignment")
+            )
+            base = required_string(assignment, "base_commit", "worker assignment")
+            observed_head = _head(worktree)
+            observed_paths = set(_dirty_paths(worktree))
+            if observed_head != base:
+                observed_paths.update(_changed_paths(worktree, base, observed_head))
+            progress_observed = bool(observed_paths)
+            scope_violation = any(
+                not _path_allowed(path, assignment["write_claims"])
+                for path in observed_paths
+            )
+            if progress_observed:
+                status = "WORKER_PRESTART_MUTATION"
+                elapsed = 0
+            elif plane["dispatched_at"] is None:
+                status = "QUEUED"
+                elapsed = 0
+            else:
+                now = _time_value(observed_at, "worker guard clock")
+                dispatched_at = _time_value(
+                    plane["dispatched_at"], "worker dispatch time"
+                )
+                elapsed = max(0, int((now - dispatched_at).total_seconds()))
+                status = (
+                    "WORKER_PRESTART_TIMEOUT"
+                    if elapsed >= WORKER_START_SECONDS
+                    else "PENDING_START"
+                )
+            return {
+                "status": status,
+                "warning": None,
+                "elapsed_seconds": elapsed,
+                "heartbeat_age_seconds": None,
+                "progress_observed": progress_observed,
+                "scope_violation": scope_violation,
+                "heartbeat_sequence": 0,
+                "heartbeat_phase": None,
+                "observed_at": observed_at,
+            }
+        if state != "running" or wave["task_states"].get(task_id) != "running":
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "only an assigned or running task can be watched",
+            )
+        return _worker_guard_status(assignment, plane, clock=clock)
 
 
 def recover_task(
@@ -1929,16 +2318,22 @@ def recover_task(
             raise PromptWorkspaceError(
                 "FRESH_SESSION_REQUIRED", "recovery requires a fresh worker session"
             )
-        if worker_session in plane["worker_session_sha256_history"] or _session_was_used(
-            run_dir, worker_session
-        ):
+        if worker_session in plane[
+            "worker_session_sha256_history"
+        ] or _session_was_used(run_dir, worker_session):
             raise PromptWorkspaceError(
                 "FRESH_SESSION_REQUIRED",
                 "recovery session identity was already used by this run",
             )
         plane["worker_session_sha256"] = worker_session
         plane["worker_session_sha256_history"].append(worker_session)
-        plane["updated_at"] = _utc(clock)
+        recovered_at = _utc(clock)
+        plane["dispatched_at"] = recovered_at
+        plane["started_at"] = recovered_at
+        plane["last_heartbeat_at"] = recovered_at
+        plane["heartbeat_sequence"] = 1
+        plane["heartbeat_phase"] = "preflight"
+        plane["updated_at"] = recovered_at
         _save_task_plane(run_dir, plane)
         return {
             "assignment": assignment,
@@ -2071,6 +2466,21 @@ def accept_task_result(
             plane["updated_at"] = _utc(clock)
             _save_task_plane(run_dir, plane)
             return result
+        guard = _worker_guard_status(assignment, plane, clock=clock)
+        if guard["status"] != "ACTIVE":
+            if guard["status"] == "WORKER_SCOPE_VIOLATION":
+                failed_at = str(guard["observed_at"])
+                wave["task_states"][task_id] = "failed"
+                wave["status"] = "blocked"
+                wave["updated_at"] = failed_at
+                _save_wave(run_dir, wave)
+                plane["state"] = "failed"
+                plane["updated_at"] = failed_at
+                _save_task_plane(run_dir, plane)
+            raise PromptWorkspaceError(
+                str(guard["status"]),
+                "worker result arrived after its liveness budget expired",
+            )
         commit = result.get("commit")
         if not isinstance(commit, str) or SHA_RE.fullmatch(commit) is None:
             raise PromptWorkspaceError(

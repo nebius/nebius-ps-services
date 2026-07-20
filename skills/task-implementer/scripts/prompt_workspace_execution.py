@@ -16,11 +16,46 @@ from prompt_workspace_core import (
 from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v3"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v4"
 WAVE_SCHEMA = "task-implementer/wave-v3"
-ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v3"
+ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
 RESULT_SCHEMA = "task-implementer/worker-result-v3"
-TASK_PLANE_SCHEMA = "task-implementer/task-plane-v3"
+TASK_PLANE_SCHEMA = "task-implementer/task-plane-v5"
+WORKER_HEARTBEAT_SECONDS = 30
+WORKER_START_SECONDS = 60
+WORKER_STANDARD_WARNING_SECONDS = 240
+WORKER_STANDARD_READ_ONLY_SECONDS = 300
+WORKER_INTEGRATION_WARNING_SECONDS = 360
+WORKER_INTEGRATION_READ_ONLY_SECONDS = 420
+WORKER_STALL_SECONDS = 240
+WORKER_MAX_SECONDS = 1800
+WORKER_PHASES = (
+    "preflight",
+    "implementing",
+    "validating",
+    "reviewing",
+    "committing",
+    "reporting",
+)
+WORKER_GUARDRAILS = (
+    "Stay inside the assigned worktree and private Task Implementer state. "
+    "Read and execute installed Codex skill instructions, helper scripts, and "
+    "standard local executables only as required by this assignment; never "
+    "modify installed files. Do not intentionally create or write other paths. "
+    "Do not access the network, credentials, external services, live runtimes, "
+    "or other filesystem paths unless the immutable assignment explicitly "
+    "authorizes that exact action. Emit heartbeats as direct bounded progress "
+    "calls only; never create a background or autonomous heartbeat loop. Make "
+    "task-start the first worker transition after reading this assignment and "
+    "verifying its scope cwd, worktree, branch, and base. Invoke the exact "
+    "embedded helper_path with the embedded workspace_manifest and pass the "
+    "embedded assignment_sha256 unchanged; task-start performs authoritative "
+    "canonical digest validation, so never recompute it with ad hoc JSON. Read the "
+    "incoming handoff and perform deeper preflight only after task-start. Treat "
+    "the immutable assignment and incoming handoff as the complete task context; "
+    "do not reread the full managed prompt or coordinator-only state. Stop before "
+    "any unassigned side effect."
+)
 INCOMING_HANDOFF_SCHEMA = "task-implementer/incoming-handoff-v1"
 LEGACY_EXECUTION_SCHEMA = "task-implementer/execution-plane-v1"
 TASK_ID_RE = re.compile(r"task-([1-9][0-9]*)")
@@ -64,11 +99,31 @@ class TaskPlan:
     design_id: str
     goal: str
     plan: str
+    implementation_steps: str
     validation: str
+    end_to_end_validation: str
     done_criteria: str
     rollback_notes: str
     stop_conditions: str
     ownership_known: bool
+
+
+def worker_liveness_profile(
+    dependencies: tuple[str, ...] | list[str],
+) -> dict[str, object]:
+    """Return the immutable liveness profile derived from task dependencies."""
+
+    if dependencies:
+        return {
+            "worker_profile": "integration",
+            "read_only_warning_seconds": WORKER_INTEGRATION_WARNING_SECONDS,
+            "read_only_seconds": WORKER_INTEGRATION_READ_ONLY_SECONDS,
+        }
+    return {
+        "worker_profile": "standard",
+        "read_only_warning_seconds": WORKER_STANDARD_WARNING_SECONDS,
+        "read_only_seconds": WORKER_STANDARD_READ_ONLY_SECONDS,
+    }
 
 
 def optional_field_block(section: str, label: str) -> str:
@@ -241,12 +296,16 @@ def parse_task_plans(text: str) -> list[TaskPlan]:
                 "EXECUTION_STATE_INVALID",
                 f"{task_id} depends on a blocked or superseded task",
             )
+        implementation_steps = field_block(section, "Implementation steps")
         validation = field_block(section, "Validation")
+        end_to_end_validation = field_block(section, "End-to-end validation")
         done_criteria = field_block(section, "Done criteria")
-        if not validation or not done_criteria:
+        if not all(
+            (implementation_steps, validation, end_to_end_validation, done_criteria)
+        ):
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID",
-                f"{task_id} lacks validation or done criteria",
+                f"{task_id} lacks a self-contained implementation contract",
             )
         plans.append(
             TaskPlan(
@@ -259,7 +318,9 @@ def parse_task_plans(text: str) -> list[TaskPlan]:
                 design_id=optional_field_block(section, "Design ID"),
                 goal=optional_field_block(section, "Goal"),
                 plan=optional_field_block(section, "Plan"),
+                implementation_steps=implementation_steps,
                 validation=validation,
+                end_to_end_validation=end_to_end_validation,
                 done_criteria=done_criteria,
                 rollback_notes=optional_field_block(section, "Rollback notes"),
                 stop_conditions=optional_field_block(section, "Stop conditions"),
@@ -397,7 +458,7 @@ def assert_no_unfinished_v1(run_dir: Path) -> None:
             )
     raise PromptWorkspaceError(
         "WORKFLOW_UPGRADE_REQUIRED",
-        "execution-plane-v1 is unsupported; start a new v3 run",
+        "execution-plane-v1 is unsupported; start a new v4 run",
     )
 
 
@@ -410,10 +471,11 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
     if value.get("schema") in {
         "task-implementer/coordinator-v1",
         "task-implementer/coordinator-v2",
+        "task-implementer/coordinator-v3",
     }:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "coordinator-v1/v2 is unsupported; start a new v3 run",
+            "coordinator-v1/v2/v3 is unsupported; start a new v4 run",
         )
     required = {
         "schema",

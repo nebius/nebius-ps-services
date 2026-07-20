@@ -260,7 +260,14 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
         )
 
     def test_sensitive_command_is_denied(self) -> None:
-        self.assertEqual(self.permission_decision(sensitive_command()), "deny")
+        result = self.evaluate_command(sensitive_command())
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+        self.assertIn(
+            "automatically selected agent profile",
+            result["hookSpecificOutput"]["permissionDecisionReason"],
+        )
         self.assertEqual(
             self.permission_decision(sensitive_command() + ">/tmp/token"),
             "deny",

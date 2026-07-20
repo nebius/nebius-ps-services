@@ -32,12 +32,88 @@ def _result(
     )
 
 
+def test_retained_bridge_slot_zero_keeps_canonical_label_value() -> None:
+    assert migration._controller_bridge_slot_label_value({"slot": 0}) == "0"  # noqa: SLF001
+    assert migration._controller_bridge_slot_label_value({"slot": 1}) == "1"  # noqa: SLF001
+    assert migration._controller_bridge_slot_label_value({}) == ""  # noqa: SLF001
+
+
+def test_bridge_node_group_cleanup_accepts_slot_zero_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group_id = "bridge-group-a"
+    group_name = "cxcli-bridge-a"
+    live_group = {
+        "metadata": {
+            "id": group_id,
+            "uid": "bridge-group-a-uid",
+            "name": group_name,
+            "resource_version": "1",
+        },
+        "spec": {
+            "template": {
+                "metadata": {
+                    "labels": {
+                        migration.CONTROLLER_BRIDGE_LABEL: "true",
+                        migration.CONTROLLER_BRIDGE_SLOT_LABEL: "0",
+                    }
+                }
+            }
+        },
+    }
+
+    class _Api:
+        def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+            assert node_group_id == group_id
+            return live_group
+
+    monkeypatch.setattr(
+        migration,
+        "_provider_operation_intent_for_request",
+        lambda **_kwargs: {"attempt_state": "intent-recorded"},
+    )
+    monkeypatch.setattr(migration, "_provider_operation_requested", lambda **_kwargs: None)
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_delete_node_group",
+        lambda **kwargs: deleted.append(str(kwargs["node_group_id"])) or {},
+    )
+    monkeypatch.setattr(migration, "_provider_operation_terminal", lambda **_kwargs: None)
+    journal = {
+        "cleanup": {
+            "node_group_operations": {},
+            "node_groups_deleted": [],
+            "node_groups_preserved": [],
+        },
+        "node_groups": [
+            {
+                "id": group_id,
+                "name": group_name,
+                "slot": 0,
+                "cleanup_policy": "delete-domain",
+            }
+        ],
+    }
+
+    result = migration._controller_bridge_delete_node_groups(  # noqa: SLF001
+        checkpoint={},
+        journal=journal,
+        nebius_api=_Api(),
+        checkpoint_writer=lambda: None,
+    )
+
+    assert result == [group_id]
+    assert deleted == [group_id]
+
+
 def test_cleanup_delete_transport_is_narrowly_allowlisted() -> None:
     supported = (
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge",
         "/api/v1/namespaces/cxcli-soperator-upgrade-inspectors",
         "/api/v1/persistentvolumes/cxcli-controller-bridge-state-pv",
         "/api/v1/persistentvolumes/cxcli-controller-bridge-jail-pv",
+        "/apis/scheduling.k8s.io/v1/priorityclasses/cxcli-soperator-upgrade-bridge",
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/"
         "cxcli-controller-bridge-state",
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/"
@@ -59,11 +135,90 @@ def test_cleanup_delete_transport_is_narrowly_allowlisted() -> None:
         "/api/v1/persistentvolumes/customer-state-pv"
     )
     assert not migration._uid_preconditioned_delete_api_path_is_supported(  # noqa: SLF001
+        "/apis/scheduling.k8s.io/v1/priorityclasses/customer"
+    )
+    assert not migration._uid_preconditioned_delete_api_path_is_supported(  # noqa: SLF001
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/customer"
     )
     assert not migration._uid_preconditioned_delete_api_path_is_supported(  # noqa: SLF001
         "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/pods/customer"
     )
+
+
+def test_uid_preconditioned_delete_can_dispatch_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deletes: list[str] = []
+    waits: list[str] = []
+    api_path = (
+        "/api/v1/namespaces/cxcli-soperator-upgrade-bridge/persistentvolumeclaims/"
+        "cxcli-controller-bridge-jail"
+    )
+    monkeypatch.setattr(
+        migration,
+        "_delete_kubernetes_resource_with_uid_precondition",
+        lambda **kwargs: deletes.append(str(kwargs["uid"])),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_kubernetes_resource_uid_absent",
+        lambda **kwargs: waits.append(str(kwargs["uid"])),
+    )
+
+    migration._command_runner_uid_preconditioned_delete(  # noqa: SLF001
+        lambda *_args, **_kwargs: pytest.fail("unexpected resource polling"),
+        kube_context="context",
+        api_path=api_path,
+        uid="bridge-jail-pvc-uid",
+        resource_version="12",
+        propagation_policy="Background",
+        timeout_seconds=300,
+        wait_for_absence=False,
+    )
+
+    assert deletes == ["bridge-jail-pvc-uid"]
+    assert waits == []
+
+
+def test_exact_pvc_nonblocking_delete_reaches_delete_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = {
+        "api_version": "v1",
+        "kind": "PersistentVolumeClaim",
+        "namespace": "cxcli-soperator-upgrade-bridge",
+        "name": "cxcli-controller-bridge-jail",
+        "uid": "bridge-jail-pvc-uid",
+        "resource_version": "12",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_live_resource",
+        lambda **_kwargs: (
+            True,
+            {"metadata": {"uid": identity["uid"], "resourceVersion": "12"}},
+        ),
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        migration,
+        "_command_runner_uid_preconditioned_delete",
+        lambda *_args, **kwargs: calls.append(bool(kwargs["wait_for_absence"])),
+    )
+
+    cleanup: dict[str, Any] = {"kubernetes_operations": {}}
+    migration._controller_bridge_delete_exact_kubernetes_resource(  # noqa: SLF001
+        cleanup=cleanup,
+        identity=identity,
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
+        checkpoint_writer=lambda: None,
+        wait_for_absence=False,
+    )
+
+    assert calls == [False]
+    operation = next(iter(cleanup["kubernetes_operations"].values()))
+    assert operation["state"] == "delete-accepted"
 
 
 def test_exact_pvc_delete_reconciles_lost_response_from_same_uid_termination(
@@ -246,9 +401,16 @@ def test_final_singleton_proof_rejects_pending_second_slurmctld_pod(
             "controller_pod_uid": "target-controller-pod-uid",
             "controller_workload_uid": "target-controller-workload-uid",
             "final_config_map_name": "slurm-config",
+            "target_state_save_location": "/mnt/controller-spool/current",
         },
         "version_transition": {
             "target_image": f"registry.example/slurm@sha256:{digest}",
+        },
+        "target_image_lock": {
+            "immutable_reference": f"registry.example/slurm@sha256:{digest}",
+            "repository": "registry.example/slurm",
+            "index_digest": f"sha256:{digest}",
+            "platform_digest": f"sha256:{digest}",
         },
         "state_manifest": {"stable_path": "/mnt/controller-spool/current"},
         "source_configuration": {"config_key": "slurm.conf"},
@@ -259,6 +421,262 @@ def test_final_singleton_proof_rejects_pending_second_slurmctld_pod(
             journal=journal,
             kube_context="context",
             command_runner=runner,
+        )
+
+
+def test_target_state_binding_uses_active_target_mount_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_pod = {
+        "spec": {
+            "containers": [
+                {
+                    "name": "slurmctld",
+                    "volumeMounts": [
+                        {"name": "controller-spool", "mountPath": "/var/spool/slurmctld"}
+                    ],
+                }
+            ],
+            "volumes": [
+                {
+                    "name": "controller-spool",
+                    "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (
+            True,
+            {
+                "metadata": {"uid": "target-pvc-uid"},
+                "spec": {"volumeName": "target-pv"},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": {"uid": "target-pv-uid"},
+            "spec": {
+                "claimRef": {
+                    "namespace": "soperator",
+                    "name": "controller-spool-pvc",
+                    "uid": "target-pvc-uid",
+                }
+            },
+        },
+    )
+    journal = {
+        "state_manifest": {"stable_path": "/mnt/controller-spool/current"},
+        "kubernetes_resources": [
+            {"kind": "PersistentVolume", "uid": "bridge-pv-uid"},
+            {"kind": "PersistentVolumeClaim", "uid": "bridge-pvc-uid"},
+        ],
+    }
+
+    binding = migration._controller_bridge_target_state_binding(  # noqa: SLF001
+        journal=journal,
+        target_pod=target_pod,
+        container_name="slurmctld",
+        state_path="/var/spool/slurmctld",
+        kube_context="context",
+        command_runner=lambda args, **_kwargs: _result(args),
+    )
+
+    assert binding["state_path"] == "/var/spool/slurmctld"
+    assert binding["pvc_uid"] == "target-pvc-uid"
+    assert binding["pv_uid"] == "target-pv-uid"
+
+
+def test_final_singleton_proof_accepts_locked_index_digest_and_target_mount_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform_digest = "b" * 64
+    index_digest = "c" * 64
+    target_pod = {
+        "metadata": {"uid": "target-pod-uid"},
+        "spec": {"containers": [{"name": "slurmctld"}]},
+        "status": {
+            "containerStatuses": [
+                {
+                    "name": "slurmctld",
+                    "imageID": f"registry.example/slurm@sha256:{index_digest}",
+                }
+            ]
+        },
+    }
+
+    def get_resource(**kwargs: Any) -> tuple[bool, Mapping[str, Any]]:
+        if kwargs["resource"] == "pod/controller-0":
+            return True, target_pod
+        if kwargs["resource"] == "statefulset.apps.kruise.io/controller":
+            return True, {"metadata": {"uid": "target-workload-uid"}, "spec": {"replicas": 1}}
+        raise AssertionError(kwargs["resource"])
+
+    monkeypatch.setattr(migration, "_kubectl_get_namespace_resource", get_resource)
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "data": {
+                "slurm.conf": ("SlurmctldHost[0] = controller-0(target-cluster-controller-svc)\n")
+            }
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_cluster_wide_slurmctld_exclusivity",
+        lambda **_kwargs: None,
+    )
+    observed_paths: list[str] = []
+
+    def bind_state(**kwargs: Any) -> dict[str, str]:
+        observed_paths.append(str(kwargs["state_path"]))
+        return {"state_path": str(kwargs["state_path"])}
+
+    monkeypatch.setattr(migration, "_controller_bridge_target_state_binding", bind_state)
+    journal = {
+        "campaign_fingerprint": "campaign",
+        "target_singleton_takeover": {
+            "controller_pod_uid": "target-pod-uid",
+            "controller_workload_uid": "target-workload-uid",
+            "final_config_map_name": "slurm-config",
+            "target_state_save_location": "/var/spool/slurmctld",
+        },
+        "version_transition": {
+            "target_image": f"registry.example/slurm@sha256:{platform_digest}",
+        },
+        "target_image_lock": {
+            "immutable_reference": (f"registry.example/slurm@sha256:{platform_digest}"),
+            "repository": "registry.example/slurm",
+            "index_digest": f"sha256:{index_digest}",
+            "platform_digest": f"sha256:{platform_digest}",
+        },
+        "state_manifest": {"stable_path": "/mnt/controller-spool/current"},
+        "source_configuration": {"config_key": "slurm.conf"},
+    }
+
+    result = migration._prove_controller_bridge_cleanup_target_singleton(  # noqa: SLF001
+        journal=journal,
+        kube_context="context",
+        command_runner=lambda args, **_kwargs: _result(
+            args,
+            stdout=(
+                "Slurmctld(primary) at controller-0 is UP\n"
+                "StateSaveLocation = /var/spool/slurmctld\n"
+            ),
+        ),
+    )
+
+    assert result == {"state_path": "/var/spool/slurmctld"}
+    assert observed_paths == ["/var/spool/slurmctld"]
+
+
+def test_cleanup_revalidation_delegates_to_full_target_successor_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: dict[str, Any] = {"target_singleton_takeover": {"target_ref": "target-cluster"}}
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_target_singleton_jwt_material",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    def writer() -> None:
+        return None
+
+    def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
+        return _result(args)
+
+    migration._revalidate_target_singleton_before_controller_bridge_cleanup(  # noqa: SLF001
+        journal=journal,
+        kube_context="context",
+        command_runner=runner,
+        checkpoint_writer=writer,
+    )
+
+    assert calls == [
+        {
+            "journal": journal,
+            "target_ref": "target-cluster",
+            "kube_context": "context",
+            "command_runner": runner,
+            "checkpoint_writer": writer,
+        }
+    ]
+
+
+def test_cleanup_revalidation_requires_checkpointed_target_identity() -> None:
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="checkpointed target SlurmCluster identity",
+    ):
+        migration._revalidate_target_singleton_before_controller_bridge_cleanup(  # noqa: SLF001
+            journal={"target_singleton_takeover": {}},
+            kube_context="context",
+            command_runner=lambda args, **_kwargs: _result(args),
+            checkpoint_writer=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ("SlurmctldHost=controller-0\n", ("controller-0",)),
+        (
+            "SlurmctldHost[0] = controller-0(target-cluster-controller-svc)\n",
+            ("controller-0",),
+        ),
+        (
+            "SlurmctldHost=controller-0(service)\nSlurmctldHost=controller-1(service)\n",
+            ("controller-0", "controller-1"),
+        ),
+        ("SlurmctldHost=controller-0(service) unexpected\n", ()),
+    ],
+)
+def test_slurmctld_host_identities_parse_canonical_forms(
+    config: str,
+    expected: tuple[str, ...],
+) -> None:
+    assert migration._slurmctld_host_identities(config) == expected  # noqa: SLF001
+
+
+def test_target_state_binding_rejects_unmounted_state_path() -> None:
+    target_pod = {
+        "spec": {
+            "containers": [
+                {
+                    "name": "slurmctld",
+                    "volumeMounts": [
+                        {"name": "controller-spool", "mountPath": "/var/spool/slurmctld"}
+                    ],
+                }
+            ],
+            "volumes": [
+                {
+                    "name": "controller-spool",
+                    "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="StateSaveLocation to resolve",
+    ):
+        migration._controller_bridge_target_state_binding(  # noqa: SLF001
+            journal={"kubernetes_resources": []},
+            target_pod=target_pod,
+            container_name="slurmctld",
+            state_path="/unmounted/controller-state",
+            kube_context="context",
+            command_runner=lambda args, **_kwargs: _result(args),
         )
 
 
@@ -447,6 +865,11 @@ def _patch_cleanup_prerequisites(
         "_prove_controller_bridge_cleanup_target_singleton",
         lambda **_kwargs: dict(target_state),
     )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_target_singleton_before_controller_bridge_cleanup",
+        lambda **_kwargs: None,
+    )
 
 
 def _live_bridge_storage(
@@ -532,7 +955,7 @@ def test_cleanup_storage_proof_rejects_non_retain_jail_mapping(
         )
 
 
-def test_cleanup_deletes_both_pvcs_before_namespace_then_both_pvs(
+def test_cleanup_dispatches_both_pvcs_then_deletes_namespace_before_waiting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target_state = {
@@ -571,11 +994,17 @@ def test_cleanup_deletes_both_pvcs_before_namespace_then_both_pvs(
         "_controller_bridge_live_resource",
         lambda **_kwargs: (False, {}),
     )
-    deletion_order: list[tuple[str, str]] = []
+    deletion_order: list[tuple[str, str, bool]] = []
 
     def delete_exact(**kwargs: Any) -> None:
         identity = kwargs["identity"]
-        deletion_order.append((str(identity["kind"]), str(identity["name"])))
+        deletion_order.append(
+            (
+                str(identity["kind"]),
+                str(identity["name"]),
+                bool(kwargs.get("wait_for_absence", True)),
+            )
+        )
 
     monkeypatch.setattr(
         migration,
@@ -606,12 +1035,14 @@ def test_cleanup_deletes_both_pvcs_before_namespace_then_both_pvs(
 
     assert changed is True
     assert journal["cleanup"]["intent_at"]
-    assert deletion_order[:5] == [
-        ("PersistentVolumeClaim", "cxcli-controller-bridge-state"),
-        ("PersistentVolumeClaim", "cxcli-controller-bridge-jail"),
-        ("Namespace", "cxcli-soperator-upgrade-bridge"),
-        ("PersistentVolume", "cxcli-controller-bridge-state-pv"),
-        ("PersistentVolume", "cxcli-controller-bridge-jail-pv"),
+    assert deletion_order[:7] == [
+        ("PersistentVolumeClaim", "cxcli-controller-bridge-state", False),
+        ("PersistentVolumeClaim", "cxcli-controller-bridge-jail", False),
+        ("Namespace", "cxcli-soperator-upgrade-bridge", True),
+        ("PersistentVolumeClaim", "cxcli-controller-bridge-state", True),
+        ("PersistentVolumeClaim", "cxcli-controller-bridge-jail", True),
+        ("PersistentVolume", "cxcli-controller-bridge-state-pv", True),
+        ("PersistentVolume", "cxcli-controller-bridge-jail-pv", True),
     ]
 
 
@@ -707,6 +1138,8 @@ def test_cleanup_resume_after_namespace_absence_skips_predelete_storage_and_work
 
     assert changed is True
     assert deleted_kinds == [
+        "PersistentVolumeClaim",
+        "PersistentVolumeClaim",
         "PersistentVolumeClaim",
         "PersistentVolumeClaim",
         "PersistentVolume",

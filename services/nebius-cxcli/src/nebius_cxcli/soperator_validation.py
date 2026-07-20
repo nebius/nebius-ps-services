@@ -214,7 +214,7 @@ def _gpu_driver_jail_script(
             'bash -lc \'set -euo pipefail; host="$(hostname)"; '
             'check_lib() { local lib="$1"; local path=""; '
             'path="$(ldconfig -p 2>/dev/null | awk -v lib="$lib" '
-            '\'"\'"\'$1 == lib { print $NF; exit }\'"\'"\')"; '
+            "'\"'\"'$1 == lib { print $NF; exit }'\"'\"')\"; "
             'if [[ -z "$path" ]]; then path="/usr/lib/$(uname -m)-linux-gnu/$lib"; fi; '
             'if [[ ! -e "$path" ]]; then echo "cxcli-soperator-gpu-driver-jail-missing '
             'host=$host lib=$lib path=$path"; return 1; fi; '
@@ -292,21 +292,21 @@ def _nccl_script(
             "fi",
             "if (( ${#eligible_gpu_nodes[@]} == 0 )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark could not '
-            'resolve allocatable Slurm GPU counts on partition $partition; found '
+            "resolve allocatable Slurm GPU counts on partition $partition; found "
             '${#total_gpu_nodes[@]} GPU-labeled node(s)."',
             "  exit 0",
             "fi",
-            "candidate_gpu_nodes=(\"${eligible_gpu_nodes[@]}\")",
-            "idle_candidate_gpu_nodes=(\"${idle_eligible_gpu_nodes[@]}\")",
+            'candidate_gpu_nodes=("${eligible_gpu_nodes[@]}")',
+            'idle_candidate_gpu_nodes=("${idle_eligible_gpu_nodes[@]}")',
             "if (( ${#idle_preferred_gpu_nodes[@]} >= 2 )); then",
-            "  candidate_gpu_nodes=(\"${preferred_gpu_nodes[@]}\")",
-            "  idle_candidate_gpu_nodes=(\"${idle_preferred_gpu_nodes[@]}\")",
+            '  candidate_gpu_nodes=("${preferred_gpu_nodes[@]}")',
+            '  idle_candidate_gpu_nodes=("${idle_preferred_gpu_nodes[@]}")',
             "elif (( requested_max_nodes == 1 && ${#idle_preferred_gpu_nodes[@]} >= 1 )); then",
-            "  candidate_gpu_nodes=(\"${preferred_gpu_nodes[@]}\")",
-            "  idle_candidate_gpu_nodes=(\"${idle_preferred_gpu_nodes[@]}\")",
+            '  candidate_gpu_nodes=("${preferred_gpu_nodes[@]}")',
+            '  idle_candidate_gpu_nodes=("${idle_preferred_gpu_nodes[@]}")',
             "elif (( ${#idle_preferred_gpu_nodes[@]} == 1 && ${#idle_eligible_gpu_nodes[@]} >= 2 )); then",
-            "  candidate_gpu_nodes=(\"${preferred_gpu_nodes[@]}\")",
-            "  idle_candidate_gpu_nodes=(\"${idle_preferred_gpu_nodes[@]}\")",
+            '  candidate_gpu_nodes=("${preferred_gpu_nodes[@]}")',
+            '  idle_candidate_gpu_nodes=("${idle_preferred_gpu_nodes[@]}")',
             "fi",
             "if (( ${#candidate_gpu_nodes[@]} >= 2 )); then",
             "  target_nodes=${#idle_candidate_gpu_nodes[@]}",
@@ -842,8 +842,7 @@ def _nccl_failure_summary(output: str, *, partition: str) -> tuple[str, str]:
             detail = text.removeprefix(_NCCL_ALLOCATION_FAILED_MARKER).strip()
             detail = _compact_output_line(detail, limit=260).rstrip(".")
             return (
-                f"Slurm NCCL benchmark could not allocate GPUs on partition {partition}: "
-                f"{detail}.",
+                f"Slurm NCCL benchmark could not allocate GPUs on partition {partition}: {detail}.",
                 "slurm_gpu_allocation_failed",
             )
     lowered = str(output or "").lower()
@@ -1457,11 +1456,46 @@ def _check_soperator_manager_deployment(
         return
     spec_payload = _as_mapping(_as_mapping(payload).get("spec"))
     status_payload = _as_mapping(_as_mapping(payload).get("status"))
+    metadata_payload = _as_mapping(_as_mapping(payload).get("metadata"))
     desired = int(spec_payload.get("replicas") or status_payload.get("replicas") or 0)
     ready = int(status_payload.get("readyReplicas") or 0)
     available = int(status_payload.get("availableReplicas") or 0)
     updated = int(status_payload.get("updatedReplicas") or 0)
     if desired <= 0:
+        pause = _as_mapping(spec.get("checkpointed_manager_pause"))
+        generation = int(metadata_payload.get("generation") or 0)
+        observed_generation = int(status_payload.get("observedGeneration") or 0)
+        if (
+            pause.get("schema") == "nebius-cxcli/checkpointed-manager-pause-v1"
+            and pause.get("status") == "verified"
+            and str(pause.get("deployment_uid") or "") == str(metadata_payload.get("uid") or "")
+            and int(pause.get("original_replicas") or 0) > 0
+            and str(pause.get("bridge_stage") or "")
+            in {
+                "source-ha-active",
+                "target-ha-active",
+                "bridge-fenced",
+                "target-singleton-active",
+            }
+            and generation > 0
+            and observed_generation >= generation
+            and int(status_payload.get("replicas") or 0) == 0
+            and ready == 0
+            and available == 0
+            and updated == 0
+        ):
+            _append_check(
+                checks,
+                name="Soperator manager deployment",
+                status="passed",
+                summary=(
+                    "soperator-manager is at the exact checkpointed zero-replica rollback "
+                    "hold while the controller bridge remains authoritative."
+                ),
+                command=command,
+                extra={"checkpointed_pause": True},
+            )
+            return
         _append_check(
             checks,
             name="Soperator manager deployment",
@@ -2115,9 +2149,7 @@ def _check_soperator_pod_health_snapshot(
         summary="Failed or crash-looping Soperator pod(s) visible in the fast snapshot: " + shown,
         command=command,
         extra={
-            "unhealthy_pods": [
-                {"name": item.name, "message": item.message} for item in unhealthy
-            ],
+            "unhealthy_pods": [{"name": item.name, "message": item.message} for item in unhealthy],
         },
     )
 
@@ -2985,16 +3017,12 @@ def _check_slurm_gpu_driver_jail(
             if result.stderr:
                 errors.append(result.stderr)
             reported_hosts = set(_gpu_driver_jail_hosts(result.stdout))
-            batch_passed = (
-                result.returncode == 0
-                and _GPU_DRIVER_JAIL_MARKER in result.stdout
-            )
+            batch_passed = result.returncode == 0 and _GPU_DRIVER_JAIL_MARKER in result.stdout
             if not batch_passed:
                 for line in "\n".join((result.stdout, result.stderr)).splitlines():
                     text = line.strip()
-                    if (
-                        text.startswith("cxcli-soperator-gpu-driver-jail-")
-                        and not text.startswith(_GPU_DRIVER_JAIL_MARKER)
+                    if text.startswith("cxcli-soperator-gpu-driver-jail-") and not text.startswith(
+                        _GPU_DRIVER_JAIL_MARKER
                     ):
                         failure_details.append(_compact_output_line(text, limit=260))
             for node in batch_result.nodes:
@@ -3524,10 +3552,7 @@ def _check_slurm_gpu_allocation_acceptance(
                 outputs.append(result.stdout)
             if result.stderr:
                 errors.append(result.stderr)
-            batch_passed = (
-                result.returncode == 0
-                and _GPU_ALLOCATION_MARKER in result.stdout
-            )
+            batch_passed = result.returncode == 0 and _GPU_ALLOCATION_MARKER in result.stdout
             evidence_by_host = _gpu_allocation_evidence(result.stdout)
             reported_hosts = set(evidence_by_host)
             for node in batch_result.nodes:
@@ -3643,8 +3668,7 @@ def _check_slurm_nccl_benchmark(
             name="Slurm NCCL benchmark",
             status="failed",
             summary=(
-                "No eligible Slurm GPU partition was available for the explicit NCCL "
-                "benchmark."
+                "No eligible Slurm GPU partition was available for the explicit NCCL benchmark."
             ),
             extra={
                 "selected_partition": "",
@@ -3754,9 +3778,7 @@ def _check_slurm_nccl_benchmark(
         bandwidth_size_label = (
             "message size" if len(large_message_bus_bandwidth) == 1 else "message sizes"
         )
-        threshold_passed = (
-            threshold_gbps is None or avg_bus_bandwidth + 1e-9 >= threshold_gbps
-        )
+        threshold_passed = threshold_gbps is None or avg_bus_bandwidth + 1e-9 >= threshold_gbps
         reported_gpus_per_node = metadata.get("reported_gpus_per_node")
         if isinstance(reported_gpus_per_node, int) and reported_gpus_per_node > 0:
             platform_gpus_per_node = reported_gpus_per_node

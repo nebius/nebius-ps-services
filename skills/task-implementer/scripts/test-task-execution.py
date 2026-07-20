@@ -41,7 +41,9 @@ def task(
         design_id=f"TI-DES-{number:03d}",
         goal=f"Implement task {number}",
         plan=f"Change task {number}",
+        implementation_steps=f"Update only task {number} files",
         validation="run focused tests",
+        end_to_end_validation="verify the task outcome",
         done_criteria="tests pass",
         rollback_notes="revert the task commit",
         stop_conditions="stop on validation failure",
@@ -66,7 +68,9 @@ def task_markdown(
 - Depends on: {dependencies}
 - Write claims: {claims if claims is not None else f"exact: src/task-{number}.py"}
 - Conflict domains: {domains if domains is not None else f"files:task-{number}"}
+- Implementation steps: update the claimed task file
 - Validation: run tests
+- End-to-end validation: verify the task result
 - Done criteria: tests pass
 """
 
@@ -195,6 +199,24 @@ class DependencyWaveTest(unittest.TestCase):
                         handoff([task_markdown(1, claims=claims, domains=domains)])
                     )
 
+    def test_parser_requires_self_contained_worker_contract(self) -> None:
+        complete = task_markdown(1)
+        for field in (
+            "Implementation steps",
+            "Validation",
+            "End-to-end validation",
+            "Done criteria",
+        ):
+            with self.subTest(field=field):
+                incomplete = "\n".join(
+                    line
+                    for line in complete.splitlines()
+                    if not line.startswith(f"- {field}:")
+                )
+                with self.assertRaises(PromptWorkspaceError) as raised:
+                    parse_task_plans(handoff([incomplete]))
+                self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
+
     def test_execution_plane_v1_is_always_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
@@ -228,30 +250,31 @@ class DependencyWaveTest(unittest.TestCase):
                 assert_no_unfinished_v1(run_dir)
             self.assertEqual(completed.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
 
-    def test_coordinator_v2_always_requires_new_v3_run(self) -> None:
+    def test_legacy_coordinators_always_require_new_v4_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
             orchestration = run_dir / "orchestration"
             orchestration.mkdir()
             coordinator = orchestration / "coordinator.json"
-            for status in ("running", "done"):
-                with self.subTest(status=status):
-                    coordinator.write_text(
-                        json.dumps(
-                            {
-                                "schema": "task-implementer/coordinator-v2",
-                                "status": status,
-                            }
+            for version in (1, 2, 3):
+                for status in ("running", "done"):
+                    with self.subTest(version=version, status=status):
+                        coordinator.write_text(
+                            json.dumps(
+                                {
+                                    "schema": f"task-implementer/coordinator-v{version}",
+                                    "status": status,
+                                }
+                            )
+                            + "\n",
+                            encoding="utf-8",
                         )
-                        + "\n",
-                        encoding="utf-8",
-                    )
-                    coordinator.chmod(0o600)
-                    with self.assertRaises(PromptWorkspaceError) as raised:
-                        load_coordinator_state(run_dir)
-                    self.assertEqual(
-                        raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED"
-                    )
+                        coordinator.chmod(0o600)
+                        with self.assertRaises(PromptWorkspaceError) as raised:
+                            load_coordinator_state(run_dir)
+                        self.assertEqual(
+                            raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED"
+                        )
 
 
 if __name__ == "__main__":

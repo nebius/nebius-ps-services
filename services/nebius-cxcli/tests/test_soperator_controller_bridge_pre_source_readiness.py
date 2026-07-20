@@ -169,14 +169,15 @@ def test_pre_authority_source_restart_invalidates_owned_precopy(
     tmp_path: Path,
 ) -> None:
     journal = _journal()
+    transfer_token = "1" * 32
     journal["stage"] = migration.BridgeStage.SOURCE_PRECOPIED.value
     journal["source_configuration"] = {"client_propagation": {"status": "verified"}}
     journal["state_precopy"] = {
-        "archive_path": str(tmp_path / "source-epoch.precopy.tar"),
-        "incremental_snapshot_path": str(tmp_path / "source-epoch.precopy.snar"),
+        "archive_path": str(tmp_path / f"source-epoch.{transfer_token}.precopy.tar"),
+        "incremental_snapshot_path": str(tmp_path / f"source-epoch.{transfer_token}.precopy.snar"),
         "remote_path": "/shared/epochs/source-epoch.precopy",
         "source_pod_uid": "controller-pod-uid",
-        "transfer_token": "1" * 32,
+        "transfer_token": transfer_token,
     }
     journal["source_fence_intent"] = {
         "state": "dispatching",
@@ -192,7 +193,10 @@ def test_pre_authority_source_restart_invalidates_owned_precopy(
     journal["shared_mount_canaries"] = [
         {"purpose": migration.CONTROLLER_BRIDGE_PRE_SOURCE_FENCE_CANARY}
     ]
-    for name in ("source-epoch.precopy.tar", "source-epoch.precopy.snar"):
+    for name in (
+        f"source-epoch.{transfer_token}.precopy.tar",
+        f"source-epoch.{transfer_token}.precopy.snar",
+    ):
         (tmp_path / name).write_text("stale", encoding="utf-8")
     calls: list[tuple[str, ...]] = []
 
@@ -231,17 +235,132 @@ def test_pre_authority_source_restart_invalidates_owned_precopy(
     assert "invalidated dependent fence proofs" in lines[0]
 
 
+def test_pre_authority_campaign_epoch_is_cas_migrated_to_segment_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _plan()
+    legacy_epoch = f"source-{plan.campaign_fingerprint[:12]}"
+    journal = migration.new_bridge_journal(
+        source=_source(),
+        plan=plan,
+        authority_epoch=legacy_epoch,
+        created_at="2026-07-13T10:00:00Z",
+    )
+    live_lease = migration.controller_authority_lease(
+        namespace=plan.namespace,
+        campaign_fingerprint=plan.campaign_fingerprint,
+        cluster_id=plan.cluster_id,
+        authority_epoch=legacy_epoch,
+        owner="source-singleton",
+    )
+    live_lease["metadata"].update({"uid": "lease-uid", "resourceVersion": "10"})
+    journal["authority_lease"] = {
+        "holder_identity": f"{legacy_epoch}:source-singleton",
+        "uid": "lease-uid",
+        "resource_version": "10",
+    }
+    journal["state_precopy"] = {"transfer_token": "1" * 32}
+    segment_id = "segment-2-kubernetes-1-32-1-33"
+    checkpoint = {
+        "campaign_fingerprint": plan.campaign_fingerprint,
+        "current_segment_id": segment_id,
+        "controller_bridge": journal,
+    }
+
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_live_resource",
+        lambda **_kwargs: (True, copy.deepcopy(live_lease)),
+    )
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: Any,
+    ) -> migration.SoperatorMigrationCommandResult:
+        assert "patch" in args
+        suffix = migration.hashlib.sha256(segment_id.encode("utf-8")).hexdigest()[:12]
+        expected_epoch = f"source-{plan.campaign_fingerprint[:12]}-{suffix}"
+        live_lease["metadata"]["annotations"]["nebius.ai/cxcli-authority-epoch"] = expected_epoch
+        live_lease["metadata"]["resourceVersion"] = "11"
+        live_lease["spec"]["holderIdentity"] = f"{expected_epoch}:source-singleton"
+        return _result(args)
+
+    writes: list[dict[str, Any]] = []
+    migration._migrate_pre_authority_bridge_segment_epoch(  # noqa: SLF001
+        checkpoint=checkpoint,
+        plan=plan,
+        kube_context="context",
+        command_runner=runner,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(journal)),
+    )
+
+    suffix = migration.hashlib.sha256(segment_id.encode("utf-8")).hexdigest()[:12]
+    expected_epoch = f"source-{plan.campaign_fingerprint[:12]}-{suffix}"
+    assert journal["authority"]["epoch"] == expected_epoch
+    assert journal["segment_epoch_suffix"] == expected_epoch.removeprefix("source-")
+    assert journal["authority_lease"]["holder_identity"] == (f"{expected_epoch}:source-singleton")
+    assert journal["segment_epoch_migration"]["state"] == "accepted"
+    assert journal["state_precopy"] == {}
+    assert len(writes) == 3
+
+
+def test_segment_unique_bridge_authority_epoch_is_reused_after_writer_scale() -> None:
+    plan = _plan()
+    segment_id = "segment-2-kubernetes-1-32-1-33"
+    suffix = (
+        f"{plan.campaign_fingerprint[:12]}-"
+        f"{migration.hashlib.sha256(segment_id.encode('utf-8')).hexdigest()[:12]}"
+    )
+    journal = migration.new_bridge_journal(
+        source=_source(),
+        plan=plan,
+        authority_epoch=f"source-{suffix}",
+        created_at="2026-07-13T10:00:00Z",
+    )
+    journal["stage"] = migration.BridgeStage.STATE_PROMOTED.value
+    journal["authority"].update(
+        {
+            "epoch": f"bridge-source-{suffix}",
+            "owner": "bridge-source",
+            "first_bridge_write_at": "2026-07-19T08:29:45Z",
+            "source_restart_prohibited": True,
+        }
+    )
+    checkpoint = {
+        "campaign_fingerprint": plan.campaign_fingerprint,
+        "current_segment_id": segment_id,
+        "controller_bridge": journal,
+    }
+
+    migration._migrate_pre_authority_bridge_segment_epoch(  # noqa: SLF001
+        checkpoint=checkpoint,
+        plan=plan,
+        kube_context="context",
+        command_runner=lambda *_args, **_kwargs: pytest.fail(
+            "an advanced segment-unique authority must not be patched"
+        ),
+        checkpoint_writer=lambda: pytest.fail(
+            "an advanced segment-unique authority needs no migration checkpoint"
+        ),
+    )
+
+    assert journal["segment_epoch_suffix"] == suffix
+    assert journal["authority"]["epoch"] == f"bridge-source-{suffix}"
+
+
 def _promoted_restart_journal(tmp_path: Path) -> dict[str, Any]:
     journal = _journal()
     epoch = str(journal["authority"]["epoch"])
+    precopy_token = "1" * 32
+    delta_token = "3" * 32
     journal["stage"] = migration.BridgeStage.STATE_PROMOTED.value
     journal["source_configuration"] = {"client_propagation": {"status": "verified"}}
     journal["state_precopy"] = {
-        "archive_path": str(tmp_path / f"{epoch}.precopy.tar"),
-        "incremental_snapshot_path": str(tmp_path / f"{epoch}.precopy.snar"),
+        "archive_path": str(tmp_path / f"{epoch}.{precopy_token}.precopy.tar"),
+        "incremental_snapshot_path": str(tmp_path / f"{epoch}.{precopy_token}.precopy.snar"),
         "remote_path": f"/shared/epochs/{epoch}.precopy",
         "source_pod_uid": "controller-pod-uid",
-        "transfer_token": "1" * 32,
+        "transfer_token": precopy_token,
     }
     journal["source_fence_intent"] = {
         "state": "accepted",
@@ -267,27 +386,28 @@ def _promoted_restart_journal(tmp_path: Path) -> dict[str, Any]:
     journal["cold_reader"] = {
         "authority_epoch": epoch,
         "transfer_token": "2" * 32,
+        "delta_token": delta_token,
         "status": "absent",
         "mount_absent": True,
         "remote_delta_applied": True,
         "remote_epoch_path": f"/shared/epochs/{epoch}",
-        "delta_archive_path": str(tmp_path / f"{epoch}.cold-delta.tar"),
-        "incremental_snapshot_path": str(tmp_path / f"{epoch}.cold.snar"),
-        "source_manifest_path": str(tmp_path / f"{epoch}.cold-source.tree.tsv"),
+        "delta_archive_path": str(tmp_path / f"{epoch}.{delta_token}.cold-delta.tar"),
+        "incremental_snapshot_path": str(tmp_path / f"{epoch}.{delta_token}.cold.snar"),
+        "source_manifest_path": str(tmp_path / f"{epoch}.{delta_token}.cold-source.tree.tsv"),
     }
     journal["runtime_fence_proofs"] = [{"purpose": "source-singleton-stopped"}]
     journal["shared_mount_canaries"] = [
         {"purpose": "pre-source-mutation"},
         {"purpose": migration.CONTROLLER_BRIDGE_PRE_SOURCE_FENCE_CANARY},
     ]
-    for suffix in (
-        "precopy.tar",
-        "precopy.snar",
-        "cold-delta.tar",
-        "cold.snar",
-        "cold-source.tree.tsv",
+    for path in (
+        tmp_path / f"{epoch}.{precopy_token}.precopy.tar",
+        tmp_path / f"{epoch}.{precopy_token}.precopy.snar",
+        tmp_path / f"{epoch}.{delta_token}.cold-delta.tar",
+        tmp_path / f"{epoch}.{delta_token}.cold.snar",
+        tmp_path / f"{epoch}.{delta_token}.cold-source.tree.tsv",
     ):
-        (tmp_path / f"{epoch}.{suffix}").write_text("stale", encoding="utf-8")
+        path.write_text("stale", encoding="utf-8")
     return journal
 
 
@@ -885,9 +1005,7 @@ def test_reused_bridge_groups_bind_checkpointed_version_after_control_plane_hop(
                 "version": "1.31",
             }
         }
-        provider_groups.append(
-            {"metadata": {"id": group_id, "name": record["name"]}}
-        )
+        provider_groups.append({"metadata": {"id": group_id, "name": record["name"]}})
 
     monkeypatch.setattr(migration, "_list_node_groups", lambda **_kwargs: provider_groups)
     monkeypatch.setattr(
