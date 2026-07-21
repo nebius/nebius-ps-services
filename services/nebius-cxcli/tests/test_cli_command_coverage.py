@@ -26722,7 +26722,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert (
-        "onboard registers one cluster identity or reconciles its complete v5 campaign "
+        "onboard registers one cluster identity or reconciles its complete v6 campaign "
         "in config.yaml"
     ) in normalized_soperator_help
     assert "upgrade reconciles live state and advances at most one campaign segment" in (
@@ -27010,8 +27010,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "repeat the same ext-soperator upgrade --execute --approve command until it is complete"
         in (normalized_ext_soperator_upgrade_help)
     )
+    assert "reports record cumulative active time spent inside approved execute invocations" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "offline gaps between resumptions are excluded" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert (
-        "The v5 operation journal never supplies a missing desired path"
+        "The v6 operation journal never supplies a missing desired path"
         in normalized_ext_soperator_upgrade_help
     )
     assert "rerun the idempotent onboard command only to check for and accept a later campaign" in (
@@ -27028,7 +27034,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         assert removed_option not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "Unsupported campaigns and non-v5 journals fail closed" in (
+    assert "Unsupported campaigns and non-v6 journals fail closed" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "external upgrade has no support-policy override" in (

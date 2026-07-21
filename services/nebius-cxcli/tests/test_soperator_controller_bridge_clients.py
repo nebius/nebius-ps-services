@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -308,6 +309,61 @@ def test_target_client_propagation_waits_for_jailed_config_convergence(
 
     assert reads == {"worker-0": 2}
     assert sleeps == [5]
+
+
+def test_target_client_propagation_probes_consumers_in_bounded_parallel() -> None:
+    target_login = _pod(
+        "login-0",
+        "login-uid",
+        container="sshd",
+        node="login-node",
+        instance="target",
+        component="login",
+    )
+    target_worker = _pod(
+        "worker-0",
+        "worker-uid",
+        container="slurmd",
+        node="worker-node",
+        instance="target",
+        component="worker",
+    )
+    config = _target_handoff_config()
+    barrier = threading.Barrier(2, timeout=2)
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: Any,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        if command[-5:] == ("get", "pods", "-o", "json", "--request-timeout=20s"):
+            return _result(command, stdout=json.dumps({"items": [target_login, target_worker]}))
+        remote = command[command.index("--") + 1 :]
+        if remote == ("cat", migration._SOPERATOR_LEGACY_SLURM_CONF):  # noqa: SLF001
+            barrier.wait()
+            return _result(command, stdout=config)
+        if remote[-2:] == ("scontrol", "ping"):
+            return _result(command, stdout="Slurmctld(primary) at bridge-0 is UP\n")
+        if remote[-3:] == ("scontrol", "show", "config"):
+            return _result(command, stdout="ClusterName = cluster-a\n")
+        raise AssertionError(command)
+
+    contract = migration._controller_bridge_client_config_contract(config)  # noqa: SLF001
+    migration._prove_controller_bridge_client_configuration(  # noqa: SLF001
+        journal={"cluster_name": "cluster-a"},
+        proof_owner={},
+        proof_key="client_propagation",
+        proof_stage="before-target-takeover",
+        expected_contract=contract,
+        required_hosts=contract["controller_hosts"],
+        target_ref="target",
+        source_clients=False,
+        require_raised_timeouts=False,
+        require_live_rpc=True,
+        kube_context="context",
+        command_runner=runner,
+        checkpoint_writer=None,
+    )
 
 
 def test_target_client_propagation_selects_only_exact_target_login_and_workers() -> None:
@@ -620,6 +676,131 @@ def test_checkpointed_target_client_proof_rejects_unjournaled_worker_successor()
             command_runner=replacement_runner,
             allowed_target_worker_replacement_node_uids=("different-node-uid",),
         )
+
+
+def test_checkpointed_target_client_proof_accepts_mixed_provider_successors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_login = _pod(
+        "source-login-0",
+        "source-login-uid",
+        container="sshd",
+        node="source-login-node",
+        instance="source",
+        component="login",
+    )
+    old_login = _pod(
+        "target-login-0",
+        "old-login-uid",
+        container="sshd",
+        node="old-login-node",
+        instance="target",
+        component="login",
+    )
+    replacement_login = _pod(
+        "target-login-0",
+        "replacement-login-uid",
+        container="sshd",
+        node="replacement-login-node",
+        instance="target",
+        component="login",
+    )
+    old_worker = _pod(
+        "target-worker-0",
+        "old-worker-uid",
+        container="slurmd",
+        node="worker-node",
+        instance="target",
+        component="worker",
+    )
+    replacement_worker = _pod(
+        "target-worker-0",
+        "replacement-worker-uid",
+        container="slurmd",
+        node="worker-node",
+        instance="target",
+        component="worker",
+    )
+    config = _target_handoff_config()
+    contract = migration._controller_bridge_client_config_contract(config)  # noqa: SLF001
+    owner: dict[str, Any] = {}
+    common = {
+        "journal": _journal(source_login),
+        "proof_owner": owner,
+        "proof_key": "client_handoff_propagation",
+        "proof_stage": "before-in-place-controller-roll",
+        "expected_contract": contract,
+        "required_hosts": contract["controller_hosts"],
+        "target_ref": "target",
+        "source_clients": False,
+        "require_raised_timeouts": False,
+        "require_live_rpc": True,
+        "kube_context": "context",
+        "checkpoint_writer": None,
+    }
+    initial_runner, _calls = _runner(
+        pods=[source_login, old_login, old_worker],
+        configs={"target-login-0": config, "target-worker-0": config},
+    )
+    migration._prove_controller_bridge_client_configuration(  # noqa: SLF001
+        **common,
+        command_runner=initial_runner,
+    )
+
+    login_successor_calls: list[dict[str, Any]] = []
+
+    def prove_login_successor(**kwargs: Any) -> list[dict[str, str]]:
+        login_successor_calls.append(kwargs)
+        return [
+            {
+                "name": "target-login-0",
+                "previous_uid": "old-login-uid",
+                "replacement_uid": "replacement-login-uid",
+                "previous_container_id": "containerd://old-login-uid",
+                "replacement_container_id": "containerd://replacement-login-uid",
+                "node_name": "replacement-login-node",
+                "workload_uid": "target-login-workload-uid",
+                "slurmcluster_uid": "target-cluster-uid",
+            }
+        ]
+
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_bridge_session_free_target_login_successors",
+        prove_login_successor,
+    )
+    replacement_runner, _calls = _runner(
+        pods=[source_login, replacement_login, replacement_worker],
+        configs={"target-login-0": config, "target-worker-0": config},
+    )
+    migration._prove_controller_bridge_client_configuration(  # noqa: SLF001
+        **common,
+        command_runner=replacement_runner,
+        allowed_target_login_replacement_node_uids=("replacement-login-node-uid",),
+        allowed_target_worker_pod_successors={
+            "target-worker-0": {
+                "previous_uid": "old-worker-uid",
+                "replacement_uid": "replacement-worker-uid",
+                "node_name": "worker-node",
+            }
+        },
+    )
+
+    assert len(login_successor_calls) == 1
+    assert login_successor_calls[0]["allowed_replacement_node_uids"] == (
+        "replacement-login-node-uid",
+    )
+    proof = owner["client_handoff_propagation"]
+    assert [(item["role"], item["uid"]) for item in proof["consumers"]] == [
+        ("target-login", "replacement-login-uid"),
+        ("target-worker", "replacement-worker-uid"),
+    ]
+    successor = proof["consumer_successors"][-1]
+    assert successor["kind"] == "checkpointed-mixed-target-client-replacements"
+    assert [item["boundary"] for item in successor["replacements"]] == [
+        "gpu-typed-gres-worker-rollover",
+        "completed-login-provider-rollover",
+    ]
 
 
 def test_final_target_clients_prove_exact_single_controller_host() -> None:

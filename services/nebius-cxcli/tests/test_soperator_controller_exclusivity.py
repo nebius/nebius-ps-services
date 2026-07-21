@@ -1182,7 +1182,10 @@ def test_in_place_login_bridge_config_repair_serially_recreates_session_free_pod
     )
     state = {"recreated": False, "deletes": 0}
 
-    def consumers(**_kwargs: Any) -> list[dict[str, Any]]:
+    consumer_worker_modes: list[bool] = []
+
+    def consumers(**kwargs: Any) -> list[dict[str, Any]]:
+        consumer_worker_modes.append(bool(kwargs.get("include_workers", True)))
         return [
             {
                 "role": "target-login",
@@ -1256,6 +1259,7 @@ def test_in_place_login_bridge_config_repair_serially_recreates_session_free_pod
 
     assert state["recreated"] is True
     assert state["deletes"] == 1
+    assert consumer_worker_modes and not any(consumer_worker_modes)
     assert lines
     rollout = phase["in_place_bridge_client_handoff"]["login_config_rollout"]
     assert rollout["status"] == "verified"

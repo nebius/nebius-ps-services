@@ -1,6 +1,0 @@
-interface:
-  display_name: "Agent Nebius Auth"
-  short_description: "Bootstrap Codex Nebius auth"
-  default_prompt: "Use $agent-nebius-auth to set up or repair Codex Agent Nebius service-account authentication."
-policy:
-  allow_implicit_invocation: false

@@ -112,6 +112,7 @@ _SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
         "jail_rootfs",
         "locked",
         "managed_operators",
+        "migration_profile",
         "mk8s",
         "recommended_order",
         "recommended_order_policy",
@@ -125,6 +126,12 @@ _SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
         "support_rule_id",
         "support_status",
         "target_k8s_version",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_MIGRATION_PROFILE_KEYS = frozenset(
+    {
+        "execution_contract",
+        "id",
     }
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_IDENTITY_KEYS = frozenset(
@@ -1237,6 +1244,23 @@ def _validate_soperator_upgrade_campaign(
         upgrade_path.get("source_provenance"),
         f"{field_label}.source_provenance",
     )
+    migration_profile = upgrade_path.get("migration_profile")
+    if not isinstance(migration_profile, Mapping):
+        raise ValueError(f"{field_label}.migration_profile must be a mapping")
+    _validate_unknown_keys(
+        migration_profile,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_MIGRATION_PROFILE_KEYS,
+        field_label=f"{field_label}.migration_profile",
+    )
+    _required_string_for_validation(
+        migration_profile.get("id"),
+        f"{field_label}.migration_profile.id",
+    )
+    execution_contract = migration_profile.get("execution_contract")
+    if not isinstance(execution_contract, Mapping) or not execution_contract:
+        raise ValueError(
+            f"{field_label}.migration_profile.execution_contract must be a non-empty mapping"
+        )
     for key in (
         "source_k8s_version",
         "target_k8s_version",

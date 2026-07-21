@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Require cxcli's v6 external-upgrade campaign schema in disposable live
+  upgrade evidence; retired v5 evidence is rejected without conversion.
 - Fixed the validation-only GPU worker init guard so jailed `nvidia-smi -L`
   uses the Jail dynamic loader and libraries while retaining the
   GPU-requesting init container's live `/dev/nvidia*` devices. The shared

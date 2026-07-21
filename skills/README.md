@@ -51,7 +51,8 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
+| `agent-nebius-auth-diagnose` | Implicit allowed | Discover the current-session Nebius project and diagnose agent-auth or hook failures without mutation. |
+| `agent-nebius-auth-setup` | Implicit planning; confirmed mutation or lease | Review setup plans, explicitly bootstrap persistent auth, and issue bounded same-account local-repair preauthorization for unattended tasks. |
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
@@ -141,6 +142,11 @@ reviewed and validated. Skills marked `Explicit only` in the catalog use
 `$skill-name`. Skills marked `Implicit allowed` use
 `allow_implicit_invocation: true` so Codex may select them when the task
 matches their metadata.
+`agent-nebius-auth-setup` is the narrow setup exception: implicit selection is
+read-only discovery/planning. Persistent IAM, credential, identity, profile,
+and hook mutation requires a displayed plan and explicit current-turn
+confirmation; only an exact unexpired, previously confirmed repair lease may
+authorize its two bound local permission/profile actions without a new prompt.
 
 For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
 containing front matter `name` and `description`. This repository uses a
@@ -587,24 +593,76 @@ removed/already-absent ledger. Later helper mutations and
 Compose actions are generation-fenced so a superseded invocation cannot
 continue against the replacement. Repeated destroy returns `ALREADY_DESTROYED`.
 
-### `agent-nebius-auth`
+### `agent-nebius-auth-diagnose` and `agent-nebius-auth-setup`
 
-`agent-nebius-auth` is a setup-only skill for bootstrapping or repairing local
-Codex Agent Nebius authentication. It uses a service account, tenant group,
-project-level `admin` access permit by default, authorized-key credential file,
-CLI profile, and a Codex `PreToolUse` hook that injects short-lived Nebius token
-environment variables into matching Bash commands without returning token
-material as model context. The hook also exports the agent credential file path
-and wires a Bash `nebius_refresh_token` helper through a restricted temporary
-`BASH_ENV` file for long-running raw API scripts. Its disclosure guard allows
-ordinary status/log labels and non-secret shell setup while still denying token
-output, environment dumps, tracing, and executable token-mint commands. A local
-hook denial is policy feedback, not proof of expired cloud credentials, and
-must never trigger browser login automatically. Install or refresh the hook
-through the root installer, for example
-`./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
-the setup script does not patch `$CODEX_HOME/config.toml` and instead records
-the selected project under `~/.nebius` for the hook to read locally.
+`agent-nebius-auth-diagnose` is the implicit, read-only runtime entry point. It
+discovers the project from current-session evidence, treats persistent memory
+only as a corroborated hint, and never infers authority from active profiles,
+credential filenames, cwd, legacy default selectors, or unrelated task state.
+
+Correctable command-policy denials are fixed and retried by the agent without
+setup confirmation: add the exact leading selector, remove a conflicting
+explicit profile or managed-auth assignment, or replace a token-printing
+command with the normal operation or redirected verification form.
+
+`agent-nebius-auth-setup` prepares a real metadata-backed dry-run and displays
+the tenant, project, service account, group, additive role, local paths, full
+bounded convergence envelope, and currently required actions. First-time setup
+asks once to confirm service-account creation and completion of that exact
+same-target bootstrap. Its state-bound digest changes after partial progress,
+but the skill revalidates the fresh plan against the recorded authorization and
+continues without another prompt until read-only verification succeeds. The
+project-ID-only setup derives project name and tenant from
+`nebius iam project get`; an optional tenant ID is an exact-match assertion.
+Existing credentials must resolve to the expected service account in the
+selected project before permission or profile mutation. Setup revalidates the
+target-bound envelope before mutation and again after locking; tenant, project,
+account identity, group, role, path/profile, endpoint, or administrative-profile
+drift fails closed instead of inheriting the old confirmation.
+
+The managed service account and dedicated group are both parented by the
+selected project, and the access permit targets only that project. Tenant ID is
+used only to validate project ancestry and configure the profile; the workflow
+does not discover or reuse tenant-parented groups or enumerate tenant IAM with
+the agent profile. Runtime selection is not a token sandbox, so grants created
+outside this workflow require a separate IAM audit.
+
+Plans expose observed service-account/group IDs and the credential fingerprint.
+Only an originally absent identity may transition once to its created ID. If
+`ensure` reports `credential-replacement-required`, the skill records the one
+attempt before invoking the separate state-bound `replace-credential` phase;
+an interrupted or failed replacement is never retried under that bootstrap.
+
+When explicitly requested after confirmed setup and basic project-access
+verification succeed, a separately reviewed 12-hour repair lease
+(24-hour maximum) may preauthorize only fd-safe mode-`0600` correction of the
+exact fingerprinted credential and rebuilding its exact local profile. The
+lease is private same-user workflow state, not an unforgeable security token.
+It never authorizes key generation/rotation, IAM, identity, or hook changes and
+fails closed on path, owner, schema, fingerprint, identity, action, or expiry
+drift.
+
+At runtime, every Nebius-sensitive Bash command starts with
+`CODEX_NEBIUS_PROJECT_ID=<project-id> <command>`. The hook strips and validates
+that one leading selector and injects the matching renewable profile,
+project, credential-file, and token-helper context for any selected executable.
+It never falls back to inherited auth, a global default file, or a single
+credential filename, and it clears ambient bearer variables instead of
+injecting a universal expiring token. Install or refresh it only when the user
+explicitly requests that separate action; normal bootstrap does not ask another
+confirmation. Use
+`./install-skills.sh --install-hooks agent-nebius-auth-setup/assets/hooks --register-hooks`.
+Normal CLI/profile and supported SDK credential paths own renewal. Raw Bash,
+Python, or API children use
+`python3 "$CODEX_NEBIUS_TOKEN_HELPER" exec-token -- <command>`; an explicitly
+idempotent adapter may use `retry-idempotent` for one refresh and retry only
+after a real 401/`UNAUTHENTICATED` mapped to status `77`. Already-running
+processes need provider-native renewal, bounded helper calls, or restart.
+
+Read-only runtime diagnosis uses `agent-nebius-auth-setup.sh verify` and never
+requires a human/admin profile. Exact IAM planning remains separate and returns
+`blocked-admin-auth` when the required non-agent administrative profile cannot
+authenticate non-interactively.
 
 ### Agentic SDLC Skills
 
@@ -1136,10 +1194,10 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   refuses to create or preserve multiple registrations for the same hook event
   and Python hook filename, such as two `Stop` entries pointing at
   `stop_sdlc_continue.py`.
-- `agent-nebius-auth` keeps hook installation canonical: setup writes the
-  project selector under `~/.nebius`, while the root installer syncs hook files
+- `agent-nebius-auth-setup` keeps hook installation canonical: setup never
+  writes a global project selector, while the root installer syncs hook files
   and `hooks.json` only. It does not migrate inline `config.toml` hook entries;
-  it rejects stale inline agent-nebius-auth entries before copying hooks or
+  it rejects stale legacy agent-nebius-auth entries before copying hooks or
   writing `hooks.json`.
 - `--replace-hooks-json` can be combined with `--register-hooks` to replace
   `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the

@@ -89,7 +89,7 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     ) in design_flat
     assert "sets the target SConfig writer size to zero" in design_flat
     assert "actual target service account and active slot" in design_flat
-    assert "non-v5 journal evidence fails closed instead of using a markerless fallback" in (
+    assert "non-v6 journal evidence fails closed instead of using a markerless fallback" in (
         design_flat
     )
     assert "falls back to the controller `slurmctld` container" in design_flat
@@ -975,7 +975,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator_flat
     )
     assert "External upgrade follows these stages:" in soperator_flat
-    assert "Plan and dry run: load the v5 campaign from `config.yaml`, refresh all live" in (
+    assert "Plan and dry run: load the v6 campaign from `config.yaml`, refresh all live" in (
         soperator_flat
     )
     assert "Execute preflight: verify the campaign fingerprint and live source" in (soperator_flat)
@@ -1012,7 +1012,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "blocks the combined run and prints a chart-first command" in soperator_flat
     assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (soperator_flat)
-    assert "External v5 campaigns are strictly catalog-pinned and fail closed" in (soperator_flat)
+    assert "External v6 campaigns are strictly catalog-pinned and fail closed" in (soperator_flat)
     assert "The managed `soperator upgrade` command retains its explicit" in soperator_flat
     assert "Paths marked `supported_with_warning` continue with the warning" in soperator_flat
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
@@ -1942,7 +1942,7 @@ def test_docs_define_component_selector_contract() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in readme
     )
     assert "Reconcile live state and inspect the first unmet segment" in readme_flat
-    assert "complete end-to-end `nebius-cxcli-ext-soperator-upgrade-campaign/v5` campaign" in (
+    assert "complete end-to-end `nebius-cxcli-ext-soperator-upgrade-campaign/v6` campaign" in (
         readme_flat
     )
     assert (
@@ -1990,7 +1990,7 @@ def test_docs_define_component_selector_contract() -> None:
     ) in readme_flat
     assert "Support-policy evidence validates the path but does not by itself mean" in readme_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
-    assert "External v5 campaigns are strictly catalog-pinned and fail closed" in readme_flat
+    assert "External v6 campaigns are strictly catalog-pinned and fail closed" in readme_flat
     assert "they have no support-policy bypass" in readme_flat
     assert "discovered storage sizes are lower bounds" in readme_flat
     assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
@@ -2058,7 +2058,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "unfiltered cluster-wide job list" in readme_flat
     assert "Slurm can show a cancelled job as `COMPLETING`" in readme_flat
     assert "waits for the selected jobs to leave the affected node list" in readme_flat
-    assert "The v5 campaign and each segment's selected" in readme_flat
+    assert "The v6 campaign and each segment's selected" in readme_flat
     assert "actions` projection are the desired external upgrade contract" in readme_flat
     assert "`approve-external-soperator-upgrade`" in readme_flat
     assert "approve-soperator-migration" not in readme
@@ -2226,7 +2226,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "the matched upgrade-path rule" in design_flat
     assert "Target-compatible storage can omit aligned SFS migration" in design_flat
-    assert "Compute migration is an explicit schema-v5 choice" in design_flat
+    assert "Compute migration is an explicit schema-v6 choice" in design_flat
     assert "`keep-existing-compute` or `create-aligned-node-groups`" in design_flat
     assert "preserves discovered role, NodeSet, partition, placement, and topology mappings" in (
         design_flat
@@ -2487,7 +2487,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "every target replacement group while its source remains retained" in design_flat
     assert "Reruns are live-reconciled" in design_flat
-    assert "the accepted v5 campaign defines the desired work" in design_flat
+    assert "the accepted v6 campaign defines the desired work" in design_flat
     assert "Rerunning `ext-soperator onboard` remains read-only while a campaign is active" in (
         design_flat
     )
@@ -2514,13 +2514,19 @@ def test_docs_define_component_selector_contract() -> None:
     assert "legacy source-family ActiveChecks CronJobs/jobs/pods" in design_flat
     assert "retired by stale Helm storage revision before target readiness lookup" in design_flat
     assert "compute_migration.mode` is exactly `in-place` or `blue-green`" in design_flat
-    assert "rolling compute follows the fingerprinted v5 mode" in design_flat
+    assert "rolling compute follows the fingerprinted v6 mode" in design_flat
     assert "workers remain blocked until jobs and epilogs finish" in design_flat
     assert "user voluntarily hands off" in design_flat
     assert "in-place zero-surge and safe-surge expose only the accepted unavailable" in design_flat
     assert "mode: in-place" in design
     assert "max_unavailable: all" in design
-    assert "max_parallel_groups: 8" in design
+    assert "max_parallel_groups: 32" in design
+    assert "32 parallel clear groups (maximum 64)" in design_flat
+    assert "cumulative active execute time" in design_flat
+    assert "offline gaps between resumptions do not inflate" in design_flat
+    assert "`elapsed_seconds`" in readme
+    assert "`elapsed_time` in `hh:mm:ss`" in readme
+    assert "Time between resumptions is excluded" in readme_flat
     assert "worker_wave_percent" not in readme
     assert "worker_group_strategy:" not in readme
     assert "worker_wave_percent" not in design

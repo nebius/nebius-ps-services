@@ -2413,7 +2413,32 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                 field="bridge target fencing",
             )
             target_start_state = str(target_start.get("state") or "")
-            accepted_start = target_start_state == "accepted" or (
+            preparing_start = (
+                target_start_state == "preparing"
+                and bool(
+                    _required_text(
+                        target_start.get("preparing_at"),
+                        field="bridge interrupted singleton preparing timestamp",
+                    )
+                )
+                and target_start.get("observed_replicas_before") == 0
+                and not str(target_start.get("pod_uid") or "")
+                and not str(target_start.get("node_name") or "")
+            )
+            dispatching_start = (
+                target_start_state == "dispatching"
+                and bool(str(target_start.get("preparing_at") or ""))
+                and bool(str(target_start.get("dispatching_at") or ""))
+                and target_start.get("observed_replicas_before") == 0
+                and target_start.get("ungate_required") is True
+                and not str(target_start.get("pod_uid") or "")
+                and not str(target_start.get("node_name") or "")
+            )
+            accepted_start = (
+                target_start_state == "accepted"
+                or preparing_start
+                or dispatching_start
+                or (
                 target_start_state == "dispatching"
                 and bool(
                     _required_text(
@@ -2434,6 +2459,7 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                     )
                 )
                 and target_start.get("ungate_required") is False
+                )
             )
             target_stop_pods = takeover.get("target_stop_pods")
             target_stop_attempt = takeover.get("target_stop_attempt")

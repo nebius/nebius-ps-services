@@ -6,6 +6,43 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed Nebius auth IAM isolation so the dedicated Codex group is created and
+  discovered under the selected project rather than its tenant. The managed
+  permit remains explicitly targeted at that project; tenant IDs are now only
+  ancestry assertions and profile context. Added fail-closed project-scope
+  guidance and regression coverage that rejects tenant group reuse.
+- Fixed Nebius auth group-membership reconciliation to parse the current CLI
+  `memberships` collection, preventing false absence and failed create-conflict
+  convergence when the service account is already in the group.
+- Refactored Nebius agent auth around one canonical credential parser and a
+  generic project-selector runtime contract. Every selected Bash, Python,
+  CLI, API, Terraform, or SDK command now receives renewable profile/project/
+  credential-file context without a hard-coded executable allowlist or a
+  universal bearer token. Added a child-scoped just-in-time token helper with
+  bounded idempotent retry, read-only runtime verification that needs no admin
+  profile, explicit `blocked-admin-auth` IAM-plan reporting, and true no-op
+  profile convergence. Legacy/ambiguous credential identities fail closed;
+  setup continues to preserve service accounts and credentials rather than
+  deleting or revoking them automatically. Cloud lookup failures now stop
+  instead of masquerading as missing resources, create conflicts require a
+  successful convergence read, credentials are validated in private
+  same-directory temporary files before atomic replacement, and plan digests
+  bind observed identities and credential fingerprints. Profile-list failures
+  and unsupported output now fail closed, while membership reconciliation
+  follows every returned page token rather than assuming one page.
+
+- Hardened Nebius auth recovery so correctable selector/profile/environment and
+  token-exposure denials explicitly retry without setup confirmation. Added a
+  protected one-refresh/one-retry helper for explicitly idempotent operations,
+  empty-token failure handling, recursive secret-output policy enforcement for
+  wrapped commands, exact helper-name matching, and denial of token-bearing
+  transport tracing. Repair-lease issuance now also requires verified basic
+  project access, and lease validation rejects noncanonical JSON field types
+  without leaking a traceback. Runtime credential validation now shares the
+  lease helper's bounded-file contract. Runtime command detection now follows
+  supported process wrappers structurally and ignores inert token text or
+  Nebius-looking test paths instead of over-injecting credentials, while
+  permitting non-output shell comparisons of injected token state.
 - Fixed the SDLC `PreToolUse` secret classifier so public Nebius profile,
   project, and credential-file path assignments no longer trigger false
   authentication-policy denials, while all other long Nebius assignments
@@ -25,6 +62,14 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added confirmed, project/account/credential-bound local-repair leases for
+  unattended Nebius tasks. Leases expire within 24 hours and authorize only
+  mode-`0600` correction and exact CLI-profile rebuilding; IAM, credential
+  generation or rotation, identity, and hook changes remain confirmation-gated.
+- Added `agent-nebius-auth-diagnose` as an implicitly selectable, read-only
+  current-session project discovery and authentication triage skill. It routes
+  hook failures without creating or repairing IAM, credentials, profiles,
+  selectors, or hooks.
 - Added a shared global-context task-state helper with collision-resistant
   session paths, private empty-scaffold initialization, read-only nested
   permission auditing, and an explicit content-preserving permission repair.
@@ -264,10 +309,37 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Removed
 
+- Removed the legacy `agent-nebius-auth` skill name, `--project-name` setup
+  selector, global default-project writes, and runtime fallback to inherited
+  project environment/default files/single credential filenames.
 - Removed the `onboard-nebius-cxcli` and `release-generator` skills.
 
 ### Changed
 
+- Changed Nebius agent-auth bootstrap to one service-account creation
+  confirmation backed by a state-bound plan digest. Partial same-target
+  progress produces a fresh digest that the skill revalidates automatically
+  against the recorded authorization without another prompt. Stale digests,
+  target or identity drift, and retries after the one bounded credential
+  replacement fail closed. Replacement is now a separate state-bound phase so
+  the skill records the attempt before key generation, and plans expose observed
+  account/group IDs plus the credential fingerprint for transition checks.
+- Kept Nebius auth role-plan guidance factual by reporting additive permit
+  reconciliation without adding an unsolicited narrower-role recommendation.
+- Renamed setup to `agent-nebius-auth-setup` and made implicit selection
+  read-only. Setup now discovers the project from current-session evidence,
+  resolves authoritative project metadata before mutation, accepts only
+  `--project-id` with an optional tenant assertion, verifies existing
+  credential ownership, shows a real dry-run mutation plan, and requires
+  the dry-run plan digest with `--confirm <plan_digest>` after explicit
+  current-turn approval. The live setup revalidates that plan before mutation
+  and after locking. Runtime Nebius Bash calls now require exactly one leading
+  `CODEX_NEBIUS_PROJECT_ID=<project-id>` selector. Setup sanitizes inherited
+  auth variables and uses collision-resistant project-bound groups; the hook
+  rejects conflicting profiles, unsafe environment wrappers, indirect process
+  launchers, managed-auth unsets, and unsafe local credential files. Exact
+  token verification now requires the canonical credential to pass the same
+  local safety checks.
 - Changed global-context task-state lifecycle ownership: normal startup remains
   lazy, compaction and the first complex prompt create only an empty `0600`
   scaffold below `0700` directories, and the parent agent remains responsible

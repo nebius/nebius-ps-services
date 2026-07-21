@@ -60,7 +60,7 @@ def _write_live_upgrade_evidence(
                     "candidate_manifest_sha256": "e" * 64,
                 },
                 "campaign": {
-                    "schema": "nebius-cxcli-ext-soperator-upgrade-campaign/v5",
+                    "schema": "nebius-cxcli-ext-soperator-upgrade-campaign/v6",
                     "status": "complete",
                     "pending_phase": "none",
                     "id": "campaign-test",

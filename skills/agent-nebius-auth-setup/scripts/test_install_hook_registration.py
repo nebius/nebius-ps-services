@@ -16,7 +16,7 @@ import textwrap
 import unittest
 
 
-HOOK_SOURCE = "agent-nebius-auth/assets/hooks"
+HOOK_SOURCE = "agent-nebius-auth-setup/assets/hooks"
 PROJECT = "project-test"
 
 
@@ -264,7 +264,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
     def write_inline_config_block(self) -> None:
         self.config_path().write_text(
             textwrap.dedent(
-                f"""\
+                rf"""\
                 model = "gpt-test"
 
                 # agent-nebius-auth managed block begin
@@ -285,7 +285,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
     def write_unmarked_inline_config_entry(self) -> None:
         self.config_path().write_text(
             textwrap.dedent(
-                f"""\
+                rf"""\
                 model = "gpt-test"
 
                 [[hooks.PreToolUse]]
@@ -719,15 +719,15 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
             )
 
-        self.assertIn("unchanged agent-nebius-auth/assets/hooks", second.stdout)
+        self.assertIn("unchanged agent-nebius-auth-setup/assets/hooks", second.stdout)
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
-        self.assertIn("files: unchanged 1", second.stdout)
+        self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
         self.assertIn("files: unchanged 6", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 11; registrations unchanged 5", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 13; registrations unchanged 5", second.stdout)
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)
@@ -752,13 +752,23 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertFalse(self.selector_path().exists())
         self.assertEqual(len(self.hook_registrations()), 1)
         self.assertTrue(self.installed_hook_path().is_file())
+        self.assertTrue(
+            self.installed_hook_target("nebius_auth_shared.py").is_file()
+        )
+        self.assertTrue(
+            self.installed_hook_target("nebius_auth_token_helper.py").is_file()
+        )
         self.assertIn("registrations: unchanged 1", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 1; registrations unchanged 1", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 3; registrations unchanged 1", second.stdout)
         self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
 
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
-        credential.write_text("{}", encoding="utf-8")
-        self.selector_path().write_text(f"{PROJECT}\n", encoding="utf-8")
+        credential.write_text(
+            '{"subject-credentials":{"type":"JWT","alg":"RS256","iss":"serviceaccount-test","sub":"serviceaccount-test"}}',
+            encoding="utf-8",
+        )
+        credential.chmod(0o600)
+        self.selector_path().write_text("project-wrong\n", encoding="utf-8")
         self.selector_path().chmod(0o600)
         call_log = self.root / "nebius-calls.log"
         bin_dir = self.root / "bin"
@@ -766,19 +776,19 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         fake_nebius = bin_dir / "nebius"
         fake_nebius.write_text(
             textwrap.dedent(
-                """\
+                f"""\
                 #!/bin/sh
                 call_count=1
-                if [ -f "$FAKE_NEBIUS_CALL_LOG" ]; then
-                  call_count=$(($(wc -l < "$FAKE_NEBIUS_CALL_LOG") + 1))
+                if [ -f "{call_log}" ]; then
+                  call_count=$(($(wc -l < "{call_log}") + 1))
                 fi
-                printf '%s\n' "$*" >> "$FAKE_NEBIUS_CALL_LOG"
+                printf '%s\\n' "$*" >> "{call_log}"
                 if [ "$1" = "iam" ] && [ "$2" = "get-access-token" ]; then
-                  if [ -n "${NEBIUS_IAM_TOKEN:-}" ] || [ -n "${TOKEN:-}" ]; then
-                    printf 'stale token env reached token mint\n' >&2
+                  if [ -n "${{NEBIUS_IAM_TOKEN:-}}" ] || [ -n "${{TOKEN:-}}" ]; then
+                    printf 'stale token env reached token mint\\n' >&2
                     exit 65
                   fi
-                  printf 'fake-token-%s\n' "$call_count"
+                  printf 'fake-token-%s\\n' "$call_count"
                   exit 0
                 fi
                 exit 64
@@ -789,24 +799,41 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         fake_nebius.chmod(0o700)
         exec_env = self.env.copy()
         exec_env["PATH"] = f"{bin_dir}{os.pathsep}{exec_env['PATH']}"
-        exec_env["EXPECTED_TEST_TOKEN"] = "fake-token-1"
         exec_env["EXPECTED_CHILD_TOKEN"] = "fake-token-2"
         exec_env["EXPECTED_CREDENTIALS_FILE"] = str(credential)
-        exec_env["FAKE_NEBIUS_CALL_LOG"] = str(call_log)
+        operation_log = self.root / "idempotent-operation.log"
         exec_env["NEBIUS_IAM_TOKEN"] = "stale-parent-token"
         exec_env["TOKEN"] = "stale-parent-token"
-
+        exec_env["CODEX_NEBIUS_PROJECT_ID"] = "project-wrong"
+        operation = bin_dir / "idempotent-read"
+        operation.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                set -eu
+                printf 'attempt\\n' >> "{operation_log}"
+                count=$(wc -l < "{operation_log}" | tr -d ' ')
+                if [ "$count" -eq 1 ]; then
+                  exit 77
+                fi
+                test "$NEBIUS_IAM_TOKEN" = "$EXPECTED_CHILD_TOKEN"
+                test -z "${{TOKEN:-}}"
+                """
+            ),
+            encoding="utf-8",
+        )
+        operation.chmod(0o700)
         payload = {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {
                 "command": (
-                    "bash -c 'nebius_refresh_token; "
-                    "test \"$NEBIUS_IAM_TOKEN\" = \"$EXPECTED_CHILD_TOKEN\"' && "
+                    f"CODEX_NEBIUS_PROJECT_ID={PROJECT} "
+                    "python3 \"$CODEX_NEBIUS_TOKEN_HELPER\" retry-idempotent -- "
+                    f"{operation} && "
                     "python3 -c 'import os; "
-                    "expected = os.environ[\"EXPECTED_TEST_TOKEN\"]; "
-                    "assert os.environ[\"NEBIUS_IAM_TOKEN\"] == expected; "
-                    "assert os.environ[\"TOKEN\"] == expected; "
+                    "assert \"NEBIUS_IAM_TOKEN\" not in os.environ; "
+                    "assert \"TOKEN\" not in os.environ; "
                     f"assert os.environ[\"NEBIUS_PROFILE\"] == \"codex-agent-{PROJECT}\"; "
                     f"assert os.environ[\"NEBIUS_PROJECT_ID\"] == \"{PROJECT}\"; "
                     "assert os.environ[\"NEBIUS_AUTH_CREDENTIALS_FILE\"] == "
@@ -833,15 +860,18 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(hook_result.stderr, "")
         hook_output = json.loads(hook_result.stdout)
         updated_command = hook_output["hookSpecificOutput"]["updatedInput"]["command"]
-        self.assertIn("nebius iam get-access-token", updated_command)
-        self.assertIn("nebius_refresh_token() {", updated_command)
-        self.assertIn("export BASH_ENV=\"$NEBIUS_REFRESH_BASH_ENV\"", updated_command)
-        self.assertNotIn("NEBIUS_REFRESH_PREVIOUS_BASH_ENV", updated_command)
-        self.assertIn("mktemp", updated_command)
-        self.assertIn('if [ -n "${BASH_VERSION:-}" ]; then', updated_command)
-        self.assertIn("export -f nebius_refresh_token", updated_command)
+        self.assertNotIn("nebius iam get-access-token", updated_command)
+        self.assertNotIn("nebius_refresh_token() {", updated_command)
         self.assertIn(
             'export NEBIUS_AUTH_CREDENTIALS_FILE="$CREDENTIALS_FILE_VALUE"',
+            updated_command,
+        )
+        self.assertIn(
+            'export CODEX_NEBIUS_TOKEN_HELPER="$TOKEN_HELPER_VALUE"',
+            updated_command,
+        )
+        self.assertIn(
+            str(self.installed_hook_target("nebius_auth_token_helper.py")),
             updated_command,
         )
         self.assertNotIn("fake-token", hook_result.stdout)
@@ -884,20 +914,24 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            call_log.read_text(encoding="utf-8").splitlines(),
-            [
-                f"iam get-access-token --profile codex-agent-{PROJECT}",
-                f"iam get-access-token --profile codex-agent-{PROJECT}",
-            ],
-        )
-
-        self.assertEqual(
             command_result.returncode,
             0,
-            f"stdout:\n{command_result.stdout}\nstderr:\n{command_result.stderr}",
+            f"stdout:\n{command_result.stdout}\nstderr:\n{command_result.stderr}\n"
+            f"mint calls: {call_log.read_text(encoding='utf-8') if call_log.exists() else '<none>'}",
         )
         self.assertEqual(command_result.stdout, "")
         self.assertEqual(command_result.stderr, "")
+        self.assertEqual(
+            call_log.read_text(encoding="utf-8").splitlines(),
+            [
+                f"iam get-access-token --no-browser --profile codex-agent-{PROJECT}",
+                f"iam get-access-token --no-browser --profile codex-agent-{PROJECT}",
+            ],
+        )
+        self.assertEqual(
+            operation_log.read_text(encoding="utf-8").splitlines(),
+            ["attempt", "attempt"],
+        )
 
 
 if __name__ == "__main__":

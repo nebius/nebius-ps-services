@@ -567,3 +567,126 @@ def test_writer_boundary_revalidation_binds_exact_handoff_config_successor(
             operation()
     else:
         operation()
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ("", "repeat_attempt", "repeat_unfenced", "other_data", "recovery_target"),
+)
+def test_writer_boundary_revalidation_binds_exact_recovery_config_successor(
+    drift: str,
+) -> None:
+    journal, config, source_role, live_binding = _writer_boundary_fixture()
+    config_key = "slurm.conf"
+    intended = "ClusterName=cluster\nSlurmctldHost=bridge-0"
+    bridge_only = intended + "\nSlurmctldHost=bridge-1"
+    handoff = bridge_only + "\nSlurmctldHost=controller-0"
+    config["data"]["custom.conf"] = "SchedulerParameters=bf_continue"
+    preimage = copy.deepcopy(config)
+    preimage["data"][config_key] = intended
+    config["data"][config_key] = bridge_only
+    if drift == "other_data":
+        config["data"]["custom.conf"] = "SchedulerParameters=drifted"
+    handoff_sha256 = hashlib.sha256(handoff.encode()).hexdigest()
+    bridge_only_sha256 = hashlib.sha256(bridge_only.encode()).hexdigest()
+    recovery_target_sha256 = "f" * 64 if drift == "recovery_target" else bridge_only_sha256
+    journal.update(
+        {
+            "stage": "bridge-fenced",
+            "source_configuration": {
+                "config_key": config_key,
+                "intended_slurm_conf": intended,
+                "intended_config_data_sha256": (
+                    migration._controller_bridge_config_map_data_sha256(  # noqa: SLF001
+                        preimage["data"]
+                    )
+                ),
+                "copies": {
+                    "bridge": {
+                        "name": "controller-material",
+                        "uid": "mirrored-config-uid",
+                        "intended_material_sha256": (
+                            migration._controller_bridge_material_fingerprint(  # noqa: SLF001
+                                preimage
+                            )
+                        ),
+                    }
+                },
+            },
+            "target_singleton_takeover": {
+                "bridge_handoff_configuration": {
+                    "schema": "nebius-cxcli/target-bridge-handoff-configuration-v1",
+                    "status": "verified",
+                    "config_map_name": "controller-material",
+                    "config_map_uid": "mirrored-config-uid",
+                    "to_sha256": handoff_sha256,
+                    "config_sha256": handoff_sha256,
+                    "expected_bridge_only_sha256": bridge_only_sha256,
+                },
+                "target_start": {"state": "accepted", "pod_uid": "target-start-pod-uid"},
+                "recovery_jailed_config_preimage": {
+                    "schema": "nebius-cxcli/controller-bridge-jailed-config-observation-v1",
+                    "sha256": handoff_sha256,
+                    "proven_after_target_runtime_fence": True,
+                    "target_start_pod_uid": "target-start-pod-uid",
+                    "canaries": [
+                        {"pod_uid": "canary-0", "sha256": handoff_sha256},
+                        {"pod_uid": "canary-1", "sha256": handoff_sha256},
+                    ],
+                },
+                "recovery_bridge_jailed_config": {
+                    "schema": "nebius-cxcli/controller-bridge-jailed-config-v1",
+                    "state": "accepted",
+                    "config_map_name": "controller-material",
+                    "config_key": config_key,
+                    "expected_preimage_sha256": handoff_sha256,
+                    "target_sha256": recovery_target_sha256,
+                },
+            },
+        }
+    )
+    if drift in {"repeat_attempt", "repeat_unfenced"}:
+        takeover = journal["target_singleton_takeover"]
+        takeover["target_primary_takeover_history"] = [
+            {"pod_uid": "target-start-pod-uid"}
+        ]
+        takeover["target_start"] = {
+            "state": "accepted",
+            "pod_uid": "replacement-target-pod-uid",
+            "node_name": "target-node",
+        }
+        takeover["target_stop_pods"] = [
+            {
+                "pod_uid": "replacement-target-pod-uid",
+                "node_name": "target-node",
+            }
+        ]
+        if drift == "repeat_attempt":
+            takeover["target_runtime_fence"] = [
+                {
+                    "schema": "nebius-cxcli-controller-runtime-fence/v1",
+                    "fenced": True,
+                    "node_name": "target-node",
+                    "slurmctld_count": 0,
+                    "writable_state_mount_count": 0,
+                    "unreadable_process_count": 0,
+                    "verified_at": "2026-07-21T10:41:12Z",
+                }
+            ]
+
+    def operation() -> None:
+        migration._revalidate_controller_bridge_mirrored_material(  # noqa: SLF001
+            journal=journal,
+            kube_context="context",
+            command_runner=_writer_boundary_runner(
+                config=config,
+                source_role=source_role,
+                live_binding=live_binding,
+            ),
+        )
+
+    if drift not in {"", "repeat_attempt"}:
+        with pytest.raises(RuntimeError, match="mirrored material identity or content changed"):
+            operation()
+    else:
+        operation()

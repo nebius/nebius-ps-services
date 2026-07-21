@@ -80,8 +80,10 @@ align-skill checks structure, safety, docs, and validation
   source-owned skill must keep that file even though OpenAI Codex treats it as
   optional metadata.
 - Set `policy.allow_implicit_invocation` to `false` for explicit-only,
-  mutating, publishing, setup, or Agentic SDLC phase skills; use `true` for
-  ordinary reusable skills that Codex may safely select from the description.
+  mutating, publishing, ordinary setup, or Agentic SDLC phase skills; use
+  `true` for ordinary reusable skills. A narrow setup exception may use `true`
+  only when implicit work is read-only and explicit current-turn confirmation
+  follows a displayed mutation plan.
 - Do not broaden a skill until its trigger becomes hard to reason about.
 - Capture durable knowledge in reusable skill sources, not in ad hoc notes or
   final-answer-only summaries.

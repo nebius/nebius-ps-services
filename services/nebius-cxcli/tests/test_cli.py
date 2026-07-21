@@ -70,6 +70,20 @@ _OTHER_VALID_ED25519_PUBLIC_KEY = _VALID_ED25519_PUBLIC_KEY.replace(
 )
 
 
+def test_external_soperator_discovery_refresh_defers_during_jail_mutation_boundary() -> None:
+    checkpoint = {
+        "completed_phases": ["discovery-and-plan"],
+        "phase_state": {
+            "populate-jail-refresh": {
+                "consumer_switch_applied_at": "2026-07-20T00:00:00Z",
+            }
+        },
+    }
+
+    assert cli_module._external_soperator_discovery_refresh_deferred(checkpoint)  # noqa: SLF001
+    assert not cli_module._external_soperator_discovery_refresh_deferred(None)  # noqa: SLF001
+
+
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
     portable: dict[str, object] = {
         "repo": repo,
@@ -4311,7 +4325,7 @@ def test_campaign_compilation_locks_default_in_place_compute_contract(
                 "nodegroup-gpu-pool": 2,
             },
             "drain_timeout": "10m",
-            "max_parallel_groups": 8,
+            "max_parallel_groups": 32,
         },
     }
 
@@ -4348,7 +4362,7 @@ def test_ext_soperator_upgrade_requires_config_campaign_even_with_valid_journal(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v5 campaign in" in normalized_output
+    assert "requires a locked v6 campaign in" in normalized_output
     assert "journal is never an upgrade-path authority" in normalized_output
 
 
@@ -4383,7 +4397,7 @@ def test_ext_soperator_upgrade_rejects_every_non_v3_campaign_schema_without_writ
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "unsupported campaign schema" in normalized_output
-    assert "requires nebius-cxcli-ext-soperator-upgrade-campaign/v5" in normalized_output
+    assert "requires nebius-cxcli-ext-soperator-upgrade-campaign/v6" in normalized_output
     assert "No conversion is supported" in normalized_output
     assert config_path.read_bytes() == before
     assert not _ext_soperator_checkpoint_path(config_path).exists()
@@ -4616,7 +4630,7 @@ def test_ext_soperator_upgrade_execute_starts_jail_repair_from_locked_incomplete
     )
 
     assert result.exit_code == 1, result.output
-    assert invoked == [campaign["segments"][0]["id"]]
+    assert invoked == [campaign["segments"][0]["id"]], result.output
     assert "Jail repair segment started" in result.output
     assert "recovery-required" not in result.output
 
@@ -10054,7 +10068,7 @@ def test_component_add_rejects_external_target_without_v3_campaign(
 
     assert result.exit_code == 1
     assert "soperator_onboarding.upgrade_path is required" in result.output
-    assert "nebius-cxcli-ext-soperator-upgrade-campaign/v5" in result.output
+    assert "nebius-cxcli-ext-soperator-upgrade-campaign/v6" in result.output
     assert config_path.read_bytes() == before
 
 
@@ -11482,7 +11496,7 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
         "worker": {
             "max_unavailable": "all",
             "drain_timeout": "10m",
-            "max_parallel_groups": 8,
+            "max_parallel_groups": 32,
         },
     }
 
@@ -13913,7 +13927,7 @@ def test_soperator_onboard_in_place_defaults_show_every_rollout_prompt(
     assert compute_migration["node_group_rollout"]["worker"] == {
         "max_unavailable": "all",
         "drain_timeout": "10m",
-        "max_parallel_groups": 8,
+        "max_parallel_groups": 32,
     }
 
 
@@ -15119,7 +15133,7 @@ def test_ext_soperator_upgrade_dry_run_rejects_malformed_v3_journal_without_writ
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "recovery-required" in normalized_output
-    assert "strict v5 contract" in normalized_output
+    assert "strict v6 contract" in normalized_output
     assert "missing required field" in normalized_output
     assert config_path.read_bytes() == config_before
     assert checkpoint_path.read_bytes() == checkpoint_before
@@ -15305,7 +15319,7 @@ def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v5 campaign" in normalized_output
+    assert "requires a locked v6 campaign" in normalized_output
     assert "journal is never an upgrade-path authority" in normalized_output
     assert "ext-soperator onboard" in normalized_output
 
@@ -15979,7 +15993,7 @@ def test_ext_soperator_upgrade_rejects_edited_locked_path_fingerprint(
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "does not have a current accepted" in normalized_output
-    assert "requires a locked v5 campaign" in normalized_output
+    assert "requires a locked v6 campaign" in normalized_output
 
 
 def test_ext_soperator_upgrade_dry_run_uses_discovery_spinner(
@@ -16124,7 +16138,7 @@ def test_ext_soperator_upgrade_execute_requires_locked_path_before_policy_check(
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v5 campaign" in normalized_output
+    assert "requires a locked v6 campaign" in normalized_output
     assert "deploy.targets[].soperator_onboarding.upgrade_path" in normalized_output
     assert "ext-soperator onboard" in normalized_output
 
@@ -16804,7 +16818,7 @@ def test_ext_soperator_upgrade_dry_run_rejects_campaignless_gpu_reconciliation_r
 
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
-    assert "requires a locked v5 campaign" in normalized_output
+    assert "requires a locked v6 campaign" in normalized_output
     assert "ext-soperator onboard" in normalized_output
     assert "External Soperator upgrade plan:" not in normalized_output
 
@@ -20769,7 +20783,7 @@ def test_soperator_onboard_rejects_campaignless_target_without_conversion(
     assert result.exit_code == 1
     normalized_output = " ".join(result.output.split())
     assert "recovery-required" in normalized_output
-    assert "has no v5 campaign" in normalized_output
+    assert "has no v6 campaign" in normalized_output
     assert "conversion is not supported" in normalized_output
     assert config_path.read_bytes() == original_config
 
@@ -20800,7 +20814,7 @@ def test_onboard_reconciliation_rejects_any_campaignless_external_target_before_
 
     with pytest.raises(
         RuntimeError,
-        match=r"existing external Soperator target 'legacy-target' has no v5 campaign",
+        match=r"existing external Soperator target 'legacy-target' has no v6 campaign",
     ):
         cli_module._reconcile_external_soperator_onboarding_campaign(
             config_path=tmp_path / "config.yaml",

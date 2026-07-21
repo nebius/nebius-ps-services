@@ -574,7 +574,7 @@ def test_jobs_screen_reconnect_drains_queued_action_once(
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (None, "requires an active v5 upgrade checkpoint"),
+        (None, "requires an active v6 upgrade checkpoint"),
         ("{not-json", "checkpoint is invalid JSON"),
         (
             json.dumps({"schema": "nebius-cxcli-ext-soperator-upgrade-journal/v3"}),
@@ -582,7 +582,7 @@ def test_jobs_screen_reconnect_drains_queued_action_once(
         ),
     ],
 )
-def test_jobs_checkpoint_rejects_missing_invalid_or_non_v5(
+def test_jobs_checkpoint_rejects_missing_invalid_or_non_v6(
     tmp_path: Path,
     content: str | None,
     message: str,

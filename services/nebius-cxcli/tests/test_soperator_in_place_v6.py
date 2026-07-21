@@ -37,9 +37,10 @@ def _node_group(*, count: int = 100) -> dict[str, object]:
     }
 
 
-def test_external_upgrade_campaign_and_execution_journal_are_v5_only() -> None:
-    assert migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA.endswith("/v5")
-    assert migration.SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA.endswith("/v5")
+def test_external_upgrade_campaign_journal_and_report_are_v6_only() -> None:
+    assert migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA.endswith("/v6")
+    assert migration.SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA.endswith("/v6")
+    assert migration.SOPERATOR_MIGRATION_REPORT_SCHEMA.endswith("/v6")
 
 
 def test_managed_upgrade_rejects_abbreviated_bridge_journal(tmp_path: Path) -> None:
@@ -135,15 +136,21 @@ def test_in_place_execution_places_jail_slot_b_before_compute() -> None:
     )
 
 
-def test_v4_execution_journal_is_rejected_without_conversion(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_version", range(1, 6))
+def test_pre_v6_execution_journal_is_rejected_without_conversion(
+    tmp_path: Path,
+    legacy_version: int,
+) -> None:
     path = tmp_path / "checkpoint.json"
-    path.write_text(
-        json.dumps({"schema": "nebius-cxcli-ext-soperator-upgrade-journal/v4"}),
-        encoding="utf-8",
+    original = json.dumps(
+        {"schema": f"nebius-cxcli-ext-soperator-upgrade-journal/v{legacy_version}"}
     )
+    path.write_text(original, encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="Unsupported external Soperator upgrade checkpoint"):
         migration._load_checkpoint(path)  # noqa: SLF001
+
+    assert path.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize("count", [1, 37, 100])
@@ -721,6 +728,116 @@ def test_service_role_health_reuses_same_invocation_proof_without_mutation(
         phase["in_place_service_role_health"]["login"]["proof_sha256"]
         == phase["in_place_service_role_health"]["accounting"]["proof_sha256"]
     )
+
+
+def test_completed_service_health_reuses_proof_after_planned_worker_outage() -> None:
+    group_state = {
+        "status": "completed",
+        "target_update": {
+            "operation": {
+                "attempt_state": "provider-terminal",
+                "reconciled_at": "2026-07-21T06:24:35Z",
+            }
+        },
+    }
+    role_health = {
+        # A later replay may be checking while replacement workers are intentionally
+        # unavailable, but the successful post-provider proof remains authoritative.
+        "status": "checking",
+        "verified_at": "2026-07-21T07:35:43Z",
+    }
+
+    assert migration._in_place_completed_service_health_reusable(  # noqa: SLF001
+        group_state=group_state,
+        role_health=role_health,
+    )
+    role_health["verified_at"] = "2026-07-21T06:20:00Z"
+    assert not migration._in_place_completed_service_health_reusable(  # noqa: SLF001
+        group_state=group_state,
+        role_health=role_health,
+    )
+
+
+def test_accepted_worker_provider_operation_is_classified_for_bridge_resume() -> None:
+    phase = {
+        "in_place_node_groups": {
+            "worker": {
+                "role": "worker-0",
+                "target_update": {
+                    "operation": {
+                        "attempt_state": "provider-pending",
+                        "provider_operation_id": "opmk8snodegroup-worker",
+                        "accepted_at": "2026-07-21T07:43:00Z",
+                    }
+                },
+            },
+            "login": {
+                "role": "login",
+                "target_update": {
+                    "operation": {
+                        "attempt_state": "provider-pending",
+                        "provider_operation_id": "opmk8snodegroup-login",
+                        "accepted_at": "2026-07-21T07:00:00Z",
+                    }
+                },
+            },
+        }
+    }
+
+    pending = migration._accepted_in_place_worker_provider_operations_pending(  # noqa: SLF001
+        phase
+    )
+    assert [item["provider_operation_id"] for item in pending] == ["opmk8snodegroup-worker"]
+
+
+def test_worker_provider_resume_reuses_predispatch_proofs_after_source_retirement() -> None:
+    group_state = {
+        "target_update": {
+            "operation": {
+                "attempt_state": "provider-pending",
+                "provider_operation_id": "opmk8snodegroup-worker",
+                "accepted_at": "2026-07-21T07:43:00Z",
+            }
+        },
+        "slurm_drain": {"status": "applied", "reason": "cxcli-owned"},
+        "final_dispatch_evidence": {
+            "status": "locked",
+            "reason": "cxcli-owned",
+            "active_job_ids": [],
+            "checked_at": "2026-07-21T07:42:36Z",
+        },
+        "kubernetes_provider_drain": {"status": "drained"},
+    }
+
+    assert migration._in_place_worker_provider_operation_resume_ready(  # noqa: SLF001
+        group_state
+    )
+    group_state["final_dispatch_evidence"]["active_job_ids"] = ["123"]
+    assert not migration._in_place_worker_provider_operation_resume_ready(  # noqa: SLF001
+        group_state
+    )
+
+
+def test_worker_outage_boundary_requires_an_exact_accepted_provider_operation() -> None:
+    phase = {
+        "in_place_node_groups": {
+            "worker": {
+                "role": "worker-0",
+                "status": "provider-complete-health-pending",
+                "target_update": {
+                    "operation": {
+                        "attempt_state": "provider-terminal",
+                        "provider_operation_id": "opmk8snodegroup-worker",
+                        "accepted_at": "2026-07-21T07:43:00Z",
+                    }
+                },
+            }
+        }
+    }
+
+    assert migration._in_place_worker_outage_boundary_active(phase)  # noqa: SLF001
+    phase["in_place_node_groups"]["worker"]["status"] = "completed"
+    assert not migration._in_place_worker_outage_boundary_active(phase)  # noqa: SLF001
 
 
 @pytest.mark.parametrize("field", ["registrations", "catalogs"])
@@ -1851,6 +1968,7 @@ def test_in_place_runtime_identity_is_journaled_before_slurm_clear(
     writes: list[bool] = []
 
     lines = migration._ensure_in_place_slurm_worker_runtime_identity(  # noqa: SLF001
+        checkpoint={},
         phase=phase,
         command_runner=SimpleNamespace(),
         kube_context="context",
@@ -2073,7 +2191,11 @@ def test_replacement_health_releases_owned_drain_before_gpu_smoke(
     monkeypatch.setattr(
         migration,
         "active_passive_jail_rootfs_slots",
-        lambda _values: SimpleNamespace(active_slot="slot-b", passive_slot="slot-a"),
+        lambda _values: SimpleNamespace(
+            active_slot="slot-b",
+            passive_slot="slot-a",
+            active_pvc="jail-rootfs-slot-b",
+        ),
     )
     monkeypatch.setattr(
         migration,
@@ -2096,6 +2218,11 @@ def test_replacement_health_releases_owned_drain_before_gpu_smoke(
         lambda **_kwargs: calls.append("gpu-release") or ["gpu release passed"],
     )
     monkeypatch.setattr(migration, "_gpu_worker_nodeset_names", lambda _values: ("worker",))
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_gpu_driver_refresh_after_provider_rollout",
+        lambda **_kwargs: [],
+    )
     monkeypatch.setattr(
         migration,
         "_release_in_place_worker_locks_for_gpu_smoke",
@@ -2221,6 +2348,42 @@ def test_final_restore_filters_only_checkpointed_target_retired_partitions() -> 
                     "partitions": [
                         {"partition": "background", "status": "retired-from-target"},
                         {"partition": "gpu", "status": "down"},
+                    ],
+                }
+            }
+        }
+    }
+    records = (SimpleNamespace(partition="background"), SimpleNamespace(partition="gpu"))
+
+    retired = migration._checkpoint_target_retired_slurm_partition_names(  # noqa: SLF001
+        checkpoint,
+        records=records,  # type: ignore[arg-type]
+    )
+
+    assert retired == frozenset({"background"})
+
+
+def test_final_restore_classifies_live_down_non_target_partition_as_retired() -> None:
+    target_partitions = ["gpu"]
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "in_place_gpu_smoke_scheduling_gate": {
+                    "status": "passed",
+                    "target_partitions": target_partitions,
+                    "target_partitions_sha256": migration._fingerprint(target_partitions),  # noqa: SLF001
+                    "retired_partitions": [],
+                    "partitions": [
+                        {
+                            "partition": "background",
+                            "status": "down",
+                            "target_configured": False,
+                        },
+                        {
+                            "partition": "gpu",
+                            "status": "down",
+                            "target_configured": True,
+                        },
                     ],
                 }
             }

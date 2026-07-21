@@ -12,7 +12,7 @@ from typing import Any
 
 from .runtime_config import to_plain_data
 
-SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v5"
+SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v6"
 
 COMPUTE_MIGRATION_MODE_IN_PLACE = "in-place"
 COMPUTE_MIGRATION_MODE_BLUE_GREEN = "blue-green"
@@ -31,8 +31,8 @@ DEFAULT_NODE_GROUP_ROLLOUT_STRATEGY = NODE_GROUP_ROLLOUT_ZERO_SURGE
 DEFAULT_ZERO_SURGE_MAX_UNAVAILABLE = "all"
 DEFAULT_SAFE_SURGE_COUNT = 1
 DEFAULT_WORKER_DRAIN_TIMEOUT = "10m"
-DEFAULT_MAX_PARALLEL_WORKER_GROUPS = 8
-MAX_PARALLEL_WORKER_GROUPS = 8
+DEFAULT_MAX_PARALLEL_WORKER_GROUPS = 32
+MAX_PARALLEL_WORKER_GROUPS = 64
 
 _FINGERPRINT_EXCLUDED_KEYS = frozenset({"campaign_id", "created_at", "fingerprint"})
 
@@ -61,6 +61,14 @@ class _K8sMinor:
         return f"{self.major}.{self.minor}"
 
 
+@dataclass(frozen=True)
+class SoperatorUpgradeSchedule:
+    """Canonical ordering shared by discovery rendering and campaign compilation."""
+
+    one_time_hop_index: int
+    recommended_steps: tuple[str, ...]
+
+
 def _parse_k8s_minor(value: Any) -> _K8sMinor:
     text = _text(value).removeprefix("v")
     match = re.fullmatch(r"(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:\.[0-9]+)?", text)
@@ -71,6 +79,80 @@ def _parse_k8s_minor(value: Any) -> _K8sMinor:
     return _K8sMinor(
         major=int(match.group("major")),
         minor=int(match.group("minor")),
+    )
+
+
+def compile_soperator_upgrade_schedule(
+    *,
+    k8s_hops: Sequence[str],
+    soperator_hops: Sequence[str],
+    soperator_after_k8s_min: str,
+    one_time_required: bool,
+) -> SoperatorUpgradeSchedule:
+    """Compile one deterministic schedule for both discovery and execution.
+
+    ``one_time_hop_index`` is the Kubernetes waypoint at which chart/Jail and
+    other one-time actions run. Zero means before the first Kubernetes hop.
+    """
+
+    normalized_k8s = tuple(_parse_k8s_minor(value).minor_text for value in k8s_hops)
+    normalized_soperator = tuple(
+        dict.fromkeys(_text(value) for value in soperator_hops if _text(value))
+    )
+    staging_index: int | None = None
+    minimum = _text(soperator_after_k8s_min)
+    if minimum and len(normalized_soperator) > 1:
+        parsed_minimum = _parse_k8s_minor(minimum)
+        staging_index = next(
+            (
+                index
+                for index, value in enumerate(normalized_k8s)
+                if (
+                    (parsed := _parse_k8s_minor(value)).major,
+                    parsed.minor,
+                )
+                >= (parsed_minimum.major, parsed_minimum.minor)
+            ),
+            None,
+        )
+
+    if not one_time_required:
+        one_time_hop_index = 0
+    elif staging_index is not None:
+        one_time_hop_index = staging_index
+    elif minimum and len(normalized_soperator) > 1:
+        raise ValueError(
+            "Soperator chart upgrade requires Kubernetes "
+            f"{parsed_minimum.minor_text} or newer, but that waypoint is absent "
+            f"from the locked Kubernetes path {normalized_k8s or ('<empty>',)}."
+        )
+    elif len(normalized_k8s) > 1:
+        one_time_hop_index = 1
+    else:
+        one_time_hop_index = 0
+
+    steps: list[str] = []
+    if staging_index is not None:
+        before = normalized_k8s[: staging_index + 1]
+        after = normalized_k8s[staging_index:]
+        if len(before) > 1:
+            steps.append(f"Kubernetes {' -> '.join(before)}")
+        if len(normalized_soperator) > 1:
+            steps.append(
+                "Soperator chart "
+                + " -> ".join(normalized_soperator)
+                + f" while Kubernetes stays {normalized_k8s[staging_index]}"
+            )
+        if len(after) > 1:
+            steps.append(f"Kubernetes {' -> '.join(after)}")
+    else:
+        if len(normalized_soperator) > 1:
+            steps.append(f"Soperator chart {' -> '.join(normalized_soperator)}")
+        if len(normalized_k8s) > 1:
+            steps.append(f"Kubernetes {' -> '.join(normalized_k8s)}")
+    return SoperatorUpgradeSchedule(
+        one_time_hop_index=one_time_hop_index,
+        recommended_steps=tuple(steps),
     )
 
 
@@ -95,7 +177,7 @@ def finalize_soperator_upgrade_campaign(
     *,
     created_at: str = "",
 ) -> dict[str, Any]:
-    """Attach deterministic identity to a compiled v5 campaign."""
+    """Attach deterministic identity to a compiled v6 campaign."""
 
     plain = to_plain_data(dict(campaign))
     result = dict(plain) if isinstance(plain, Mapping) else {}
@@ -640,7 +722,7 @@ def effective_campaign_segment_for_replacements(
 def journal_node_group_replacement_transitions(
     checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Extract exact replacement bindings and retirements from a v5 journal."""
+    """Extract exact replacement bindings and retirements from a v6 journal."""
 
     phase_states: list[Mapping[str, Any]] = []
     current_phase_state = checkpoint.get("phase_state")

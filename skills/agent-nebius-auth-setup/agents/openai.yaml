@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Nebius Auth Setup"
+  short_description: "One-confirmation Nebius auth bootstrap"
+  default_prompt: "Use $agent-nebius-auth-setup to confirm service-account creation once, converge the same project auth without repeat prompts, or handle an explicitly requested bounded local-repair lease."
+policy:
+  allow_implicit_invocation: true

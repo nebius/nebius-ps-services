@@ -534,7 +534,7 @@ def test_pre_authority_partial_preimage_rollback_reapplies_only_restored_copy(
     assert copies["bridge"]["state"] == "accepted"
     assert journal["source_configuration"]["source_reference_rebindings"] == [
         {
-            "reason": "exact-jailed-config-resource-version-after-copy-recovery",
+            "reason": "exact-jailed-config-resource-version-after-accepted-copy",
             "jailed_config_uid": "jailed-config-uid",
             "previous_resource_version": "30",
             "resource_version": "31",

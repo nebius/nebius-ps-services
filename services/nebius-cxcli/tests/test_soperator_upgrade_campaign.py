@@ -6,6 +6,7 @@ import pytest
 
 from nebius_cxcli.soperator_upgrade_campaign import (
     compile_node_group_hop_targets,
+    compile_soperator_upgrade_schedule,
     effective_campaign_segment_for_replacements,
     external_soperator_final_health_conflicts,
     finalize_soperator_upgrade_campaign,
@@ -15,6 +16,32 @@ from nebius_cxcli.soperator_upgrade_campaign import (
     validate_campaign_segment_capabilities,
     validated_control_plane_path,
 )
+
+
+def test_schedule_places_chart_and_jail_at_the_policy_kubernetes_waypoint() -> None:
+    schedule = compile_soperator_upgrade_schedule(
+        k8s_hops=("1.31", "1.32", "1.33"),
+        soperator_hops=("1.22.3", "4.0.2-ps.4"),
+        soperator_after_k8s_min="1.32",
+        one_time_required=True,
+    )
+
+    assert schedule.one_time_hop_index == 1
+    assert schedule.recommended_steps == (
+        "Kubernetes 1.31 -> 1.32",
+        "Soperator chart 1.22.3 -> 4.0.2-ps.4 while Kubernetes stays 1.32",
+        "Kubernetes 1.32 -> 1.33",
+    )
+
+
+def test_schedule_rejects_an_unreachable_policy_waypoint() -> None:
+    with pytest.raises(ValueError, match="waypoint is absent"):
+        compile_soperator_upgrade_schedule(
+            k8s_hops=("1.30", "1.31"),
+            soperator_hops=("1.22.3", "4.0.2-ps.4"),
+            soperator_after_k8s_min="1.32",
+            one_time_required=True,
+        )
 
 
 def _healthy_final_campaign_and_snapshot() -> tuple[dict[str, object], dict[str, object]]:

@@ -52,8 +52,12 @@ this reference:
   uses the requested `sdlc-` name but must say that it runs outside the workflow.
 - Set `policy.allow_implicit_invocation: false` for `sdlc-*` skills and other
   skills that must be explicitly requested, such as Git commit/push/PR/merge,
-  publish/release, auth/setup, high-risk security mutation, container
+  publish/release, ordinary auth/setup, high-risk security mutation, container
   attachment, MCP installation, or workflow-verification harnesses.
+- Permit `true` for a narrowly identified setup skill only when implicit use is
+  read-only diagnosis/planning and a machine-checkable invocation section
+  requires a displayed plan and explicit current-turn confirmation before all
+  IAM, credential, profile, hook, or equivalent mutations.
 - Set `policy.allow_implicit_invocation: true` for ordinary reusable skills
   that Codex may safely choose from the `description`. This is OpenAI Codex's
   default, but this repository still records it explicitly for validation.

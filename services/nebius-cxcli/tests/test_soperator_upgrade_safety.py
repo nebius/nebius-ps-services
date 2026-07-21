@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -197,6 +199,45 @@ class _Runner:
         if "show partition" in joined:
             return "PartitionName=gpu Nodes=worker-0 State=UP"
         return "ClusterName=cluster"
+
+
+class _ConcurrentRunner(_Runner):
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+    ) -> _Result:
+        command = tuple(str(arg) for arg in args)
+        if "exec" in command:
+            return super().__call__(
+                args,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.02)
+            return super().__call__(
+                args,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 class _NodeRunner(_Runner):
@@ -457,6 +498,32 @@ def test_slurm_runtime_capture_uses_login_sshd_container() -> None:
     exec_calls = [call for call in runner.calls if "exec" in call]
     assert exec_calls
     assert all("-c" in call and call[call.index("-c") + 1] == "sshd" for call in exec_calls)
+
+
+def test_kubernetes_protected_state_probes_run_in_parallel_with_stable_audit_order() -> None:
+    runner = _ConcurrentRunner()
+
+    state = _capture(runner)
+
+    assert runner.max_active > 1
+    assert [item["section"] for item in state.command_audit[:16]] == [
+        "pods",
+        "pvcs",
+        "pvs",
+        "configmaps",
+        "secrets",
+        "deployments",
+        "statefulsets",
+        "daemonsets",
+        "slurmclusters",
+        "nodesets",
+        "activechecks",
+        "helmreleases",
+        "flux-system.helmreleases",
+        "kustomizations",
+        "flux-system.kustomizations",
+        "nodes",
+    ]
 
 
 def test_configmap_and_nodeset_drift_are_protected_deltas() -> None:
@@ -1067,6 +1134,23 @@ def test_fast_verification_rejects_running_pod_when_container_is_not_ready() -> 
         check for check in result.checks if check["name"] == "pods-running-or-completed"
     )
     assert pod_check["status"] == "failed"
+
+
+def test_fast_verification_accepts_succeeded_pod_when_container_is_not_ready() -> None:
+    before = _capture(_Runner())
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(pod_phase="Succeeded", pod_ready=False),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    pod_check = next(
+        check for check in result.checks if check["name"] == "pods-running-or-completed"
+    )
+    assert pod_check["status"] == "passed"
 
 
 def test_pvc_size_reduction_fails_fast_verification() -> None:

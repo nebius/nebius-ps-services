@@ -2008,6 +2008,16 @@ def test_external_jail_gpu_smoke_pins_the_full_worker_gpu_count(
         )
 
     monkeypatch.setattr(migration, "_kubectl_exec_login_once", exec_login_once)
+    monkeypatch.setattr(
+        migration,
+        "_jail_gpu_slurm_node_evidence",
+        lambda **_kwargs: {
+            "node_name": "worker-gpu-0",
+            "state": "IDLE+DYNAMIC_NORM",
+            "reason": "",
+            "returncode": 0,
+        },
+    )
     state: dict[str, Any] = {}
 
     evidence = migration._jail_gpu_pinned_h100_smoke(
@@ -2085,6 +2095,16 @@ def test_external_jail_gpu_smoke_retries_only_after_exact_terminal_failure(
         raise AssertionError(selected)
 
     monkeypatch.setattr(migration, "_kubectl_exec_login_once", exec_login_once)
+    monkeypatch.setattr(
+        migration,
+        "_jail_gpu_slurm_node_evidence",
+        lambda **_kwargs: {
+            "node_name": "worker-gpu-0",
+            "state": "IDLE+DYNAMIC_NORM",
+            "reason": "",
+            "returncode": 0,
+        },
+    )
     state = {
         "pinned_h100_smoke": {
             "status": "Indeterminate",

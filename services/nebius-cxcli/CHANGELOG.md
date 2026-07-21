@@ -6,6 +6,60 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Replace the external Soperator upgrade runtime with the v6-only campaign,
+  operation-journal, and report contracts. Discovery and execution now share
+  one command-start observation, discovery and campaign compilation use one
+  canonical schedule, each segment owns one immutable backup binding, and an
+  accepted provider operation remains attached to its exact operation ID until
+  terminal success or an authentication, lease, or operator interruption. The
+  backup is source-observation-bound, mutation begins only after fresh narrow
+  SlurmCluster/PVC identity reads, delayed provider postconditions remain
+  attached, and the accepted migration-profile execution contract is embedded
+  in the campaign so resumes never reinterpret mutable installed policy.
+- Record cumulative active external Soperator upgrade time in the canonical
+  Markdown and JSON reports. The resume-safe campaign timing includes every
+  approved execute invocation, formats the total as `hh:mm:ss`, and excludes
+  offline gaps between resumptions so latency analysis reflects command work.
+- Keep the controller-bridge source configuration inside one execute attempt
+  while Kubernetes projects the accepted `slurm.conf`. The executor now polls
+  the mounted file read-only for a bounded interval before `scontrol
+  reconfigure`, avoiding a redundant full discovery/resume cycle without
+  weakening the exact-content gate. Resume also accepts the resulting
+  same-UID `JailedConfig` resource-version advance only when the checkpointed
+  source ConfigMap copy has the exact intended digest.
+- Bind the live target SlurmCluster name and UID at the authorized Jail-refresh
+  creation boundary before staging the in-place login surge. This removes a
+  redundant pending/resume cycle while retaining the immutable source/target
+  identity fence used by rolling compute migration.
+- Resample positive login SSH socket counts before blocking a guarded mutation,
+  while returning immediately on a zero sample. Short Kubernetes TCP readiness
+  connections no longer masquerade as persistent user sessions; real sessions
+  that remain present across the bounded samples continue to block.
+- Resume the exact in-place Jail pre-ownership boundary after a checkpointed
+  login hold was released before immutable-child inventory capture. Recovery
+  now accepts only an exact zero-session release journal whose original login
+  Pods remain Ready, restart-free, UID-stable, and source-StatefulSet-owned.
+- Recover an interrupted target Helm `pending-*` revision only when its chart,
+  application version, and stored-values fingerprint match the immutable
+  pre-apply intent. Recovery reads Helm history because an ordinary Helm list
+  can continue to expose the preceding deployed revision while the newer
+  revision is pending. cxcli checkpoints the exact revision before clearing
+  its Helm Secret. If resume-derived values changed after that never-deployed
+  intent, cxcli archives the retired intent and checkpoints one new immutable
+  intent before returning through the normal login-guarded replay path.
+- Retry an accounting SlurmDBD command-fence compare-and-set up to three times
+  without delay when only the SlurmCluster resource version changed. Every
+  retry re-reads the exact UID-bound resource and revalidates the checkpointed
+  enabled/command/args identity, so controller status churn no longer forces a
+  full command resume and any real writer drift still fails closed. Resume
+  validation now also accepts the source-first v2 `fence-intent` crash
+  boundaries emitted by that same durable state machine.
+- Raise the default in-place Soperator worker dispatch width from eight groups
+  to 32 and the explicit maximum to 64. Full-group `max_unavailable: all`
+  remains the per-group provider bound; the wider client dispatch removes the
+  previous eight-group wave for 1,000-node layouts that require at least ten
+  provider node groups, while provider-side replacement concurrency remains
+  provider-controlled.
 - Replace the crowded combined Soperator Jail handoff diagram with separate
   in-place and blue-green overall upgrade workflows. Each diagram now shows the
   controller bridge, login continuity, mode-specific compute ordering, Jail
@@ -42,7 +96,7 @@ All notable changes to this project are tracked here. This changelog follows
   that bounded provider, Kubernetes, Slurm, accounting, GPU, and Helm probes
   are serial and can take several minutes.
 - Fix fresh-install external onboarding so a no-Soperator discovery locks a
-  schema-valid v5 campaign against the live provider Kubernetes version and
+  schema-valid v6 campaign against the live provider Kubernetes version and
   current catalog Jail identity. Campaignless or stale accepted targets now
   fail with the canonical `recovery-required` and no-conversion guidance.
 
@@ -272,6 +326,11 @@ All notable changes to this project are tracked here. This changelog follows
   source-era partitions omitted by the target configuration as retired, and
   only then compare-and-set releases its own worker drain. Final restoration
   reopens surviving target partitions without recreating retired source ones.
+- Fixed the same retirement boundary when the final Helm replay removes a
+  source-era partition after the GPU gate observed it exactly `DOWN`. Resume
+  now derives retirement from the canonical target configuration and repairs
+  only an unfinished restore plan whose surviving partitions still match the
+  saved `DOWN` or pre-pause fingerprints; unknown drift remains fail-closed.
 - Fixed cross-midnight recovery of an `Indeterminate` cxcli H100 smoke. The
   exact-name `sacct` reconciliation is now bounded by the checkpointed smoke
   preparation time, so one uniquely terminal failed/cancelled job with no
@@ -397,8 +456,17 @@ All notable changes to this project are tracked here. This changelog follows
   proofs. One execute attempt now reuses only checkpoint-proven read-only Slurm
   routes, the `preserve` policy reuses its first post-pause all-job snapshot,
   status-only Slurm RPCs defer during the immutable Jail mutation boundary, and
-  rootfs consumers share one Kubernetes snapshot. Mutating Slurm commands,
-  lease checks, and final writer/readiness proofs remain fresh.
+  rootfs consumers share one Kubernetes snapshot. Independent source-fence API
+  inventory lists now use eight bounded parallel readers while preserving
+  deterministic validation order. Mutating Slurm commands, lease checks, and
+  final writer/readiness proofs remain fresh.
+- Reduced source-retirement latency when the legacy Soperator `orphan` finalizer
+  stalls. UID-preconditioned source deletion now gets a 30-second grace before
+  entering the existing complete-inventory, immutable-identity, admission-window
+  recovery instead of waiting five minutes before the same proof. Resume also
+  accepts the exact post-retirement `children-prepared` zero-writer boundary only
+  with the complete child, login-selector, controller-spool, source-retirement,
+  and positive restore-intent journal.
 - Fixed retired-source accounting takeover when the globally named Deployment
   still has the immutable source selector. After both writers are command-fenced
   and source retirement is durable, cxcli checkpoints an exact
@@ -524,7 +592,7 @@ All notable changes to this project are tracked here. This changelog follows
   binds writer, PVC, catalog, registration, and history continuity; controller
   and system rolls require healthy authority in the opposite fixed domain and
   rebind only the replaced domain's Node UIDs. Managed workers are dispatched
-  in clear batches of at most eight, resolve zero-surge `all` to each group's
+  in clear batches of at most 64, resolve zero-surge `all` to each group's
   exact fixed size, acquire an exact cxcli-owned per-group Slurm drain before
   provider dispatch, and leave job-bearing groups pending and untouched. Drain
   acquisition and restoration persist the exact preimage before mutation;
@@ -538,7 +606,7 @@ All notable changes to this project are tracked here. This changelog follows
   override. The end-to-end worker policy now uses
   `--node-group-strategy`, `--zero-surge-max-unavailable`,
   `--strategy-max-surge-count`, `--worker-drain-timeout`, and
-  `--max-parallel-worker-groups` (maximum eight). Standalone
+  `--max-parallel-worker-groups` (default 32, maximum 64). Standalone
   `upgrade node-template` keeps its existing interface.
 - Added `soperator jobs` alongside `ext-soperator jobs` for the shared durable,
   authority-aware Slurm action journal and exact
@@ -751,7 +819,7 @@ All notable changes to this project are tracked here. This changelog follows
   migration setting even when CLI values preselect defaults; non-interactive
   onboarding requires `--compute-migration-mode`. In-place defaults to paused
   Slurm scheduling, zero surge, full-group `max_unavailable: all`, a `10m`
-  worker drain timeout, and eight parallel clear groups. It uses exact
+  worker drain timeout, and 32 parallel clear groups (maximum 64). It uses exact
   per-group Slurm drains and a final job/epilog/identity proof before CAS
   provider updates, displays the aggregate prepared-batch unavailable-node
   impact before dispatch, keeps those drains held until replacement Nodes, `slurmd`,

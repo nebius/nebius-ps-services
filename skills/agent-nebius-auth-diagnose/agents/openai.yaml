@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Nebius Auth Diagnose"
+  short_description: "Diagnose project-scoped Nebius auth"
+  default_prompt: "Use $agent-nebius-auth-diagnose to diagnose current-session Nebius auth read-only, correct retryable command denials, and route persistent repair safely."
+policy:
+  allow_implicit_invocation: true

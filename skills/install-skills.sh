@@ -987,7 +987,7 @@ reject_inline_agent_nebius_auth_config_hook() {
   if grep -Eq 'agent-nebius-auth managed block begin|pre_tool_use_nebius_auth\.py' "${config}"; then
     log_error "agent-nebius-auth inline config.toml hook entry detected: ${config}"
     log_note "Remove the inline agent-nebius-auth hook entry before registering the canonical hooks.json entry."
-    log_note "Then rerun: ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks"
+    log_note "Then rerun: ./install-skills.sh --install-hooks agent-nebius-auth-setup/assets/hooks --register-hooks"
     exit 1
   fi
 }

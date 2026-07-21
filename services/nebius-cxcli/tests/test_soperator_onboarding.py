@@ -3837,6 +3837,14 @@ def _locked_upgrade_path_payload() -> dict[str, object]:
             "target_version": "4.0.2-ps.3",
             "upgrade_required": True,
         },
+        "migration_profile": {
+            "id": "legacy-v1-to-target",
+            "execution_contract": {
+                "source_controller_pause": {
+                    "required_before_target_compute_reconcile": True,
+                }
+            },
+        },
         "jail_rootfs": jail_rootfs,
         "support_status": "supported",
         "support_rule_id": "k8s-1-33-soperator-4-supported",
@@ -4198,14 +4206,14 @@ def test_runtime_validation_rejects_soperator_onboarding_bad_target_k8s_version(
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_requires_v5_campaign_for_external_onboarding() -> None:
+def test_runtime_validation_requires_v6_campaign_for_external_onboarding() -> None:
     payload = _onboarding_campaign_payload()
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
     onboarding.pop("upgrade_path", None)  # type: ignore[union-attr]
 
     with pytest.raises(
         ValueError,
-        match=r"upgrade_path is required and must use 'nebius-cxcli-ext-soperator-upgrade-campaign/v5'",
+        match=r"upgrade_path is required and must use 'nebius-cxcli-ext-soperator-upgrade-campaign/v6'",
     ):
         validate_runtime_payload(payload)
 
@@ -4299,6 +4307,10 @@ def test_runtime_validation_requires_v5_campaign_for_external_onboarding() -> No
         (
             lambda path: path["compute_migration"].update({"slurm_scheduling_pause": "true"}),
             r"upgrade_path\.compute_migration\.slurm_scheduling_pause must be true or false",
+        ),
+        (
+            lambda path: path["migration_profile"].pop("execution_contract"),
+            r"upgrade_path\.migration_profile\.execution_contract must be a non-empty mapping",
         ),
         (
             lambda path: path.update({"rollout": {"strategy": "zero-surge"}}),

@@ -279,7 +279,7 @@ begin
   campaign = mapping_at(root["campaign"], "evidence.campaign")
   require_exact(
     campaign["schema"],
-    "nebius-cxcli-ext-soperator-upgrade-campaign/v5",
+    "nebius-cxcli-ext-soperator-upgrade-campaign/v6",
     "evidence.campaign.schema"
   )
   require_exact(campaign["status"], "complete", "evidence.campaign.status")

@@ -7,6 +7,7 @@ import json
 import re
 import shlex
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -188,23 +189,14 @@ def capture_protected_customer_state(
     warnings: list[str] = []
     complete = True
 
-    def _collect(
+    def _parse_result(
         section: str,
-        args: Sequence[str],
+        result: SafetyCommandResult,
         *,
-        namespaced: bool = True,
-        namespace_override: str | None = None,
         optional: bool = False,
         parser: Callable[[Mapping[str, Any]], Any] | None = None,
     ) -> Any:
         nonlocal complete
-        command_namespace = namespace_override if namespace_override is not None else namespace
-        command = _kubectl_args(
-            args,
-            namespace=command_namespace if namespaced else None,
-            kube_context=kube_context,
-        )
-        result = _run_readonly(command_runner, command, timeout_seconds=timeout_seconds)
         audit.append(_command_audit(result, section=section))
         if result.returncode != 0:
             warning = _command_failure_summary(section, result)
@@ -223,85 +215,138 @@ def capture_protected_customer_state(
             return _sanitize_resource_list(payload)
         return parser(payload)
 
-    pods = _collect("pods", ("get", "pods", "-o", "json"), parser=_sanitize_pods)
-    pvcs = _collect("pvcs", ("get", "pvc", "-o", "json"), parser=_sanitize_pvcs)
-    pvs = _collect("pvs", ("get", "pv", "-o", "json"), namespaced=False, parser=_sanitize_pvs)
-    configmaps = _collect(
-        "configmaps",
-        ("get", "configmaps", "-o", "json"),
-        parser=_sanitize_configmaps,
+    capture_specs: tuple[
+        tuple[
+            str,
+            tuple[str, ...],
+            str | None,
+            bool,
+            Callable[[Mapping[str, Any]], Any],
+        ],
+        ...,
+    ] = (
+        ("pods", ("get", "pods", "-o", "json"), namespace, False, _sanitize_pods),
+        ("pvcs", ("get", "pvc", "-o", "json"), namespace, False, _sanitize_pvcs),
+        ("pvs", ("get", "pv", "-o", "json"), None, False, _sanitize_pvs),
+        (
+            "configmaps",
+            ("get", "configmaps", "-o", "json"),
+            namespace,
+            False,
+            _sanitize_configmaps,
+        ),
+        ("secrets", ("get", "secrets", "-o", "json"), namespace, False, _sanitize_secrets),
+        (
+            "deployments",
+            ("get", "deployments", "-o", "json"),
+            namespace,
+            True,
+            lambda payload: _sanitize_workloads(payload, workload_kind="Deployment"),
+        ),
+        (
+            "statefulsets",
+            ("get", "statefulsets", "-o", "json"),
+            namespace,
+            True,
+            lambda payload: _sanitize_workloads(payload, workload_kind="StatefulSet"),
+        ),
+        (
+            "daemonsets",
+            ("get", "daemonsets", "-o", "json"),
+            namespace,
+            True,
+            lambda payload: _sanitize_workloads(payload, workload_kind="DaemonSet"),
+        ),
+        (
+            "slurmclusters",
+            ("get", "slurmclusters", "-o", "json"),
+            namespace,
+            False,
+            lambda payload: _sanitize_custom_resources(payload, kind="SlurmCluster"),
+        ),
+        (
+            "nodesets",
+            ("get", "nodesets", "-o", "json"),
+            namespace,
+            False,
+            lambda payload: _sanitize_custom_resources(payload, kind="NodeSet"),
+        ),
+        (
+            "activechecks",
+            ("get", "activechecks", "-o", "json"),
+            namespace,
+            True,
+            _sanitize_activechecks,
+        ),
+        (
+            "helmreleases",
+            ("get", "helmreleases", "-o", "json"),
+            namespace,
+            True,
+            lambda payload: _sanitize_flux_resources(payload, kind="HelmRelease"),
+        ),
+        (
+            "flux-system.helmreleases",
+            ("get", "helmreleases", "-o", "json"),
+            "flux-system",
+            True,
+            lambda payload: _sanitize_flux_resources(payload, kind="HelmRelease"),
+        ),
+        (
+            "kustomizations",
+            ("get", "kustomizations", "-o", "json"),
+            namespace,
+            True,
+            lambda payload: _sanitize_flux_resources(payload, kind="Kustomization"),
+        ),
+        (
+            "flux-system.kustomizations",
+            ("get", "kustomizations", "-o", "json"),
+            "flux-system",
+            True,
+            lambda payload: _sanitize_flux_resources(payload, kind="Kustomization"),
+        ),
+        ("nodes", ("get", "nodes", "-o", "json"), None, False, _sanitize_nodes),
     )
-    secrets = _collect("secrets", ("get", "secrets", "-o", "json"), parser=_sanitize_secrets)
-    deployments = _collect(
-        "deployments",
-        ("get", "deployments", "-o", "json"),
-        optional=True,
-        parser=lambda payload: _sanitize_workloads(payload, workload_kind="Deployment"),
-    )
-    statefulsets = _collect(
-        "statefulsets",
-        ("get", "statefulsets", "-o", "json"),
-        optional=True,
-        parser=lambda payload: _sanitize_workloads(payload, workload_kind="StatefulSet"),
-    )
-    daemonsets = _collect(
-        "daemonsets",
-        ("get", "daemonsets", "-o", "json"),
-        optional=True,
-        parser=lambda payload: _sanitize_workloads(payload, workload_kind="DaemonSet"),
-    )
-    slurmclusters = _collect(
-        "slurmclusters",
-        ("get", "slurmclusters", "-o", "json"),
-        parser=lambda payload: _sanitize_custom_resources(payload, kind="SlurmCluster"),
-    )
-    nodesets = _collect(
-        "nodesets",
-        ("get", "nodesets", "-o", "json"),
-        parser=lambda payload: _sanitize_custom_resources(payload, kind="NodeSet"),
-    )
-    activechecks = _collect(
-        "activechecks",
-        ("get", "activechecks", "-o", "json"),
-        optional=True,
-        parser=_sanitize_activechecks,
-    )
-    helmreleases = _collect(
-        "helmreleases",
-        ("get", "helmreleases", "-o", "json"),
-        namespaced=True,
-        optional=True,
-        parser=lambda payload: _sanitize_flux_resources(payload, kind="HelmRelease"),
-    )
-    flux_system_helmreleases = _collect(
-        "flux-system.helmreleases",
-        ("get", "helmreleases", "-o", "json"),
-        namespaced=True,
-        namespace_override="flux-system",
-        optional=True,
-        parser=lambda payload: _sanitize_flux_resources(payload, kind="HelmRelease"),
-    )
-    kustomizations = _collect(
-        "kustomizations",
-        ("get", "kustomizations", "-o", "json"),
-        namespaced=True,
-        optional=True,
-        parser=lambda payload: _sanitize_flux_resources(payload, kind="Kustomization"),
-    )
-    flux_system_kustomizations = _collect(
-        "flux-system.kustomizations",
-        ("get", "kustomizations", "-o", "json"),
-        namespaced=True,
-        namespace_override="flux-system",
-        optional=True,
-        parser=lambda payload: _sanitize_flux_resources(payload, kind="Kustomization"),
-    )
-    nodes = _collect(
-        "nodes",
-        ("get", "nodes", "-o", "json"),
-        namespaced=False,
-        parser=_sanitize_nodes,
-    )
+
+    def _capture_one(spec):
+        section, args, command_namespace, optional, parser = spec
+        command = _kubectl_args(
+            args,
+            namespace=command_namespace,
+            kube_context=kube_context,
+        )
+        result = _run_readonly(command_runner, command, timeout_seconds=timeout_seconds)
+        return section, result, optional, parser
+
+    captured: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(capture_specs))) as executor:
+        futures = {spec[0]: executor.submit(_capture_one, spec) for spec in capture_specs}
+        for spec in capture_specs:
+            section, result, optional, parser = futures[spec[0]].result()
+            captured[section] = _parse_result(
+                section,
+                result,
+                optional=optional,
+                parser=parser,
+            )
+
+    pods = captured["pods"]
+    pvcs = captured["pvcs"]
+    pvs = captured["pvs"]
+    configmaps = captured["configmaps"]
+    secrets = captured["secrets"]
+    deployments = captured["deployments"]
+    statefulsets = captured["statefulsets"]
+    daemonsets = captured["daemonsets"]
+    slurmclusters = captured["slurmclusters"]
+    nodesets = captured["nodesets"]
+    activechecks = captured["activechecks"]
+    helmreleases = captured["helmreleases"]
+    flux_system_helmreleases = captured["flux-system.helmreleases"]
+    kustomizations = captured["kustomizations"]
+    flux_system_kustomizations = captured["flux-system.kustomizations"]
+    nodes = captured["nodes"]
     slurm_runtime = _capture_slurm_runtime(
         command_runner=command_runner,
         namespace=namespace,
@@ -2335,7 +2380,7 @@ def _pod_phase_check(state: ProtectedCustomerState) -> dict[str, Any]:
             phase in _UNAVAILABLE_STATUSES
             or phase not in {"running", "succeeded"}
             or reasons & _BAD_WAITING_REASONS
-            or pod.get("containers_ready") is False
+            or (phase == "running" and pod.get("containers_ready") is False)
         ):
             failed.append(name)
         elif int(pod.get("restart_count") or 0) >= 10:
