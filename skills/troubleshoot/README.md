@@ -15,6 +15,11 @@ The workflow preserves evidence before functional edits, maintains competing
 hypotheses, chooses discriminating experiments, localizes the earliest
 divergence, and requires a causal mechanism before claiming root cause.
 
+Autonomous remediation is bounded by default to three distinct failed repairs
+or 60 active minutes for the same blocker. The agent reports failures 1 and 2,
+then stops all tools and returns a complete troubleshooting report at the first
+reached limit. Only an explicit user instruction starts another tranche.
+
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but
 does not prove why the failure occurred.
@@ -41,6 +46,9 @@ does not prove why the failure occurred.
   stack failure classes.
 - `references/technique-selection.md` maps causal questions to diagnostics.
 - `references/verification-and-reporting.md` owns closure and reporting.
+- `references/remediation-budget.md` owns attempt identity, limits, durable
+  marker state, continuation tranches, and exhaustion reporting.
+- `assets/hooks/` contains the optional `PreToolUse` and `Stop` guard bundle.
 - `scripts/` contains deterministic evidence helpers and their tests.
 - `evals/` contains trigger and process evaluation cases.
 
@@ -84,6 +92,9 @@ PYTHONDONTWRITEBYTECODE=1 \
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s troubleshoot/scripts \
   -p 'test_*.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s troubleshoot/assets/hooks/tests \
+  -p 'test_*.py'
 ```
 
 Static metadata validation establishes trigger readiness, not observed runtime
@@ -94,5 +105,6 @@ activation. Use fresh Codex sessions for positive and negative trigger checks.
 - `SKILL.md`: runtime contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/`: detailed investigation guidance.
+- `assets/hooks/`: optional local remediation-budget enforcement.
 - `scripts/`: deterministic evidence utilities and tests.
 - `evals/`: trigger and process evaluation material.

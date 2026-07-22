@@ -16,6 +16,13 @@
 
 ## Risks
 
+## Active remediation budget
+
+When troubleshooting has initialized `codex-remediation-budget:v1`, preserve
+its single bounded marker here exactly. Omit this section when no remediation
+budget is active. Do not place raw errors, logs, secrets, private endpoints, or
+customer data in the marker.
+
 ## Next action
 
 ## Summary hygiene

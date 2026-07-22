@@ -213,6 +213,15 @@ small managed section for `config-codex`/`global-context-management` guidance
 and leave unrelated user rules untouched. Marker presence alone is not enough:
 empty or stale managed blocks must be updated in place.
 
+The managed section must include the global remediation default: after one
+failed repair against the same blocker, use `troubleshoot`, stop after three
+distinct failed remediations or 60 active minutes unless the current user set a
+different budget, report failures 1 and 2 as progress, and at exhaustion make
+only the exact private state update before stopping all other tools and returning
+the complete report. Another bounded tranche requires a new explicit user
+instruction. Preserve the active `codex-remediation-budget:v1` marker while
+rewriting private task state.
+
 Recommended managed block markers:
 
 ```markdown

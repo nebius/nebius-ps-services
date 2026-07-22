@@ -67,6 +67,7 @@ EXPLICIT_INVOCATION_SECTION_MARKERS = (
     "do not implicitly invoke",
 )
 EXPLICIT_ONLY_SKILL_NAMES = {
+    "agent-nebius-auth-setup",
     "sdlc-workflow-test",
     "attach-ubuntu",
     "code-info",
@@ -81,18 +82,6 @@ EXPLICIT_ONLY_SKILL_NAMES = {
     "publish-release",
     "review-pr",
 }
-IMPLICIT_SELECTION_EXPLICIT_MUTATION_SKILL_NAMES = {
-    "agent-nebius-auth-setup",
-}
-IMPLICIT_SELECTION_EXPLICIT_MUTATION_MARKERS = (
-    "implicit invocation",
-    "read-only",
-    "displayed plan",
-    "explicit current-turn confirmation",
-    "iam, credential, profile, or hook mutation",
-)
-
-
 @dataclass
 class SkillResult:
     path: Path
@@ -346,24 +335,6 @@ def validate_openai_metadata_policy(
             f"{expected} for {name} based on the skill name and explicit-only "
             "workflow contract"
         )
-
-    if name in IMPLICIT_SELECTION_EXPLICIT_MUTATION_SKILL_NAMES:
-        invocation_policy = extract_markdown_section(skill_text, "## Invocation Policy")
-        policy_lower = (invocation_policy or "").lower()
-        missing_markers = [
-            marker
-            for marker in IMPLICIT_SELECTION_EXPLICIT_MUTATION_MARKERS
-            if marker not in policy_lower
-        ]
-        if missing_markers:
-            result.failures.append(
-                "implicit-selection/explicit-mutation skills must state in "
-                "## Invocation Policy that implicit invocation is read-only and "
-                "a displayed plan precedes explicit confirmation; IAM, "
-                "credential, profile, or hook mutation requires explicit "
-                "current-turn confirmation; missing markers: "
-                + ", ".join(missing_markers)
-            )
 
 
 def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:

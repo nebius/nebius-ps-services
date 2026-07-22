@@ -403,6 +403,7 @@ def assert_doc_contracts(root: Path) -> None:
         "same-workspace prior task-state candidate paths",
         "must not inject\nhistorical task-state contents",
         "rolling summary, not an append-only log",
+        "preserve exactly one valid marker",
         "close every spawned subagent handle",
         "Completed agents remain open",
         "final lifecycle sweep",
@@ -422,6 +423,7 @@ def assert_doc_contracts(root: Path) -> None:
         "continuity note",
         "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
         "rolling summary, not an append-only transcript",
+        "codex-remediation-budget:v1",
         "summarize any older task-state file",
         "bounded\nsame-workspace related task-state candidate discovery",
         "close every spawned subagent handle",
@@ -486,6 +488,8 @@ def assert_doc_contracts(root: Path) -> None:
         "compact rolling summary, not an append-only transcript",
         "Replace stale or superseded details",
         "raw logs, broad command output, full prompts",
+        "## Active remediation budget",
+        "codex-remediation-budget:v1",
     )
     for needle in required_summary_template:
         if needle not in state_template:
@@ -517,6 +521,8 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat that policy request as sufficient\n  authorization",
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
+        "stop after three distinct failed remediation attempts or 60 active",
+        "Preserve an active `codex-remediation-budget:v1` marker exactly",
     )
     for needle in required_agents_template:
         if needle not in agents_template:

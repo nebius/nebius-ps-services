@@ -24,6 +24,9 @@ readiness only; fresh-session execution is required to observe activation.
 8. "A production request intermittently fails across three services. Do not
    change production; correlate one failed request and specify the highest-value
    next experiment."
+9. "Forty-three repair attempts have run for hours without resolving the same
+   failure. Stop after three distinct failed remediations, explain the blocker,
+   and wait for me before continuing."
 
 ## Should Not Trigger Implicitly
 
@@ -44,6 +47,8 @@ readiness only; fresh-session execution is required to observe activation.
   stay with ordinary implementation.
 - Repeated failed attempts, multiple symptoms, or an unclear cross-layer cause
   should activate troubleshooting even when the first symptom is a test failure.
+- A first failed remediation should activate the bounded remediation contract
+  before a second repair, even when the task began as ordinary implementation.
 - A known Terraform, Helm, or cloud implementation should use the domain skill;
   an unexplained failure in the deployed stack should use troubleshooting and
   consult the domain skill for product-specific commands.

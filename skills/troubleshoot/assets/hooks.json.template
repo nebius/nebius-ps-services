@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking remediation budget"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking troubleshooting report"
+          }
+        ]
+      }
+    ]
+  }
+}

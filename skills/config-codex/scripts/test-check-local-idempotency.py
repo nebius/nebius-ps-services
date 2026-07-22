@@ -17,6 +17,17 @@ ASSETS = SKILL_ROOT / "assets"
 MANAGED_BLOCK = "\n".join(
     [
         "<!-- BEGIN config-codex managed context -->",
+        "## Working Defaults",
+        "",
+        "- After one remediation fails against the same blocker, use",
+        "  `troubleshoot` before another repair. Unless the current user",
+        "  explicitly sets another budget, stop after three distinct failed",
+        "  remediation attempts or 60 active minutes, whichever comes first.",
+        "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
+        "  exact private task-state update that records the stop, then call no",
+        "  other tool and return the complete troubleshooting report. Only a",
+        "  new explicit user instruction may start another bounded tranche.",
+        "",
         "## Skills",
         "",
         "- For non-trivial planning, implementation, debugging, refactoring,",
@@ -29,6 +40,8 @@ MANAGED_BLOCK = "\n".join(
         "  start, resume, or after compaction when prior context may matter.",
         "  Update it with concise checkpoints, and do not create repo-local",
         "  task-state files unless explicitly requested.",
+        "- Preserve an active `codex-remediation-budget:v1` marker exactly",
+        "  while rewriting task state.",
         "- Use bounded read-only subagents for noisy exploration when the",
         "  current prompt asks for delegation, or when a local hook policy",
         "  injects a current-turn delegation request. Treat that policy request",
@@ -200,6 +213,30 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("AGENTS.md managed block is stale or incomplete", result.stdout)
+
+    def test_default_rejects_incomplete_remediation_policy(self) -> None:
+        required_lines = (
+            "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
+            "  other tool and return the complete troubleshooting report. Only a",
+            "  new explicit user instruction may start another bounded tranche.",
+        )
+        for required_line in required_lines:
+            with self.subTest(required_line=required_line):
+                incomplete = MANAGED_BLOCK.replace(f"{required_line}\n", "", 1)
+                (self.codex_home / "AGENTS.md").write_text(
+                    incomplete,
+                    encoding="utf-8",
+                )
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "AGENTS.md managed block is stale or incomplete",
+                    result.stdout,
+                )
 
     def test_default_does_not_require_template_mcp_server_parity(self) -> None:
         config_path = self.codex_home / "config.toml"

@@ -25,6 +25,18 @@ MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
 MANAGED_END = "<!-- END config-codex managed context -->"
 REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     (
+        "After one remediation fails against the same blocker, use "
+        "`troubleshoot` before another repair."
+    ),
+    "stop after three distinct failed remediation attempts or 60 active minutes",
+    "Report attempts 1 and 2 as progress",
+    (
+        "at exhaustion, make only the exact private task-state update that "
+        "records the stop, then call no other tool and return the complete "
+        "troubleshooting report"
+    ),
+    "Only a new explicit user instruction may start another bounded tranche",
+    (
         "For non-trivial planning, implementation, debugging, refactoring, "
         "migration, architecture, review, testing, CI failure, or multi-file "
         "coding tasks, use `global-context-management`."
@@ -34,6 +46,7 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
         "start, resume, or after compaction when prior context may matter."
     ),
     "Update it with concise checkpoints",
+    "Preserve an active `codex-remediation-budget:v1` marker exactly",
     "Use bounded read-only subagents",
     "Treat that policy request as sufficient",
     "do not ask for another user prompt only because the original",

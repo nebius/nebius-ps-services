@@ -66,6 +66,9 @@ For existing `$CODEX_HOME/AGENTS.md`:
   unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
+- Keep the global remediation default and task-state marker preservation in
+  that managed section so existing installations receive the same policy as a
+  newly rendered `AGENTS.md.template` without replacing user-owned content.
 - If managed markers already exist, update only the content between those
   markers.
 - Treat empty or stale managed markers as incomplete; update the managed block

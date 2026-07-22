@@ -16,134 +16,132 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
     def read(self, path: Path) -> str:
         return path.read_text(encoding="utf-8")
 
-    def test_both_skills_remain_implicitly_selectable(self) -> None:
-        for skill in (DIAGNOSE, SETUP):
-            with self.subTest(skill=skill.name):
-                metadata = self.read(skill / "agents" / "openai.yaml")
-                self.assertIn("allow_implicit_invocation: true", metadata)
+    def test_diagnose_is_implicit_and_setup_is_explicit(self) -> None:
+        diagnose = self.read(DIAGNOSE / "agents" / "openai.yaml")
+        setup = self.read(SETUP / "agents" / "openai.yaml")
 
-    def test_diagnose_is_read_only_but_may_handoff_to_setup_planning(self) -> None:
+        self.assertIn("allow_implicit_invocation: true", diagnose)
+        self.assertIn("allow_implicit_invocation: false", setup)
+
+    def test_explicit_setup_needs_no_second_confirmation(self) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("Direct invocation authorizes one bounded", skill)
+        self.assertIn("Do not ask for another confirmation", skill)
+        self.assertNotIn("--confirm", script)
+        self.assertNotIn("replace-credential", script)
+        self.assertNotIn("compute_plan_digest", script)
+
+    def test_diagnose_never_invokes_setup_implicitly(self) -> None:
         skill = self.read(DIAGNOSE / "SKILL.md")
 
-        self.assertIn("read-only dry-run plan", skill)
-        self.assertIn("implicit setup never authorizes mutation", skill)
-        self.assertIn("retry without setup or user confirmation", skill)
+        self.assertIn("Do not invoke setup implicitly", skill)
+        self.assertIn("invoke `$agent-nebius-auth-setup` explicitly", skill)
         self.assertIn("$CODEX_NEBIUS_TOKEN_HELPER", skill)
         self.assertIn("retry-idempotent", skill)
         self.assertIn("blocked-admin-auth", skill)
 
-    def test_persistent_mutations_remain_confirmation_gated(self) -> None:
+    def test_managed_iam_is_one_group_with_two_fixed_permits(self) -> None:
         skill = self.read(SETUP / "SKILL.md")
-
-        self.assertIn("explicit current-turn confirmation", skill)
-        self.assertIn("repair-lease", skill)
-        self.assertIn("repair-local", skill)
-        self.assertIn("not a cryptographic boundary", skill)
-        for excluded in (
-            "IAM",
-            "credential generation/rotation",
-            "identity",
-            "hook",
-        ):
-            with self.subTest(excluded=excluded):
-                self.assertIn(excluded, skill)
-
-    def test_bootstrap_asks_once_and_revalidates_same_target_confirmation(self) -> None:
-        setup = self.read(SETUP / "SKILL.md")
-        diagnose = self.read(DIAGNOSE / "SKILL.md")
-        evals = self.read(SETUP / "evals" / "trigger-prompts.md")
-
-        self.assertIn("ask exactly once", setup)
-        self.assertIn("versioned, state-bound plan", setup)
-        self.assertIn("Do not ask again", setup)
-        self.assertIn("Do not ask\nagain for partial convergence", diagnose)
-        self.assertIn("without another user prompt", evals)
-        self.assertIn(
-            "Target/configuration drift, credential identity mismatch, or any action outside\nthe recorded envelope fails closed",
-            setup,
-        )
-
-    def test_replacement_is_separate_and_marked_before_invocation(self) -> None:
-        setup = self.read(SETUP / "SKILL.md")
-        evals = self.read(SETUP / "evals" / "trigger-prompts.md")
-
-        self.assertIn("observed service-account ID, group ID,\n   credential SHA-256", setup)
-        self.assertIn("After an ID is observed, any change requires a new\nuser confirmation", setup)
-        self.assertIn("ensure` never performs that replacement\ninternally", setup)
-        self.assertIn("Mark the attempt before\ninvocation", setup)
-        self.assertIn("failed or interrupted replacement ends that\nbootstrap attempt", setup)
-        self.assertIn("same-name service account or group has a different ID", evals)
-
-    def test_role_plan_stays_factual_without_extra_recommendation(self) -> None:
-        skill = self.read(SETUP / "SKILL.md")
-
-        self.assertIn("Role reconciliation is additive", skill)
-        self.assertIn(
-            "do not add broader- or\nnarrower-role advice unless the user asks for it",
-            skill,
-        )
-        self.assertNotIn("Recommend a narrower role", skill)
-        self.assertNotIn("Project-level `admin` is broad", skill)
-
-    def test_managed_iam_is_strictly_project_scoped(self) -> None:
-        setup = self.read(SETUP / "SKILL.md")
-        diagnose = self.read(DIAGNOSE / "SKILL.md")
         script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
-        evals = self.read(SETUP / "evals" / "trigger-prompts.md")
 
-        self.assertIn("## Project Scope Invariant", setup)
-        self.assertIn("never as the group parent or access-permit resource", setup)
-        self.assertIn("tenant-scope denial is expected", diagnose)
+        self.assertIn("one deterministic tenant-parented custom group", skill)
+        self.assertIn("`admin` on the selected project", skill)
+        self.assertIn("`viewer` on the authoritative parent tenant", skill)
+        self.assertIn('PROJECT_ROLE="admin"', script)
+        self.assertIn('TENANT_ROLE="viewer"', script)
+        self.assertIn('SA_NAME="codex-agent-sa"', script)
+        self.assertIn('GROUP_NAME="codex-agent-${project_hash}"', script)
         self.assertIn(
-            'nebius iam group create \\\n      --parent-id "$PROJECT_ID"',
+            'get_or_create_group "$GROUP_NAME" "$TENANT_ID"', script
+        )
+        self.assertIn("ensure_exact_agent_group_permits", script)
+        self.assertNotIn("TENANT_QUOTA_GROUP", script)
+        self.assertNotIn("--role)", script)
+        self.assertNotIn("--service-account-name)", script)
+
+    def test_managed_group_rejects_extra_or_duplicate_permits(self) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("other permit or\nduplicate", skill)
+        self.assertIn("without duplicates; refusing mutation", script)
+        self.assertIn("length == 2", script)
+        self.assertIn("must contain only one membership", script)
+
+    def test_setup_uses_one_live_convergence_pass(self) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("performs one convergence pass", skill)
+        main = script.split("main() {", maxsplit=1)[1]
+        self.assertEqual(main.count("resolve_project_metadata"), 1)
+        self.assertEqual(main.count("build_setup_plan"), 1)
+        self.assertIn("if is_dry_run; then\n    build_setup_plan", main)
+
+    def test_credential_replacement_is_bounded_inside_ensure(self) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("canonical credential at most once", skill)
+        self.assertIn("ensure_working_profile_with_one_replacement", script)
+        self.assertIn("no second replacement was attempted", script)
+        self.assertIn("credential_auth_failure_is_proven", script)
+        self.assertIn("profile_matches_service_account", script)
+        self.assertIn('profile_has_project_access "$service_account_id"', script)
+
+    def test_deleted_credential_identity_has_one_strict_human_bootstrap_path(
+        self,
+    ) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        readme = self.read(SETUP / "README.md")
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("minting a human-user access token", skill)
+        self.assertIn("never prints or\npersists that human token", skill)
+        self.assertIn("provider-classified RPC/API `NotFound`", skill)
+        self.assertIn('"not found" text', skill)
+        self.assertIn("service_account_get_error_is_not_found", script)
+        self.assertIn('credential_service_account_is_current', script)
+        self.assertIn('ensure_deleted_service_account_credential_flow', script)
+        self.assertIn("len(codes) == 1", script)
+        self.assertIn('[[ "$rpc_code" == "notfound" ]]', script)
+        self.assertIn("Authentication, authorization, transient", script)
+        self.assertIn("never prints or persists the human\ntoken", readme)
+
+        recovery = script.split(
+            "ensure_deleted_service_account_credential_flow() {", maxsplit=1
+        )[1].split("\n}\n", maxsplit=1)[0]
+        self.assertLess(
+            recovery.index("ensure_iam_shape_for_service_account"),
+            recovery.index("replace_credential_file"),
+        )
+        self.assertLess(
+            recovery.index("replace_credential_file"),
+            recovery.index("ensure_profile_binding"),
+        )
+        self.assertNotIn("ensure_working_profile_with_one_replacement", recovery)
+
+    def test_dry_run_discloses_profile_and_conditional_key_repair(self) -> None:
+        script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")
+
+        self.assertIn("profile_needs_rebind", script)
+        self.assertIn(
+            "if the rebuilt profile still has a classified credential-authentication failure",
             script,
         )
-        self.assertNotIn(
-            'nebius iam group create \\\n      --parent-id "$TENANT_ID"',
-            script,
-        )
-        self.assertIn('--resource-id "$PROJECT_ID"', script)
-        self.assertNotIn('--resource-id "$TENANT_ID"', script)
-        self.assertIn("same-name Codex group exists under the tenant", evals)
+        self.assertIn("CODEX_NEBIUS_PROJECT_ID=$PROJECT_ID nebius", script)
 
-    def test_project_discovery_authority_is_aligned(self) -> None:
-        diagnose = self.read(DIAGNOSE / "SKILL.md")
-        setup = self.read(SETUP / "SKILL.md")
-        concepts = (
-            ("current turn", "current turn"),
-            ("task-state", "task-state"),
-            ("Persistent memory", "Persistent memory"),
-            ("active profile", "active Nebius profile"),
-            ("credential filename", "credential filename"),
-            ("cwd", "working-directory"),
-            ("legacy default selector", "codex-agent-default-project-id"),
-        )
-        for diagnose_phrase, setup_phrase in concepts:
-            with self.subTest(concept=diagnose_phrase):
-                self.assertIn(diagnose_phrase, diagnose)
-                self.assertIn(setup_phrase, setup)
-
-    def test_evals_cover_retry_and_confirmed_persistent_repair(self) -> None:
-        evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
-
-        self.assertIn("retry without setup or user confirmation", evals)
-        self.assertIn("401/`UNAUTHENTICATED`", evals)
-        self.assertIn("confirmed setup plan", evals)
-        self.assertIn("valid matching repair lease", evals)
-
-    def test_root_readme_documents_renewal_ownership(self) -> None:
+    def test_root_readme_and_evals_match_the_contract(self) -> None:
         readme = self.read(ROOT / "README.md")
+        setup_evals = self.read(SETUP / "evals" / "trigger-prompts.md")
+        diagnose_evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
 
-        for phrase in (
-            "Normal CLI/profile",
-            "supported SDK credential paths own renewal",
-            "CODEX_NEBIUS_TOKEN_HELPER",
-            "retry-idempotent",
-            "Already-running",
-            "blocked-admin-auth",
-        ):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, readme)
+        self.assertIn("`agent-nebius-auth-setup` | Explicit only", readme)
+        self.assertIn("One\ndeterministic group is parented", readme)
+        self.assertIn("without another confirmation", setup_evals)
+        self.assertIn("invoke setup explicitly", diagnose_evals)
 
 
 if __name__ == "__main__":

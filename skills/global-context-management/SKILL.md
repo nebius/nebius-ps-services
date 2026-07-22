@@ -143,6 +143,12 @@ objective, constraints, decisions, changed files, validation status, risks, and
 next action needed for continuation. Keep it below 12 KiB when practical and
 use `assets/task-state-template.md` only when a section template is helpful.
 
+When `troubleshoot` records an active `codex-remediation-budget:v1` marker,
+preserve exactly one valid marker during every rolling-summary rewrite until it
+is resolved, superseded by a causally different blocker, or replaced by a new
+user-authorized tranche. Do not infer attempts, change limits, or copy raw
+failure evidence into it; `troubleshoot` owns those semantics.
+
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the
 final response. If a task-state file grows harder to scan than the current

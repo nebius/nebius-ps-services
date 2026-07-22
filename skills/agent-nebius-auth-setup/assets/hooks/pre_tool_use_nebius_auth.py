@@ -1365,14 +1365,13 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
                 "agent credential has unsafe permissions. Run "
                 "$agent-nebius-auth-diagnose. If a still-valid matching repair "
                 "lease exists, $agent-nebius-auth-setup repair-local may restore "
-                "mode 0600 without a new user confirmation; otherwise use the "
-                "reviewed and confirmed setup flow."
+                "mode 0600; otherwise explicitly invoke "
+                "$agent-nebius-auth-setup for bounded repair."
             )
         return deny(
             "Nebius auth required, but the selected project's local agent credential "
             "file is missing or unsafe. Run $agent-nebius-auth-diagnose, then use "
-            "$agent-nebius-auth-setup only after reviewing and confirming its "
-            "mutation plan."
+            "explicitly invoke $agent-nebius-auth-setup for bounded repair."
         )
 
     return allow_rewrite(

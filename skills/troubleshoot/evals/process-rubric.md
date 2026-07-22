@@ -21,7 +21,7 @@ verification. With integer raw scores, 85% requires at least 111/130.
 | Minimal repair | Symptom masking or broad rewrite | Partially related fix | Narrow invariant-restoring repair directly follows from cause |
 | Regression oracle | None | Test passes corrected state | Oracle distinguishes faulty and corrected states |
 | Verification | One pass | Targeted checks only | Reproducer, counterfactual, affected boundaries, diagnostics, repetitions, and hygiene |
-| Reporting | Overclaim or missing uncertainty | Useful narrative | Outcome class, facts/inferences, confidence, evidence, changes, residual risk, and next action |
+| Reporting | Overclaim, missing uncertainty, or ignores an exhausted remediation budget | Useful narrative | Outcome class, facts/inferences, confidence, evidence, changes, remediation-budget status, residual risk, and next action |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -33,6 +33,7 @@ Track without turning speed into the primary objective:
 - duplicate unchanged commands
 - speculative functional patches
 - experiments that did not update any hypothesis
+- remediation attempts after the active budget was exhausted
 - time to first decisive boundary observation
 - breadth of searches before localization
 - retained diagnostic artifacts

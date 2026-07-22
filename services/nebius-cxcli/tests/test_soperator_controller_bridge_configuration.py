@@ -534,7 +534,7 @@ def test_pre_authority_partial_preimage_rollback_reapplies_only_restored_copy(
     assert copies["bridge"]["state"] == "accepted"
     assert journal["source_configuration"]["source_reference_rebindings"] == [
         {
-            "reason": "exact-jailed-config-resource-version-after-accepted-copy",
+            "reason": "same-identity-jailed-config-resource-version-churn",
             "jailed_config_uid": "jailed-config-uid",
             "previous_resource_version": "30",
             "resource_version": "31",
@@ -672,6 +672,8 @@ def test_partition_pause_after_reconfigure_reuses_exact_down_observation(
         kube_context="context",
         command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
         checkpoint_writer=lambda: checkpoints.append(copy.deepcopy(journal)),
+        checkpoint=None,
+        operation_label="test bridge partition pause reassertion",
     )
 
     assert journal["partition_pause_reasserted"] == []
@@ -703,6 +705,8 @@ def test_partition_pause_after_reconfigure_reasserts_exact_previous_up_observati
         kube_context="context",
         command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
         checkpoint_writer=lambda: None,
+        checkpoint=None,
+        operation_label="test bridge partition pause reassertion",
     )
 
     assert updates == [("scontrol", "update", "PartitionName=main", "State=DOWN")]
@@ -729,4 +733,6 @@ def test_partition_pause_after_reconfigure_rejects_unowned_drift(
             kube_context="context",
             command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected command"),
             checkpoint_writer=lambda: None,
+            checkpoint=None,
+            operation_label="test bridge partition pause reassertion",
         )

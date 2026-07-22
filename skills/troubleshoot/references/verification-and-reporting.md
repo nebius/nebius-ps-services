@@ -96,6 +96,16 @@ coverage limitation.
 ## Residual Uncertainty And Next Action
 ```
 
+For remediation-budget exhaustion, add `REMEDIATION_BUDGET_EXHAUSTED`, the
+`attempt_limit` or `time_limit` stop trigger, and use these exact report section
+names so the optional Stop hook can validate delivery: `## Outcome`,
+`## Blocking Error`, `## Source`, `## Attempts`, `## Evidence`,
+`## Current State`, and `## Next Action`. List all counted attempts and the
+highest-information action available to the user or a later authorized tranche.
+Include the exact redacted error class, code, message excerpt, and failing
+operation when known; identify its component, command, test, service, or bounded
+log location under `## Source`.
+
 Keep reports public-safe when committed. Do not include secrets, private URLs,
 internal hostnames, customer data, raw production logs, or environment-specific
 credential paths.

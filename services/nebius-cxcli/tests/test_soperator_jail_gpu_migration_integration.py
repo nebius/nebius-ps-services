@@ -1952,6 +1952,7 @@ def test_external_jail_gpu_post_activation_validates_every_gate_before_success(
     )
 
     lines = migration._ensure_jail_gpu_post_activation_gate(
+        checkpoint=None,
         phase=phase,
         command_runner=lambda args, **_kwargs: _result(args),
         kube_context="ctx",

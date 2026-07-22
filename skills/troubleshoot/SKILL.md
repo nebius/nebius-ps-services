@@ -47,6 +47,8 @@ target repository's toolchain and current official language or runtime guidance.
   diff, nearby tests, architecture docs, runbooks, and the narrow execution path.
 - Read [investigation-protocol.md](references/investigation-protocol.md) for the
   failure contract, ledgers, experiments, proof standard, and state transitions.
+- Read [remediation-budget.md](references/remediation-budget.md) before a second
+  remediation after the first one failed against the same blocker.
 - Read [software-failure-playbooks.md](references/software-failure-playbooks.md)
   for code, shell, CI, build, concurrency, memory, and performance failures.
 - Read
@@ -70,7 +72,8 @@ target repository's toolchain and current official language or runtime guidance.
 - Write evidence artifacts only to a user-selected path. Do not create hidden
   repository-local troubleshooting state.
 - Use the current durable task-state surface when available for concise
-  continuation facts, never for raw logs, secrets, or customer data.
+  continuation facts and the bounded remediation marker, never for raw logs,
+  secrets, or customer data.
 
 ## Process
 
@@ -121,6 +124,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 10. **REPORTED**
     - Classify the outcome as `VERIFIED_FIXED`, `MITIGATED_NOT_PROVEN`,
       `DIAGNOSED_NOT_FIXED`, `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
+    - If an attempt or time budget is exhausted, record the stop in the exact
+      private task-state marker, stop all other tool use, and return the
+      remediation-budget report before any user-authorized continuation.
 
 ## Authority And Safety
 
@@ -151,6 +157,15 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   observation unless it becomes justified production observability.
 - After three low-information experiments, stop and rebuild the model and
   hypothesis set before running another experiment.
+- After one remediation fails against a stable blocker, initialize the
+  remediation budget before a second repair. Count only distinct failed
+  remediation-plus-verification cycles; default to three attempts or 60 active
+  minutes, whichever is reached first.
+- Report failed attempts 1 and 2 to the user. After the third failed attempt or
+  time exhaustion, set the marker to `exhausted`, call no other tools, and
+  transition directly to `REPORTED`.
+- Never extend or reset a tranche without an explicit current-task user
+  instruction. A bare `continue` after the report starts a fresh default tranche.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 
@@ -166,6 +181,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   disposable fixture, or stop for explicit approval.
 - If new evidence contradicts the current cause, lower confidence and return to
   `MODEL` or `HYPOTHESES` rather than defending the earlier explanation.
+- If a remediation tranche is exhausted, return `UNRESOLVED`,
+  `BLOCKED_MISSING_EVIDENCE`, or `DIAGNOSED_NOT_FIXED` as supported by the
+  evidence; do not attempt a fourth remediation before a new user instruction.
 
 ## Must Not
 
@@ -216,6 +234,9 @@ Return:
 - Remediation or mitigation performed, with authority and safety basis.
 - Regression oracle and verification evidence.
 - Final outcome classification, residual uncertainty, and exact next action.
+- On budget exhaustion, the exact stop trigger, `REMEDIATION_BUDGET_EXHAUSTED`,
+  the blocking error and source, every counted attempt, current state, and the
+  user action required before another tranche.
 
 ## References
 

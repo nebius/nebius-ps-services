@@ -722,12 +722,26 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("unchanged agent-nebius-auth-setup/assets/hooks", second.stdout)
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
+        self.assertIn("unchanged troubleshoot/assets/hooks", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
         self.assertIn("files: unchanged 6", second.stdout)
+        self.assertIn("files: unchanged 2", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
-        self.assertIn("Summary: files updated 0, unchanged 13; registrations unchanged 5", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 15; registrations unchanged 7", second.stdout)
+        self.assertTrue(
+            self.installed_hook_target("remediation_attempt_guard.py").is_file()
+        )
+        hooks = json.loads((self.codex_home / "hooks.json").read_text(encoding="utf-8"))
+        remediation_events = {
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "remediation_attempt_guard.py" in hook["command"]
+        }
+        self.assertEqual(remediation_events, {"PreToolUse", "Stop"})
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)

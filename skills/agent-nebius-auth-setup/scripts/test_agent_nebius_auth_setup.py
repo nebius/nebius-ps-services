@@ -23,15 +23,15 @@ PROJECT_NAME = "Project Test"
 HUMAN_PROFILE = "human-admin"
 AGENT_PROFILE = f"codex-agent-{PROJECT}"
 SERVICE_ACCOUNT_ID = "serviceaccount-test"
+STALE_SERVICE_ACCOUNT_ID = "serviceaccount-deleted"
 GROUP_ID = "group-test"
-GROUP_NAME = (
-    f"codex-agent-project-test-{hashlib.sha256(PROJECT.encode()).hexdigest()[:20]}"
-)
+GROUP_NAME = f"codex-agent-{hashlib.sha256(PROJECT.encode()).hexdigest()[:20]}"
 
 
 FAKE_NEBIUS = r"""#!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -116,8 +116,16 @@ if args[:2] == ["profile", "list"]:
 
 if args[:2] in (["profile", "create"], ["profile", "update"]):
     profile = args[2]
+    if state.get("profile_write_error"):
+        print("profile write failed", file=sys.stderr)
+        raise SystemExit(2)
     if profile not in state["profiles"]:
         state["profiles"].append(profile)
+    credential_path = option_value("--service-account-file")
+    credential_value = json.loads(Path(credential_path).read_text(encoding="utf-8"))
+    state["profile_service_account_ids"][profile] = credential_value[
+        "subject-credentials"
+    ]["iss"]
     state["active"] = profile
     if args[1] == "create":
         state["profile_create_calls"] += 1
@@ -137,9 +145,17 @@ if args[:2] in (["profile", "create"], ["profile", "update"]):
 
 if args[:2] == ["iam", "get-access-token"]:
     profile = current_profile()
+    if profile.startswith("codex-agent-"):
+        state["agent_token_calls"] += 1
+    else:
+        state["human_token_calls"] += 1
+    save()
     credential_blocks_agent = state["credential_broken"] and profile.startswith(
         "codex-agent-"
     )
+    if state.get("token_transient_error") and profile.startswith("codex-agent-"):
+        print("UNAVAILABLE: temporary token service failure", file=sys.stderr)
+        raise SystemExit(2)
     if (
         profile in state["profiles"]
         and profile not in state["broken_profiles"]
@@ -147,7 +163,27 @@ if args[:2] == ["iam", "get-access-token"]:
     ):
         print("fake-token")
         raise SystemExit(0)
+    if credential_blocks_agent:
+        print("UNAUTHENTICATED: invalid credential", file=sys.stderr)
     raise SystemExit(2)
+
+if args[:2] == ["iam", "whoami"]:
+    profile = current_profile()
+    if profile.startswith("codex-agent-"):
+        state["agent_whoami_calls"] += 1
+        save()
+    service_account_id = state["profile_service_account_ids"].get(profile, "")
+    if not service_account_id:
+        print("profile identity unavailable", file=sys.stderr)
+        raise SystemExit(2)
+    print_json(
+        {
+            "service_account_profile": {
+                "info": {"metadata": {"id": service_account_id}}
+            }
+        }
+    )
+    raise SystemExit(0)
 
 if args[:3] == ["iam", "service-account", "get-by-name"]:
     if state.get("service_account_lookup_error"):
@@ -163,12 +199,38 @@ if args[:3] == ["iam", "service-account", "get-by-name"]:
     if not state["service_account_exists"]:
         print("not found", file=sys.stderr)
         raise SystemExit(13)
-    print_json({"metadata": {"id": state["service_account_id"]}})
+    parent_id = option_value("--parent-id")
+    account_name = option_value("--name")
+    matching_ids = [
+        service_account_id
+        for service_account_id, record in state["service_account_records"].items()
+        if record["parent_id"] == parent_id and record["name"] == account_name
+    ]
+    if len(matching_ids) != 1:
+        print("not found or ambiguous", file=sys.stderr)
+        raise SystemExit(13)
+    print_json({"metadata": {"id": matching_ids[0]}})
     raise SystemExit(0)
 
 if args[:3] == ["iam", "service-account", "get"]:
     require_human()
     service_account_id = option_value("--id")
+    if state.get("service_account_get_error"):
+        print(
+            state.get(
+                "service_account_get_error_message",
+                "rpc error: code = Unavailable desc = temporary lookup failure",
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(state.get("service_account_get_error_status", 2))
+    if service_account_id not in state["service_account_records"]:
+        print(
+            "rpc error: code = NotFound desc = entity not found\n"
+            "Resource not found ResourceNotFound: service iam",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     record = state["service_account_records"][service_account_id]
     print_json(
         {
@@ -214,6 +276,10 @@ if args[:3] == ["iam", "service-account", "create"]:
     require_human()
     state["service_account_exists"] = True
     state["service_account_create_calls"] += 1
+    state["service_account_records"][state["service_account_id"]] = {
+        "name": state["service_account_name"],
+        "parent_id": state["service_account_parent_id"],
+    }
     save()
     print_json({"metadata": {"id": state["service_account_id"]}})
     raise SystemExit(0)
@@ -239,9 +305,14 @@ if args[:3] == ["iam", "group", "create"]:
     parent_id = option_value("--parent-id")
     group_name = option_value("--name")
     state["group_create_parent_ids"].append(parent_id)
-    state["group_records"][f"{parent_id}:{group_name}"] = state["group_id"]
+    group_id = (
+        state["group_id"]
+        if group_name == state["group_name"]
+        else f"group-{hashlib.sha256(group_name.encode()).hexdigest()[:12]}"
+    )
+    state["group_records"][f"{parent_id}:{group_name}"] = group_id
     save()
-    print_json({"metadata": {"id": state["group_id"]}})
+    print_json({"metadata": {"id": group_id}})
     raise SystemExit(0)
 
 if args[:3] == ["iam", "access-permit", "list"]:
@@ -249,25 +320,51 @@ if args[:3] == ["iam", "access-permit", "list"]:
     if state.get("access_permit_lookup_error"):
         print("temporary permit lookup failure", file=sys.stderr)
         raise SystemExit(2)
-    print_json(
-        {
-            "items": [
-                {"spec": {"resource_id": project_id, "role": role}}
-                for project_id in state["project_ids"]
-                for role in state["access_permit_roles"]
-            ]
-        }
-    )
+    if state.get("access_permit_unsupported_object"):
+        print_json({"unexpected": []})
+        raise SystemExit(0)
+    parent_id = option_value("--parent-id")
+    state["access_permit_list_calls"] += 1
+    save()
+    if parent_id == state["group_id"]:
+        items = [
+            {"spec": {"resource_id": state["project_id"], "role": role}}
+            for role in state["access_permit_roles"]
+        ]
+        items.extend(
+            {"spec": {"resource_id": state["tenant_id"], "role": role}}
+            for role in state["tenant_access_permit_roles"]
+        )
+    else:
+        items = [
+            {"spec": permit}
+            for permit in state["access_permit_records"].get(parent_id, [])
+        ]
+    if not items and state.get("access_permit_empty_object"):
+        print_json({})
+        raise SystemExit(0)
+    print_json({"items": items})
     raise SystemExit(0)
 
 if args[:3] == ["iam", "access-permit", "create"]:
     require_human()
     role = option_value("--role")
-    state["access_permit_create_parent_ids"].append(option_value("--parent-id"))
-    state["access_permit_create_resource_ids"].append(option_value("--resource-id"))
+    parent_id = option_value("--parent-id")
+    resource_id = option_value("--resource-id")
+    state["access_permit_create_parent_ids"].append(parent_id)
+    state["access_permit_create_resource_ids"].append(resource_id)
     state["access_permit_create_roles"].append(role)
-    if role not in state["access_permit_roles"]:
-        state["access_permit_roles"].append(role)
+    if parent_id == state["group_id"]:
+        if resource_id == state["tenant_id"]:
+            if role not in state["tenant_access_permit_roles"]:
+                state["tenant_access_permit_roles"].append(role)
+        elif role not in state["access_permit_roles"]:
+            state["access_permit_roles"].append(role)
+    else:
+        permit = {"resource_id": resource_id, "role": role}
+        state["access_permit_records"].setdefault(parent_id, [])
+        if permit not in state["access_permit_records"][parent_id]:
+            state["access_permit_records"][parent_id].append(permit)
     save()
     raise SystemExit(0)
 
@@ -276,27 +373,60 @@ if args[:3] == ["iam", "group-membership", "list-members"]:
     if state.get("membership_lookup_error"):
         print("temporary membership lookup failure", file=sys.stderr)
         raise SystemExit(2)
+    if state.get("membership_unsupported_object"):
+        print_json({"unexpected": []})
+        raise SystemExit(0)
     state["membership_list_calls"] += 1
     save()
+    group_id = option_value("--parent-id")
     page_token = option_value("--page-token")
     if state.get("membership_on_second_page") and not page_token:
-        print_json({"memberships": [], "next_page_token": "page-2"})
+        first_page_memberships = (
+            [
+                {"spec": {"member_id": member_id}}
+                for member_id in state["membership_extra_ids"]
+            ]
+            if state.get("membership_extra_on_first_page")
+            else []
+        )
+        print_json(
+            {
+                "memberships": first_page_memberships,
+                "next_page_token": "page-2",
+            }
+        )
         raise SystemExit(0)
     if state.get("membership_on_second_page") and page_token != "page-2":
         print("unexpected page token", file=sys.stderr)
         raise SystemExit(2)
-    memberships = (
-        [{"spec": {"member_id": state["service_account_id"]}}]
-        if state.get("membership_exists", True)
-        else []
-    )
+    memberships = [
+        {"spec": {"member_id": member_id}}
+        for member_id in state["membership_records"].get(group_id, [])
+    ]
+    if (
+        group_id not in state["membership_records"]
+        and group_id in state["membership_group_ids"]
+    ):
+        memberships.append({"spec": {"member_id": state["service_account_id"]}})
+    if not state.get("membership_extra_on_first_page"):
+        memberships.extend(
+            {"spec": {"member_id": member_id}}
+            for member_id in state["membership_extra_ids"]
+        )
+    if not memberships and state.get("membership_empty_object"):
+        print_json({})
+        raise SystemExit(0)
     print_json({"memberships": memberships})
     raise SystemExit(0)
 
 if args[:3] == ["iam", "group-membership", "create"]:
     require_human()
+    group_id = option_value("--parent-id")
     state["membership_create_calls"] += 1
-    state["membership_exists"] = True
+    state["membership_create_parent_ids"].append(group_id)
+    state["membership_records"][group_id] = [option_value("--member-id")]
+    if group_id not in state["membership_group_ids"]:
+        state["membership_group_ids"].append(group_id)
     save()
     if state.get("membership_create_conflict_converges"):
         print("AlreadyExists", file=sys.stderr)
@@ -306,6 +436,10 @@ if args[:3] == ["iam", "group-membership", "create"]:
 if args[:3] == ["iam", "auth-public-key", "generate"]:
     require_human()
     state["auth_public_key_generate_calls"] += 1
+    if state.get("auth_public_key_generate_error"):
+        save()
+        print("authorized-key generation failed", file=sys.stderr)
+        raise SystemExit(2)
     if state.get("generated_credentials_broken_count", 0) > 0:
         state["credential_broken"] = True
         state["generated_credentials_broken_count"] -= 1
@@ -332,6 +466,32 @@ if args[:3] == ["iam", "auth-public-key", "generate"]:
         ),
         encoding="utf-8",
     )
+    raise SystemExit(0)
+
+if args[:3] == ["quotas", "quota-allowance", "list"]:
+    state["quota_list_calls"] += 1
+    save()
+    if (
+        state.get("tenant_quota_access_broken")
+        or not any(
+            group_id in state["membership_group_ids"]
+            and (
+                (
+                    group_id == state["group_id"]
+                    and "viewer" in state["tenant_access_permit_roles"]
+                )
+                or any(
+                    permit["resource_id"] == state["tenant_id"]
+                    and permit["role"] == "viewer"
+                    for permit in state["access_permit_records"].get(group_id, [])
+                )
+            )
+            for group_id in state["membership_group_ids"]
+        )
+    ):
+        print("tenant quota access denied", file=sys.stderr)
+        raise SystemExit(13)
+    print_json({"items": []})
     raise SystemExit(0)
 
 print(f"unhandled fake nebius command: {' '.join(args)}", file=sys.stderr)
@@ -386,27 +546,52 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             "access_permit_roles": (
                 ["admin"] if access_permit_roles is None else access_permit_roles
             ),
+            "access_permit_list_calls": 0,
+            "access_permit_records": {},
+            "tenant_access_permit_roles": ["viewer"],
             "agent_iam_attempts": 0,
+            "agent_token_calls": 0,
+            "agent_whoami_calls": 0,
+            "human_token_calls": 0,
             "auth_public_key_generate_calls": 0,
+            "auth_public_key_generate_error": False,
             "broken_profiles": broken_profiles or [],
             "credential_broken": False,
             "generated_credentials_broken_count": 0,
             "generated_credential_invalid": False,
             "service_account_lookup_error": False,
+            "service_account_get_error": False,
+            "service_account_get_error_message": "",
+            "service_account_get_error_status": 2,
             "group_lookup_error": False,
             "access_permit_lookup_error": False,
+            "access_permit_empty_object": False,
+            "access_permit_unsupported_object": False,
             "membership_lookup_error": False,
+            "membership_empty_object": False,
+            "membership_unsupported_object": False,
             "membership_create_calls": 0,
+            "membership_create_parent_ids": [],
             "membership_create_conflict_converges": False,
-            "membership_exists": True,
+            "membership_group_ids": [GROUP_ID] if service_account_exists else [],
+            "membership_records": {},
+            "membership_extra_ids": [],
+            "membership_extra_on_first_page": False,
             "membership_list_calls": 0,
             "membership_on_second_page": False,
             "profile_list_error": False,
             "profile_list_malformed": False,
+            "profile_write_error": False,
+            "profile_service_account_ids": {
+                AGENT_PROFILE: SERVICE_ACCOUNT_ID,
+            },
+            "token_transient_error": False,
             "group_get_by_name_calls": 0,
             "group_get_parent_ids": [],
             "group_create_parent_ids": [],
-            "group_records": {f"{PROJECT}:{GROUP_NAME}": GROUP_ID},
+            "group_records": {
+                f"{TENANT}:{GROUP_NAME}": GROUP_ID,
+            },
             "inherited_auth_attempts": 0,
             "profile_create_calls": 0,
             "profile_update_calls": 0,
@@ -418,6 +603,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             "project_names": {PROJECT: PROJECT_NAME},
             "project_parent_ids": {PROJECT: TENANT},
             "project_response_ids": {},
+            "quota_list_calls": 0,
             "service_account_id": SERVICE_ACCOUNT_ID,
             "service_account_create_calls": 0,
             "service_account_exists": service_account_exists,
@@ -430,23 +616,34 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
                 }
             },
             "group_id": GROUP_ID,
+            "group_name": GROUP_NAME,
+            "project_id": PROJECT,
+            "tenant_quota_access_broken": False,
+            "tenant_id": TENANT,
         }
         self.state_path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
 
     def read_state(self) -> dict[str, object]:
         return json.loads(self.state_path.read_text(encoding="utf-8"))
 
-    def write_credential(self, project: str = PROJECT) -> None:
+    def write_credential(
+        self,
+        project: str = PROJECT,
+        *,
+        service_account_id: str | None = None,
+        register_service_account: bool = True,
+    ) -> None:
         (self.home / ".nebius").mkdir(exist_ok=True)
         (self.home / ".nebius").chmod(0o700)
-        service_account_id = (
+        selected_service_account_id = service_account_id or (
             SERVICE_ACCOUNT_ID if project == PROJECT else f"serviceaccount-{project}"
         )
         state = self.read_state()
-        state["service_account_records"][service_account_id] = {
-            "name": "codex-agent-sa",
-            "parent_id": project,
-        }
+        if register_service_account:
+            state["service_account_records"][selected_service_account_id] = {
+                "name": "codex-agent-sa",
+                "parent_id": project,
+            }
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
         credential = self.home / ".nebius" / f"codex-agent-authkey.{project}.json"
         credential.write_text(
@@ -455,20 +652,47 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
                     "subject-credentials": {
                         "type": "JWT",
                         "alg": "RS256",
-                        "iss": service_account_id,
-                        "sub": service_account_id,
+                        "iss": selected_service_account_id,
+                        "sub": selected_service_account_id,
                     }
                 }
             ),
             encoding="utf-8",
         )
 
+    def write_deleted_service_account_credential(
+        self,
+        *,
+        replacement_service_account_exists: bool = False,
+    ) -> Path:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential(service_account_id=STALE_SERVICE_ACCOUNT_ID)
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["service_account_records"].pop(STALE_SERVICE_ACCOUNT_ID)
+        state["service_account_id"] = SERVICE_ACCOUNT_ID
+        state["service_account_exists"] = replacement_service_account_exists
+        if replacement_service_account_exists:
+            state["service_account_records"][SERVICE_ACCOUNT_ID] = {
+                "name": "codex-agent-sa",
+                "parent_id": PROJECT,
+            }
+        else:
+            state["service_account_records"].pop(SERVICE_ACCOUNT_ID, None)
+        state["profile_service_account_ids"][AGENT_PROFILE] = (
+            STALE_SERVICE_ACCOUNT_ID
+        )
+        state["membership_group_ids"] = []
+        state["membership_records"] = {}
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        return credential
+
     def setup_command(
         self,
         project: str | None = PROJECT,
         *,
         tenant: str | None = TENANT,
-        confirm_digest: str | None = None,
         extra_args: tuple[str, ...] = (),
     ) -> list[str]:
         command = [
@@ -481,17 +705,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         if tenant is not None:
             command.extend(["--tenant-id", tenant])
         command.extend(extra_args)
-        if confirm_digest is not None:
-            command.extend(["--confirm", confirm_digest])
         return command
-
-    def plan_digest(self, result: subprocess.CompletedProcess[str]) -> str:
-        prefix = "Plan digest: "
-        return next(
-            line.split(prefix, 1)[1]
-            for line in result.stderr.splitlines()
-            if prefix in line
-        )
 
     def run_setup(
         self,
@@ -503,22 +717,10 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         extra_args: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
         selected_env = env or self.env
-        confirm_digest: str | None = None
-        if confirm:
-            dry_run = self.run_dry_run(
-                project or PROJECT,
-                tenant=tenant,
-                env=selected_env,
-                extra_args=extra_args,
-            )
-            if dry_run.returncode != 0:
-                return dry_run
-            confirm_digest = self.plan_digest(dry_run)
         return subprocess.run(
             self.setup_command(
                 project,
                 tenant=tenant,
-                confirm_digest=confirm_digest,
                 extra_args=extra_args,
             ),
             cwd=str(SCRIPT.parent.parent),
@@ -548,48 +750,9 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             check=False,
         )
 
-    def replacement_command(
-        self, *, confirm_digest: str | None = None
-    ) -> list[str]:
-        command = [
-            "bash",
-            str(SCRIPT),
-            "replace-credential",
-            "--project-id",
-            PROJECT,
-            "--tenant-id",
-            TENANT,
-        ]
-        if confirm_digest is not None:
-            command.extend(["--confirm", confirm_digest])
-        return command
-
-    def run_replacement(
-        self, *, confirm: bool = True
-    ) -> subprocess.CompletedProcess[str]:
-        dry_run = subprocess.run(
-            [*self.replacement_command(), "--dry-run"],
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if not confirm or dry_run.returncode != 0:
-            return dry_run
-        return subprocess.run(
-            self.replacement_command(confirm_digest=self.plan_digest(dry_run)),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
     def repair_lease_command(
         self,
         *,
-        confirm_digest: str | None = None,
         ttl_seconds: int = 43200,
     ) -> list[str]:
         command = [
@@ -603,28 +766,16 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             "--ttl-seconds",
             str(ttl_seconds),
         ]
-        if confirm_digest is not None:
-            command.extend(["--confirm", confirm_digest])
         return command
 
     def run_repair_lease(
         self, *, ttl_seconds: int = 43200, confirm: bool = True
     ) -> subprocess.CompletedProcess[str]:
-        dry_run = subprocess.run(
-            [*self.repair_lease_command(ttl_seconds=ttl_seconds), "--dry-run"],
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if not confirm or dry_run.returncode != 0:
-            return dry_run
         return subprocess.run(
-            self.repair_lease_command(
-                confirm_digest=self.plan_digest(dry_run),
-                ttl_seconds=ttl_seconds,
-            ),
+            [
+                *self.repair_lease_command(ttl_seconds=ttl_seconds),
+                *([] if confirm else ["--dry-run"]),
+            ],
             cwd=str(SCRIPT.parent.parent),
             env=self.env,
             text=True,
@@ -684,14 +835,10 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         env: dict[str, str] | None = None,
     ) -> subprocess.Popen[str]:
         selected_env = env or self.env
-        dry_run = self.run_dry_run(project or PROJECT, tenant=tenant, env=selected_env)
-        if dry_run.returncode != 0:
-            raise AssertionError(dry_run.stderr)
         return subprocess.Popen(
             self.setup_command(
                 project,
                 tenant=tenant,
-                confirm_digest=self.plan_digest(dry_run),
             ),
             cwd=str(SCRIPT.parent.parent),
             env=selected_env,
@@ -769,7 +916,27 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(after["profile_update_calls"], 0)
         self.assertEqual(after["service_account_create_calls"], 0)
         self.assertEqual(after["access_permit_create_roles"], [])
+        self.assertEqual(after["quota_list_calls"], 1)
         self.assertEqual(after["agent_iam_attempts"], before["agent_iam_attempts"])
+
+    def test_verify_rejects_noncanonical_service_account_identity(self) -> None:
+        foreign_service_account_id = "serviceaccount-foreign"
+        self.write_state(active=AGENT_PROFILE, profiles=[AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential_value = json.loads(credential.read_text(encoding="utf-8"))
+        credential_value["subject-credentials"]["iss"] = foreign_service_account_id
+        credential_value["subject-credentials"]["sub"] = foreign_service_account_id
+        credential.write_text(json.dumps(credential_value), encoding="utf-8")
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["profile_service_account_ids"][AGENT_PROFILE] = foreign_service_account_id
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_verify()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not resolve the canonical service account", result.stderr)
 
     def test_verify_fails_closed_without_repairing_local_state(self) -> None:
         self.write_state(profiles=[AGENT_PROFILE])
@@ -787,7 +954,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
     def test_verify_distinguishes_token_and_project_access_failures(self) -> None:
         for broken_profile, broken_access, expected in (
             (True, False, "cannot mint a token non-interactively"),
-            (False, True, "lacks basic project access"),
+            (False, True, "does not resolve the canonical service account"),
         ):
             with self.subTest(expected=expected):
                 self.write_state(
@@ -812,34 +979,239 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
-    def test_default_role_adds_admin_permit_to_editor_only_group(self) -> None:
+    def test_verify_requires_authoritative_tenant_quota_read_access(self) -> None:
+        self.write_state(profiles=[AGENT_PROFILE])
+        state = self.read_state()
+        state["tenant_quota_access_broken"] = True
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+
+        result = self.run_verify()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lacks authoritative tenant quota-allowance read access", result.stderr)
+        self.assertEqual(self.read_state()["quota_list_calls"], 1)
+
+    def test_verify_rejects_profile_credential_identity_mismatch(self) -> None:
+        self.write_state(profiles=[AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["profile_service_account_ids"][AGENT_PROFILE] = (
+            "serviceaccount-different"
+        )
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_verify()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match the canonical credential", result.stderr)
+        self.assertEqual(self.read_state()["profile_update_calls"], 0)
+
+    def test_managed_group_rejects_existing_extra_project_role(self) -> None:
         self.write_state(access_permit_roles=["editor"])
         self.write_credential()
 
-        self.assert_setup_succeeds()
-        state = self.read_state()
+        result = self.run_setup()
 
-        self.assertEqual(state["access_permit_create_roles"], ["admin"])
-        self.assertEqual(state["access_permit_roles"], ["editor", "admin"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must contain only project 'admin' and tenant 'viewer'", result.stderr)
+        self.assertEqual(self.read_state()["access_permit_create_roles"], [])
 
-        self.assert_setup_succeeds()
-        state = self.read_state()
-
-        self.assertEqual(state["access_permit_create_roles"], ["admin"])
-        self.assertEqual(state["access_permit_roles"], ["editor", "admin"])
-
-    def test_explicit_role_override_remains_available(self) -> None:
+    def test_role_override_is_rejected(self) -> None:
         self.write_state(access_permit_roles=[])
         self.write_credential()
 
         result = self.run_setup(extra_args=("--role", "editor"))
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown argument: --role", result.stderr)
+        self.assertEqual(self.read_state()["access_permit_create_roles"], [])
+
+    def test_confirmation_option_is_rejected(self) -> None:
+        self.write_state()
+
+        result = self.run_setup(extra_args=("--confirm", "obsolete"))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown argument: --confirm", result.stderr)
+        self.assertEqual(self.read_state()["project_get_calls"], 0)
+
+    def test_managed_group_rejects_duplicate_permits(self) -> None:
+        self.write_state(access_permit_roles=["admin", "admin"])
+        self.write_credential()
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("without duplicates; refusing mutation", result.stderr)
+        self.assertEqual(self.read_state()["membership_create_calls"], 0)
+
+    def test_managed_group_rejects_extra_or_duplicate_members(self) -> None:
+        for extras in (["serviceaccount-extra"], [SERVICE_ACCOUNT_ID]):
+            with self.subTest(extras=extras):
+                self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+                self.write_credential()
+                credential = (
+                    self.home
+                    / ".nebius"
+                    / f"codex-agent-authkey.{PROJECT}.json"
+                )
+                credential.chmod(0o600)
+                state = self.read_state()
+                state["membership_extra_ids"] = extras
+                self.state_path.write_text(
+                    json.dumps(state, sort_keys=True), encoding="utf-8"
+                )
+
+                result = self.run_setup()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must contain only one membership", result.stderr)
+                self.assertEqual(self.read_state()["membership_create_calls"], 0)
+
+    def test_managed_group_rejects_extra_member_on_another_page(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["membership_on_second_page"] = True
+        state["membership_extra_on_first_page"] = True
+        state["membership_extra_ids"] = ["serviceaccount-extra"]
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must contain only one membership", result.stderr)
+        self.assertEqual(self.read_state()["membership_list_calls"], 2)
+
+    def test_setup_adds_fixed_tenant_viewer_permit_for_quota_reads(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["tenant_access_permit_roles"] = []
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        self.assert_setup_succeeds()
         state = self.read_state()
 
-        self.assertEqual(state["access_permit_create_roles"], ["editor"])
-        self.assertEqual(state["access_permit_roles"], ["editor"])
+        self.assertEqual(state["access_permit_create_roles"], ["viewer"])
+        self.assertEqual(state["access_permit_create_parent_ids"], [GROUP_ID])
+        self.assertEqual(state["access_permit_create_resource_ids"], [TENANT])
+        self.assertEqual(state["tenant_access_permit_roles"], ["viewer"])
+        self.assertGreaterEqual(state["quota_list_calls"], 1)
 
-    def test_help_reports_admin_as_default_role(self) -> None:
+    def test_empty_list_objects_converge_permits_and_memberships(self) -> None:
+        self.write_state(
+            access_permit_roles=[], profiles=[HUMAN_PROFILE, AGENT_PROFILE]
+        )
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["access_permit_empty_object"] = True
+        state["membership_empty_object"] = True
+        state["membership_group_ids"] = []
+        state["tenant_access_permit_roles"] = []
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.assert_setup_succeeds()
+        state = self.read_state()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state["access_permit_create_roles"], ["admin", "viewer"])
+        self.assertEqual(state["access_permit_roles"], ["admin"])
+        self.assertEqual(state["tenant_access_permit_roles"], ["viewer"])
+        self.assertEqual(
+            state["membership_create_parent_ids"],
+            [GROUP_ID],
+        )
+
+    def test_nonempty_unsupported_list_objects_fail_closed(self) -> None:
+        for field, expected in (
+            (
+                "access_permit_unsupported_object",
+                "Access-permit lookup returned malformed JSON",
+            ),
+            (
+                "membership_unsupported_object",
+                "Group-membership lookup returned malformed JSON",
+            ),
+        ):
+            with self.subTest(field=field):
+                self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+                self.write_credential()
+                credential = (
+                    self.home
+                    / ".nebius"
+                    / f"codex-agent-authkey.{PROJECT}.json"
+                )
+                credential.chmod(0o600)
+                state = self.read_state()
+                state[field] = True
+                self.state_path.write_text(
+                    json.dumps(state, sort_keys=True), encoding="utf-8"
+                )
+
+                result = self.run_dry_run()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertEqual(self.read_state()["access_permit_create_roles"], [])
+
+    def test_empty_group_member_id_fails_closed(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["membership_records"] = {GROUP_ID: [""]}
+        state["membership_group_ids"] = []
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("empty or malformed member ID", result.stderr)
+        self.assertEqual(self.read_state()["membership_create_calls"], 0)
+
+    def test_managed_group_rejects_any_broader_existing_permit(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["tenant_access_permit_roles"] = ["viewer", "admin"]
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_dry_run()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must contain only project 'admin' and tenant 'viewer'", result.stderr)
+        self.assertEqual(self.read_state()["membership_create_calls"], 0)
+
+    def test_live_setup_fails_closed_on_tenant_permit_drift(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["tenant_access_permit_roles"] = ["viewer", "editor"]
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must contain only project 'admin' and tenant 'viewer'", result.stderr)
+        self.assertEqual(self.read_state()["membership_create_calls"], 0)
+
+    def test_help_reports_fixed_roles_and_no_confirmation(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
             cwd=str(SCRIPT.parent.parent),
@@ -850,7 +1222,19 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        self.assertIn("project role 'admin'", result.stderr)
+        self.assertIn("exactly project 'admin'", result.stderr)
+        self.assertIn("plus tenant 'viewer'", result.stderr)
+        self.assertNotIn("--confirm", result.stderr)
+        self.assertNotIn("--role", result.stderr)
+        self.assertNotIn("--service-account-name", result.stderr)
+
+    def test_service_account_name_override_is_rejected(self) -> None:
+        result = self.run_setup(
+            extra_args=("--service-account-name", "codex-agent-other")
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown argument: --service-account-name", result.stderr)
 
     def test_unsupported_install_hook_flag_fails_fast(self) -> None:
         self.write_state()
@@ -880,13 +1264,12 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.write_state()
         self.write_credential()
 
-        result = self.assert_setup_succeeds(tenant=None)
+        self.assert_setup_succeeds(tenant=None)
         state = self.read_state()
 
         self.assertEqual(state["project_get_calls"], 2)
         self.assertIn(AGENT_PROFILE, state["profiles"])
-        self.assertIn(f"tenant ID: {TENANT}", result.stderr)
-        self.assertIn(f"project name: {PROJECT_NAME}", result.stderr)
+        self.assertEqual(set(state["group_get_parent_ids"]), {TENANT})
 
     def test_project_name_selector_is_rejected(self) -> None:
         self.write_state()
@@ -978,7 +1361,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertIn("add role 'admin'", result.stderr)
         self.assertIn("create owned local Nebius directory", result.stderr)
 
-    def test_group_and_access_permit_are_project_scoped(self) -> None:
+    def test_one_tenant_group_has_exact_project_and_tenant_scopes(self) -> None:
         self.write_state(
             access_permit_roles=[],
             profiles=[HUMAN_PROFILE, AGENT_PROFILE],
@@ -988,25 +1371,41 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         credential.chmod(0o600)
         state = self.read_state()
         state["group_records"] = {}
-        state["membership_exists"] = False
+        state["tenant_access_permit_roles"] = []
+        state["membership_group_ids"] = []
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
         result = self.run_setup()
         state = self.read_state()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(state["group_create_parent_ids"], [PROJECT])
+        self.assertEqual(state["group_create_parent_ids"], [TENANT])
         self.assertTrue(state["group_get_parent_ids"])
-        self.assertEqual(set(state["group_get_parent_ids"]), {PROJECT})
-        self.assertEqual(state["access_permit_create_parent_ids"], [GROUP_ID])
-        self.assertEqual(state["access_permit_create_resource_ids"], [PROJECT])
-        self.assertNotIn(TENANT, state["group_create_parent_ids"])
-        self.assertNotIn(TENANT, state["access_permit_create_resource_ids"])
+        self.assertEqual(set(state["group_get_parent_ids"]), {TENANT})
+        self.assertEqual(
+            state["access_permit_create_parent_ids"],
+            [GROUP_ID, GROUP_ID],
+        )
+        self.assertEqual(state["access_permit_create_resource_ids"], [PROJECT, TENANT])
+        self.assertEqual(state["access_permit_create_roles"], ["admin", "viewer"])
+        self.assertEqual(
+            state["membership_create_parent_ids"],
+            [GROUP_ID],
+        )
 
-    def test_tenant_scoped_group_is_not_discovered_or_reused(self) -> None:
+        repeated = self.run_setup()
+        repeated_state = self.read_state()
+
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(
+            repeated_state["membership_create_parent_ids"],
+            [GROUP_ID],
+        )
+
+    def test_same_name_project_parented_group_is_not_reused(self) -> None:
         self.write_state(access_permit_roles=[])
         state = self.read_state()
-        state["group_records"] = {f"{TENANT}:{GROUP_NAME}": "group-tenant-legacy"}
+        state["group_records"] = {f"{PROJECT}:{GROUP_NAME}": "group-project-legacy"}
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
         result = self.run_dry_run()
@@ -1014,11 +1413,11 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
-            f"create group '{GROUP_NAME}' under project '{PROJECT}'",
+            f"create group '{GROUP_NAME}' under tenant '{TENANT}'",
             result.stderr,
         )
-        self.assertEqual(set(state["group_get_parent_ids"]), {PROJECT})
-        self.assertNotIn("group-tenant-legacy", result.stderr)
+        self.assertEqual(set(state["group_get_parent_ids"]), {TENANT})
+        self.assertNotIn("group-project-legacy", result.stderr)
 
     def test_read_failures_are_not_treated_as_absent_resources(self) -> None:
         cases = (
@@ -1144,15 +1543,49 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             json.dumps(state, sort_keys=True), encoding="utf-8"
         )
 
-        setup_result = self.run_setup()
-        result = self.run_replacement()
+        result = self.run_setup()
 
-        self.assertIn("credential-replacement-required", setup_result.stderr)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Replacement credential identity is invalid", result.stderr)
         self.assertEqual(credential.read_bytes(), original)
         self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
         self.assertEqual(list(credential.parent.glob("*.tmp.*")), [])
+
+    def test_profile_write_failure_never_replaces_credential(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        original = credential.read_bytes()
+        state = self.read_state()
+        state["profile_write_error"] = True
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no additional credential replacement was attempted", result.stderr)
+        self.assertEqual(credential.read_bytes(), original)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
+        self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
+
+    def test_transient_token_failure_never_replaces_credential(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        original = credential.read_bytes()
+        state = self.read_state()
+        state["token_transient_error"] = True
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("without a classified credential-authentication error", result.stderr)
+        self.assertEqual(credential.read_bytes(), original)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
+        self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
 
     def test_dry_run_keeps_an_already_working_profile_unchanged(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
@@ -1162,118 +1595,42 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
         result = self.run_dry_run()
         current_actions = result.stderr.split("Currently required actions:", 1)[1].split(
-            "Plan digest:", 1
+            "No global default-project selector", 1
         )[0]
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("none (read-only authentication and access verification only)", result.stderr)
         self.assertNotIn("update CLI profile", current_actions)
 
-    def test_live_run_requires_explicit_confirm(self) -> None:
-        self.write_state()
-
-        result = self.run_setup(confirm=False)
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Review the plan with --dry-run", result.stderr)
-        self.assertEqual(self.read_state()["project_get_calls"], 0)
-
-    def test_confirmed_plan_digest_rejects_target_metadata_drift(self) -> None:
-        self.write_state(access_permit_roles=[])
-        dry_run = self.run_dry_run()
-        digest = self.plan_digest(dry_run)
-        state = self.read_state()
-        state["project_names"][PROJECT] = "Renamed Project"
-        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-
-        result = subprocess.run(
-            self.setup_command(confirm_digest=digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not match the confirmed dry-run digest", result.stderr)
-        self.assertEqual(self.read_state()["profile_create_calls"], 0)
-
-    def test_confirmed_plan_digest_rejects_role_or_account_name_drift(self) -> None:
-        for extra_args in (
-            ("--role", "editor"),
-            ("--service-account-name", "different-agent-sa"),
-        ):
-            with self.subTest(extra_args=extra_args):
-                self.write_state(access_permit_roles=[])
-                dry_run = self.run_dry_run()
-                digest = self.plan_digest(dry_run)
-
-                result = subprocess.run(
-                    self.setup_command(
-                        confirm_digest=digest,
-                        extra_args=extra_args,
-                    ),
-                    cwd=str(SCRIPT.parent.parent),
-                    env=self.env,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(
-                    "does not match the confirmed dry-run digest", result.stderr
-                )
-                state = self.read_state()
-                self.assertEqual(state["service_account_create_calls"], 0)
-                self.assertEqual(state["auth_public_key_generate_calls"], 0)
-                self.assertEqual(state["profile_create_calls"], 0)
-
-    def test_missing_credential_creates_service_account_after_validation(self) -> None:
-        self.write_state(service_account_exists=False)
-
-        result = self.assert_setup_succeeds()
-        state = self.read_state()
-
-        self.assertIn(f"project ID: {PROJECT}", result.stderr)
-        self.assertEqual(state["project_get_calls"], 2)
-        self.assertEqual(state["service_account_create_calls"], 1)
-        self.assertEqual(state["auth_public_key_generate_calls"], 1)
-        self.assertTrue(
-            (self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json").is_file()
-        )
-
-    def test_confirmed_bootstrap_replaces_one_unusable_generated_credential(
-        self,
-    ) -> None:
-        self.write_state(service_account_exists=False)
-        state = self.read_state()
-        state["generated_credentials_broken_count"] = 1
-        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-
-        setup_result = self.run_setup()
-        result = self.run_replacement()
+    def test_dry_run_reports_wrong_identity_profile_rebind(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
-        backups = list(credential.parent.glob(f"{credential.name}.bak.*"))
-
-        self.assertIn("credential-replacement-required", setup_result.stderr)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("one bounded credential replacement", result.stderr)
-        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 2)
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
-
-    def test_partial_progress_requires_fresh_state_bound_digest(self) -> None:
-        self.write_state(access_permit_roles=[], service_account_exists=False)
-        initial_plan = self.run_dry_run()
-        digest = self.plan_digest(initial_plan)
-
+        credential.chmod(0o600)
         state = self.read_state()
-        state["service_account_exists"] = True
-        state["access_permit_roles"] = ["admin"]
-        state["profiles"] = [HUMAN_PROFILE, AGENT_PROFILE]
+        state["profile_service_account_ids"][AGENT_PROFILE] = "serviceaccount-other"
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_dry_run()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"update CLI profile '{AGENT_PROFILE}'", result.stderr)
+        self.assertIn("back up and replace the canonical credential once", result.stderr)
+        self.assertEqual(self.read_state()["profile_update_calls"], 0)
+
+        live = self.run_setup()
+        live_state = self.read_state()
+
+        self.assertEqual(live.returncode, 0, live.stderr)
+        self.assertEqual(live_state["profile_update_calls"], 1)
+        self.assertEqual(live_state["auth_public_key_generate_calls"], 0)
+        self.assertEqual(
+            live_state["profile_service_account_ids"][AGENT_PROFILE],
+            SERVICE_ACCOUNT_ID,
+        )
+
+    def test_dry_run_discloses_conditional_broken_credential_replacement(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
         self.write_credential()
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
         credential.chmod(0o600)
@@ -1281,165 +1638,265 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         state["credential_broken"] = True
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
-        continued_plan = self.run_dry_run()
-        stale_result = subprocess.run(
-            self.setup_command(confirm_digest=digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        fresh_digest = self.plan_digest(continued_plan)
-        result = subprocess.run(
-            self.setup_command(confirm_digest=fresh_digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        result = self.run_dry_run()
 
-        self.assertNotEqual(fresh_digest, digest)
-        self.assertNotEqual(stale_result.returncode, 0)
-        self.assertIn("does not match the confirmed dry-run digest", stale_result.stderr)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("credential-replacement-required", result.stderr)
-        self.assertEqual(self.read_state()["service_account_create_calls"], 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"update CLI profile '{AGENT_PROFILE}'", result.stderr)
+        self.assertIn("back up and replace the canonical credential once", result.stderr)
         self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
 
-    def test_plan_exposes_same_name_identity_recreation_for_skill_rejection(
+    def test_explicit_ensure_runs_without_confirmation(self) -> None:
+        self.write_state()
+
+        result = self.run_setup()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_state()["project_get_calls"], 2)
+
+    def test_missing_credential_creates_service_account_after_validation(self) -> None:
+        self.write_state(service_account_exists=False)
+
+        self.assert_setup_succeeds()
+        state = self.read_state()
+
+        self.assertEqual(state["project_get_calls"], 2)
+        self.assertEqual(state["service_account_create_calls"], 1)
+        self.assertEqual(state["auth_public_key_generate_calls"], 1)
+        self.assertTrue(
+            (self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json").is_file()
+        )
+
+    def test_missing_credential_rebinds_existing_working_profile(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+
+        dry_run = self.run_dry_run()
+
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        self.assertIn(f"generate credential '{self.home}/.nebius/", dry_run.stderr)
+        self.assertIn(f"update CLI profile '{AGENT_PROFILE}'", dry_run.stderr)
+        self.assertEqual(self.read_state()["profile_update_calls"], 0)
+
+        live = self.run_setup()
+        state = self.read_state()
+
+        self.assertEqual(live.returncode, 0, live.stderr)
+        self.assertEqual(state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(state["profile_update_calls"], 1)
+        self.assertEqual(
+            state["profile_service_account_ids"][AGENT_PROFILE],
+            SERVICE_ACCOUNT_ID,
+        )
+
+    def test_deleted_service_account_credential_bootstraps_with_human_profile(
         self,
     ) -> None:
+        credential = self.write_deleted_service_account_credential()
+        original = credential.read_bytes()
+
+        first = self.assert_setup_succeeds()
+        first_state = self.read_state()
+        backups = list(credential.parent.glob(f"{credential.name}.bak.*"))
+        credential_value = json.loads(credential.read_text(encoding="utf-8"))
+
+        self.assertIn("bootstrapping the fixed account", first.stderr)
+        self.assertEqual(first_state["service_account_create_calls"], 1)
+        self.assertEqual(first_state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(first_state["membership_create_calls"], 1)
+        self.assertEqual(first_state["profile_update_calls"], 1)
+        self.assertGreaterEqual(first_state["human_token_calls"], 1)
+        self.assertEqual(first_state["agent_iam_attempts"], 0)
+        self.assertEqual(first_state["inherited_auth_attempts"], 0)
+        self.assertEqual(first_state["active"], HUMAN_PROFILE)
+        self.assertEqual(
+            first_state["profile_service_account_ids"][AGENT_PROFILE],
+            SERVICE_ACCOUNT_ID,
+        )
+        self.assertEqual(
+            credential_value["subject-credentials"]["iss"], SERVICE_ACCOUNT_ID
+        )
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), original)
+        self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(credential.stat().st_mode), 0o600)
+        self.assertEqual(list(credential.parent.glob("*.tmp.*")), [])
+
+        second = self.assert_setup_succeeds()
+        second_state = self.read_state()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(second_state["service_account_create_calls"], 1)
+        self.assertEqual(second_state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(second_state["membership_create_calls"], 1)
+        self.assertEqual(second_state["profile_update_calls"], 1)
+        self.assertEqual(
+            len(list(credential.parent.glob(f"{credential.name}.bak.*"))), 1
+        )
+
+    def test_dry_run_reports_deleted_service_account_recovery_without_mutation(
+        self,
+    ) -> None:
+        credential = self.write_deleted_service_account_credential()
+        original = credential.read_bytes()
+
+        result = self.run_dry_run()
+        state = self.read_state()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("with the validated human profile", result.stderr)
+        self.assertIn("generate one replacement authorized-key credential", result.stderr)
+        self.assertIn("back up the stale credential at mode 0600", result.stderr)
+        self.assertEqual(state["service_account_create_calls"], 0)
+        self.assertEqual(state["auth_public_key_generate_calls"], 0)
+        self.assertEqual(state["membership_create_calls"], 0)
+        self.assertEqual(state["profile_update_calls"], 0)
+        self.assertEqual(credential.read_bytes(), original)
+        self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
+        self.assertEqual(list(credential.parent.glob("*.tmp.*")), [])
+
+    def test_existing_credential_identity_lookup_failures_do_not_rebootstrap(
+        self,
+    ) -> None:
+        cases = (
+            "rpc error: code = PermissionDenied desc = access denied",
+            "rpc error: code = Unavailable desc = temporary lookup failure",
+            "rpc error: code = PermissionDenied desc = wrapped "
+            "rpc error: code = NotFound",
+            "profile not found",
+        )
+        for message in cases:
+            with self.subTest(message=message):
+                self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+                self.write_credential()
+                credential = (
+                    self.home
+                    / ".nebius"
+                    / f"codex-agent-authkey.{PROJECT}.json"
+                )
+                credential.chmod(0o600)
+                original = credential.read_bytes()
+                state = self.read_state()
+                state["service_account_get_error"] = True
+                state["service_account_get_error_message"] = message
+                state["service_account_get_error_status"] = 1
+                self.state_path.write_text(
+                    json.dumps(state, sort_keys=True), encoding="utf-8"
+                )
+
+                result = self.run_setup()
+                state = self.read_state()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refusing mutation", result.stderr)
+                self.assertEqual(state["service_account_create_calls"], 0)
+                self.assertEqual(state["auth_public_key_generate_calls"], 0)
+                self.assertEqual(state["membership_create_calls"], 0)
+                self.assertEqual(state["profile_update_calls"], 0)
+                self.assertEqual(credential.read_bytes(), original)
+                self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
+
+    def test_deleted_service_account_recovery_preserves_stale_credential_when_generation_fails(
+        self,
+    ) -> None:
+        credential = self.write_deleted_service_account_credential()
+        original = credential.read_bytes()
+        state = self.read_state()
+        state["auth_public_key_generate_error"] = True
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+        state = self.read_state()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Replacement credential generation failed", result.stderr)
+        self.assertEqual(state["service_account_create_calls"], 1)
+        self.assertEqual(state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(state["profile_update_calls"], 0)
+        self.assertEqual(credential.read_bytes(), original)
+        self.assertEqual(list(credential.parent.glob("*.bak.*")), [])
+        self.assertEqual(list(credential.parent.glob("*.tmp.*")), [])
+
+    def test_deleted_service_account_recovery_never_generates_a_second_key(
+        self,
+    ) -> None:
+        credential = self.write_deleted_service_account_credential()
+        state = self.read_state()
+        state["generated_credentials_broken_count"] = 1
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+        state = self.read_state()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no second credential was generated", result.stderr)
+        self.assertEqual(state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(
+            len(list(credential.parent.glob(f"{credential.name}.bak.*"))), 1
+        )
+
+    def test_deleted_identity_reuses_an_existing_canonical_service_account(
+        self,
+    ) -> None:
+        credential = self.write_deleted_service_account_credential(
+            replacement_service_account_exists=True
+        )
+
+        result = self.assert_setup_succeeds()
+        state = self.read_state()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state["service_account_create_calls"], 0)
+        self.assertEqual(state["auth_public_key_generate_calls"], 1)
+        self.assertEqual(
+            state["profile_service_account_ids"][AGENT_PROFILE], SERVICE_ACCOUNT_ID
+        )
+        self.assertEqual(
+            len(list(credential.parent.glob(f"{credential.name}.bak.*"))), 1
+        )
+
+    def test_ensure_replaces_one_unusable_generated_credential(
+        self,
+    ) -> None:
+        self.write_state(service_account_exists=False)
+        state = self.read_state()
+        state["generated_credentials_broken_count"] = 1
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        result = self.run_setup()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        backups = list(credential.parent.glob(f"{credential.name}.bak.*"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("replacing it once", result.stderr)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 2)
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
+
+    def test_dry_run_exposes_observed_identity_and_one_group(self) -> None:
         self.write_state()
         self.write_credential()
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
         credential.chmod(0o600)
         original_plan = self.run_dry_run()
 
-        recreated_sa_id = "serviceaccount-recreated"
-        recreated_group_id = "group-recreated"
-        state = self.read_state()
-        state["service_account_id"] = recreated_sa_id
-        state["group_id"] = recreated_group_id
-        state["group_records"] = {f"{PROJECT}:{GROUP_NAME}": recreated_group_id}
-        state["service_account_records"][recreated_sa_id] = {
-            "name": "codex-agent-sa",
-            "parent_id": PROJECT,
-        }
-        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        credential.write_text(
-            json.dumps(
-                {
-                    "subject-credentials": {
-                        "type": "JWT",
-                        "alg": "RS256",
-                        "iss": recreated_sa_id,
-                        "sub": recreated_sa_id,
-                    }
-                }
-            ),
-            encoding="utf-8",
-        )
-        credential.chmod(0o600)
-        recreated_plan = self.run_dry_run()
-
         self.assertEqual(original_plan.returncode, 0, original_plan.stderr)
-        self.assertEqual(recreated_plan.returncode, 0, recreated_plan.stderr)
         self.assertIn(
             f"observed service-account ID: {SERVICE_ACCOUNT_ID}",
             original_plan.stderr,
         )
         self.assertIn(f"observed group ID: {GROUP_ID}", original_plan.stderr)
-        self.assertIn(
-            f"observed service-account ID: {recreated_sa_id}",
-            recreated_plan.stderr,
-        )
-        self.assertIn(
-            f"observed group ID: {recreated_group_id}", recreated_plan.stderr
-        )
-        self.assertIn("observed credential SHA-256:", recreated_plan.stderr)
-        self.assertNotEqual(
-            self.plan_digest(original_plan), self.plan_digest(recreated_plan)
-        )
+        self.assertIn("observed credential SHA-256:", original_plan.stderr)
+        self.assertIn("group parent: tenant-test", original_plan.stderr)
 
-    def test_completed_bootstrap_rejects_replay_of_initial_digest(self) -> None:
-        self.write_state(service_account_exists=False)
-        initial_plan = self.run_dry_run()
-        digest = self.plan_digest(initial_plan)
-
-        completed = subprocess.run(
-            self.setup_command(confirm_digest=digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        calls_after_completion = self.read_state()["auth_public_key_generate_calls"]
-        replay = subprocess.run(
-            self.setup_command(confirm_digest=digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertNotEqual(replay.returncode, 0)
-        self.assertIn("does not match the confirmed dry-run digest", replay.stderr)
-        self.assertEqual(
-            self.read_state()["auth_public_key_generate_calls"],
-            calls_after_completion,
-        )
-
-    def test_failed_bounded_replacement_rejects_same_digest_retry(self) -> None:
+    def test_failed_bounded_replacement_stops_after_two_total_generations(self) -> None:
         self.write_state(service_account_exists=False)
         state = self.read_state()
         state["generated_credentials_broken_count"] = 2
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        initial_plan = self.run_dry_run()
-        digest = self.plan_digest(initial_plan)
+        result = self.run_setup()
 
-        setup_failed = subprocess.run(
-            self.setup_command(confirm_digest=digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertIn("credential-replacement-required", setup_failed.stderr)
-        replacement_plan = self.run_replacement(confirm=False)
-        replacement_digest = self.plan_digest(replacement_plan)
-        failed = subprocess.run(
-            self.replacement_command(confirm_digest=replacement_digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        calls_after_failure = self.read_state()["auth_public_key_generate_calls"]
-        replay = subprocess.run(
-            self.replacement_command(confirm_digest=replacement_digest),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn("one bounded credential replacement", failed.stderr)
-        self.assertEqual(calls_after_failure, 2)
-        self.assertNotEqual(replay.returncode, 0)
-        self.assertIn("does not match the confirmed dry-run digest", replay.stderr)
-        self.assertEqual(
-            self.read_state()["auth_public_key_generate_calls"],
-            calls_after_failure,
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no second replacement was attempted", result.stderr)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 2)
 
     def test_membership_create_conflict_converges_after_readback(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
@@ -1447,7 +1904,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
         credential.chmod(0o600)
         state = self.read_state()
-        state["membership_exists"] = False
+        state["membership_group_ids"] = []
         state["membership_create_conflict_converges"] = True
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
@@ -1456,6 +1913,9 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("converged after a create conflict", result.stderr)
         self.assertEqual(self.read_state()["membership_create_calls"], 1)
+        self.assertEqual(
+            self.read_state()["membership_create_parent_ids"], [GROUP_ID]
+        )
 
     def test_existing_credential_identity_must_match_name_and_project(self) -> None:
         for field, value, expected in (
@@ -1508,18 +1968,6 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertIn("regular non-symlink file", result.stderr)
         self.assertEqual(self.read_state()["profile_create_calls"], 0)
 
-    def test_confirmation_envelope_discloses_conditional_credential_replacement(
-        self,
-    ) -> None:
-        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
-        self.write_credential()
-
-        result = self.run_dry_run()
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Authorized convergence actions", result.stderr)
-        self.assertIn("back it up and replace it once", result.stderr)
-
     def test_removed_repair_flag_fails_fast(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
         self.write_credential()
@@ -1530,7 +1978,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertIn("Unknown argument: --repair", result.stderr)
         self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
 
-    def test_confirmed_broken_matching_credential_is_backed_up_and_replaced(
+    def test_broken_matching_credential_is_backed_up_and_replaced_once(
         self,
     ) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
@@ -1544,10 +1992,8 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         state["credential_broken"] = True
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
-        setup_result = self.run_setup()
-        result = self.run_replacement()
+        result = self.run_setup()
 
-        self.assertIn("credential-replacement-required", setup_result.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         backups = list(credential.parent.glob(f"{credential.name}.bak.*"))
         self.assertEqual(len(backups), 1)
@@ -1555,14 +2001,14 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(credential.stat().st_mode), 0o600)
         self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 1)
 
-    def test_repair_lease_requires_existing_working_auth_and_confirmation(
+    def test_repair_lease_requires_existing_working_auth(
         self,
     ) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
 
         missing = self.run_repair_lease(confirm=False)
         self.assertNotEqual(missing.returncode, 0)
-        self.assertIn("requires an existing confirmed credential", missing.stderr)
+        self.assertIn("requires an existing working credential", missing.stderr)
 
         self.write_credential()
         credential = (
@@ -1573,21 +2019,11 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertIn("requires the canonical credential at mode 0600", insecure.stderr)
         credential.chmod(0o600)
         (self.home / ".nebius").chmod(0o700)
-        unconfirmed = subprocess.run(
-            self.repair_lease_command(),
-            cwd=str(SCRIPT.parent.parent),
-            env=self.env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertNotEqual(unconfirmed.returncode, 0)
-        self.assertIn("Review the plan with --dry-run", unconfirmed.stderr)
-        self.assertFalse(
-            (self.home / ".nebius" / "codex-agent-repair-leases").exists()
-        )
+        issued = self.run_repair_lease()
+        self.assertEqual(issued.returncode, 0, issued.stderr)
+        self.assertTrue(self.issued_lease_path(issued).is_file())
 
-    def test_confirmed_repair_lease_is_bound_and_private(self) -> None:
+    def test_repair_lease_is_bound_and_private(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
         self.write_credential()
         credential = (
@@ -1630,7 +2066,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         result = self.run_repair_lease(confirm=False)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("lacks basic project access", result.stderr)
+        self.assertIn("canonical service account with project access", result.stderr)
         self.assertFalse(
             (self.home / ".nebius" / "codex-agent-repair-leases").exists()
         )
@@ -1783,6 +2219,12 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertNotEqual(boolean_timestamp.returncode, 0)
         self.assertIn("timestamps must be integers", boolean_timestamp.stderr)
 
+        write_mutation("service_account_name", "codex-agent-other")
+        noncanonical_account = self.run_local_repair(lease)
+
+        self.assertNotEqual(noncanonical_account.returncode, 0)
+        self.assertIn("not the canonical 'codex-agent-sa'", noncanonical_account.stderr)
+
         lease.write_bytes(b"x" * (64 * 1024 + 1))
         lease.chmod(0o600)
         oversized = self.run_local_repair(lease)
@@ -1790,7 +2232,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertNotEqual(oversized.returncode, 0)
         self.assertIn("65536-byte safety limit", oversized.stderr)
 
-    def test_colliding_project_name_slugs_have_distinct_groups(self) -> None:
+    def test_distinct_project_ids_have_distinct_groups(self) -> None:
         project_one = "project-one"
         project_two = "project-two"
         self.write_state()
@@ -1816,6 +2258,46 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             if "group: " in line
         )
         self.assertNotEqual(first_group, second_group)
+
+    def test_project_rename_reuses_the_same_id_hash_group(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+        state = self.read_state()
+        state["group_records"] = {}
+        state["access_permit_roles"] = []
+        state["tenant_access_permit_roles"] = []
+        state["membership_group_ids"] = []
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        first = self.run_setup()
+        state = self.read_state()
+        state["project_names"][PROJECT] = "Renamed Project"
+        self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        second = self.run_setup()
+        final_state = self.read_state()
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(final_state["group_create_parent_ids"], [TENANT])
+        self.assertEqual(
+            final_state["group_records"], {f"{TENANT}:{GROUP_NAME}": GROUP_ID}
+        )
+
+    def test_success_output_uses_selector_prefixed_token_check(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+        credential.chmod(0o600)
+
+        result = self.assert_setup_succeeds()
+
+        self.assertIn(
+            f"Token test: CODEX_NEBIUS_PROJECT_ID={PROJECT} nebius iam "
+            f"get-access-token --no-browser --profile {AGENT_PROFILE} >/dev/null",
+            result.stderr,
+        )
 
     def test_profile_update_preserves_active_human_profile(self) -> None:
         self.write_state(
@@ -1845,7 +2327,11 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         state = self.read_state()
 
         self.assertEqual(state["active"], AGENT_PROFILE)
-        self.assertEqual(state["group_get_by_name_calls"], 7)
+        self.assertEqual(state["group_get_by_name_calls"], 1)
+        self.assertEqual(state["access_permit_list_calls"], 1)
+        self.assertEqual(state["membership_list_calls"], 1)
+        self.assertEqual(state["agent_token_calls"], 1)
+        self.assertEqual(state["agent_whoami_calls"], 1)
         self.assertEqual(state["agent_iam_attempts"], 0)
 
     def test_inherited_auth_environment_is_sanitized(self) -> None:

@@ -72,6 +72,11 @@ Do not rerun an unchanged command unless repetition is the measurement. After
 three experiments that do not materially update the ledger, reconstruct the
 system model and choose another localization dimension.
 
+Diagnostic experiments are not remediation attempts. Once a remediation is
+applied and the original reproducer still shows the same blocker, record the
+failed attempt under [remediation-budget.md](remediation-budget.md) before
+another repair.
+
 ## Minimal System Model
 
 Trace only the path capable of explaining the failure:
@@ -131,3 +136,5 @@ next experiment. Do not convert incomplete access into false certainty.
 - **Scope gate:** broaden searches or rebuilds only after localization evidence.
 - **Evidence gate:** retain negative and contradictory evidence.
 - **Completion gate:** one passing test or restart is not closure.
+- **Remediation-budget gate:** after three distinct failed remediations or the
+  active time limit, stop all tools and report instead of widening the search.

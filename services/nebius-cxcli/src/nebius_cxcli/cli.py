@@ -13852,7 +13852,7 @@ def _apply_standalone_external_soperator_backup_live_evidence(
 
 
 @contextmanager
-def _standalone_external_soperator_backup_cluster_context(
+def _standalone_external_soperator_cluster_context(
     payload: Mapping[str, Any],
     *,
     cluster_id: str,
@@ -13959,7 +13959,7 @@ def _run_standalone_external_soperator_backup(
         explicit_context = _non_empty_text(kube_context)
         resolved_cluster_id = _non_empty_text(cluster_id)
         if resolved_cluster_id:
-            with _standalone_external_soperator_backup_cluster_context(
+            with _standalone_external_soperator_cluster_context(
                 payload,
                 cluster_id=resolved_cluster_id,
                 access=resolved_access,
@@ -14620,35 +14620,54 @@ def _run_external_soperator_discovery_command(
                 "External Soperator discovery by --cluster-id requires --project-id when "
                 "CONFIG_OR_DEPLOYMENTS_ROOT is omitted."
             )
-        snapshot, collection_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+        with _standalone_external_soperator_cluster_context(
             payload,
             cluster_id=resolved_cluster_id,
             access=resolved_access,
-            slurmcluster_identity_scope=slurmcluster_identity_scope,
-        )
-        return _write_soperator_discovery_bundle_from_snapshot(
-            project_dir=project_dir,
-            config_path=config_path,
-            client_name=client_name,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            target_ref=resolved_target_ref,
-            snapshot=snapshot,
-            source_kind="external",
-            command_group="ext-soperator",
-            output_dir=output_dir,
-            namespace=namespace,
-            release_name=release_name,
-            kube_context=collection_context,
-            cluster_id=resolved_cluster_id,
-            access=resolved_access,
-            cluster_name="",
-            to_chart_version=to_chart_version,
-            to_k8s_version=to_k8s_version,
-            to_os=to_os,
-            to_gpu_stack_preset=to_gpu_stack_preset,
-            redaction=normalized_redaction,
-        )
+        ) as collection_context:
+            snapshot = collect_kubectl_soperator_snapshot(
+                kube_context=collection_context,
+                slurmcluster_identity_scope=slurmcluster_identity_scope,
+            )
+            try:
+                provider_snapshot = _collect_provider_mk8s_template_snapshot(
+                    payload,
+                    cluster_id=resolved_cluster_id,
+                )
+                _require_complete_provider_mk8s_campaign_snapshot(
+                    provider_snapshot,
+                    cluster_id=resolved_cluster_id,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "External Soperator discovery could not collect complete live Nebius "
+                    "MK8s control-plane, node-group, and compatibility-matrix capabilities. "
+                    f"No discovery bundle was written: {exc}"
+                ) from exc
+            snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
+            return _write_soperator_discovery_bundle_from_snapshot(
+                project_dir=project_dir,
+                config_path=config_path,
+                client_name=client_name,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                target_ref=resolved_target_ref,
+                snapshot=snapshot,
+                source_kind="external",
+                command_group="ext-soperator",
+                output_dir=output_dir,
+                namespace=namespace,
+                release_name=release_name,
+                kube_context=collection_context,
+                cluster_id=resolved_cluster_id,
+                access=resolved_access,
+                cluster_name="",
+                to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                to_os=to_os,
+                to_gpu_stack_preset=to_gpu_stack_preset,
+                redaction=normalized_redaction,
+            )
     if not explicit_context:
         raise RuntimeError(
             "External Soperator discovery requires a kube_context or cluster_id. "
@@ -28981,26 +29000,15 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
     access: str = "external",
     slurmcluster_identity_scope: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
     if not cluster_id:
         return _soperator_onboarding_empty_snapshot(), ""
-    if not _runtime_auth_env_available():
-        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
-    spec = _mk8s_cluster_handoff_spec_for_identity(
-        project_id=project_id,
-        client_name=client_name,
+    with _standalone_external_soperator_cluster_context(
+        payload,
         cluster_id=cluster_id,
         access=access,
-    )
-    with ExitStack() as stack:
-        kube_root = Path(
-            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
-        )
-        kubeconfig_path = kube_root / "config"
-        _write_kubeconfig_file(kubeconfig_path, spec)
+    ) as context_name:
         snapshot = collect_kubectl_soperator_snapshot(
-            kube_context=spec.context_name,
-            extra_env={"KUBECONFIG": str(kubeconfig_path)},
+            kube_context=context_name,
             slurmcluster_identity_scope=slurmcluster_identity_scope,
         )
     try:
@@ -29020,7 +29028,7 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
         ) from exc
     else:
         snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
-    return snapshot, spec.context_name
+    return snapshot, context_name
 
 
 def _soperator_snapshot_kubernetes_uid(
@@ -64956,6 +64964,24 @@ def _source_report_for_locked_upgrade_segment(
         return effective
     report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     report["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
+    migration_profile = upgrade_path.get("migration_profile")
+    if not isinstance(migration_profile, Mapping):
+        raise RuntimeError(
+            "External Soperator v6 campaign is missing its locked migration profile."
+        )
+    migration_profile_id = _non_empty_text(migration_profile.get("id"))
+    migration_execution_contract = migration_profile.get("execution_contract")
+    if not migration_profile_id or not isinstance(migration_execution_contract, Mapping):
+        raise RuntimeError(
+            "External Soperator v6 campaign is missing the exact migration profile "
+            "execution contract accepted during onboarding."
+        )
+    # A retained report can describe the already-mutated live target generation
+    # while the checkpoint is still executing the accepted legacy-to-target
+    # segment. Keep the immutable campaign profile aligned with the source and
+    # target versions projected below instead of treating the intermediate live
+    # generation as permission to select a different migration implementation.
+    report["migration_profile_id"] = migration_profile_id
     source_app = _locked_upgrade_path_record_value(segment, "soperator_app", "current_version")
     target_chart = _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
     soperator_app = segment.get("soperator_app")

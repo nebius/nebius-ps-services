@@ -52,7 +52,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `agent-nebius-auth-diagnose` | Implicit allowed | Discover the current-session Nebius project and diagnose agent-auth or hook failures without mutation. |
-| `agent-nebius-auth-setup` | Implicit planning; confirmed mutation or lease | Review setup plans, explicitly bootstrap persistent auth, and issue bounded same-account local-repair preauthorization for unattended tasks. |
+| `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
@@ -142,11 +142,10 @@ reviewed and validated. Skills marked `Explicit only` in the catalog use
 `$skill-name`. Skills marked `Implicit allowed` use
 `allow_implicit_invocation: true` so Codex may select them when the task
 matches their metadata.
-`agent-nebius-auth-setup` is the narrow setup exception: implicit selection is
-read-only discovery/planning. Persistent IAM, credential, identity, profile,
-and hook mutation requires a displayed plan and explicit current-turn
-confirmation; only an exact unexpired, previously confirmed repair lease may
-authorize its two bound local permission/profile actions without a new prompt.
+`agent-nebius-auth-setup` is explicit-only. Direct invocation authorizes its
+bounded canonical convergence, so it does not add a second confirmation prompt
+or require a plan digest. Read-only implicit triage belongs to
+`agent-nebius-auth-diagnose`.
 
 For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
 containing front matter `name` and `description`. This repository uses a
@@ -601,42 +600,49 @@ only as a corroborated hint, and never infers authority from active profiles,
 credential filenames, cwd, legacy default selectors, or unrelated task state.
 
 Correctable command-policy denials are fixed and retried by the agent without
-setup confirmation: add the exact leading selector, remove a conflicting
+running setup: add the exact leading selector, remove a conflicting
 explicit profile or managed-auth assignment, or replace a token-printing
 command with the normal operation or redirected verification form.
 
-`agent-nebius-auth-setup` prepares a real metadata-backed dry-run and displays
-the tenant, project, service account, group, additive role, local paths, full
-bounded convergence envelope, and currently required actions. First-time setup
-asks once to confirm service-account creation and completion of that exact
-same-target bootstrap. Its state-bound digest changes after partial progress,
-but the skill revalidates the fresh plan against the recorded authorization and
-continues without another prompt until read-only verification succeeds. The
-project-ID-only setup derives project name and tenant from
-`nebius iam project get`; an optional tenant ID is an exact-match assertion.
-Existing credentials must resolve to the expected service account in the
-selected project before permission or profile mutation. Setup revalidates the
-target-bound envelope before mutation and again after locking; tenant, project,
-account identity, group, role, path/profile, endpoint, or administrative-profile
-drift fails closed instead of inheriting the old confirmation.
+`agent-nebius-auth-setup` is explicit-only. Invoking it directly authorizes one
+bounded convergence, without a second prompt or confirmation digest. It locks
+first, validates the current non-agent administrative profile by minting a
+human-user token to discarded stdout, resolves authoritative project metadata
+once, and performs one convergence pass. Human-profile authentication owns IAM
+bootstrap and authorized-key creation until the agent account is ready; the
+token is never printed or persisted. `--dry-run` remains available for an
+explicitly requested read-only preview.
 
-The managed service account and dedicated group are both parented by the
-selected project, and the access permit targets only that project. Tenant ID is
-used only to validate project ancestry and configure the profile; the workflow
-does not discover or reuse tenant-parented groups or enumerate tenant IAM with
-the agent profile. Runtime selection is not a token sandbox, so grants created
-outside this workflow require a separate IAM audit.
+The selected project owns the `codex-agent-sa` service account. One
+deterministic group is parented by the authoritative tenant and contains
+exactly two permits: `admin` on the selected project and `viewer` on that
+tenant. Its name depends only on the project ID hash, so project renames cannot
+create another canonical group. A tenant-created group can hold both scopes, so
+setup no longer creates a separate quota-specific group. Tenant `viewer` enables read-only quota
+allowance listing but is broader than quota access alone. Setup rejects extra
+or duplicate permits on its managed group, rejects extra or duplicate members,
+never grants tenant write access, and does not automatically delete old groups
+or external grants.
 
-Plans expose observed service-account/group IDs and the credential fingerprint.
-Only an originally absent identity may transition once to its created ID. If
-`ensure` reports `credential-replacement-required`, the skill records the one
-attempt before invoking the separate state-bound `replace-credential` phase;
-an interrupted or failed replacement is never retried under that bootstrap.
+Existing credentials normally must resolve to the expected account and project
+before mutation. If the credential's service-account ID instead returns the
+provider-classified RPC/API `NotFound`, explicit setup may bootstrap or reuse a
+distinct fixed account through the human profile, reconcile the exact IAM shape,
+generate one checked authorized-key credential, create one mode-`0600` backup,
+atomically replace the stale file, and rebind the profile. Permission,
+authentication, transient, parse, generic "not found", and unclassified lookup
+failures remain non-recoverable. If a matching current credential cannot mint a
+token, setup backs it up and replaces it at most once in the same explicit
+invocation only after a classified credential-authentication failure. Profile
+write errors and transient or unclassified token failures do not rotate keys. A
+second failure stops without another key, revocation, or prompt. Runtime
+verification also binds the profile-reported service-account identity and the
+project lookup for the fixed `codex-agent-sa` to the canonical credential.
 
-When explicitly requested after confirmed setup and basic project-access
-verification succeed, a separately reviewed 12-hour repair lease
-(24-hour maximum) may preauthorize only fd-safe mode-`0600` correction of the
-exact fingerprinted credential and rebuilding its exact local profile. The
+When explicitly requested after setup and basic project-access verification
+succeed, a 12-hour repair lease (24-hour maximum) may authorize only fd-safe
+mode-`0600` correction of the exact fingerprinted credential and rebuilding
+its exact local profile. No extra confirmation digest is required. The
 lease is private same-user workflow state, not an unforgeable security token.
 It never authorizes key generation/rotation, IAM, identity, or hook changes and
 fails closed on path, owner, schema, fingerprint, identity, action, or expiry
@@ -649,8 +655,7 @@ project, credential-file, and token-helper context for any selected executable.
 It never falls back to inherited auth, a global default file, or a single
 credential filename, and it clears ambient bearer variables instead of
 injecting a universal expiring token. Install or refresh it only when the user
-explicitly requests that separate action; normal bootstrap does not ask another
-confirmation. Use
+explicitly requests that separate action. Use
 `./install-skills.sh --install-hooks agent-nebius-auth-setup/assets/hooks --register-hooks`.
 Normal CLI/profile and supported SDK credential paths own renewal. Raw Bash,
 Python, or API children use
@@ -660,9 +665,11 @@ after a real 401/`UNAUTHENTICATED` mapped to status `77`. Already-running
 processes need provider-native renewal, bounded helper calls, or restart.
 
 Read-only runtime diagnosis uses `agent-nebius-auth-setup.sh verify` and never
-requires a human/admin profile. Exact IAM planning remains separate and returns
-`blocked-admin-auth` when the required non-agent administrative profile cannot
-authenticate non-interactively.
+requires a human/admin profile. It verifies token mint, project access,
+authoritative project-to-tenant ancestry, and one tenant quota-allowance list
+call. Exact IAM planning remains separate and returns `blocked-admin-auth` when
+the required non-agent administrative profile cannot authenticate
+non-interactively.
 
 ### Agentic SDLC Skills
 
@@ -1025,6 +1032,16 @@ Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
 
+After one remediation fails against the same blocker, `troubleshoot` starts a
+bounded tranche before another repair. The defaults are three distinct failed
+remediations or 60 active minutes, whichever comes first. Failures 1 and 2 are
+reported as progress; after the exact private state update records exhaustion,
+all other tool use stops and a complete user-visible report is returned. A new
+explicit user instruction is required for another tranche. The optional
+`troubleshoot/assets/hooks` bundle enforces the
+recorded private task-state budget at supported `PreToolUse` and `Stop`
+boundaries; it does not infer attempts from raw command failures.
+
 ## Skills Installer
 
 `install-skills.sh` installs or updates skills into `~/.agents/skills` by
@@ -1134,6 +1151,9 @@ automatically.
 # Copy and register global context-management hooks
 ./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 
+# Copy and register the remediation-budget guard hooks
+./install-skills.sh --install-hooks troubleshoot/assets/hooks --register-hooks
+
 # Copy and register every reviewed hook-only bundle
 ./install-skills.sh --install-all-hooks --register-hooks
 
@@ -1177,7 +1197,8 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   source.
 - `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
   guardrails, not skills. Use a hook-only source directory such as
-  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
+  `sdlc-start/assets/hooks`, `config-codex/assets/hooks`, or
+  `troubleshoot/assets/hooks`. Without
   `--register-hooks`, this only syncs files under
   `${CODEX_HOME:-$HOME/.codex}/hooks`. It records hook file provenance hashes
   and backs up differing existing hook files before refreshing them from source.

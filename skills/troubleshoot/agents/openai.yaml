@@ -1,6 +1,6 @@
 interface:
   display_name: "Troubleshoot"
-  short_description: "Prove and fix complex failures"
-  default_prompt: "Use $troubleshoot to investigate this failure causally, apply the safest durable fix, and verify it end to end."
+  short_description: "Prove failures with bounded repairs"
+  default_prompt: "Use $troubleshoot to investigate this failure causally, apply bounded remediation attempts, verify each attempt, and stop with a complete report if the remediation budget is exhausted."
 policy:
   allow_implicit_invocation: true

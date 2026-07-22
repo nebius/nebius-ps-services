@@ -9,6 +9,13 @@
 
 ## Working Defaults
 
+- After one remediation fails against the same blocker, use `troubleshoot`
+  before another repair. Unless the current user explicitly sets another
+  budget, stop after three distinct failed remediation attempts or 60 active
+  minutes, whichever comes first. Report attempts 1 and 2 as progress; at
+  exhaustion, make only the exact private task-state update that records the
+  stop, then call no other tool and return the complete troubleshooting report.
+  Only a new explicit user instruction may start another bounded tranche.
 - Default policy for logic/API/CLI behavior changes is **no legacy
   compatibility layer** and **no backward-compatibility shims**.
 - When behavior changes, prefer fail-fast and a single canonical path instead
@@ -77,6 +84,9 @@
   concise checkpoints. Hooks may create only an empty private scaffold at
   compaction or the first complex prompt; the parent owns semantic content.
   Do not create repo-local task-state files unless explicitly requested.
+- Preserve an active `codex-remediation-budget:v1` marker exactly while
+  rewriting task state. The `troubleshoot` skill owns its semantics; task state
+  owns only private continuity.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment

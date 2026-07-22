@@ -468,93 +468,20 @@ def test_ordinary_skill_policy_must_be_true() -> None:
         )
 
 
-def test_implicit_selection_explicit_mutation_contract_passes() -> None:
+def test_agent_nebius_auth_setup_is_explicit_only() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         write_skill(
             root / "agent-nebius-auth-setup",
             "agent-nebius-auth-setup",
-            (
-                "## Invocation Policy\n\n"
-                "Implicit invocation is read-only. Show a displayed plan. "
-                "Before any IAM, credential, "
-                "profile, or hook mutation, require explicit current-turn "
-                "confirmation.\n"
-            ),
-            allow_implicit_invocation="true",
+            "## Invocation Policy\n\nExplicit invocation required.\n",
+            allow_implicit_invocation="false",
         )
 
         result = run_validator(root)
         output = result.stdout + result.stderr
         if result.returncode != 0:
             raise AssertionError(output)
-
-
-def test_implicit_selection_explicit_mutation_missing_guard_fails() -> None:
-    with TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        write_skill(
-            root / "agent-nebius-auth-setup",
-            "agent-nebius-auth-setup",
-            "## Invocation Policy\n\nImplicit invocation is allowed.\n",
-            allow_implicit_invocation="true",
-        )
-
-        result = run_validator(root)
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            raise AssertionError(f"expected validator failure\n{output}")
-        assert_contains(output, "implicit-selection/explicit-mutation skills")
-
-
-def test_implicit_selection_explicit_mutation_missing_plan_fails() -> None:
-    with TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        write_skill(
-            root / "agent-nebius-auth-setup",
-            "agent-nebius-auth-setup",
-            (
-                "## Invocation Policy\n\n"
-                "Implicit invocation is read-only. Before any IAM, credential, "
-                "profile, or hook mutation, require explicit current-turn "
-                "confirmation.\n"
-            ),
-            allow_implicit_invocation="true",
-        )
-
-        result = run_validator(root)
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            raise AssertionError(f"expected validator failure\n{output}")
-        assert_contains(output, "displayed plan")
-
-
-def test_implicit_selection_explicit_mutation_must_be_implicit() -> None:
-    with TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        write_skill(
-            root / "agent-nebius-auth-setup",
-            "agent-nebius-auth-setup",
-            (
-                "## Invocation Policy\n\n"
-                "Implicit invocation is read-only. Show a displayed plan. "
-                "Before any IAM, credential, "
-                "profile, or hook mutation, require explicit current-turn "
-                "confirmation.\n"
-            ),
-            allow_implicit_invocation="false",
-        )
-
-        result = run_validator(root)
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            raise AssertionError(f"expected validator failure\n{output}")
-        assert_contains(
-            output,
-            "policy.allow_implicit_invocation must be true for agent-nebius-auth-setup",
-        )
-
-
 def test_apply_security_policy_can_be_implicit() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -640,10 +567,7 @@ def main() -> int:
         test_description_declared_explicit_policy_must_be_false,
         test_invocation_policy_section_can_require_explicit_only,
         test_ordinary_skill_policy_must_be_true,
-        test_implicit_selection_explicit_mutation_contract_passes,
-        test_implicit_selection_explicit_mutation_missing_guard_fails,
-        test_implicit_selection_explicit_mutation_missing_plan_fails,
-        test_implicit_selection_explicit_mutation_must_be_implicit,
+        test_agent_nebius_auth_setup_is_explicit_only,
         test_apply_security_policy_can_be_implicit,
         test_guardrail_text_does_not_make_whole_skill_explicit_only,
         test_sdlc_invocation_policy_must_be_explicit_only,

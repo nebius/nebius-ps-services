@@ -1432,7 +1432,7 @@ def test_in_place_controller_roll_uses_admission_window_while_manager_is_paused(
     admission_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         migration,
-        "_patch_in_place_slurmcluster_during_manager_pause",
+        "_patch_slurmcluster_during_manager_pause",
         lambda **kwargs: admission_calls.append(kwargs),
     )
 
@@ -1454,6 +1454,8 @@ def test_in_place_controller_roll_uses_admission_window_while_manager_is_paused(
     assert len(admission_calls) == 1
     assert admission_calls[0]["target_uid"] == "cluster-uid"
     assert admission_calls[0]["target_resource_version"] == "42"
+    assert admission_calls[0]["operation_label"] == "target controller gate repair"
+    assert admission_calls[0]["window_purpose"] == "target-controller-gate-rearm"
     expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
     assert admission_calls[0]["spec_patch"]["slurmNodes"]["controller"]["slurmctld"] == expected
 
@@ -2265,6 +2267,7 @@ def test_gpu_smoke_drain_release_requires_continuous_partition_pause() -> None:
         match="continuous Slurm scheduling pause",
     ):
         migration._release_in_place_worker_locks_for_gpu_smoke(  # noqa: SLF001
+            checkpoint={},
             phase=phase,
             command_runner=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
             kube_context="test",
@@ -2319,6 +2322,7 @@ def test_gpu_smoke_drain_release_accepts_only_target_retired_missing_partitions(
     }
 
     lines = migration._release_in_place_worker_locks_for_gpu_smoke(  # noqa: SLF001
+        checkpoint={},
         phase=phase,
         command_runner=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
         kube_context="test",

@@ -122,6 +122,12 @@ objective, constraints, decisions, changed files, validation status, risks, and
 next action needed for continuation, and summarize any older task-state file
 that has grown too large to scan quickly before relying on it.
 
+If `troubleshoot` initializes a `codex-remediation-budget:v1` marker, preserve
+that bounded machine-readable block exactly during compaction and summary
+rewrites. `global-context-management` provides continuity only: it does not
+decide whether failures share a blocker, count semantic remediation attempts,
+or change a user-defined budget.
+
 ### Skill
 
 The skill is the runtime process contract. During a complex task it tells Codex

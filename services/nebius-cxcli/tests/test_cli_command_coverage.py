@@ -182,6 +182,8 @@ def _soperator_upgrade_checkpoint_path(paths: cli.ProjectPaths) -> Path:
 
 
 def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
+    migration_profile_id = "legacy-v1-to-target"
+    migration_profile = cli.soperator_migration_profile_group(migration_profile_id)
     identity = {
         "project_id": "project-456",
         "cluster_id": "mk8scluster-123",
@@ -293,6 +295,10 @@ def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
                 "release_name": "network-operator",
                 "namespace": "nvidia-network-operator",
             },
+        },
+        "migration_profile": {
+            "id": migration_profile_id,
+            "execution_contract": copy.deepcopy(migration_profile["execution_contract"]),
         },
         "rollout": {
             "strategy": "zero-surge",

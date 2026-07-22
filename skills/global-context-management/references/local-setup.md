@@ -76,6 +76,9 @@ global file.
 - Keep `current.md` as a rolling summary, not an append-only transcript:
   replace stale details with the latest validated state, and summarize any
   oversized historical task-state file before relying on it.
+- Preserve an active `codex-remediation-budget:v1` marker exactly while
+  rewriting the current task state. Attempt classification and limits belong to
+  `troubleshoot`, not the global-context hooks.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer

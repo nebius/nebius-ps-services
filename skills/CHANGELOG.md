@@ -6,11 +6,36 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
-- Fixed Nebius auth IAM isolation so the dedicated Codex group is created and
-  discovered under the selected project rather than its tenant. The managed
-  permit remains explicitly targeted at that project; tenant IDs are now only
-  ancestry assertions and profile context. Added fail-closed project-scope
-  guidance and regression coverage that rejects tenant group reuse.
+- Fixed explicit Nebius agent-auth setup after operator deletion of the managed
+  service account. A canonical credential whose old account ID receives an
+  exact provider-classified `NotFound` now triggers one human-profile-authenticated
+  rebootstrap: create or reuse a distinct fixed account, reconcile the exact IAM
+  shape, generate and validate one authorized-key credential, make one
+  mode-`0600` backup, atomically replace the stale credential, and rebind the
+  profile. Permission, authentication, transient, parse, generic `not found`,
+  and unclassified failures remain fail-closed, and a failed replacement never
+  generates a second key.
+- Simplified Nebius agent auth setup to an explicit-only, single-pass workflow
+  with no second confirmation or plan digest. The canonical service account now
+  joins one tenant-parented group containing exactly project `admin` and tenant
+  `viewer`; missing permits are added, extra or duplicate permits fail closed,
+  extra or duplicate members also fail closed, and old groups remain separate
+  cleanup. The group name now depends only on the immutable project ID hash,
+  and the service-account name is fixed to `codex-agent-sa`; the unverifiable
+  custom-name option was removed. A broken matching credential may be backed up
+  and replaced once during the same explicit invocation only after a classified
+  authentication failure; profile-write and transient token errors do not
+  rotate keys. Runtime verification now binds both profile identity and the
+  project account lookup to the canonical credential, and a healthy setup uses
+  one profile token-and-identity probe instead of repeating it. Empty or
+  malformed membership IDs now fail closed.
+- Fixed Nebius auth reconciliation for newly created groups by accepting the
+  CLI's successful empty JSON object as an empty access-permit or membership
+  list, while retaining fail-closed handling for unsupported non-empty response
+  shapes.
+- Fixed Nebius auth quota readiness with fixed tenant `viewer`, which is
+  read-only but broader than quota alone, plus a real read-only tenant quota
+  list verification call. Tenant write roles stay forbidden.
 - Fixed Nebius auth group-membership reconciliation to parse the current CLI
   `memberships` collection, preventing false absence and failed create-conflict
   convergence when the service account is already in the group.
@@ -26,13 +51,12 @@ All notable changes to the reusable Codex skills are tracked here.
   deleting or revoking them automatically. Cloud lookup failures now stop
   instead of masquerading as missing resources, create conflicts require a
   successful convergence read, credentials are validated in private
-  same-directory temporary files before atomic replacement, and plan digests
-  bind observed identities and credential fingerprints. Profile-list failures
+  same-directory temporary files before atomic replacement. Profile-list failures
   and unsupported output now fail closed, while membership reconciliation
   follows every returned page token rather than assuming one page.
 
 - Hardened Nebius auth recovery so correctable selector/profile/environment and
-  token-exposure denials explicitly retry without setup confirmation. Added a
+  token-exposure denials explicitly retry without running setup. Added a
   protected one-refresh/one-retry helper for explicitly idempotent operations,
   empty-token failure handling, recursive secret-output policy enforcement for
   wrapped commands, exact helper-name matching, and denial of token-bearing
@@ -62,10 +86,18 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
-- Added confirmed, project/account/credential-bound local-repair leases for
+- Added a global remediation-budget contract backed by `troubleshoot` and an
+  optional `PreToolUse`/`Stop` hook bundle. After the first failed repair, the
+  agent records a stable blocker and distinct remediation ledger in private
+  task state, reports failures 1 and 2, and stops after three failed repairs or
+  60 active minutes with a complete troubleshooting report. Only an explicit
+  user instruction starts another bounded tranche; raw command failures and
+  diagnostic experiments do not consume attempts.
+- Added project/account/credential-bound local-repair leases for
   unattended Nebius tasks. Leases expire within 24 hours and authorize only
   mode-`0600` correction and exact CLI-profile rebuilding; IAM, credential
-  generation or rotation, identity, and hook changes remain confirmation-gated.
+  generation or rotation, identity, and hook changes remain excluded from the
+  lease and require their separate explicit workflows.
 - Added `agent-nebius-auth-diagnose` as an implicitly selectable, read-only
   current-session project discovery and authentication triage skill. It routes
   hook failures without creating or repairing IAM, credentials, profiles,
@@ -316,24 +348,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Changed Nebius agent-auth bootstrap to one service-account creation
-  confirmation backed by a state-bound plan digest. Partial same-target
-  progress produces a fresh digest that the skill revalidates automatically
-  against the recorded authorization without another prompt. Stale digests,
-  target or identity drift, and retries after the one bounded credential
-  replacement fail closed. Replacement is now a separate state-bound phase so
-  the skill records the attempt before key generation, and plans expose observed
-  account/group IDs plus the credential fingerprint for transition checks.
-- Kept Nebius auth role-plan guidance factual by reporting additive permit
-  reconciliation without adding an unsolicited narrower-role recommendation.
-- Renamed setup to `agent-nebius-auth-setup` and made implicit selection
-  read-only. Setup now discovers the project from current-session evidence,
+- Renamed setup to `agent-nebius-auth-setup` and made it explicit-only. Setup
+  now discovers the project from current-session evidence,
   resolves authoritative project metadata before mutation, accepts only
   `--project-id` with an optional tenant assertion, verifies existing
-  credential ownership, shows a real dry-run mutation plan, and requires
-  the dry-run plan digest with `--confirm <plan_digest>` after explicit
-  current-turn approval. The live setup revalidates that plan before mutation
-  and after locking. Runtime Nebius Bash calls now require exactly one leading
+  credential ownership, and supports an optional real dry-run mutation plan.
+  Runtime Nebius Bash calls now require exactly one leading
   `CODEX_NEBIUS_PROJECT_ID=<project-id>` selector. Setup sanitizes inherited
   auth variables and uses collision-resistant project-bound groups; the hook
   rejects conflicting profiles, unsafe environment wrappers, indirect process

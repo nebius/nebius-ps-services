@@ -84,6 +84,83 @@ def test_external_soperator_discovery_refresh_defers_during_jail_mutation_bounda
     assert not cli_module._external_soperator_discovery_refresh_deferred(None)  # noqa: SLF001
 
 
+def test_external_soperator_discovery_refresh_defers_during_target_controller_gate() -> None:
+    checkpoint = {
+        "completed_phases": [
+            "discovery-and-plan",
+            "populate-jail-refresh",
+        ],
+        "controller_bridge": {
+            "stage": "target-ha-active",
+        },
+        "phase_state": {
+            "rolling-compute-migration": {
+                "in_place_target_controller_command_gate": {
+                    "status": "verified",
+                },
+                "in_place_target_native_controller_ha": {},
+            }
+        },
+    }
+
+    assert cli_module._external_soperator_discovery_refresh_deferred(checkpoint)  # noqa: SLF001
+
+    checkpoint["phase_state"]["rolling-compute-migration"][
+        "in_place_target_native_controller_ha"
+    ] = {
+        "cleanup_status": "controller-gate-removed",
+        "controller_gate_removed_at": "2026-07-22T13:00:00Z",
+    }
+    assert not cli_module._external_soperator_discovery_refresh_deferred(checkpoint)  # noqa: SLF001
+
+
+def test_locked_segment_projection_retains_accepted_migration_profile() -> None:
+    source_report = {
+        "report": {
+            "migration_profile_id": "v4-to-target",
+            "source_version": "4.0.2",
+            "target_version": "4.0.2-ps.4",
+        }
+    }
+    upgrade_path = {
+        "migration_profile": {
+            "id": "legacy-v1-to-target",
+            "execution_contract": {
+                "source_controller_pause": {
+                    "required_before_target_compute_reconcile": True,
+                }
+            },
+        }
+    }
+    segment = {
+        "id": "segment-1",
+        "soperator_app": {"current_version": "1.22.3"},
+        "soperator_chart": {"target_version": "4.0.2-ps.4"},
+    }
+
+    projected = cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
+        source_report=source_report,
+        upgrade_path=upgrade_path,
+        segment=segment,
+    )
+
+    assert projected["report"]["migration_profile_id"] == "legacy-v1-to-target"
+    assert projected["report"]["source_version"] == "1.22.3"
+    assert source_report["report"]["migration_profile_id"] == "v4-to-target"
+
+
+def test_locked_segment_projection_rejects_missing_migration_profile_contract() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="missing the exact migration profile execution contract",
+    ):
+        cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
+            source_report={"report": {"migration_profile_id": "v4-to-target"}},
+            upgrade_path={"migration_profile": {"id": "legacy-v1-to-target"}},
+            segment={"id": "segment-1"},
+        )
+
+
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
     portable: dict[str, object] = {
         "repo": repo,
@@ -19493,7 +19570,7 @@ def test_standalone_external_soperator_backup_external_db_fails_before_archive(
 
     monkeypatch.setattr(
         cli_module,
-        "_standalone_external_soperator_backup_cluster_context",
+        "_standalone_external_soperator_cluster_context",
         _cluster_context,
     )
     monkeypatch.setattr(
@@ -19565,10 +19642,28 @@ def test_external_soperator_discovery_without_onboarding_writes_cluster_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    @contextmanager
+    def _cluster_context(*_args, **_kwargs):
+        yield "generated-context"
+
+    snapshot = _old_soperator_snapshot_with_provider()
     monkeypatch.setattr(
         cli_module,
-        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
-        lambda *_args, **_kwargs: (_old_soperator_snapshot_with_provider(), "generated-context"),
+        "_standalone_external_soperator_cluster_context",
+        _cluster_context,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: copy.deepcopy(snapshot),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_provider_mk8s_template_snapshot",
+        lambda *_args, **_kwargs: _v3_provider_template_snapshot(
+            snapshot,
+            cluster_id="mk8scluster-123",
+        ),
     )
     monkeypatch.setattr(cli_module, "_collect_soperator_discovery_helm_values", lambda **_: {})
     monkeypatch.setattr(cli_module, "_collect_soperator_discovery_slurm_snapshot", lambda **_: {})
@@ -19630,10 +19725,28 @@ def test_external_soperator_discovery_output_dir_is_bundle_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    @contextmanager
+    def _cluster_context(*_args, **_kwargs):
+        yield "generated-context"
+
+    snapshot = _old_soperator_snapshot_with_provider()
     monkeypatch.setattr(
         cli_module,
-        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
-        lambda *_args, **_kwargs: (_old_soperator_snapshot_with_provider(), "generated-context"),
+        "_standalone_external_soperator_cluster_context",
+        _cluster_context,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: copy.deepcopy(snapshot),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_provider_mk8s_template_snapshot",
+        lambda *_args, **_kwargs: _v3_provider_template_snapshot(
+            snapshot,
+            cluster_id="mk8scluster-123",
+        ),
     )
     monkeypatch.setattr(cli_module, "_collect_soperator_discovery_helm_values", lambda **_: {})
     monkeypatch.setattr(cli_module, "_collect_soperator_discovery_slurm_snapshot", lambda **_: {})
@@ -19680,6 +19793,81 @@ def test_external_soperator_discovery_output_dir_is_bundle_root(
         / "manifest.json"
     )
     assert not (output_root / "manifest.json").exists()
+
+
+def test_external_soperator_discovery_keeps_generated_context_for_subcollectors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = False
+
+    @contextmanager
+    def _cluster_context(*_args, **_kwargs):
+        nonlocal active
+        active = True
+        yield "generated-context"
+        active = False
+
+    snapshot = _old_soperator_snapshot_with_provider()
+    monkeypatch.setattr(
+        cli_module,
+        "_standalone_external_soperator_cluster_context",
+        _cluster_context,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: copy.deepcopy(snapshot),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_provider_mk8s_template_snapshot",
+        lambda *_args, **_kwargs: _v3_provider_template_snapshot(
+            snapshot,
+            cluster_id="mk8scluster-123",
+        ),
+    )
+
+    def _subcollector(**kwargs):
+        assert active is True
+        assert kwargs["kube_context"] == "generated-context"
+        return {}
+
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_helm_values", _subcollector)
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_slurm_snapshot", _subcollector)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_discovery_accounting_snapshot",
+        _subcollector,
+    )
+    payload = cli_module._standalone_external_soperator_discovery_payload(
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+    )
+
+    cli_module._run_external_soperator_discovery_command(
+        project_dir=tmp_path,
+        config_path=None,
+        payload=payload,
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+        target_ref=None,
+        cluster_id="mk8scluster-123",
+        kube_context=None,
+        access="external",
+        output_dir=None,
+        namespace=None,
+        release_name=None,
+        to_chart_version=None,
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        redaction="support",
+    )
+
+    assert active is False
 
 
 def test_external_soperator_discovery_cluster_snapshot_uses_cached_client_name(

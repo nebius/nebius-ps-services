@@ -5,16 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LEASE_HELPER="$SCRIPT_DIR/agent-nebius-auth-repair-lease.py"
 SHARED_HELPER="$SCRIPT_DIR/../assets/hooks/nebius_auth_shared.py"
 SA_NAME="codex-agent-sa"
-ROLE="admin"
+PROJECT_ROLE="admin"
+TENANT_ROLE="viewer"
 DRY_RUN="false"
-CONFIRM_DIGEST=""
 LEASE_FILE=""
 LEASE_TTL_SECONDS="43200"
 MAX_LEASE_TTL_SECONDS="86400"
 TENANT_ARG_SET="false"
 PROJECT_ARG_SET="false"
-SA_ARG_SET="false"
-ROLE_ARG_SET="false"
 TTL_ARG_SET="false"
 ENDPOINT="api.nebius.cloud"
 AGENT_PROFILE_PREFIX="codex-agent-"
@@ -27,12 +25,13 @@ COMMAND=""
 LOCK_DIRS=()
 PROFILE_RESTORE_TARGET=""
 PLANNED_MUTATIONS=()
-AUTHORIZED_CONVERGENCE_ACTIONS=()
 PLAN_DIGEST=""
 PLAN_NOTES=()
 OBSERVED_SERVICE_ACCOUNT_ID=""
 OBSERVED_GROUP_ID=""
+OBSERVED_PERMITS_SHA256=""
 OBSERVED_CREDENTIAL_SHA256=""
+OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID=""
 LEASE_SERVICE_ACCOUNT_ID=""
 LEASE_CREDENTIAL_SHA256=""
 LEASE_DIR="$HOME/.nebius/codex-agent-repair-leases"
@@ -56,23 +55,13 @@ Usage:
   bash scripts/agent-nebius-auth-setup.sh ensure \
     --project-id <project_id> \
     [--tenant-id <expected_tenant_id>] \
-    [--service-account-name <name>] \
-    [--role <role>] \
-    (--dry-run | --confirm <plan_digest>)
-
-  bash scripts/agent-nebius-auth-setup.sh replace-credential \
-    --project-id <project_id> \
-    [--tenant-id <expected_tenant_id>] \
-    [--service-account-name <name>] \
-    [--role <role>] \
-    (--dry-run | --confirm <plan_digest>)
+    [--dry-run]
 
   bash scripts/agent-nebius-auth-setup.sh repair-lease \
     --project-id <project_id> \
     [--tenant-id <expected_tenant_id>] \
-    [--service-account-name <name>] \
     [--ttl-seconds <seconds>] \
-    (--dry-run | --confirm <plan_digest>)
+    [--dry-run]
 
   bash scripts/agent-nebius-auth-setup.sh repair-local \
     --lease-file <path>
@@ -81,14 +70,21 @@ Verifies, creates, or repairs local Codex Agent Nebius service-account auth.
 The verify command is read-only and never requires a human/admin profile.
 Runtime renewable context is handled by the installed PreToolUse hook, not by
 this script.
-Defaults: service account 'codex-agent-sa', project role 'admin'.
+Setup is explicit-only. Invoking it authorizes one bounded convergence for the
+resolved project: one tenant-parented custom group, exactly project 'admin'
+plus tenant 'viewer', one service-account membership, the canonical credential,
+and its CLI profile. An optional --dry-run previews the same target without
+mutation. If the canonical credential cannot mint a token, ensure backs it up
+and replaces it at most once.
 
-For first-time bootstrap, review one dry-run plan and confirm service-account
-creation once. That confirmation covers bounded convergence of the same
-tenant/project/account/group/role/paths, including one backup-and-replacement
-attempt when the newly generated credential cannot mint a token.
+If the existing canonical credential references a service account that the
+validated human profile proves is no longer present, ensure creates or reuses
+the fixed service account with that human profile, reconciles its exact IAM
+shape, generates one new authorized-key credential, backs up the stale file,
+and rebinds the agent profile. Authentication, authorization, transient, and
+unclassified identity-lookup failures still stop without replacement.
 
-A confirmed repair lease lasts 12 hours by default (24 hours maximum) and can
+An explicitly requested repair lease lasts 12 hours by default (24 hours maximum) and can
 authorize only mode-0600 correction and rebuilding the exact bound CLI profile.
 It never authorizes credential generation or rotation, IAM, identity changes,
 or hook installation.
@@ -166,12 +162,6 @@ acquire_lock() {
   die "Timed out waiting for lock: $lock_dir"
 }
 
-slugify() {
-  printf '%s' "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
-}
-
 json_get_id() {
   jq -r '.metadata.id // .id // .items[0].metadata.id // empty'
 }
@@ -185,37 +175,31 @@ json_get_parent_id() {
 }
 
 validate_inputs() {
-  [[ -n "$COMMAND" ]] || die "A command is required: verify, ensure, replace-credential, repair-lease, or repair-local."
+  [[ -n "$COMMAND" ]] || die "A command is required: verify, ensure, repair-lease, or repair-local."
   if [[ "$COMMAND" == "repair-local" ]]; then
     [[ -n "$LEASE_FILE" ]] || die "repair-local requires --lease-file <path>."
-    [[ "$TENANT_ARG_SET" == "false" && "$PROJECT_ARG_SET" == "false" && "$SA_ARG_SET" == "false" && "$ROLE_ARG_SET" == "false" && "$TTL_ARG_SET" == "false" ]] \
+    [[ "$TENANT_ARG_SET" == "false" && "$PROJECT_ARG_SET" == "false" && "$TTL_ARG_SET" == "false" ]] \
       || die "repair-local derives its exact target from the lease; pass only --lease-file."
-    [[ "$DRY_RUN" == "false" && -z "$CONFIRM_DIGEST" ]] || die "repair-local accepts neither --dry-run nor --confirm."
+    [[ "$DRY_RUN" == "false" ]] || die "repair-local does not accept --dry-run."
     return 0
   fi
 
-  [[ "$COMMAND" == "verify" || "$COMMAND" == "ensure" || "$COMMAND" == "replace-credential" || "$COMMAND" == "repair-lease" ]] || die "Unsupported command: $COMMAND"
+  [[ "$COMMAND" == "verify" || "$COMMAND" == "ensure" || "$COMMAND" == "repair-lease" ]] || die "Unsupported command: $COMMAND"
   [[ -n "$PROJECT_ID" ]] || die "--project-id is required. Discover it from the current session before setup."
   [[ "$PROJECT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || die "--project-id contains unsupported characters."
   [[ -z "$TENANT_ID" || "$TENANT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || die "--tenant-id contains unsupported characters."
-  [[ "$SA_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] || die "--service-account-name is not a safe Nebius resource name."
-  [[ "$ROLE" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--role contains unsupported characters."
   if [[ "$COMMAND" == "verify" ]]; then
-    [[ "$TENANT_ARG_SET" == "false" && "$SA_ARG_SET" == "false" && "$ROLE_ARG_SET" == "false" && "$TTL_ARG_SET" == "false" ]] \
+    [[ "$TENANT_ARG_SET" == "false" && "$TTL_ARG_SET" == "false" ]] \
       || die "verify accepts only --project-id."
-    [[ "$DRY_RUN" == "false" && -z "$CONFIRM_DIGEST" && -z "$LEASE_FILE" ]] \
-      || die "verify accepts no mutation, lease, dry-run, repair, or confirmation options."
+    [[ "$DRY_RUN" == "false" && -z "$LEASE_FILE" ]] \
+      || die "verify accepts no mutation, lease, dry-run, or repair options."
     return 0
   fi
-  [[ "$DRY_RUN" == "true" || -n "$CONFIRM_DIGEST" ]] || die "Review the plan with --dry-run, then rerun with --confirm <plan_digest> under the workflow's one-time bootstrap approval or a separately approved standalone repair."
-  [[ "$DRY_RUN" != "true" || -z "$CONFIRM_DIGEST" ]] || die "Pass only one of --dry-run or --confirm."
-  [[ -z "$CONFIRM_DIGEST" || "$CONFIRM_DIGEST" =~ ^[a-f0-9]{64}$ ]] || die "--confirm requires the 64-character digest from the reviewed dry-run plan."
   [[ -z "$LEASE_FILE" ]] || die "--lease-file is valid only with repair-local."
-  if [[ "$COMMAND" == "ensure" || "$COMMAND" == "replace-credential" ]]; then
+  if [[ "$COMMAND" == "ensure" ]]; then
     [[ "$TTL_ARG_SET" == "false" ]] || die "$COMMAND does not accept --ttl-seconds."
   fi
   if [[ "$COMMAND" == "repair-lease" ]]; then
-    [[ "$ROLE_ARG_SET" == "false" ]] || die "repair-lease does not accept --role."
     [[ "$LEASE_TTL_SECONDS" =~ ^[0-9]+$ ]] || die "--ttl-seconds must be an integer."
     (( LEASE_TTL_SECONDS > 0 && LEASE_TTL_SECONDS <= MAX_LEASE_TTL_SECONDS )) \
       || die "--ttl-seconds must be between 1 and $MAX_LEASE_TTL_SECONDS."
@@ -315,18 +299,6 @@ profile_restore_target() {
   current_human_profile || true
 }
 
-human_session_available() {
-  local profile=""
-
-  profile="$(current_human_profile || true)"
-  [[ -n "$profile" ]] || return 1
-  nebius iam get-access-token --no-browser --auth-timeout 10s --timeout 20s --profile "$profile" </dev/null >/dev/null 2>&1
-}
-
-ensure_human_session() {
-  require_human_profile >/dev/null
-}
-
 resolve_project_metadata() {
   local metadata=""
   local resolved_id=""
@@ -361,19 +333,16 @@ resolve_project_metadata() {
 
 ensure_group_name() {
   local project_hash=""
-  local project_slug=""
 
   if [[ -n "${GROUP_NAME:-}" ]]; then
     return 0
   fi
 
-  project_slug="$(slugify "$PROJECT_NAME")"
-  [[ -n "$project_slug" ]] || die "Project name must contain at least one alphanumeric character."
   project_hash="$(
     python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:20])' \
       "$PROJECT_ID"
   )"
-  GROUP_NAME="codex-agent-${project_slug:0:28}-${project_hash}"
+  GROUP_NAME="codex-agent-${project_hash}"
 }
 
 get_or_create_service_account() {
@@ -441,28 +410,29 @@ lookup_service_account_id() {
 }
 
 get_or_create_group() {
+  local group_name="$1"
+  local parent_id="$2"
+  local scope_label="$3"
   local create_output=""
   local group_id=""
 
-  ensure_group_name
-
-  group_id="$(lookup_group_id)"
+  group_id="$(lookup_group_id_by_name "$group_name" "$parent_id")"
 
   if [[ -n "$group_id" ]]; then
     printf '%s\n' "$group_id"
     return 0
   fi
 
-  log "Creating group: $GROUP_NAME"
+  log "Creating $scope_label group: $group_name"
   if create_output="$(nebius iam group create \
-      --parent-id "$PROJECT_ID" \
-      --name "$GROUP_NAME" \
+      --parent-id "$parent_id" \
+      --name "$group_name" \
       --no-browser \
       --profile "$HUMAN_PROFILE" \
       --format json)"; then
     group_id="$(printf '%s' "$create_output" | json_get_id)"
   else
-    group_id="$(lookup_group_id)"
+    group_id="$(lookup_group_id_by_name "$group_name" "$parent_id")"
     [[ -n "$group_id" ]] \
       || die "Failed to create group and no converged group exists."
     log "Group converged after a create conflict."
@@ -472,7 +442,7 @@ get_or_create_group() {
 }
 
 lookup_group_id() {
-  lookup_group_id_by_name "$GROUP_NAME" "$PROJECT_ID"
+  lookup_group_id_by_name "$GROUP_NAME" "$TENANT_ID"
 }
 
 lookup_group_id_by_name() {
@@ -511,10 +481,9 @@ lookup_group_id_by_name() {
   die "Group lookup failed; refusing to treat unknown state as absent."
 }
 
-access_permit_exists() {
+list_access_permits_canonical() {
   local group_id="$1"
   local response=""
-  local status=0
 
   response="$(nebius iam access-permit list \
     --parent-id "$group_id" \
@@ -523,48 +492,68 @@ access_permit_exists() {
     --profile "$HUMAN_PROFILE" \
     --format json)" \
     || die "Access-permit lookup failed; refusing to treat unknown state as absent."
-  if printf '%s' "$response" | jq -e --arg resource "$PROJECT_ID" --arg role "$ROLE" '
+  printf '%s' "$response" | jq -ce '
         def rows:
           if type == "array" then .
           elif (.items? | type) == "array" then .items
-          else [] end;
-        any(rows[]; ((.spec.resource_id // .resource_id // "") == $resource)
-          and ((.spec.role // .role // "") == $role))
-      ' >/dev/null; then
-    return 0
-  else
-    status=$?
-  fi
-  [[ "$status" -eq 1 ]] || die "Access-permit lookup returned malformed JSON."
-  return 1
+          elif type == "object" and length == 0 then []
+          else error("unsupported access-permit response") end;
+        [rows[] | {
+          resource_id: (.spec.resource_id // .resource_id // ""),
+          role: (.spec.role // .role // "")
+        }] | sort_by(.resource_id, .role)
+      ' || die "Access-permit lookup returned malformed JSON."
 }
 
-ensure_access_permit() {
+validated_agent_permits_canonical() {
   local group_id="$1"
+  local permits=""
+
+  permits="$(list_access_permits_canonical "$group_id")"
+  printf '%s' "$permits" | jq -e \
+    --arg project "$PROJECT_ID" \
+    --arg project_role "$PROJECT_ROLE" \
+    --arg tenant "$TENANT_ID" \
+    --arg tenant_role "$TENANT_ROLE" '
+      all(.[];
+        ((.resource_id == $project) and (.role == $project_role))
+        or ((.resource_id == $tenant) and (.role == $tenant_role)))
+      and (([.[] | [.resource_id, .role]] | unique | length) == length)
+    ' >/dev/null \
+    || die "Agent group '$GROUP_NAME' must contain only project '$PROJECT_ROLE' and tenant '$TENANT_ROLE' permits, without duplicates; refusing mutation."
+  printf '%s\n' "$permits"
+}
+
+create_access_permit() {
+  local group_id="$1"
+  local resource_id="$2"
+  local role="$3"
+  local scope_label="$4"
   local output_file=""
+  local permits=""
 
   if is_dry_run; then
-    log "Would ensure group '$group_id' has role '$ROLE' on project '$PROJECT_ID'."
-    return 0
-  fi
-
-  if access_permit_exists "$group_id"; then
-    log "Access permit already exists."
+    log "Would add role '$role' on $scope_label '$resource_id' to group '$GROUP_NAME'."
     return 0
   fi
 
   output_file="$(mktemp)"
   if nebius iam access-permit create \
     --parent-id "$group_id" \
-    --resource-id "$PROJECT_ID" \
+    --resource-id "$resource_id" \
     --no-browser \
     --profile "$HUMAN_PROFILE" \
-    --role "$ROLE" >"$output_file" 2>&1; then
+    --role "$role" >"$output_file" 2>&1; then
     cleanup_file "$output_file"
     return 0
   fi
 
-  if access_permit_exists "$group_id"; then
+  permits="$(validated_agent_permits_canonical "$group_id")"
+  if printf '%s' "$permits" | jq -e \
+      --arg resource "$resource_id" \
+      --arg role "$role" '
+        any(.[]; (.resource_id == $resource) and (.role == $role))
+      ' >/dev/null; then
     cleanup_file "$output_file"
     log "Access permit converged after a create conflict."
     return 0
@@ -572,18 +561,63 @@ ensure_access_permit() {
 
   cat "$output_file" >&2
   cleanup_file "$output_file"
-  die "Failed to ensure access permit."
+  die "Failed to create access permit."
 }
 
-membership_exists() {
+ensure_exact_agent_group_permits() {
+  local group_id="$1"
+  local permits=""
+  local project_missing="false"
+  local tenant_missing="false"
+
+  permits="$(validated_agent_permits_canonical "$group_id")"
+  if ! printf '%s' "$permits" | jq -e \
+      --arg resource "$PROJECT_ID" \
+      --arg role "$PROJECT_ROLE" '
+        any(.[]; (.resource_id == $resource) and (.role == $role))
+      ' >/dev/null; then
+    project_missing="true"
+  fi
+  if ! printf '%s' "$permits" | jq -e \
+      --arg resource "$TENANT_ID" \
+      --arg role "$TENANT_ROLE" '
+        any(.[]; (.resource_id == $resource) and (.role == $role))
+      ' >/dev/null; then
+    tenant_missing="true"
+  fi
+
+  if [[ "$project_missing" == "true" ]]; then
+    create_access_permit "$group_id" "$PROJECT_ID" "$PROJECT_ROLE" "project"
+  fi
+  if [[ "$tenant_missing" == "true" ]]; then
+    create_access_permit "$group_id" "$TENANT_ID" "$TENANT_ROLE" "tenant"
+  fi
+
+  if [[ "$project_missing" == "true" || "$tenant_missing" == "true" ]]; then
+    permits="$(validated_agent_permits_canonical "$group_id")"
+  fi
+  printf '%s' "$permits" | jq -e \
+    --arg project "$PROJECT_ID" \
+    --arg project_role "$PROJECT_ROLE" \
+    --arg tenant "$TENANT_ID" \
+    --arg tenant_role "$TENANT_ROLE" '
+      length == 2
+      and any(.[]; (.resource_id == $project) and (.role == $project_role))
+      and any(.[]; (.resource_id == $tenant) and (.role == $tenant_role))
+    ' >/dev/null \
+    || die "Agent group '$GROUP_NAME' did not converge to exactly project '$PROJECT_ROLE' and tenant '$TENANT_ROLE'."
+}
+
+managed_group_membership_exact() {
   local group_id="$1"
   local sa_id="$2"
+  local members='[]'
   local next_page_token=""
   local page_count=0
+  local page_members=""
   local page_token=""
   local page_args=()
   local response=""
-  local status=0
   local seen_page_tokens=()
   local seen_token=""
 
@@ -605,22 +639,27 @@ membership_exists() {
       || die "Group-membership lookup failed; refusing to treat unknown state as absent."
     printf '%s' "$response" | jq -e '
       type == "object"
-      and (.memberships | type == "array")
-      and ((.next_page_token // "") | type == "string")
+      and (
+        length == 0
+        or (
+          (.memberships | type == "array")
+          and ((.next_page_token // "") | type == "string")
+        )
+      )
     ' >/dev/null \
       || die "Group-membership lookup returned malformed JSON."
-    if printf '%s' "$response" | jq -e --arg member "$sa_id" '
-          any(.memberships[];
-            (.spec.member_id // .member_id // .metadata.id // .id // "") == $member)
-        ' >/dev/null; then
-      return 0
-    else
-      status=$?
-    fi
-    [[ "$status" -eq 1 ]] \
-      || die "Group-membership lookup returned malformed JSON."
+    page_members="$(printf '%s' "$response" | jq -ce '
+      [(.memberships // [])[] |
+        (.spec.member_id // .member_id // .metadata.id // .id // "")]
+    ')" || die "Group-membership lookup returned malformed JSON."
+    printf '%s' "$page_members" | jq -e '
+      all(.[]; (type == "string") and (length > 0))
+    ' >/dev/null \
+      || die "Group-membership lookup returned an empty or malformed member ID."
+    members="$(jq -cn --argjson prior "$members" --argjson page "$page_members" \
+      '$prior + $page')"
     next_page_token="$(printf '%s' "$response" | jq -r '.next_page_token // empty')"
-    [[ -n "$next_page_token" ]] || return 1
+    [[ -n "$next_page_token" ]] || break
     for seen_token in "${seen_page_tokens[@]}"; do
       [[ "$seen_token" != "$next_page_token" ]] \
         || die "Group-membership lookup repeated a pagination token."
@@ -628,6 +667,15 @@ membership_exists() {
     seen_page_tokens+=("$next_page_token")
     page_token="$next_page_token"
   done
+
+  if printf '%s' "$members" | jq -e --arg member "$sa_id" \
+      'length == 1 and .[0] == $member' >/dev/null; then
+    return 0
+  fi
+  if printf '%s' "$members" | jq -e 'length == 0' >/dev/null; then
+    return 1
+  fi
+  die "Agent group '$GROUP_NAME' must contain only one membership for service account '$sa_id'; refusing mutation."
 }
 
 ensure_group_membership() {
@@ -640,7 +688,7 @@ ensure_group_membership() {
     return 0
   fi
 
-  if membership_exists "$group_id" "$sa_id"; then
+  if managed_group_membership_exact "$group_id" "$sa_id"; then
     log "Group membership already exists."
     return 0
   fi
@@ -652,10 +700,12 @@ ensure_group_membership() {
     --profile "$HUMAN_PROFILE" \
     --member-id "$sa_id" >"$output_file" 2>&1; then
     cleanup_file "$output_file"
+    managed_group_membership_exact "$group_id" "$sa_id" \
+      || die "Group membership create succeeded, but exact membership could not be verified."
     return 0
   fi
 
-  if membership_exists "$group_id" "$sa_id"; then
+  if managed_group_membership_exact "$group_id" "$sa_id"; then
     cleanup_file "$output_file"
     log "Group membership converged after a create conflict."
     return 0
@@ -670,8 +720,8 @@ ensure_iam_shape_for_service_account() {
   local sa_id="$1"
   local group_id=""
 
-  group_id="$(get_or_create_group)"
-  ensure_access_permit "$group_id"
+  group_id="$(get_or_create_group "$GROUP_NAME" "$TENANT_ID" "agent authorization")"
+  ensure_exact_agent_group_permits "$group_id"
   ensure_group_membership "$group_id" "$sa_id"
 }
 
@@ -684,25 +734,68 @@ credential_service_account_id() {
     --allow-non-0600
 }
 
-verify_credential_identity() {
+service_account_get_error_is_not_found() {
+  local status="$1"
+  local error_file="$2"
+  local rpc_code=""
+
+  [[ "$status" -ne 0 ]] || return 1
+  rpc_code="$(python3 -c '
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+codes = re.findall(r"rpc error:\s*code\s*=\s*([a-z][a-z0-9_]*)", text, re.I)
+print(codes[0].lower() if len(codes) == 1 else "")
+' "$error_file")" || return 1
+  [[ "$rpc_code" == "notfound" ]]
+}
+
+credential_service_account_is_current() {
   local sa_id=""
+  local error_file=""
   local metadata=""
+  local output_file=""
   local resolved_name=""
   local resolved_parent_id=""
+  local status=0
 
   sa_id="$(credential_service_account_id "$CREDENTIAL_FILE" || true)"
   [[ -n "$sa_id" ]] || die "Existing credential does not contain a service-account ID; refusing mutation."
-  metadata="$(
-    nebius iam service-account get \
+
+  output_file="$(mktemp)"
+  error_file="$(mktemp)"
+  if nebius iam service-account get \
       --id "$sa_id" \
       --no-browser \
+      --retries 1 \
       --profile "$HUMAN_PROFILE" \
-      --format json
-  )" || die "Failed to resolve service account '$sa_id' from the existing credential; refusing mutation."
+      --format json >"$output_file" 2>"$error_file"; then
+    metadata="$(<"$output_file")"
+  else
+    status=$?
+    if service_account_get_error_is_not_found "$status" "$error_file"; then
+      cleanup_file "$output_file"
+      cleanup_file "$error_file"
+      return 1
+    fi
+    cat "$error_file" >&2
+    cleanup_file "$output_file"
+    cleanup_file "$error_file"
+    die "Failed to resolve service account '$sa_id' from the existing credential; refusing mutation."
+  fi
+  cleanup_file "$output_file"
+  cleanup_file "$error_file"
   resolved_name="$(printf '%s' "$metadata" | json_get_name)"
   resolved_parent_id="$(printf '%s' "$metadata" | json_get_parent_id)"
   [[ "$resolved_name" == "$SA_NAME" ]] || die "Existing credential belongs to service account '$resolved_name', not '$SA_NAME'; refusing mutation."
   [[ "$resolved_parent_id" == "$PROJECT_ID" ]] || die "Existing credential service account belongs to project '$resolved_parent_id', not '$PROJECT_ID'; refusing mutation."
+}
+
+verify_credential_identity() {
+  credential_service_account_is_current \
+    || die "Existing credential references a service account that is no longer present; a repair lease cannot bootstrap a replacement identity."
 }
 
 verify_credential_local_safety() {
@@ -725,17 +818,15 @@ print_plan() {
   log "  project name: $PROJECT_NAME"
   log "  service account: $SA_NAME"
   log "  observed service-account ID: ${OBSERVED_SERVICE_ACCOUNT_ID:-absent}"
-  log "  group: $GROUP_NAME"
-  log "  group parent: $PROJECT_ID (project-scoped)"
+  log "  credential service-account ID: ${OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID:-absent}"
+  log "  authorization group: $GROUP_NAME"
+  log "  group parent: $TENANT_ID"
   log "  observed group ID: ${OBSERVED_GROUP_ID:-absent}"
-  log "  additive project role: $ROLE (existing roles on this project are preserved)"
+  log "  required permits: '$PROJECT_ROLE' on project '$PROJECT_ID'; '$TENANT_ROLE' on tenant '$TENANT_ID'"
+  log "  observed permits SHA-256: ${OBSERVED_PERMITS_SHA256:-absent}"
   log "  credential file: $CREDENTIAL_FILE"
   log "  observed credential SHA-256: ${OBSERVED_CREDENTIAL_SHA256:-absent}"
   log "  CLI profile: $PROFILE"
-  log "Authorized convergence actions:"
-  for mutation in "${AUTHORIZED_CONVERGENCE_ACTIONS[@]}"; do
-    log "  - $mutation"
-  done
   log "Currently required actions:"
   if [[ "${#PLANNED_MUTATIONS[@]}" -eq 0 ]]; then
     log "  none (read-only authentication and access verification only)"
@@ -750,7 +841,6 @@ print_plan() {
       log "  - $note"
     done
   fi
-  log "Plan digest: $PLAN_DIGEST"
   log "No global default-project selector will be read or written."
 }
 
@@ -794,7 +884,6 @@ replace_credential_file() {
   local generated_id=""
   local temp_file=""
 
-  ensure_human_session
   ensure_nebius_dir
 
   PENDING_CREDENTIAL_TEMP_DIR="$(mktemp -d "${CREDENTIAL_FILE}.tmp.XXXXXX")"
@@ -847,6 +936,23 @@ profile_can_mint_token() {
   nebius iam get-access-token --no-browser --auth-timeout 10s --timeout 20s --profile "$PROFILE" </dev/null >/dev/null 2>&1
 }
 
+profile_service_account_id() {
+  nebius iam whoami \
+    --no-browser \
+    --profile "$PROFILE" \
+    --format json 2>/dev/null \
+    | jq -er '.service_account_profile.info.metadata.id // empty'
+}
+
+profile_matches_service_account() {
+  local expected_service_account_id="$1"
+  local actual_service_account_id=""
+
+  actual_service_account_id="$(profile_service_account_id)" \
+    || die "CLI profile '$PROFILE' can mint a token but its service-account identity cannot be resolved."
+  [[ "$actual_service_account_id" == "$expected_service_account_id" ]]
+}
+
 verify_agent_runtime() {
   local mode=""
   local service_account_id=""
@@ -864,9 +970,14 @@ verify_agent_runtime() {
   profile_exists || die "Agent runtime profile is missing: $PROFILE"
   profile_can_mint_token \
     || die "Agent runtime profile cannot mint a token non-interactively."
-  profile_has_project_access \
-    || die "Agent runtime profile minted a token but lacks basic project access."
-  log "Agent runtime auth is ready for project '$PROJECT_ID'."
+  profile_matches_service_account "$service_account_id" \
+    || die "Agent runtime profile service-account identity does not match the canonical credential."
+  profile_has_project_access "$service_account_id" \
+    || die "Agent runtime profile minted a token but does not resolve the canonical service account with project access."
+  resolve_agent_profile_tenant
+  profile_has_tenant_quota_access \
+    || die "Agent runtime profile minted a token and can reach the project but lacks authoritative tenant quota-allowance read access. Invoke agent-nebius-auth-setup explicitly to reconcile the fixed tenant viewer grant."
+  log "Agent runtime auth is ready for project '$PROJECT_ID' and tenant quota reads."
   log "Human/admin IAM reconciliation was not checked."
 }
 
@@ -913,7 +1024,10 @@ run_preserving_active_profile() {
   return "$status"
 }
 
-ensure_profile() {
+ensure_profile_binding() {
+  local sa_id="$1"
+  local force_rebind="${2:-false}"
+
   if is_dry_run; then
     log "Would create or update profile '$PROFILE' from '$CREDENTIAL_FILE'."
     return 0
@@ -922,7 +1036,9 @@ ensure_profile() {
   [[ -f "$CREDENTIAL_FILE" ]] || return 1
 
   if profile_exists; then
-    if profile_can_mint_token; then
+    if [[ "$force_rebind" != "true" ]] \
+        && profile_can_mint_token \
+        && profile_matches_service_account "$sa_id"; then
       log "CLI profile already exists and can mint a token: $PROFILE"
       return 0
     fi
@@ -931,130 +1047,186 @@ ensure_profile() {
       --endpoint "$ENDPOINT" \
       --tenant-id "$TENANT_ID" \
       --parent-id "$PROJECT_ID" \
-      --service-account-file "$CREDENTIAL_FILE" >/dev/null
+      --service-account-file "$CREDENTIAL_FILE" >/dev/null \
+      || die "Failed to update CLI profile '$PROFILE'; no additional credential replacement was attempted."
   else
     log "Creating profile: $PROFILE"
     run_preserving_active_profile nebius profile create "$PROFILE" \
       --endpoint "$ENDPOINT" \
       --tenant-id "$TENANT_ID" \
       --parent-id "$PROJECT_ID" \
-      --service-account-file "$CREDENTIAL_FILE" >/dev/null
+      --service-account-file "$CREDENTIAL_FILE" >/dev/null \
+      || die "Failed to create CLI profile '$PROFILE'; no additional credential replacement was attempted."
   fi
 
-  profile_can_mint_token
+  profile_can_mint_token && profile_matches_service_account "$sa_id"
+}
+
+credential_auth_failure_is_proven() {
+  local error_file=""
+  local normalized_error=""
+
+  error_file="$(mktemp)"
+  if nebius iam get-access-token \
+      --no-browser \
+      --auth-timeout 10s \
+      --timeout 20s \
+      --retries 1 \
+      --profile "$PROFILE" </dev/null >/dev/null 2>"$error_file"; then
+    cleanup_file "$error_file"
+    return 1
+  fi
+  normalized_error="$(tr '[:upper:]' '[:lower:]' <"$error_file")"
+  cleanup_file "$error_file"
+  case "$normalized_error" in
+    *unauthenticated*|*invalid*credential*|*authentication*failed*|*signature*failed*|*public*key*not*found*)
+      return 0
+      ;;
+    *)
+      die "Token minting failed without a classified credential-authentication error; no credential replacement was attempted."
+      ;;
+  esac
 }
 
 profile_has_project_access() {
-  nebius iam service-account get-by-name \
-    --name "$SA_NAME" \
-    --parent-id "$PROJECT_ID" \
+  local expected_service_account_id="$1"
+  local metadata=""
+  local resolved_service_account_id=""
+
+  metadata="$(
+    nebius iam service-account get-by-name \
+      --name "$SA_NAME" \
+      --parent-id "$PROJECT_ID" \
+      --no-browser \
+      --profile "$PROFILE" \
+      --format json 2>/dev/null
+  )" || return 1
+  resolved_service_account_id="$(printf '%s' "$metadata" | json_get_id)"
+  [[ -n "$resolved_service_account_id" && "$resolved_service_account_id" == "$expected_service_account_id" ]]
+}
+
+resolve_agent_profile_tenant() {
+  local expected_tenant_id="$TENANT_ID"
+  local metadata=""
+  local resolved_id=""
+  local resolved_tenant_id=""
+
+  metadata="$(
+    nebius iam project get \
+      --id "$PROJECT_ID" \
+      --no-browser \
+      --profile "$PROFILE" \
+      --format json
+  )" || die "Agent runtime profile minted a token but cannot read project metadata."
+  resolved_id="$(printf '%s' "$metadata" | json_get_id)"
+  resolved_tenant_id="$(printf '%s' "$metadata" | json_get_parent_id)"
+  [[ "$resolved_id" == "$PROJECT_ID" ]] \
+    || die "Agent project metadata ID '$resolved_id' does not match requested project '$PROJECT_ID'."
+  [[ -n "$resolved_tenant_id" ]] \
+    || die "Agent project metadata for '$PROJECT_ID' is missing metadata.parent_id."
+  [[ "$resolved_tenant_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
+    || die "Agent project metadata contains an unsupported tenant ID."
+  if [[ -n "$expected_tenant_id" && "$expected_tenant_id" != "$resolved_tenant_id" ]]; then
+    die "Agent project metadata tenant '$resolved_tenant_id' does not match the reviewed tenant '$expected_tenant_id'."
+  fi
+  TENANT_ID="$resolved_tenant_id"
+}
+
+profile_has_tenant_quota_access() {
+  [[ -n "$TENANT_ID" ]] || return 1
+  nebius quotas quota-allowance list \
+    --parent-id "$TENANT_ID" \
+    --page-size 1 \
     --no-browser \
     --profile "$PROFILE" \
     --format json >/dev/null 2>&1
 }
 
 verify_project_access() {
+  local expected_service_account_id="$1"
+
   if is_dry_run; then
     log "Would verify basic project access through profile '$PROFILE'."
     return 0
   fi
 
-  profile_has_project_access
+  profile_has_project_access "$expected_service_account_id"
+}
+
+verify_tenant_quota_access() {
+  if is_dry_run; then
+    log "Would verify read-only tenant quota-allowance access through profile '$PROFILE'."
+    return 0
+  fi
+
+  resolve_agent_profile_tenant
+  profile_has_tenant_quota_access
 }
 
 ensure_existing_credential_flow() {
   local sa_id=""
 
   safe_chmod_credential "$CREDENTIAL_FILE"
-
-  if ! ensure_profile; then
-    die "credential-replacement-required: the matching credential cannot mint a token. Before any replacement, mark the one replacement attempt in private task state, run replace-credential --dry-run, validate its state-bound target against the recorded bootstrap authorization, and invoke its confirmed phase without another user prompt."
-  fi
-
-  if ! verify_project_access; then
-    if human_session_available; then
-      log "Service-account token minted, but project access verification failed. Repairing IAM shape with the current human session."
-      sa_id="$(credential_service_account_id "$CREDENTIAL_FILE" || true)"
-      [[ -n "$sa_id" ]] || sa_id="$(get_or_create_service_account)"
-      ensure_iam_shape_for_service_account "$sa_id"
-      verify_project_access || die "Project access still fails after IAM repair."
-    elif is_dry_run; then
-      log "Would verify and repair IAM shape if a human/admin session is available."
-    else
-      die "Service-account token minted, but basic project access failed and no human/admin session is available to repair IAM drift."
-    fi
-  fi
-
-  if human_session_available; then
-    log "Human session available, verifying IAM shape."
-    sa_id="$(credential_service_account_id "$CREDENTIAL_FILE" || true)"
-    [[ -n "$sa_id" ]] || sa_id="$(get_or_create_service_account)"
-    ensure_iam_shape_for_service_account "$sa_id"
-  elif is_dry_run; then
-    log "Would verify IAM shape if a human/admin session is available."
-  else
-    log "Human session unavailable, skipping IAM drift repair. Service-account auth works."
-  fi
+  sa_id="$(credential_service_account_id "$CREDENTIAL_FILE")"
+  ensure_iam_shape_for_service_account "$sa_id"
+  ensure_working_profile_with_one_replacement "$sa_id"
+  verify_project_access "$sa_id" || die "Basic project access or canonical service-account identity still fails after IAM reconciliation."
+  verify_tenant_quota_access \
+    || die "The agent profile lacks authoritative tenant quota-allowance read access after IAM reconciliation."
 }
 
 ensure_missing_credential_flow() {
   local sa_id=""
 
-  ensure_human_session
   sa_id="$(get_or_create_service_account)"
   ensure_iam_shape_for_service_account "$sa_id"
   ensure_credential_file "$sa_id"
-  if ! ensure_profile; then
-    die "credential-replacement-required: the newly generated credential cannot mint a token. Before any replacement, mark the one replacement attempt in private task state, run replace-credential --dry-run, validate its state-bound target against the recorded bootstrap authorization, and invoke its confirmed phase without another user prompt."
+  ensure_working_profile_with_one_replacement "$sa_id" "true"
+  verify_project_access "$sa_id" || die "Token minted, but basic project access or canonical service-account identity verification failed."
+  verify_tenant_quota_access \
+    || die "Token minted, but authoritative tenant quota-allowance read access failed."
+}
+
+ensure_deleted_service_account_credential_flow() {
+  local replacement_sa_id=""
+  local stale_sa_id=""
+
+  stale_sa_id="$(credential_service_account_id "$CREDENTIAL_FILE")"
+  log "The canonical credential references a service account that is no longer present; bootstrapping the fixed account with the validated human profile."
+  replacement_sa_id="$(get_or_create_service_account)"
+  [[ -n "$replacement_sa_id" && "$replacement_sa_id" != "$stale_sa_id" ]] \
+    || die "The canonical service-account lookup did not prove a distinct replacement for the deleted credential identity; refusing mutation."
+  ensure_iam_shape_for_service_account "$replacement_sa_id"
+  replace_credential_file "$replacement_sa_id"
+  if ! ensure_profile_binding "$replacement_sa_id" "true"; then
+    if credential_auth_failure_is_proven; then
+      die "The replacement credential cannot mint a token; the stale credential was replaced once and no second credential was generated."
+    fi
+    die "The rebuilt profile does not match the replacement credential; no second credential was generated."
   fi
-  verify_project_access || die "Token minted, but basic project access verification failed."
+  verify_project_access "$replacement_sa_id" \
+    || die "Token minted, but basic project access or replacement service-account identity verification failed."
+  verify_tenant_quota_access \
+    || die "Token minted, but authoritative tenant quota-allowance read access failed."
 }
 
-build_credential_replacement_plan() {
-  local group_id=""
-  local sa_id=""
+ensure_working_profile_with_one_replacement() {
+  local sa_id="$1"
+  local force_rebind="${2:-false}"
 
-  PLANNED_MUTATIONS=()
-  PLAN_NOTES=()
-  OBSERVED_SERVICE_ACCOUNT_ID=""
-  OBSERVED_GROUP_ID=""
-  OBSERVED_CREDENTIAL_SHA256=""
-  plan_nebius_dir
-  ensure_group_name
-  AUTHORIZED_CONVERGENCE_ACTIONS=(
-    "back up matching credential '$CREDENTIAL_FILE' with mode 0600"
-    "replace the canonical credential once for service account '$SA_NAME'"
-    "create or update CLI profile '$PROFILE' from the replacement credential"
-    "verify token mint and basic project access"
-  )
+  if ensure_profile_binding "$sa_id" "$force_rebind"; then
+    return 0
+  fi
 
-  [[ -e "$CREDENTIAL_FILE" || -L "$CREDENTIAL_FILE" ]] \
-    || die "Credential replacement requires an existing canonical credential."
-  verify_credential_local_safety "$CREDENTIAL_FILE"
-  verify_credential_identity
-  sa_id="$(credential_service_account_id "$CREDENTIAL_FILE")"
-  OBSERVED_SERVICE_ACCOUNT_ID="$sa_id"
-  OBSERVED_CREDENTIAL_SHA256="$(credential_sha256 "$CREDENTIAL_FILE")"
-  group_id="$(lookup_group_id)"
-  OBSERVED_GROUP_ID="$group_id"
-  profile_can_mint_token \
-    && die "Credential replacement is not required because the matching profile can mint a token."
-
-  PLANNED_MUTATIONS+=("back up and replace credential '$CREDENTIAL_FILE' once")
-  PLANNED_MUTATIONS+=("create or update CLI profile '$PROFILE' from the replacement credential")
-  PLANNED_MUTATIONS+=("verify token mint and basic project access")
-}
-
-run_credential_replacement() {
-  local sa_id="$OBSERVED_SERVICE_ACCOUNT_ID"
-
-  [[ -n "$sa_id" ]] || die "Credential replacement requires a resolved service-account identity."
+  if ! credential_auth_failure_is_proven; then
+    profile_matches_service_account "$sa_id" \
+      || die "CLI profile service-account identity does not match the canonical credential."
+    return 0
+  fi
+  log "The canonical credential cannot mint a token; replacing it once within this explicit setup invocation."
   replace_credential_file "$sa_id"
-  ensure_profile \
-    || die "Profile still cannot mint a token after the confirmed bootstrap's one bounded credential replacement: $PROFILE"
-  verify_project_access \
-    || die "The replacement credential can mint a token, but basic project access still fails. Return to a fresh state-bound ensure plan without replacing another key."
-  log "The one bounded credential replacement completed."
+  ensure_profile_binding "$sa_id" \
+    || die "Profile still cannot mint a token after one bounded credential replacement; no second replacement was attempted: $PROFILE"
 }
 
 credential_mode() {
@@ -1107,19 +1279,23 @@ build_repair_lease_plan() {
   PLANNED_MUTATIONS=()
   PLAN_NOTES=()
   [[ -e "$CREDENTIAL_FILE" || -L "$CREDENTIAL_FILE" ]] \
-    || die "A repair lease requires an existing confirmed credential. Complete first-time setup, then request the lease separately."
+    || die "A repair lease requires an existing working credential. Complete setup, then request the lease separately."
   verify_credential_local_safety "$CREDENTIAL_FILE"
   verify_credential_identity
   [[ "$(credential_mode "$CREDENTIAL_FILE")" == "600" ]] \
-    || die "A repair lease requires the canonical credential at mode 0600. Complete confirmed setup or repair first."
+    || die "A repair lease requires the canonical credential at mode 0600. Complete setup or repair first."
   LEASE_SERVICE_ACCOUNT_ID="$(credential_service_account_id "$CREDENTIAL_FILE")"
   credential_hash="$(credential_sha256 "$CREDENTIAL_FILE")"
   [[ -n "$credential_hash" ]] || die "Failed to fingerprint the canonical credential."
   LEASE_CREDENTIAL_SHA256="$credential_hash"
-  profile_exists || die "A repair lease requires the matching CLI profile. Complete confirmed setup first."
-  profile_can_mint_token || die "The matching profile cannot mint a token. Complete confirmed repair before issuing a lease."
-  profile_has_project_access \
-    || die "The matching profile can mint a token but lacks basic project access. Complete confirmed IAM repair before issuing a lease."
+  profile_exists || die "A repair lease requires the matching CLI profile. Complete setup first."
+  profile_can_mint_token || die "The matching profile cannot mint a token. Complete repair before issuing a lease."
+  profile_matches_service_account "$LEASE_SERVICE_ACCOUNT_ID" \
+    || die "The matching profile identity differs from the canonical credential. Complete repair before issuing a lease."
+  profile_has_project_access "$LEASE_SERVICE_ACCOUNT_ID" \
+    || die "The matching profile can mint a token but does not resolve the canonical service account with project access. Complete IAM repair before issuing a lease."
+  profile_has_tenant_quota_access \
+    || die "The matching profile lacks authoritative tenant quota-allowance read access. Complete IAM repair before issuing a lease."
   [[ ! -L "$HOME/.nebius" && -d "$HOME/.nebius" ]] \
     || die "$HOME/.nebius must be an owned non-symlink directory before lease issuance."
   owner_uid="$(stat -f '%u' "$HOME/.nebius" 2>/dev/null || stat -c '%u' "$HOME/.nebius" 2>/dev/null || true)"
@@ -1168,7 +1344,7 @@ print_repair_lease_plan() {
   log "  - set the exact bound credential to mode 0600"
   log "  - create or update the exact bound CLI profile from that credential"
   log "Explicitly excluded: IAM, credential generation or rotation, identity changes, and hooks."
-  log "Plan digest: $PLAN_DIGEST"
+  log "Lease integrity digest: $PLAN_DIGEST"
 }
 
 issue_repair_lease() {
@@ -1201,6 +1377,7 @@ issue_repair_lease() {
 
 validate_repair_lease() {
   local lease_json=""
+  local lease_service_account_name=""
 
   lease_json="$(
     python3 "$LEASE_HELPER" validate \
@@ -1213,7 +1390,9 @@ validate_repair_lease() {
 
   PROJECT_ID="$(printf '%s' "$lease_json" | jq -r '.project_id')"
   TENANT_ID="$(printf '%s' "$lease_json" | jq -r '.tenant_id')"
-  SA_NAME="$(printf '%s' "$lease_json" | jq -r '.service_account_name')"
+  lease_service_account_name="$(printf '%s' "$lease_json" | jq -r '.service_account_name')"
+  [[ "$lease_service_account_name" == "$SA_NAME" ]] \
+    || die "Repair lease service-account name is not the canonical '$SA_NAME'."
   LEASE_SERVICE_ACCOUNT_ID="$(printf '%s' "$lease_json" | jq -r '.service_account_id')"
   PROFILE="$(printf '%s' "$lease_json" | jq -r '.profile')"
   CREDENTIAL_FILE="$(printf '%s' "$lease_json" | jq -r '.credential_file')"
@@ -1226,51 +1405,56 @@ run_local_repair() {
   validate_repair_lease
   mode="$(credential_mode "$CREDENTIAL_FILE")"
   if [[ "$mode" != "600" ]]; then
-    log "Correcting the exact lease-bound credential to mode 0600. Because it was previously broader, review whether confirmed credential rotation is required."
+    log "Correcting the exact lease-bound credential to mode 0600. Because it was previously broader, review whether credential rotation is required."
     safe_chmod_credential "$CREDENTIAL_FILE"
   fi
-  ensure_profile || die "Local profile repair completed, but token minting still fails. Confirm persistent credential or IAM repair; the lease cannot rotate credentials or change IAM."
-  verify_project_access || die "Token minting succeeded, but basic project access still fails. Confirm IAM diagnosis and repair; the lease cannot change IAM."
+  ensure_profile_binding "$LEASE_SERVICE_ACCOUNT_ID" \
+    || die "Local profile repair completed, but token minting or service-account identity verification still fails. Confirm persistent credential or IAM repair; the lease cannot rotate credentials or change IAM."
+  verify_project_access "$LEASE_SERVICE_ACCOUNT_ID" || die "Token minting succeeded, but canonical service-account identity or basic project access still fails. Confirm IAM diagnosis and repair; the lease cannot change IAM."
+  profile_has_tenant_quota_access || die "Token minting and project access succeeded, but tenant quota-allowance read access still fails. Confirm IAM diagnosis and repair; the lease cannot change IAM."
   log "Lease-authorized local repair completed. No IAM, credential generation or rotation, identity, or hook mutation was attempted."
 }
 
 build_setup_plan() {
+  local credential_missing="false"
   local group_id=""
   local mode=""
-  local legacy_group_id=""
-  local legacy_group_name=""
+  local permits=""
+  local profile_needs_rebind="false"
   local sa_id=""
 
   PLANNED_MUTATIONS=()
   PLAN_NOTES=()
   OBSERVED_SERVICE_ACCOUNT_ID=""
   OBSERVED_GROUP_ID=""
+  OBSERVED_PERMITS_SHA256=""
   OBSERVED_CREDENTIAL_SHA256=""
+  OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID=""
   plan_nebius_dir
   ensure_group_name
-  AUTHORIZED_CONVERGENCE_ACTIONS=(
-    "create service account '$SA_NAME' in project '$PROJECT_ID' if absent"
-    "create group '$GROUP_NAME' under project '$PROJECT_ID' if absent"
-    "ensure role '$ROLE' on project '$PROJECT_ID' for group '$GROUP_NAME'"
-    "ensure service account '$SA_NAME' belongs to group '$GROUP_NAME'"
-    "generate canonical credential '$CREDENTIAL_FILE' if absent"
-    "set the canonical credential to mode 0600"
-    "create or update CLI profile '$PROFILE' from the canonical credential"
-    "if the credential cannot mint a token, back it up and replace it once"
-    "verify basic project access and reconcile the same group permit and membership"
-  )
-  legacy_group_name="codex-agent-$(slugify "$PROJECT_NAME")"
 
   if [[ -e "$CREDENTIAL_FILE" || -L "$CREDENTIAL_FILE" ]]; then
     verify_credential_local_safety "$CREDENTIAL_FILE"
-    verify_credential_identity
-    sa_id="$(credential_service_account_id "$CREDENTIAL_FILE")"
+    OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID="$(credential_service_account_id "$CREDENTIAL_FILE")"
     OBSERVED_CREDENTIAL_SHA256="$(credential_sha256 "$CREDENTIAL_FILE")"
-    mode="$(credential_mode "$CREDENTIAL_FILE")"
-    if [[ "$mode" != "600" ]]; then
-      PLANNED_MUTATIONS+=("set credential permissions to 0600")
+    if credential_service_account_is_current; then
+      sa_id="$OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID"
+      mode="$(credential_mode "$CREDENTIAL_FILE")"
+      if [[ "$mode" != "600" ]]; then
+        PLANNED_MUTATIONS+=("set credential permissions to 0600")
+      fi
+    else
+      credential_missing="true"
+      sa_id="$(lookup_service_account_id)"
+      [[ -z "$sa_id" || "$sa_id" != "$OBSERVED_CREDENTIAL_SERVICE_ACCOUNT_ID" ]] \
+        || die "The canonical service-account lookup did not prove a distinct replacement for the deleted credential identity; refusing mutation."
+      if [[ -z "$sa_id" ]]; then
+        PLANNED_MUTATIONS+=("create service account '$SA_NAME' in project '$PROJECT_ID' with the validated human profile")
+      fi
+      PLANNED_MUTATIONS+=("after exact IAM convergence, generate one replacement authorized-key credential, back up the stale credential at mode 0600, and atomically install the replacement")
     fi
   else
+    credential_missing="true"
     sa_id="$(lookup_service_account_id)"
     if [[ -z "$sa_id" ]]; then
       PLANNED_MUTATIONS+=("create service account '$SA_NAME' in project '$PROJECT_ID'")
@@ -1281,49 +1465,57 @@ build_setup_plan() {
   OBSERVED_SERVICE_ACCOUNT_ID="$sa_id"
   group_id="$(lookup_group_id)"
   OBSERVED_GROUP_ID="$group_id"
-  if [[ "$legacy_group_name" != "$GROUP_NAME" ]]; then
-    legacy_group_id="$(lookup_group_id_by_name "$legacy_group_name" "$PROJECT_ID")"
-    if [[ -n "$legacy_group_id" ]]; then
-      PLAN_NOTES+=("legacy group '$legacy_group_name' remains unchanged; review its permits and cleanup separately")
-    fi
-  fi
   if [[ -z "$group_id" ]]; then
-    PLANNED_MUTATIONS+=("create group '$GROUP_NAME' under project '$PROJECT_ID'")
-    PLANNED_MUTATIONS+=("add role '$ROLE' on project '$PROJECT_ID' to the new group")
+    PLANNED_MUTATIONS+=("create group '$GROUP_NAME' under tenant '$TENANT_ID'")
+    PLANNED_MUTATIONS+=("add role '$PROJECT_ROLE' on project '$PROJECT_ID' to the new group")
+    PLANNED_MUTATIONS+=("add role '$TENANT_ROLE' on tenant '$TENANT_ID' to the new group")
     PLANNED_MUTATIONS+=("add service account '$SA_NAME' to the new group")
   else
-    if ! access_permit_exists "$group_id"; then
-      PLANNED_MUTATIONS+=("add role '$ROLE' on project '$PROJECT_ID' to group '$GROUP_NAME'")
+    permits="$(validated_agent_permits_canonical "$group_id")"
+    OBSERVED_PERMITS_SHA256="$(printf '%s' "$permits" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    if ! printf '%s' "$permits" | jq -e --arg resource "$PROJECT_ID" --arg role "$PROJECT_ROLE" \
+        'any(.[]; (.resource_id == $resource) and (.role == $role))' >/dev/null; then
+      PLANNED_MUTATIONS+=("add role '$PROJECT_ROLE' on project '$PROJECT_ID' to group '$GROUP_NAME'")
     fi
-    if [[ -z "$sa_id" ]] || ! membership_exists "$group_id" "$sa_id"; then
+    if ! printf '%s' "$permits" | jq -e --arg resource "$TENANT_ID" --arg role "$TENANT_ROLE" \
+        'any(.[]; (.resource_id == $resource) and (.role == $role))' >/dev/null; then
+      PLANNED_MUTATIONS+=("add role '$TENANT_ROLE' on tenant '$TENANT_ID' to group '$GROUP_NAME'")
+    fi
+    if [[ -z "$sa_id" ]]; then
+      managed_group_membership_exact "$group_id" "" || true
+      PLANNED_MUTATIONS+=("add service account '$SA_NAME' to group '$GROUP_NAME'")
+    elif ! managed_group_membership_exact "$group_id" "$sa_id"; then
       PLANNED_MUTATIONS+=("add service account '$SA_NAME' to group '$GROUP_NAME'")
     fi
   fi
 
   if profile_exists; then
-    if ! profile_can_mint_token; then
+    if [[ "$credential_missing" == "true" ]]; then
+      profile_needs_rebind="true"
+    elif [[ -z "$sa_id" ]]; then
+      profile_needs_rebind="true"
+    elif ! profile_can_mint_token; then
+      profile_needs_rebind="true"
+    elif ! profile_matches_service_account "$sa_id"; then
+      profile_needs_rebind="true"
+    fi
+    if [[ "$profile_needs_rebind" == "true" ]]; then
       PLANNED_MUTATIONS+=("update CLI profile '$PROFILE' from the canonical credential")
     fi
   else
+    profile_needs_rebind="true"
     PLANNED_MUTATIONS+=("create CLI profile '$PROFILE' from the canonical credential")
   fi
-}
-
-compute_plan_digest() {
-  {
-    printf '%s\0' "setup-confirmation-v4" "$TENANT_ID" "$PROJECT_ID" "$PROJECT_NAME" "$SA_NAME" "$GROUP_NAME" "$PROJECT_ID" "$ROLE" "$CREDENTIAL_FILE" "$PROFILE" "$HUMAN_PROFILE" "$ENDPOINT"
-    printf '%s\0' "$OBSERVED_SERVICE_ACCOUNT_ID" "$OBSERVED_GROUP_ID" "$OBSERVED_CREDENTIAL_SHA256"
-    printf '%s\0' "${AUTHORIZED_CONVERGENCE_ACTIONS[@]}"
-    printf '%s\0' "${PLANNED_MUTATIONS[@]}"
-    printf '%s\0' "${PLAN_NOTES[@]}"
-  } | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  if [[ "$profile_needs_rebind" == "true" && "$credential_missing" != "true" && -n "$OBSERVED_CREDENTIAL_SHA256" ]]; then
+    PLANNED_MUTATIONS+=("if the rebuilt profile still has a classified credential-authentication failure, back up and replace the canonical credential once")
+  fi
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      verify|ensure|replace-credential|repair-lease|repair-local)
-        [[ -z "$COMMAND" ]] || die "Pass exactly one command: verify, ensure, replace-credential, repair-lease, or repair-local."
+      verify|ensure|repair-lease|repair-local)
+        [[ -z "$COMMAND" ]] || die "Pass exactly one command: verify, ensure, repair-lease, or repair-local."
         COMMAND="$1"
         shift
         ;;
@@ -1337,18 +1529,6 @@ parse_args() {
         [[ $# -ge 2 ]] || die "--project-id requires a value."
         PROJECT_ID="$2"
         PROJECT_ARG_SET="true"
-        shift 2
-        ;;
-      --service-account-name)
-        [[ $# -ge 2 ]] || die "--service-account-name requires a value."
-        SA_NAME="$2"
-        SA_ARG_SET="true"
-        shift 2
-        ;;
-      --role)
-        [[ $# -ge 2 ]] || die "--role requires a value."
-        ROLE="$2"
-        ROLE_ARG_SET="true"
         shift 2
         ;;
       --ttl-seconds)
@@ -1368,11 +1548,6 @@ parse_args() {
       --dry-run)
         DRY_RUN="true"
         shift
-        ;;
-      --confirm)
-        [[ $# -ge 2 ]] || die "--confirm requires the digest from the reviewed dry-run plan."
-        CONFIRM_DIGEST="$2"
-        shift 2
         ;;
       -h|--help)
         usage
@@ -1403,6 +1578,7 @@ main() {
   need_cmd id
   need_cmd sed
   need_cmd awk
+  need_cmd tr
   need_cmd mktemp
   need_cmd stat
   need_cmd unlink
@@ -1427,12 +1603,17 @@ main() {
     return 0
   fi
 
-  resolve_project_metadata
-
   PROFILE="codex-agent-${PROJECT_ID}"
   CREDENTIAL_FILE="$HOME/.nebius/codex-agent-authkey.${PROJECT_ID}.json"
   auth_lock_dir="$HOME/.agent-nebius-auth-setup.${PROJECT_ID}.lock"
   profile_lock_dir="$HOME/.agent-nebius-auth-setup.profile.lock"
+
+  if ! is_dry_run; then
+    acquire_lock "$profile_lock_dir"
+    acquire_lock "$auth_lock_dir"
+  fi
+  resolve_project_metadata
+  ensure_group_name
 
   if [[ "$COMMAND" == "repair-lease" ]]; then
     build_repair_lease_plan
@@ -1442,66 +1623,34 @@ main() {
       log "Dry run complete. No filesystem, profile, credential, or IAM mutations were performed."
       return 0
     fi
-    [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The current repair-lease plan does not match the confirmed dry-run digest. Review a new --dry-run plan before mutation."
-
-    acquire_lock "$profile_lock_dir"
-    acquire_lock "$auth_lock_dir"
-    build_repair_lease_plan
-    PLAN_DIGEST="$(compute_repair_lease_plan_digest)"
-    [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The repair-lease plan changed while acquiring the lock. Review a new --dry-run plan before mutation."
     issue_repair_lease
     return 0
   fi
 
-  if [[ "$COMMAND" == "replace-credential" ]]; then
-    build_credential_replacement_plan
-    PLAN_DIGEST="$(compute_plan_digest)"
-    print_plan
-    if is_dry_run; then
-      log "Dry run complete. No filesystem, profile, credential, or IAM mutations were performed."
-      return 0
-    fi
-    [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The current credential-replacement plan does not match the confirmed dry-run digest. Review a new --dry-run plan before mutation."
-
-    acquire_lock "$profile_lock_dir"
-    acquire_lock "$auth_lock_dir"
-    build_credential_replacement_plan
-    PLAN_DIGEST="$(compute_plan_digest)"
-    [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The credential-replacement plan changed while acquiring the lock. Review a new --dry-run plan before mutation."
-    run_credential_replacement
-    return 0
-  fi
-
-  build_setup_plan
-  PLAN_DIGEST="$(compute_plan_digest)"
-  print_plan
   if is_dry_run; then
+    build_setup_plan
+    print_plan
     log "Dry run complete. No filesystem, profile, credential, or IAM mutations were performed."
     return 0
   fi
-  [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The current plan does not match the confirmed dry-run digest. Review a new --dry-run plan before mutation."
-
-  acquire_lock "$profile_lock_dir"
-  acquire_lock "$auth_lock_dir"
-
-  build_setup_plan
-  PLAN_DIGEST="$(compute_plan_digest)"
-  [[ "$CONFIRM_DIGEST" == "$PLAN_DIGEST" ]] || die "The setup plan changed while acquiring the lock. Review a new --dry-run plan before mutation."
 
   ensure_nebius_dir
 
   if [[ -e "$CREDENTIAL_FILE" || -L "$CREDENTIAL_FILE" ]]; then
     log "Credential file exists: $CREDENTIAL_FILE"
     verify_credential_local_safety "$CREDENTIAL_FILE"
-    verify_credential_identity
-    ensure_existing_credential_flow
+    if credential_service_account_is_current; then
+      ensure_existing_credential_flow
+    else
+      ensure_deleted_service_account_credential_flow
+    fi
   else
     ensure_missing_credential_flow
   fi
   log "Done."
   log "Credential file: $CREDENTIAL_FILE"
   log "Profile: $PROFILE"
-  log "Token test: nebius iam get-access-token --no-browser --profile $PROFILE >/dev/null"
+  log "Token test: CODEX_NEBIUS_PROJECT_ID=$PROJECT_ID nebius iam get-access-token --no-browser --profile $PROFILE >/dev/null"
 }
 
 main "$@"

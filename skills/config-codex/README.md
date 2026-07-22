@@ -521,6 +521,9 @@ setup.
 - `README.md`: human-facing design, architecture, core concepts, and workflow.
 - `references/local-setup.md`: detailed setup and validation checklist.
 - `assets/AGENTS.md.template`: generic global instruction file.
+- Its managed global defaults include the bounded `troubleshoot` remediation
+  policy and preservation of the private remediation marker for existing
+  merge-safe installations.
 - `assets/config.toml.template`: public-safe Codex config template.
 - `assets/hooks.json.template`: hook registration template using
   `${CODEX_HOME:-$HOME/.codex}` so hook commands follow the active Codex home.
