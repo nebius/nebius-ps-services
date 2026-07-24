@@ -15,12 +15,6 @@ need exact commands, endpoint values, or troubleshooting details.
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/clients/codex/>
 - Grafana MCP tool controls:
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/enable-and-disable-tools/>
-- Grafana MCP Prometheus and Loki guides:
-  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/guides/query-metrics-with-prometheus/>
-  and
-  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/guides/query-logs-with-loki/>
-- Grafana MCP proxied tools:
-  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/proxied-tools/>
 - Optional external Grafana data source provisioning and custom HTTP headers:
   <https://grafana.com/docs/grafana/latest/administration/provisioning/>
 - Grafana service accounts and service account HTTP API:
@@ -58,11 +52,10 @@ export NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS="36000"
 
 Use placeholders in docs and examples. Never write real values into a repo.
 
-Ask for `PROJECT_ID` when the user wants project-scoped metric/log/trace query
-help, label filtering, or resource-specific prompts. Do not ask for
-`TENANT_ID` in the default path. A basic Nebius-managed Grafana API login check
-does not need tenant or project values when the local Nebius CLI identity
-already has access.
+Do not ask for `TENANT_ID` or `PROJECT_ID` in the default path. A basic
+Nebius-managed Grafana API login and datasource-list readiness check uses the
+local Nebius CLI identity. `$nebius-grafana-query` collects authoritative
+project and resource scope for operational queries.
 
 Collect these only for the optional external-Grafana data-source path:
 
@@ -215,86 +208,19 @@ export NEBIUS_PROFILE="<profile_name>"
 Because Nebius access tokens are valid for 12 hours, keep the refresh interval
 below that lifetime. The default is 10 hours.
 
-## Query Through Nebius-Managed Grafana
+## Post-Setup Readiness
 
-After Codex is restarted with the `grafana-nebius` MCP server enabled, the
-first runtime step is datasource discovery:
-
-```text
-Use grafana-nebius to list Grafana datasources and identify PromQL-compatible
-monitoring, Loki logging, and Tempo tracing datasources available for my
-Nebius project.
-```
-
-Nebius-managed Grafana may expose monitoring as a Prometheus datasource or as a
-PromQL-compatible datasource such as `victoriametrics-datasource`. Use the UID
-returned by datasource discovery instead of assuming a fixed datasource name.
-
-For project-scoped metric exploration, discover labels before running a metric
-query:
+After Codex is restarted with the `grafana-nebius` MCP server enabled, validate
+setup by listing Grafana datasources:
 
 ```text
-Use grafana-nebius to list label names for the discovered monitoring datasource
-UID <monitoring_datasource_uid> over the last 30 minutes. Identify labels that
-look like project, resource, cluster, instance, namespace, or node identifiers.
-Do not return raw series data.
+Use the grafana-nebius MCP server to list Grafana datasources.
 ```
 
-Then discover bounded values for the project and resource labels:
-
-```text
-Use grafana-nebius to list up to 20 values for label <project_label> in
-datasource <monitoring_datasource_uid> over the last 30 minutes, filtered only
-as needed to find project <project_ID>.
-```
-
-```text
-Use grafana-nebius to list up to 20 values for label <resource_label> in
-datasource <monitoring_datasource_uid> over the last 30 minutes, filtered by
-<project_label>="<project_ID>" and, if known, a narrow resource name or
-resource type.
-```
-
-After labels and metric names are known, run a short, resource-filtered query:
-
-```text
-Use grafana-nebius to run an instant PromQL query in datasource
-<monitoring_datasource_uid> for metric <metric_name>, filtered by
-<project_label>="<project_ID>" and <resource_label>="<resource_ID>". Limit the
-result to the matching resource and summarize only the latest value.
-```
-
-For a short range query, keep the window and step bounded:
-
-```text
-Use grafana-nebius to run a PromQL range query in datasource
-<monitoring_datasource_uid> over the last 15 minutes with a 60 second step:
-<metric_name>{<project_label>="<project_ID>", <resource_label>="<resource_ID>"}.
-Return a compact summary, not every sample.
-```
-
-For logs, query only through a discovered Loki datasource and start with label
-discovery:
-
-```text
-Use grafana-nebius to list Loki label names in datasource <loki_datasource_uid>
-over the last 30 minutes. Identify the project/workspace/bucket and resource
-labels needed for project <project_ID>.
-```
-
-Then run bounded LogQL, such as a count or a very small log limit:
-
-```text
-Use grafana-nebius to run a LogQL count_over_time query in datasource
-<loki_datasource_uid> over the last 15 minutes, filtered by the discovered
-project/workspace label for <project_ID> and the resource label for
-<resource_ID>. Do not return raw log lines unless I ask for them.
-```
-
-Grafana MCP has documented Prometheus and Loki query tools. For traces, first
-list available MCP tools and inspect the discovered Tempo datasource. Do not
-promise direct TraceQL or `tempo_*` tools unless the configured server actually
-exposes them.
+Successful datasource listing completes the installer readiness check. Routine
+datasource exploration, PromQL, LogQL, dashboard panel-query inspection, and
+trace-tool availability belong to `$nebius-grafana-query`. Do not keep a
+second operational query cookbook in this setup guide.
 
 ## External Grafana Only: Nebius Service Account Flow
 
@@ -612,25 +538,17 @@ tool_timeout_ms = 120000
 Codex uses `mcp_servers` with an underscore. Restart Codex after changing the
 config.
 
-## Validation Prompts
+## Validation Prompt
 
-After local checks pass and Codex is restarted, ask for safe read-only checks:
+After local checks pass and Codex is restarted, ask for one safe readiness
+check:
 
 ```text
 Use the grafana-nebius MCP server to list Grafana data sources.
 ```
 
-```text
-Use the Grafana MCP server to run a small PromQL query against a discovered Nebius monitoring datasource.
-```
-
-```text
-Use the Grafana MCP server to run a small LogQL query against a discovered Nebius Loki datasource.
-```
-
-For traces, first list available MCP tools. Do not promise `tempo_*` tools
-unless they appear. Grafana MCP loads Tempo-specific tools only when proxied
-Tempo MCP support is available through the configured Tempo data source.
+After readiness succeeds, use `$nebius-grafana-query` for operational
+observability questions.
 
 ## Common Failure Modes
 
@@ -645,13 +563,10 @@ Tempo MCP support is available through the configured Tempo data source.
 - Generic Grafana auth failure: verify `GRAFANA_URL` is the Grafana base URL
   and the token file contains a Grafana service-account token, not a Nebius
   static key.
-- Missing Nebius project data: verify the local Nebius identity has access to
-  the project and that the target Grafana datasource actually contains the
-  requested project's data.
 - External Grafana data source auth failure: validate the Nebius service
   account group membership, static-key service `OBSERVABILITY`, and whether the
   data source expects `Bearer <static_token>` or the raw static key.
-- Prometheus/Loki tools missing: verify those categories were not disabled.
 - Write tools exposed unexpectedly: add `--disable-write` and restart Codex.
-- Trace tools missing: treat as expected until the Tempo datasource exposes
-  proxied Tempo MCP tools.
+- Missing project data, Prometheus/Loki query tools, or trace tools: hand the
+  operational diagnosis to `$nebius-grafana-query`; keep setup repair here only
+  when the server configuration or authentication is the cause.

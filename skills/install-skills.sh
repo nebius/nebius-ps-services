@@ -131,7 +131,7 @@ show_usage() {
   printf '%b\n' "                           into ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks.json${S_RESET}."
   printf '%b\n' "  ${S_YELLOW}--refresh-hook-registrations${S_RESET}"
   printf '%b\n' "                           With ${S_CYAN}--register-hooks${S_RESET}, replace only differing registrations"
-  printf '%b\n' "                           for the same event/script when the handler list is identical."
+  printf '%b\n' "                           for the same event/script and handlers; only statusMessage may differ."
   printf '%b\n' "  ${S_YELLOW}--replace-hooks-json${S_RESET}    With ${S_CYAN}--register-hooks${S_RESET}, replace hooks.json with a clean"
   printf '%b\n' "                           file built only from selected source manifest(s)."
   printf '\n'
@@ -182,7 +182,7 @@ show_usage() {
   printf '%b\n' "    and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
   printf '%b\n' "  - ${S_CYAN}--refresh-hook-registrations${S_RESET} explicitly replaces only a differing registration"
-  printf '%b\n' "    with the same event/script and identical handler list, preserving unrelated entries."
+  printf '%b\n' "    with the same event/script and handlers when only statusMessage differs, preserving unrelated entries."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with"
   printf '%b\n' "    selected source entries."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET}"
@@ -1185,6 +1185,27 @@ def entry_label(event_name: str, entry: dict[str, object]) -> str:
     return event_name
 
 
+def handler_lists_refresh_compatible(
+    existing_entry: dict[str, object],
+    source_entry: dict[str, object],
+) -> bool:
+    existing_handlers = existing_entry.get("hooks")
+    source_handlers = source_entry.get("hooks")
+    if not isinstance(existing_handlers, list) or not isinstance(source_handlers, list):
+        return False
+
+    def without_status_message(handler: object) -> object:
+        if not isinstance(handler, dict):
+            return handler
+        normalized = dict(handler)
+        normalized.pop("statusMessage", None)
+        return normalized
+
+    return [without_status_message(handler) for handler in existing_handlers] == [
+        without_status_message(handler) for handler in source_handlers
+    ]
+
+
 source_hooks: dict[str, list[dict[str, object]]] = {}
 loaded_sources: list[
     tuple[str, Path, dict[str, list[dict[str, object]]]]
@@ -1274,11 +1295,12 @@ else:
                             f"existing {event_name} entries; refusing ambiguous replacement"
                         )
                     existing_entry = next(iter(conflicts.values()))
-                    if existing_entry.get("hooks") != entry.get("hooks"):
+                    if not handler_lists_refresh_compatible(existing_entry, entry):
                         fail(
                             "Targeted hook registration refresh matched an entry "
-                            "with a differing or mixed handler list; refusing to "
-                            "replace unrelated handlers"
+                            "with a differing or mixed handler list beyond "
+                            "statusMessage metadata; refusing to replace "
+                            "unrelated handlers"
                         )
                     target_entries[target_entries.index(existing_entry)] = entry
                     for script_name in entry_python_script_names(existing_entry):

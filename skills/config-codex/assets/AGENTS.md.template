@@ -27,6 +27,11 @@
   in scope.
 - Preserve unrelated user changes. Make focused edits, inspect the diff, and
   verify with the narrowest relevant checks before broadening.
+- Agents may clean up temporary trees they created during the current task.
+  Resolve and validate the exact task-specific path under the system temporary
+  directory first, use a scoped non-forced deletion such as
+  `find "$task_temp_dir" -depth -delete`, and never target the temporary root or
+  an unresolved variable.
 
 ## Git Workflow
 

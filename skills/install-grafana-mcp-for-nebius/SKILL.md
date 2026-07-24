@@ -1,15 +1,15 @@
 ---
 name: install-grafana-mcp-for-nebius
-description: "Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana. Use when Codex needs to set up mcp-grafana on macOS or Linux, wire Codex MCP config, refresh Nebius-managed Grafana IAM token files, query metrics/logs through PromQL-compatible monitoring and Loki Grafana datasources, check whether trace tools are available, or troubleshoot Grafana MCP access to Nebius observability data. Only use Nebius static-key/data-source setup when the user explicitly asks to connect external Grafana to Nebius read endpoints."
+description: "Install, configure, validate, or repair the official Grafana MCP server for Codex against Nebius-managed Grafana. Use only when the user explicitly invokes this skill to set up mcp-grafana on macOS or Linux, wire Codex MCP config, manage the Nebius IAM token wrapper, troubleshoot server/authentication access, or configure explicitly requested external Grafana Nebius datasources. Routine read-only metrics, logs, dashboards, and trace-tool questions belong to $nebius-grafana-query."
 ---
 
 # Install Grafana MCP for Nebius
 
 ## Purpose
 
-Set up the official Grafana MCP server so Codex can inspect
-`https://grafana.nebius.dev/` and query Nebius Observability data through
-datasources that are already available in that Grafana instance.
+Set up the official Grafana MCP server so Codex can access
+`https://grafana.nebius.dev/` through a validated read-only MCP connection.
+Hand routine observability queries to `$nebius-grafana-query`.
 
 ## Core Model
 
@@ -78,9 +78,8 @@ datasources that are already available in that Grafana instance.
 
 1. Identify the target OS, Codex surface, and whether the user wants the
    default Nebius-managed Grafana path or an external Grafana data-source
-   setup. For the default path, do not ask for `TENANT_ID`; ask for
-   `PROJECT_ID` only when the user wants project-scoped metric/log/trace query
-   help.
+   setup. For the default path, do not ask for `TENANT_ID` or `PROJECT_ID`;
+   basic setup validation uses the current Nebius CLI identity.
 2. Ensure `mcp-grafana` is installed using the official binary path for macOS
    or Linux. Prefer Homebrew only when Homebrew is already available; otherwise
    use the official release binary or Go install path.
@@ -98,14 +97,9 @@ datasources that are already available in that Grafana instance.
    `codex mcp get <server-name>` already succeeds.
 5. Validate locally with `mcp-grafana --help`, `codex mcp list`, and
    `codex mcp get <server-name>`.
-6. Validate live access by listing Grafana datasources first. If
-   PromQL-compatible monitoring or Loki datasources are present, run a small,
-   bounded PromQL or LogQL query through Grafana MCP. For resource-specific
-   metrics, discover label names and label values first, then query with both a
-   project label and a resource label over a short time range. For traces, first
-   list available MCP tools and do not promise direct Tempo querying unless
-   `tempo_*` proxied tools or an equivalent supported panel-query path is
-   available.
+6. Validate readiness by listing Grafana datasources. Do not retain the
+   operational query workflow here. After the server is ready, route metrics,
+   logs, dashboards, and trace-tool questions to `$nebius-grafana-query`.
 7. Use the external Grafana static-key flow only when the user explicitly asks
    to configure self-hosted Grafana or Grafana Cloud to call Nebius read
    endpoints directly.
@@ -136,14 +130,12 @@ default `https://grafana.nebius.dev/` MCP path.
   store when available; issue a new static key only for first setup or explicit
   rotation. Do not pass the Nebius static key to `mcp-grafana`.
 
-## Trace Tool Caveat
+## Query Handoff
 
-Nebius docs verify a Tempo data source URL for viewing traces in Grafana.
-Grafana MCP docs verify trace-specific MCP tools only through proxied Tempo MCP
-tools when the Tempo backend exposes that MCP server. Do not claim direct
-Nebius trace querying through `mcp-grafana` until the configured server lists
-usable `tempo_*` proxied tools, or until a current Nebius doc explicitly says
-its Tempo endpoint supports the Grafana Tempo MCP proxy path.
+This skill owns setup readiness, not user outcome queries. Once datasource
+listing succeeds, tell the user to ask the observability question normally or
+invoke `$nebius-grafana-query`. Do not keep a legacy query path in this
+installer.
 
 ## Learning Loop
 
@@ -163,15 +155,15 @@ mcp-grafana --help
 install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh --check
 install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh --print-config
 install-grafana-mcp-for-nebius/scripts/test-run-nebius-grafana-mcp.sh
+python3 -B install-grafana-mcp-for-nebius/scripts/test_grafana_skill_contract.py
 install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh --refresh-token-only
 codex mcp list
 codex mcp get <server-name>
 ```
 
-Live validation should list Grafana datasources first, then run a small
-PromQL/LogQL query only through a datasource available in the target Grafana.
-Avoid broad unfiltered queries; prefer short time ranges, low result limits,
-and discovered project/resource labels.
+Live setup validation should list Grafana datasources and stop. Run operational
+PromQL, LogQL, dashboard, or trace-tool queries only through
+`$nebius-grafana-query` with an explicitly safe target.
 
 ## Output Contract
 

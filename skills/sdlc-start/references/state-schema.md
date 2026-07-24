@@ -351,10 +351,13 @@ Optional Agentic SDLC hook source lives under
 `sdlc-start/assets/hooks/`. Installed copies under `$CODEX_HOME/hooks` are
 runtime artifacts and can drift, so maintainers should patch the source bundle
 first, run its hook tests, and then sync it intentionally with
-`install-skills.sh --install-all-hooks`, or with
-`install-skills.sh --install-hooks sdlc-start/assets/hooks` when only the SDLC
-hook bundle should be refreshed. Add `--register-hooks` when the installer
-should also merge the SDLC `PreToolUse` and `Stop` registration entries into
+`install-skills.sh --install-all-hooks --register-hooks
+--refresh-hook-registrations`, or with
+`install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks
+--refresh-hook-registrations` when only the SDLC hook bundle should be
+refreshed. The refresh option replaces only a differing same-event,
+same-script registration with the same handlers, allowing only `statusMessage`
+metadata to differ while preserving unrelated entries in
 `$CODEX_HOME/hooks.json`.
 
 The Stop hook continuation prompt must route through explicit `$sdlc-start run
@@ -369,7 +372,10 @@ classification belongs to `sdlc-auto-steering`, not the hook.
 The PreToolUse hook does not block filesystem targets by path. Repository
 files, outside-repo files, credential directories, Codex runtime files, global
 `AGENTS.md`, locked SDLC plans, and private SDLC state are path-allowed for
-operator flexibility. It must still block secret-bearing payloads, dangerous
-shell patterns, and guarded Git or GitHub actions without valid short-lived
+operator flexibility. A user-level registration matches by tool name before
+active-run discovery, so the hook immediately allows calls outside an active
+SDLC run and its registration omits a static SDLC status message. During an
+active run it must still block secret-bearing payloads, dangerous shell
+patterns, and guarded Git or GitHub actions without valid short-lived
 authorization. Use the explicit hook installer option for deliberate runtime
 sync instead of editing installed hook artifacts directly.

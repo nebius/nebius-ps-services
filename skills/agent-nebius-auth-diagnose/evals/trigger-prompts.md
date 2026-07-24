@@ -2,7 +2,16 @@
 
 | Prompt or state | Expected behavior |
 | --- | --- |
-| Hook denies a command with no leading selector | Discover the project, correct the command, and retry without setup. |
+| Hook denies a command with no leading selector and no project is selected | Discover exactly one task-authoritative project, correct the command, and retry without setup. |
+| Known task project, then missing-selector hook denial | Reuse the selected project and retry the original outer payload once with exactly one leading selector; do not rediscover, verify, or invoke setup. |
+| Selected project A, then a later user turn explicitly selects project B | Replace A with B for later Nebius-sensitive payloads; do not carry the stale A selector forward. |
+| Selected project A, then non-explicit task evidence conflicts between A and B | Discard the carried selection and ask; do not choose from profiles, filenames, cwd, or memory. |
+| `nebius --help`, `nebius --version`, or a Nebius executable path probe | Treat it as Nebius-sensitive and put the selector at byte zero of the outer Bash payload. |
+| Proposed compound payload mixes a local-only probe and a Nebius command | Split it into separate Bash calls; leave the local probe unprefixed and put one selector at byte zero of the Nebius call. |
+| Compound payload contains only Nebius-sensitive segments | Put one selector before the entire outer payload, not before each segment. |
+| Nebius command is under `env`, `timeout`, `bash -c`, a guard, pipeline, substitution, or nested shell | Put one selector before the outer wrapper or construct; do not place it inside the nested command. |
+| Selector is non-leading, nested, invalid, or duplicated | Reconstruct the payload with exactly one valid selector as the first raw shell token and retry once. |
+| Local-only `git`, `rg`, or unrelated help command follows project discovery | Leave it unprefixed; do not inject Nebius credential context into unrelated commands. |
 | Selected project credential is missing | Report it and tell the user to invoke setup explicitly; do not create it. |
 | Credential/profile auth fails persistently | Report evidence and the exact explicit setup invocation; do not run a setup dry-run implicitly. |
 | Explicit profile conflicts with the selector | Remove the explicit profile and retry through selector-derived auth. |

@@ -40,9 +40,9 @@ replacement decision instead of being duplicated.
 Use the skill when a user wants Codex to set up `mcp-grafana` on macOS or
 Linux, register it in Codex, and connect it to Nebius metrics, logs, or traces.
 The runtime instructions install the official binary, configure the Nebius IAM
-token refresh wrapper, register the MCP server with Codex, discover Grafana
-datasources, and run safe read-only validation. Static-key and datasource setup
-is explicitly optional for external Grafana only.
+token refresh wrapper, register the MCP server with Codex, and validate
+readiness by listing Grafana datasources. Static-key and datasource setup is
+explicitly optional for external Grafana only.
 
 Live Nebius IAM changes and static-key issuance are intentionally outside the
 default path. The skill documents an idempotent external-Grafana pattern, but
@@ -63,77 +63,19 @@ validate by listing datasources. It keeps the wrapper bound to
 `https://grafana.nebius.dev/`; use a generic Grafana service-account-token setup
 for any external Grafana instance.
 
-After Codex has restarted with the `grafana-nebius` server enabled, ask Codex
-for the outcome you need. Natural-language prompts are fine when they include
-the scope, time window, and resource identifiers. Codex should use
-`grafana-nebius` to discover the datasource, labels, and metric names before it
-queries Grafana:
+After Codex has restarted with the `grafana-nebius` server enabled and
+datasource listing succeeds, use `$nebius-grafana-query` or ask a matching
+natural-language observability question:
 
 ```text
-Use grafana-nebius to query the GPU usage for the last 30 days for all the
-nodes of this MK8s cluster:
-<MK8S_CLUSTER_ID>
-in project:
-<PROJECT_ID>
+Show GPU usage for MK8s cluster <MK8S_CLUSTER_ID> in project <PROJECT_ID> over
+the last 24 hours.
 ```
 
-For this kind of request, Codex should report the GPU-reporting nodes it finds,
-the average and peak GPU utilization per node, the metric used, and whether the
-cluster has data for the whole requested window.
-
-Other useful prompts can stay just as direct:
-
-```text
-Use grafana-nebius to list the monitoring and logging datasources available in
-Grafana, and tell me which ones can be used for project <PROJECT_ID>.
-```
-
-```text
-Use grafana-nebius to show CPU and memory usage for the nodes in MK8s cluster
-<MK8S_CLUSTER_ID> in project <PROJECT_ID> over the last 24 hours. Summarize by
-node and call out missing data.
-```
-
-```text
-Use grafana-nebius to check whether MK8s cluster <MK8S_CLUSTER_ID> in project
-<PROJECT_ID> had any GPU XID errors in the last 7 days. Return counts by node
-and GPU only.
-```
-
-```text
-Use grafana-nebius to summarize recent error logs for MK8s cluster
-<MK8S_CLUSTER_ID> in project <PROJECT_ID> over the last hour. Return counts and
-the most relevant short examples only; do not dump raw logs.
-```
-
-When you already know the exact datasource UID, labels, or PromQL, include
-them. Otherwise, let Codex discover those details through Grafana MCP and ask
-for a compact result instead of raw series or logs.
-
-## How The MCP Flow Works
-
-`grafana-nebius` is the Codex MCP server entry for the Grafana MCP server. It is
-not Grafana itself, and Grafana does not reroute user prompts to it.
-
-The runtime flow is:
-
-```text
-User prompt
-  -> Codex decides which grafana-nebius tool to call
-  -> Codex runtime sends an MCP tool call to grafana-nebius
-  -> grafana-nebius calls Grafana and its datasource APIs
-  -> Grafana returns datasource, Prometheus-compatible, Loki, or other results
-  -> grafana-nebius returns the tool result to Codex
-  -> Codex summarizes the answer for the user
-```
-
-The Codex-to-MCP hop is an MCP tool/RPC call. Depending on the MCP server
-configuration, that hop can run over stdio to a local process or over an HTTP
-transport to a remote MCP endpoint. The MCP-to-Grafana hop is where Grafana API
-and datasource API calls happen.
-
-Use placeholders in reusable docs and prompts. Do not store real project IDs,
-resource IDs, raw logs, or query results in this skill source.
+`$nebius-grafana-query` owns datasource/label discovery, bounded PromQL and
+LogQL, dashboard panel-query inspection, trace-tool availability, sanitization,
+and result summaries. This installer does not retain a second operational query
+path.
 
 ## Files
 
@@ -149,6 +91,9 @@ resource IDs, raw logs, or query results in this skill source.
   read-only by default.
 - `scripts/test-run-nebius-grafana-mcp.sh`: local fake-command smoke test for
   wrapper token export modes and token-file permissions.
+- `scripts/test_grafana_skill_contract.py`: static cross-skill ownership,
+  routing, metadata, catalog, and eval assertions.
+- `evals/trigger-prompts.md`: explicit setup and query-handoff examples.
 - `agents/openai.yaml`: UI metadata for the skill.
 
 ## Vendor Evidence

@@ -197,8 +197,8 @@ records hook file provenance hashes. It backs up differing existing hook files,
 then refreshes them from the selected source. It still does not trust hooks or
 patch `config.toml`. Add
 `--refresh-hook-registrations` when differing registrations for the same
-event/script and identical handler list should be replaced while unrelated
-entries remain.
+event/script and handlers, allowing only `statusMessage` metadata to differ,
+should be replaced while unrelated entries remain.
 Add
 `--replace-hooks-json` only when the operator intentionally wants to back up
 and replace `hooks.json` with a clean file built from the selected source
@@ -221,6 +221,12 @@ only the exact private state update before stopping all other tools and returnin
 the complete report. Another bounded tranche requires a new explicit user
 instruction. Preserve the active `codex-remediation-budget:v1` marker while
 rewriting private task state.
+
+The managed section must also permit agents to clean up temporary trees they
+created during the current task. Require the exact task-specific path to be
+resolved and validated under the system temporary directory first, use scoped
+non-forced deletion such as `find "$task_temp_dir" -depth -delete`, and never
+target the temporary root or an unresolved variable.
 
 Recommended managed block markers:
 

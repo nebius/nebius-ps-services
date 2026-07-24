@@ -117,7 +117,7 @@ hooks = true
 multi_agent = true
 
 [agents]
-max_threads = 4
+max_threads = 16
 max_depth = 1
 
 [agents.repo_mapper]
@@ -153,7 +153,7 @@ When delegation is authorized and useful but the active tool list does not show
 subagent controls, and `tool_search` is available, Codex should search for
 multi-agent/subagent tools before reporting delegation unavailable.
 
-Keep `max_threads = 4` as the conservative local thread budget. Do not spawn
+Keep `max_threads = 16` as the configured local thread budget. Do not spawn
 every configured read-only role by default: use `repo_mapper` and
 `test_strategist` early only when useful and independent, close completed
 helpers after consolidation, and use `risk_reviewer` near the end only for

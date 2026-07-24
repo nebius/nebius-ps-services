@@ -176,8 +176,8 @@ If the parent is finalizing while a helper is still running and the result is
 no longer needed, it should close that handle before the final response. If the
 result is still needed, it should wait for a terminal status, consolidate the
 result, then close the handle.
-Do not spawn every configured role by default. Keep `max_threads = 4` as the
-conservative local thread budget. Use `repo_mapper` and `test_strategist` early
+Do not spawn every configured role by default. Keep `max_threads = 16` as the
+configured local thread budget. Use `repo_mapper` and `test_strategist` early
 only when their work is useful and independent, close them after consolidation,
 then use `risk_reviewer` near the end only for non-trivial or risky changes.
 When several helpers are running, the main agent should close each completed

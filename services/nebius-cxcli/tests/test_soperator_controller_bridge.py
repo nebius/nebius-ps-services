@@ -649,6 +649,41 @@ def test_first_bridge_write_permanently_fences_source_restart() -> None:
         )
 
 
+def test_controller_authority_rejects_skipping_passive_bridge_generations() -> None:
+    journal = new_bridge_journal(
+        source=_source(),
+        plan=_plan(),
+        authority_epoch="source-epoch-1",
+    )
+
+    with pytest.raises(ValueError, match="source-singleton -> target-singleton"):
+        record_bridge_authority(
+            journal,
+            epoch="target-epoch-1",
+            owner="target-singleton",
+            reason="unsafe direct mixed-generation promotion",
+        )
+
+    assert journal["authority"]["owner"] == "source-singleton"
+    assert len(journal["authority"]["history"]) == 1
+
+
+@pytest.mark.parametrize("field,value", (("owner", "bridge-source"), ("epoch", "forged-epoch")))
+def test_controller_authority_current_state_must_equal_latest_history(
+    field: str,
+    value: str,
+) -> None:
+    journal = new_bridge_journal(
+        source=_source(),
+        plan=_plan(),
+        authority_epoch="source-epoch-1",
+    )
+    journal["authority"][field] = value
+
+    with pytest.raises(ValueError, match="latest durable history entry"):
+        validate_bridge_journal(journal)
+
+
 def test_bridge_node_groups_are_fixed_isolated_and_sfs_attached_from_birth() -> None:
     payloads = bridge_node_group_payloads(_plan())
 
@@ -1418,6 +1453,28 @@ def _cleaned_journal() -> dict[str, object]:
             },
         }
     )
+    journal["authority"]["history"].extend(
+        [
+            {
+                "epoch": "bridge-source-aaaaaaaaaaaa",
+                "owner": "bridge-source",
+                "at": "2026-07-12T10:07:00Z",
+                "reason": "source-version bridge accepted the first shared-state write",
+            },
+            {
+                "epoch": "bridge-target-aaaaaaaaaaaa",
+                "owner": "bridge-target",
+                "at": "2026-07-12T10:12:00Z",
+                "reason": "target-version bridge accepted shared-state authority",
+            },
+            {
+                "epoch": "target-aaaaaaaaaaaa",
+                "owner": "target-singleton",
+                "at": "2026-07-12T10:19:00Z",
+                "reason": "target singleton accepted final controller authority",
+            },
+        ]
+    )
     journal["authority_lease"].update(
         {
             "uid": "authority-lease-uid",
@@ -2008,6 +2065,14 @@ def test_bridge_fenced_journal_accepts_fenced_target_bridge_authority_reentry() 
         {
             "owner": "bridge-target",
             "epoch": "bridge-target-epoch",
+        }
+    )
+    journal["authority"]["history"].append(
+        {
+            "epoch": "bridge-target-epoch",
+            "owner": "bridge-target",
+            "at": "2026-07-12T10:20:00Z",
+            "reason": "fenced target startup rolled forward through the target bridge",
         }
     )
 

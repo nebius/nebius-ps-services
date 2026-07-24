@@ -1,0 +1,25 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "pytest-watch",
+            "type": "shell",
+            "command": ".venv/bin/watchfiles --filter python \".venv/bin/pytest -v tests\" tests",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "isBackground": true,
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated",
+                "clear": true,
+                "showReuseMessage": false
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        }
+    ]
+}

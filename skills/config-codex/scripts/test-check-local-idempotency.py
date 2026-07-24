@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,11 @@ MANAGED_BLOCK = "\n".join(
         "  exact private task-state update that records the stop, then call no",
         "  other tool and return the complete troubleshooting report. Only a",
         "  new explicit user instruction may start another bounded tranche.",
+        "- Agents may clean up temporary trees they created during the current",
+        "  task. Resolve and validate the exact task-specific path under the",
+        "  system temporary directory first, use a scoped non-forced deletion",
+        '  such as `find "$task_temp_dir" -depth -delete`, and never target the',
+        "  temporary root or an unresolved variable.",
         "",
         "## Skills",
         "",
@@ -60,6 +66,16 @@ def copy_template(source: Path, target: Path) -> None:
 
 
 class CheckLocalIdempotencyTest(unittest.TestCase):
+    def test_public_config_template_defaults_to_sol_xhigh_fast(self) -> None:
+        with (ASSETS / "config.toml.template").open("rb") as handle:
+            config = tomllib.load(handle)
+
+        self.assertEqual(config.get("model"), "gpt-5.6-sol")
+        self.assertEqual(config.get("model_reasoning_effort"), "xhigh")
+        self.assertEqual(config.get("plan_mode_reasoning_effort"), "xhigh")
+        self.assertEqual(config.get("service_tier"), "fast")
+        self.assertIs(config.get("features", {}).get("fast_mode"), True)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.codex_home = Path(self.tmp.name) / "codex"
@@ -219,6 +235,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
             "  other tool and return the complete troubleshooting report. Only a",
             "  new explicit user instruction may start another bounded tranche.",
+            "  temporary root or an unresolved variable.",
         )
         for required_line in required_lines:
             with self.subTest(required_line=required_line):
@@ -254,6 +271,20 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "template MCP server parity is not required for merge-safe laptop check",
             result.stdout,
         )
+
+    def test_rejects_old_max_threads_budget(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "max_threads = 16",
+                "max_threads = 4",
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("agents.max_threads is not 16", result.stdout)
 
     def test_template_mcp_audit_detects_drift(self) -> None:
         config_path = self.codex_home / "config.toml"

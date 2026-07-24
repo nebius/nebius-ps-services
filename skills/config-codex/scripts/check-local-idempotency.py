@@ -21,6 +21,7 @@ import tomllib
 
 
 REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
+REQUIRED_MAX_THREADS = 16
 MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
 MANAGED_END = "<!-- END config-codex managed context -->"
 REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
@@ -36,6 +37,9 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
         "troubleshooting report"
     ),
     "Only a new explicit user instruction may start another bounded tranche",
+    "Agents may clean up temporary trees they created during the current task",
+    'find "$task_temp_dir" -depth -delete',
+    "never target the temporary root or an unresolved variable",
     (
         "For non-trivial planning, implementation, debugging, refactoring, "
         "migration, architecture, review, testing, CI failure, or multi-file "
@@ -214,10 +218,10 @@ def check_config_toml(
             fail(f"features.{key} is not true", failures)
 
     agents = config.get("agents", {})
-    if agents.get("max_threads") == 4:
-        ok("agents.max_threads=4")
+    if agents.get("max_threads") == REQUIRED_MAX_THREADS:
+        ok(f"agents.max_threads={REQUIRED_MAX_THREADS}")
     else:
-        fail("agents.max_threads is not 4", failures)
+        fail(f"agents.max_threads is not {REQUIRED_MAX_THREADS}", failures)
     if agents.get("max_depth") == 1:
         ok("agents.max_depth=1")
     else:

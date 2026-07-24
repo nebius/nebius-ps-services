@@ -1,0 +1,6 @@
+interface:
+  display_name: "Nebius Grafana Query"
+  short_description: "Query Nebius Grafana observability read-only"
+  default_prompt: "Use $nebius-grafana-query to answer a bounded read-only Nebius metrics or logs question through the configured grafana-nebius MCP server."
+policy:
+  allow_implicit_invocation: true

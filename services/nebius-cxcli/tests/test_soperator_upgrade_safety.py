@@ -964,6 +964,40 @@ def test_zero_downtime_fails_when_slurm_workers_are_not_responsive() -> None:
     )
 
 
+def test_zero_downtime_reports_planned_controller_gap_without_failing_health() -> None:
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        external_cluster=True,
+        external_transition_handoff={
+            "controller_continuity_mode": "cold-boundary-observed",
+            "controller_outage_boundaries": [
+                {
+                    "kind": "bridge-to-target-singleton-fence",
+                    "service": "slurm-controller",
+                    "planned": True,
+                    "started_at": "2026-07-24T00:27:47Z",
+                    "ended_at": "2026-07-24T00:41:10Z",
+                    "complete": True,
+                }
+            ],
+        },
+    )
+
+    assert result.status == "passed"
+    assert result.zero_downtime_eligibility["eligible"] is False
+    assert result.zero_downtime_eligibility["blocking_reasons"] == []
+    assert result.zero_downtime_eligibility["controller_continuity_mode"] == (
+        "cold-boundary-observed"
+    )
+    assert any(
+        check["name"] == "zero-downtime-eligibility" and check["status"] == "skipped"
+        for check in result.checks
+    )
+
+
 def test_managed_node_template_upgrade_classifies_node_replacement_as_intentional() -> None:
     before = _capture(_NodeRunner("node-old"))
     result = run_post_upgrade_fast_verification(

@@ -23,6 +23,42 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
         self.assertIn("allow_implicit_invocation: true", diagnose)
         self.assertIn("allow_implicit_invocation: false", setup)
 
+    def test_diagnose_carries_task_project_into_sensitive_payloads(self) -> None:
+        skill = self.read(DIAGNOSE / "SKILL.md")
+        metadata = self.read(DIAGNOSE / "agents" / "openai.yaml")
+        evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
+        readme = self.read(ROOT / "README.md")
+
+        self.assertIn(
+            "Project selection is task execution context, not a typed skill argument.",
+            skill,
+        )
+        self.assertIn("current task only", skill)
+        self.assertIn("raw shell token at byte zero", skill)
+        self.assertIn("prefix the entire outer Bash payload once", skill)
+        self.assertIn("split it into separate Bash calls", skill)
+        self.assertIn("leave local-only commands", skill)
+        self.assertIn("retry the corrected payload once", skill)
+        self.assertIn(
+            "carry it into every Nebius-sensitive Bash payload", metadata
+        )
+        self.assertIn("split mixed local/Nebius payloads", metadata)
+        self.assertIn(
+            "Known task project, then missing-selector hook denial", evals
+        )
+        self.assertIn(
+            "later user turn explicitly selects project B", evals
+        )
+        self.assertIn(
+            "Proposed compound payload mixes a local-only probe", evals
+        )
+        self.assertIn("Local-only `git`, `rg`, or unrelated help command", evals)
+        self.assertIn(
+            "Project selection is task execution context, not a typed skill argument.",
+            readme,
+        )
+        self.assertIn("Mixed local/Nebius payloads are split", readme)
+
     def test_explicit_setup_needs_no_second_confirmation(self) -> None:
         skill = self.read(SETUP / "SKILL.md")
         script = self.read(SETUP / "scripts" / "agent-nebius-auth-setup.sh")

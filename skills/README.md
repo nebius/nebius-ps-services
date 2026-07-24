@@ -55,7 +55,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
-| `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
+| `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana observability data. |
 
@@ -86,6 +86,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
+| `nebius-grafana-query` | Implicit allowed | Query already-configured Nebius Grafana datasources, dashboards, metrics, logs, and available trace tools with bounded read-only output. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
@@ -220,7 +221,7 @@ $task-implementer-test --destroy
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
-$code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
+$code-info Gather read-only project info from this folder or a GitHub repo with a concise description, documented features, three-level CLI hierarchy, LOC, packages, dependencies, size comparisons, repo size, tests, artifacts, and coverage.
 ```
 
 You can also be more specific when needed:
@@ -599,10 +600,23 @@ discovers the project from current-session evidence, treats persistent memory
 only as a corroborated hint, and never infers authority from active profiles,
 credential filenames, cwd, legacy default selectors, or unrelated task state.
 
+Project selection is task execution context, not a typed skill argument.
+Implicit skill selection and hook feedback do not inject the project ID into a
+later tool call. Once exactly one project is selected, the agent carries it for
+the current task into every Nebius-sensitive Bash payload. A later explicit
+project replaces that selection, while unresolved conflicting task evidence
+must ask rather than guess.
+
 Correctable command-policy denials are fixed and retried by the agent without
-running setup: add the exact leading selector, remove a conflicting
-explicit profile or managed-auth assignment, or replace a token-printing
-command with the normal operation or redirected verification form.
+running setup: add exactly one selector as the first raw token of the entire
+outer Bash payload, remove a conflicting explicit profile or managed-auth
+assignment, or replace a token-printing command with the normal operation or
+redirected verification form. Help, version, path-discovery, wrapped, and
+all-Nebius compound commands follow the same outer-selector rule.
+Mixed local/Nebius payloads are split into separate Bash calls so local-only
+commands remain unprefixed and receive no injected credential context. When
+the project is already authoritative, the agent retries the corrected payload
+once without rediscovery or `verify`.
 
 `agent-nebius-auth-setup` is explicit-only. Invoking it directly authorizes one
 bounded convergence, without a second prompt or confirmation digest. It locks
@@ -712,7 +726,10 @@ so later evaluation and UAT can use a confirmed non-production or disposable
 target with safe connection, allowed-action, reset, and evidence rules.
 Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
 local state. The Stop hook repeats the prompt-bound `sdlc-start run` command
-rather than routing directly into phase skills.
+rather than routing directly into phase skills. The PreToolUse registration is
+matched by tool name, but it immediately allows calls outside an active SDLC
+run and omits a static SDLC status message so ordinary tasks are not presented
+as SDLC work.
 Sensitive Git actions use
 short-lived local authorization files under the active run's `permissions/`
 directory; the skills create those files only immediately before the guarded
@@ -722,8 +739,12 @@ authorization checks for sensitive raw Git operations.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
-bundles deliberately with `./install-skills.sh --install-all-hooks`; installed
-copies under `$CODEX_HOME/hooks` are runtime artifacts.
+bundles deliberately with `./install-skills.sh --install-all-hooks
+--register-hooks --refresh-hook-registrations`; installed copies under
+`$CODEX_HOME/hooks` are runtime artifacts. The refresh option replaces only a
+differing same-event, same-script registration with the same handlers,
+allowing only `statusMessage` metadata to differ, and preserves unrelated
+entries.
 Keep these SDLC hooks separate from the non-SDLC global-context hooks:
 `SessionStart` is for stable global context and task-state location, and
 `UserPromptSubmit` is only for lightweight prompt-time context, safety, or
@@ -875,14 +896,17 @@ checks still block the PR.
 
 ### `code-info`
 
-`code-info` summarizes a local project folder or a GitHub repository with
-read-only, copy/paste-friendly Markdown metrics, including LOC per language,
-LOC per top-level component, tracked repo size, repo link, test file counts,
-CLI command definitions, package/module counts, build artifact sizes, and
-already-available coverage artifacts. For not-yet-cloned GitHub repositories,
-it reads a temporary archive using `GH_TOKEN`, `GITHUB_TOKEN`, or
-`gh auth token` when needed. It does not edit, format, build, test, install,
-generate coverage, or stage files.
+`code-info` summarizes a local project folder or GitHub repository with a
+read-only, copy/paste-friendly Markdown report. It includes a concise project
+description, documented feature count, CLI command paths through three levels,
+comparable and per-language LOC, project packages, declared and statically
+selected/resolved dependencies, approximate pinned Redis/SQLite size
+comparisons, repo size and link, tests, artifacts, and already-available
+coverage. For not-yet-cloned
+GitHub repositories, it reads a temporary archive using `GH_TOKEN`,
+`GITHUB_TOKEN`, or `gh auth token` when needed. It never executes project code,
+manifests, package managers, builds, tests, or generators and does not change
+project files.
 
 ### `config-codex`
 
@@ -945,9 +969,9 @@ templates, schema, and validation.
 `install-grafana-mcp-for-nebius` installs and configures the official Grafana
 MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
 external Grafana service-account/static-key setup out of the default path, and
-guides agents through idempotent Codex MCP registration, datasource discovery,
-PromQL-compatible monitoring, Loki, trace-tool checks, and read-only
-validation.
+guides agents through idempotent Codex MCP registration and datasource-list
+readiness validation. Routine observability questions are handed to
+`nebius-grafana-query`; the installer retains no second query path.
 
 ### `linter`
 
@@ -967,6 +991,17 @@ checks, observability, and MK8s GPU/operator decisions.
 Plane Audit Logs queries. It resolves tenant, region, time window, resource or
 current subject filters, keeps page size bounded by default, and sanitizes
 output unless raw output is explicitly requested.
+
+### `nebius-grafana-query`
+
+`nebius-grafana-query` is the implicitly selectable, read-only operational
+workflow for an already-configured `grafana-nebius` MCP server. It discovers
+datasource UIDs, metrics, labels, dashboard panel queries, and available trace
+tools before running bounded PromQL or LogQL. It defaults omitted time ranges
+to one hour, requires authoritative project/resource scope for potentially
+cross-project queries, summarizes logs by default, and routes missing server,
+configuration, or authentication back to the explicit
+`install-grafana-mcp-for-nebius` skill.
 
 ### `publish-helm`
 
@@ -1092,9 +1127,10 @@ those payload files in one pass. It does not scan mixed `assets/` directories.
 With `--register-hooks`, it also merges each discovered bundle's registration
 manifest while preserving existing hook entries. Add
 `--refresh-hook-registrations` to replace only differing registrations with the
-same event/script and an identical handler list. Add `--replace-hooks-json`
-only when you intentionally want to back up and replace `hooks.json` with a
-clean file built from the selected source manifests. Hook install modes are
+same event/script and handlers, allowing only `statusMessage` metadata to
+differ. Add `--replace-hooks-json` only when you intentionally want to back up
+and replace `hooks.json` with a clean file built from the selected source
+manifests. Hook install modes are
 idempotent: unchanged files are not recopied, hook file provenance is recorded,
 differing existing hook files are backed up before being refreshed,
 registration appends only missing source entries by default, refuses duplicate
@@ -1145,8 +1181,8 @@ automatically.
 # Remove from a custom destination
 ./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
 
-# Copy optional Agentic SDLC hooks into the default local Codex home
-./install-skills.sh --install-hooks sdlc-start/assets/hooks
+# Copy and refresh optional Agentic SDLC hooks in the default local Codex home
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks --refresh-hook-registrations
 
 # Copy and register global context-management hooks
 ./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
@@ -1154,8 +1190,8 @@ automatically.
 # Copy and register the remediation-budget guard hooks
 ./install-skills.sh --install-hooks troubleshoot/assets/hooks --register-hooks
 
-# Copy and register every reviewed hook-only bundle
-./install-skills.sh --install-all-hooks --register-hooks
+# Copy and refresh every reviewed hook-only bundle
+./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
 
 # Copy all reviewed hook bundles and replace hooks.json with only those entries
 ./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json

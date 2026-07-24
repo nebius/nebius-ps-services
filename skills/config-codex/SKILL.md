@@ -66,9 +66,10 @@ For existing `$CODEX_HOME/AGENTS.md`:
   unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
-- Keep the global remediation default and task-state marker preservation in
-  that managed section so existing installations receive the same policy as a
-  newly rendered `AGENTS.md.template` without replacing user-owned content.
+- Keep the global remediation default, task-owned temporary cleanup rule, and
+  task-state marker preservation in that managed section so existing
+  installations receive the same policy as a newly rendered
+  `AGENTS.md.template` without replacing user-owned content.
 - If managed markers already exist, update only the content between those
   markers.
 - Treat empty or stale managed markers as incomplete; update the managed block
@@ -162,9 +163,11 @@ For existing `$CODEX_HOME/config.toml`:
    explicitly wants the installer to semantically merge the
    bundle's hook registration into `hooks.json`; add
    `--refresh-hook-registrations` only when differing registrations for the
-   same event/script and an identical handler list should be replaced while
-   unrelated entries remain intact. Add `--replace-hooks-json` only when the selected source manifests should replace
-   `hooks.json` after backup. Registration is validated before payload sync.
+   same event/script and handlers, allowing only `statusMessage` metadata to
+   differ, should be replaced while unrelated entries remain intact. Add
+   `--replace-hooks-json` only when the selected source manifests should
+   replace `hooks.json` after backup. Registration is validated before payload
+   sync.
    Neither path trusts hooks, patches `config.toml`, replaces `AGENTS.md`, or
    replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,

@@ -1261,11 +1261,21 @@ def run_post_upgrade_fast_verification(
     zero_downtime = _zero_downtime_eligibility(
         after_state=after_state,
         comparison=comparison,
+        transition_handoff=external_transition_handoff if external_cluster else None,
+    )
+    zero_downtime_check_status = (
+        "passed"
+        if zero_downtime.get("eligible") is True
+        else (
+            "failed"
+            if zero_downtime.get("blocking_reasons")
+            else "skipped"
+        )
     )
     checks.append(
         {
             "name": "zero-downtime-eligibility",
-            "status": "passed" if zero_downtime.get("eligible") is True else "failed",
+            "status": zero_downtime_check_status,
             "summary": str(zero_downtime.get("summary", "") or ""),
         }
     )
@@ -2622,33 +2632,65 @@ def _zero_downtime_eligibility(
     *,
     after_state: ProtectedCustomerState,
     comparison: Mapping[str, Any],
+    transition_handoff: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    reasons: list[str] = []
+    blocking_reasons: list[str] = []
     if int(comparison.get("blocked_count") or 0) > 0:
-        reasons.append("blocked protected-state deltas exist")
+        blocking_reasons.append("blocked protected-state deltas exist")
     if not after_state.complete:
-        reasons.append("post-upgrade protected-state capture is incomplete")
+        blocking_reasons.append("post-upgrade protected-state capture is incomplete")
     nodes = _items_by_name(after_state.sections.get("nodes"))
     ready_count = sum(
         1 for item in nodes.values() if str(item.get("ready", "") or "").lower() == "true"
     )
     if nodes and ready_count == 0:
-        reasons.append("no Ready Kubernetes nodes were captured")
+        blocking_reasons.append("no Ready Kubernetes nodes were captured")
     slurm_problem_nodes = _slurm_runtime_problem_nodes(after_state)
     if slurm_problem_nodes:
         sample = ", ".join(
             f"{item.get('name')}:{item.get('state')}" for item in slurm_problem_nodes[:6]
         )
         suffix = "" if len(slurm_problem_nodes) <= 6 else f" (+{len(slurm_problem_nodes) - 6} more)"
-        reasons.append(f"Slurm worker nodes are not responsive: {sample}{suffix}")
+        blocking_reasons.append(f"Slurm worker nodes are not responsive: {sample}{suffix}")
+    raw_controller_outage_boundaries = _as_mapping(transition_handoff).get(
+        "controller_outage_boundaries"
+    )
+    controller_outage_boundaries = [
+        to_plain_data(dict(item))
+        for item in (
+            raw_controller_outage_boundaries
+            if isinstance(raw_controller_outage_boundaries, Sequence)
+            and not isinstance(raw_controller_outage_boundaries, (str, bytes, bytearray))
+            else ()
+        )
+        if isinstance(item, Mapping) and str(item.get("started_at") or "").strip()
+    ]
+    continuity_reasons: list[str] = []
+    if controller_outage_boundaries:
+        kinds = sorted(
+            {
+                str(item.get("kind") or "controller-gap")
+                for item in controller_outage_boundaries
+            }
+        )
+        continuity_reasons.append(
+            "executor-recorded Slurm controller outage boundary: " + ", ".join(kinds)
+        )
+    reasons = [*blocking_reasons, *continuity_reasons]
     eligible = not reasons
     return {
         "status": "passed" if eligible else "blocked",
         "eligible": eligible,
         "summary": "Zero-downtime guardrails have no blocking evidence."
         if eligible
-        else "Zero-downtime guardrail blocked: " + "; ".join(reasons),
+        else "Zero-downtime eligibility is not established: " + "; ".join(reasons),
         "reasons": reasons,
+        "blocking_reasons": blocking_reasons,
+        "continuity_reasons": continuity_reasons,
+        "controller_continuity_mode": str(
+            _as_mapping(transition_handoff).get("controller_continuity_mode") or ""
+        ),
+        "controller_outage_boundaries": controller_outage_boundaries,
         "node_sample": {
             "captured": len(nodes),
             "ready": ready_count,

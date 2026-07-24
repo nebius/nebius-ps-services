@@ -79,13 +79,16 @@ managed `prompt.json` binding and fails closed if an optional `run.json` prompt
 filename mirror disagrees. The PreToolUse hook does not block file targets
 by path; repo files, outside-repo files, credential directories, Codex runtime
 files, global `AGENTS.md`, locked SDLC plans, and private SDLC state are all
-path-allowed for operator flexibility. It still blocks secret-bearing payloads,
-dangerous Bash command patterns, and guarded Git/GitHub actions. Dangerous
-shell matching is not applied to patch contents, so Dockerfile and
+path-allowed for operator flexibility. A global registration is selected by
+tool name before it can inspect SDLC state, so the hook immediately allows a
+call when no active SDLC run covers the working directory and omits a static
+SDLC status message. During an active run it still blocks secret-bearing
+payloads, dangerous Bash command patterns, and guarded Git/GitHub actions.
+Dangerous shell matching is not applied to patch contents, so Dockerfile and
 documentation command examples remain subject to patch secret/target/spec
 checks instead of being treated as commands being executed. Public Nebius
 profile, project, and credential-file path assignments are allowed as metadata;
-all other long Nebius assignments remain fail-closed.
+all other long Nebius assignments remain fail-closed during an active run.
 Coordinator-registered integration and worker worktrees outside the original
 checkout remain inside active-run policy; sensitive raw Git actions require
 exact identity and action-scoped authorization.
@@ -99,8 +102,8 @@ python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py
 To intentionally sync the source bundle into a local Codex runtime:
 
 ```bash
-./install-skills.sh --install-all-hooks
-./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks
+./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks --refresh-hook-registrations
 ```
 
 The all-hooks form syncs every reviewed hook-only bundle under the source skills

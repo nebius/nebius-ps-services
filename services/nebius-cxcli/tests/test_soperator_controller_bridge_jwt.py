@@ -258,6 +258,22 @@ def _journal_and_source() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any
         }
     )
     journal["authority"].update({"epoch": "bridge-target-epoch", "owner": "bridge-target"})
+    journal["authority"]["history"].extend(
+        [
+            {
+                "epoch": "bridge-source-epoch",
+                "owner": "bridge-source",
+                "at": "2026-07-12T10:01:00Z",
+                "reason": "source-version bridge fixture authority",
+            },
+            {
+                "epoch": "bridge-target-epoch",
+                "owner": "bridge-target",
+                "at": "2026-07-12T10:02:00Z",
+                "reason": "target-version bridge fixture authority",
+            },
+        ]
+    )
     journal["stage"] = migration.BridgeStage.TARGET_HA_ACTIVE.value
     return journal, source, material
 
@@ -276,6 +292,14 @@ def _preflight(journal: dict[str, Any], runner: _JwtRunner) -> None:
 def _activate_target(journal: dict[str, Any], runner: _JwtRunner) -> None:
     journal["stage"] = migration.BridgeStage.PLANNED.value
     journal["authority"].update({"epoch": "target-singleton-epoch", "owner": "target-singleton"})
+    journal["authority"]["history"].append(
+        {
+            "epoch": "target-singleton-epoch",
+            "owner": "target-singleton",
+            "at": "2026-07-12T10:03:00Z",
+            "reason": "target singleton fixture authority",
+        }
+    )
     runner.pod = _target_pod(gated=False)
     runner.workload = _target_workload(runner.pod, gated=False)
 

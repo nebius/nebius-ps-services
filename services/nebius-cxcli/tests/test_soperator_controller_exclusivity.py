@@ -652,6 +652,12 @@ def test_target_singleton_proof_accepts_tagged_spec_with_locked_runtime_digest(
     journal = {
         "campaign_fingerprint": "b" * 64,
         "authority": {"epoch": "target-bbbbbbbbbbbb", "owner": "target-singleton"},
+        "target_image_lock": {
+            "repository": "registry.example/controller",
+            "immutable_reference": f"registry.example/controller@sha256:{digest}",
+            "index_digest": f"sha256:{digest}",
+            "platform_digest": f"sha256:{digest}",
+        },
         "source_configuration": {"config_key": "slurm.conf"},
         "version_transition": {
             "target_image": f"registry.example/controller@sha256:{digest}",

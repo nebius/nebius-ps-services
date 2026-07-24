@@ -109,6 +109,12 @@ durable guidance. For `config.toml`, parse the file first and patch the
 minimum settings needed for hooks, multi-agent support, and the three read-only
 custom agent config layers.
 
+The managed defaults permit cleanup of temporary trees created by the current
+task only after the exact task-specific path is resolved and validated under
+the system temporary directory. Use a scoped non-forced deletion such as
+`find "$task_temp_dir" -depth -delete`; do not target the temporary root or an
+unresolved variable.
+
 Do not treat `assets/config.toml.template` as desired state for existing
 machines. It is the create-only baseline for a missing config plus examples of
 supported settings. Do not add template-only model defaults, app/plugin
@@ -118,6 +124,10 @@ cannot otherwise satisfy the requested behavior. If `global-context-management`
 and `config-codex` are already discoverable from the installed skills
 directory, explicit `[[skills.config]]` entries are optional and should not be
 added just to match the template.
+
+The create-only baseline selects `gpt-5.6-sol`, `xhigh` reasoning for both
+normal and Plan modes, and the Fast service tier. Existing configs retain their
+current model preferences unless the user explicitly asks to change them.
 
 ### Private Prompt Workspace Is Explicitly Opt-In
 

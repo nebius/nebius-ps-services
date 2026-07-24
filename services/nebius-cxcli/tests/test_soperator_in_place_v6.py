@@ -941,7 +941,7 @@ def test_in_place_accounting_continuity_allows_only_writer_pod_recreation() -> N
     )
 
 
-def test_in_place_accounting_continuity_allows_controller_host_refresh() -> None:
+def test_in_place_accounting_continuity_rejects_unproven_controller_host_refresh() -> None:
     baseline = {
         "writer_identity": {
             "pod": "cluster-acct-db-0",
@@ -965,10 +965,11 @@ def test_in_place_accounting_continuity_allows_controller_host_refresh() -> None
     observed["writer_identity"]["pod_uid"] = "pod-new"
     observed["registrations"]["cluster"]["control_host"] = "10.0.0.2"
 
-    migration._verify_in_place_accounting_continuity(  # noqa: SLF001
-        baseline=baseline,
-        observed=observed,
-    )
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="registrations evidence"):
+        migration._verify_in_place_accounting_continuity(  # noqa: SLF001
+            baseline=baseline,
+            observed=observed,
+        )
 
 
 def test_in_place_controller_roll_requires_system_domain_authority(
@@ -1085,7 +1086,14 @@ def test_bridge_primary_authority_uses_exact_login_client_not_cached_controller_
 
     assert active is roles[0]
     assert standby is roles[1]
-    assert exact_calls == [("scontrol", "ping")]
+    assert exact_calls == [
+        (
+            "env",
+            f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+            "scontrol",
+            "ping",
+        )
+    ]
 
 
 def test_in_place_controller_roll_resumes_setup_after_manager_pause(
@@ -1692,7 +1700,11 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
         "in_place_target_native_controller_ha": {
             "cleanup_status": "singleton-config-accepted",
         },
-        "in_place_target_manager_pause": {"original_replicas": 1},
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "original_replicas": 1,
+        },
     }
     checkpoint = {
         "controller_bridge": {"target_singleton_takeover": {"command_gate_applied": True}}
@@ -1719,9 +1731,31 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
         ),
     )
     commands: list[tuple[str, ...]] = []
+    manager = {
+        "metadata": {
+            "uid": "manager-uid",
+            "resourceVersion": "8",
+            "generation": 4,
+        },
+        "spec": {"replicas": 0, "template": {"spec": {"containers": []}}},
+        "status": {"observedGeneration": 4},
+    }
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: copy.deepcopy(manager),
+    )
 
     def _runner(args: list[str], **_kwargs: Any) -> SimpleNamespace:
         commands.append(tuple(args))
+        if "patch" in args and "deployment/soperator-manager" in args:
+            manager["spec"]["replicas"] = 1
+            manager["metadata"].update({"resourceVersion": "9", "generation": 5})
+            manager["status"] = {
+                "observedGeneration": 5,
+                "readyReplicas": 1,
+                "availableReplicas": 1,
+            }
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     lines = migration._finalize_in_place_target_native_controller_ha(  # noqa: SLF001
@@ -1737,9 +1771,17 @@ def test_in_place_singleton_finalizer_resumes_after_backup_retirement(
     assert state["cleanup_status"] == "verified"
     assert phase["in_place_target_manager_pause"]["status"] == "restored"
     assert removed == ["gate"]
-    assert any(
-        command[-2:] == ("deployment/soperator-manager", "--replicas=1") for command in commands
+    manager_patch = next(
+        command
+        for command in commands
+        if "patch" in command and "deployment/soperator-manager" in command
     )
+    patch = json.loads(manager_patch[manager_patch.index("-p") + 1])
+    assert patch[:3] == [
+        {"op": "test", "path": "/metadata/uid", "value": "manager-uid"},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": "8"},
+        {"op": "test", "path": "/metadata/generation", "value": 4},
+    ]
     assert lines
 
 
@@ -1985,7 +2027,7 @@ def test_in_place_runtime_identity_is_journaled_before_slurm_clear(
     assert calls[0]["resume_not_responding"] is True
     assert calls[0]["worker_instances"] == {"worker-0": "computeinstance-new"}
     assert len(writes) == 2
-    assert "stable per-worker service addresses" in lines[0]
+    assert "exact current Ready Pod IPs" in lines[0]
 
 
 def test_pre_rollout_runtime_identity_resumes_only_not_responding_nodes(
@@ -2002,8 +2044,8 @@ def test_pre_rollout_runtime_identity_resumes_only_not_responding_nodes(
     lines = migration._reconcile_slurm_worker_runtime_identity(  # noqa: SLF001
         command_runner=SimpleNamespace(),
         kube_context="context",
-        target_ref="cluster",
         worker_instances={"worker-1": "computeinstance-current"},
+        worker_addresses={"worker-1": "10.0.0.8"},
         via_login=True,
         resume_not_responding=True,
     )

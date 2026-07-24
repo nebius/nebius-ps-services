@@ -23,6 +23,38 @@ Never infer authority from an active profile, inherited environment,
 credential filename or count, cwd, a legacy default selector, or unrelated
 task state.
 
+Project selection is task execution context, not a typed skill argument.
+Implicit skill selection and hook feedback do not inject a project ID into a
+later tool call. After resolving exactly one project, carry that selection for
+the current task only. Replace it when a later user turn explicitly selects a
+different project. When no explicit current-turn project exists and task
+evidence becomes conflicting, discard the prior selection and ask rather than
+guessing. Never persist the selection into files, profiles, or ambient
+environment state.
+
+## Carry the Selected Project
+
+Before every Bash tool call, decide which segments need Nebius auth. Help,
+version, and path-discovery probes are sensitive when they invoke or inspect a
+Nebius CLI.
+
+If a proposed payload mixes local-only and Nebius-sensitive segments,
+split it into separate Bash calls before execution. Leave the local-only call
+unprefixed and apply the selector only to the Nebius-sensitive call.
+
+For every Nebius-sensitive Bash payload:
+
+- make exactly one `CODEX_NEBIUS_PROJECT_ID=<project-id>` assignment the first
+  raw shell token at byte zero;
+- prefix the entire outer Bash payload once, before local variable
+  declarations, wrappers such as `env`, `timeout`, or `bash -c`, shell guards,
+  pipelines, separators between Nebius-sensitive segments, command
+  substitutions, or nested shell commands;
+- never add the selector to each segment, place it inside a wrapper or nested
+  script, or duplicate it; and
+- leave local-only commands such as `git`, `rg`, and unrelated help probes
+  unprefixed.
+
 ## Diagnose Read-Only
 
 Inspect only the selected project's local surfaces:
@@ -71,6 +103,13 @@ The canonical retry is:
 ```bash
 CODEX_NEBIUS_PROJECT_ID=<project-id> <command>
 ```
+
+When an authoritative project is already selected, do not rediscover it or run
+`verify` for a selector-shape denial. Reconstruct the original outer payload
+with the canonical leading selector and retry the corrected payload once. If a
+later explicit project replaced the selection, resolve that project first. If
+the corrected payload is denied again, classify and report the persistent
+failure instead of looping or invoking setup.
 
 A raw-token child uses:
 

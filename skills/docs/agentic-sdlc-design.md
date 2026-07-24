@@ -267,13 +267,17 @@ The PreToolUse hook does not deny filesystem targets by path. File reads,
 writes, updates, deletes, and moves may target repository files, outside-repo
 files, credential directories, Codex runtime files, global `AGENTS.md`, locked
 SDLC plans, and private SDLC state when the operator needs that flexibility.
-The hook can still deny unsafe content or action shapes such as secret-bearing
-shell, patch, or MCP payloads, destructive Bash commands, destructive Git
-commands, protected-branch commit or push attempts, force pushes, force
-cleanup, and guarded Git or GitHub actions without valid short-lived
-authorization. Dangerous-shell pattern matching applies only to Bash tool
-payloads; source patches containing Dockerfile or documentation command text
-remain governed by patch target, secret, and spec checks. Registered
+Because Codex matches a user-level PreToolUse registration by tool name before
+the hook can inspect local run state, the hook immediately allows calls when no
+active SDLC run covers the current working directory and its registration does
+not display a static SDLC status message. During an active run, the hook can
+still deny unsafe content or action shapes such as secret-bearing shell, patch,
+or MCP payloads, destructive Bash commands, destructive Git commands,
+protected-branch commit or push attempts, force pushes, force cleanup, and
+guarded Git or GitHub actions without valid short-lived authorization.
+Dangerous-shell pattern matching applies only to Bash tool payloads; source
+patches containing Dockerfile or documentation command text remain governed by
+patch target, secret, and spec checks. Registered
 integration and worker worktrees remain inside the
 active run even though they live outside the original checkout. For sensitive
 Git operations the hook verifies their Git root/common directory, branch,

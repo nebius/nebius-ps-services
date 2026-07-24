@@ -80,6 +80,15 @@ _BRIDGE_STAGE_INDEX = {stage.value: index for index, stage in enumerate(_BRIDGE_
 _BRIDGE_AUTHORITY_OWNERS = frozenset(
     {"source-singleton", "bridge-source", "bridge-target", "target-singleton", "none"}
 )
+_BRIDGE_AUTHORITY_TRANSITIONS = {
+    "source-singleton": frozenset({"source-singleton", "bridge-source"}),
+    "bridge-source": frozenset({"source-singleton", "bridge-source", "bridge-target"}),
+    "bridge-target": frozenset({"bridge-target", "target-singleton", "none"}),
+    # A failed target startup may roll forward through the already-upgraded
+    # bridge pair, but it may never downgrade to the source generation.
+    "target-singleton": frozenset({"bridge-target", "target-singleton", "none"}),
+    "none": frozenset({"none"}),
+}
 _CONTROLLER_RUNTIME_FENCE_SCHEMA = "nebius-cxcli-controller-runtime-fence/v1"
 CONTROLLER_BRIDGE_JWT_MATERIAL_CONTRACT_SCHEMA = "nebius-cxcli-controller-jwt-material-contract/v1"
 CONTROLLER_BRIDGE_JWT_MATERIAL_PREFLIGHT_SCHEMA = (
@@ -1968,13 +1977,28 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         or not history
     ):
         raise ValueError("Controller bridge authority history must be non-empty.")
+    previous_owner = ""
     for item in history:
         if not isinstance(item, Mapping):
             raise ValueError("Controller bridge authority history entry must be a mapping.")
         _safe_token(item.get("epoch"), field="bridge authority history epoch")
-        if item.get("owner") not in _BRIDGE_AUTHORITY_OWNERS:
+        item_owner = str(item.get("owner") or "")
+        if item_owner not in _BRIDGE_AUTHORITY_OWNERS:
             raise ValueError("Controller bridge authority history owner is invalid.")
+        if previous_owner and item_owner not in _BRIDGE_AUTHORITY_TRANSITIONS[previous_owner]:
+            raise ValueError(
+                "Controller bridge authority history contains an unsupported owner transition."
+            )
+        previous_owner = item_owner
         _required_text(item.get("at"), field="bridge authority history timestamp")
+    latest_authority = history[-1]
+    if (
+        authority.get("epoch") != latest_authority.get("epoch")
+        or owner != latest_authority.get("owner")
+    ):
+        raise ValueError(
+            "Controller bridge current authority must equal the latest durable history entry."
+        )
     first_bridge_write_at = str(authority.get("first_bridge_write_at", "") or "").strip()
     if first_bridge_write_at and (
         authority.get("source_restart_prohibited") is not True or owner == "source-singleton"
@@ -3340,6 +3364,12 @@ def record_bridge_authority(
     authority = journal.get("authority")
     if not isinstance(authority, dict):
         raise ValueError("Controller bridge authority must be mutable.")
+    current_owner = str(authority.get("owner") or "")
+    if owner not in _BRIDGE_AUTHORITY_TRANSITIONS.get(current_owner, frozenset()):
+        raise ValueError(
+            "Unsupported controller bridge authority transition: "
+            f"{current_owner or '<missing>'} -> {owner}."
+        )
     if (
         str(authority.get("first_bridge_write_at", "") or "").strip()
         and owner == "source-singleton"

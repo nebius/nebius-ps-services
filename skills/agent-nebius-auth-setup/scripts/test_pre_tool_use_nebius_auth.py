@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -166,11 +167,40 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.evaluate(command, selector=False), {})
 
-    def test_missing_or_malformed_selector_denies_nebius_commands(self) -> None:
+    def test_separate_local_call_receives_no_managed_auth_context(self) -> None:
+        managed_names = (
+            "NEBIUS_PROFILE",
+            "NEBIUS_PROJECT_ID",
+            "NEBIUS_AUTH_CREDENTIALS_FILE",
+            "CODEX_NEBIUS_TOKEN_HELPER",
+        )
+        clean_env = os.environ.copy()
+        for name in managed_names:
+            clean_env.pop(name, None)
+        check = (
+            "import os; "
+            f"names={managed_names!r}; "
+            "assert all(name not in os.environ for name in names)"
+        )
+        command = f"python3 -c {shlex.quote(check)}"
+
+        self.assertEqual(self.evaluate(command, selector=False), {})
+        result = subprocess.run(
+            ["bash", "-c", command],
+            cwd=self.home,
+            env=clean_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_selector_denies_nebius_commands_with_exact_reason(
+        self,
+    ) -> None:
         commands = (
             "nebius iam group list",
             "curl https://api.nebius.cloud/",
-            "env CODEX_NEBIUS_PROJECT_ID=project-test nebius iam group list",
         )
         for command in commands:
             with self.subTest(command=command):
@@ -178,10 +208,48 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
                 self.assertEqual(
                     result["hookSpecificOutput"]["permissionDecision"], "deny"
                 )
+                reason = result["hookSpecificOutput"]["permissionDecisionReason"]
                 self.assertIn(
-                    "Start the Bash command exactly",
-                    result["hookSpecificOutput"]["permissionDecisionReason"],
+                    "the required leading project selector is missing",
+                    reason,
                 )
+                self.assertIn(
+                    "'CODEX_NEBIUS_PROJECT_ID=<project-id> <command>'",
+                    reason,
+                )
+
+    def test_nonleading_selector_denies_with_exact_reason(self) -> None:
+        commands = (
+            "env CODEX_NEBIUS_PROJECT_ID=project-test nebius --help",
+            "bash -c 'CODEX_NEBIUS_PROJECT_ID=project-test nebius --version'",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = self.evaluate(command, selector=False)
+                self.assertEqual(
+                    result["hookSpecificOutput"]["permissionDecision"], "deny"
+                )
+                reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+                self.assertIn(
+                    "the project selector is not the first shell token",
+                    reason,
+                )
+                self.assertIn(
+                    "'CODEX_NEBIUS_PROJECT_ID=<project-id> <command>'",
+                    reason,
+                )
+
+    def test_duplicate_selector_denies_with_exact_reason(self) -> None:
+        command = f"{PROJECT_ENV}={PROJECT} nebius --version"
+        result = self.evaluate(command)
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+        self.assertIn(
+            "multiple or nested project selectors are not allowed",
+            result["hookSpecificOutput"]["permissionDecisionReason"],
+        )
 
     def test_managed_auth_mutation_is_denied(self) -> None:
         commands = (

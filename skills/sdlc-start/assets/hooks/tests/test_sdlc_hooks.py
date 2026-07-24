@@ -272,13 +272,83 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(output.get("permissionDecision"), "deny")
         self.assertIn(text, output.get("permissionDecisionReason", ""))
 
+    def test_pretool_registration_omits_static_status_message(self) -> None:
+        registration_path = HOOK_DIR.parent / "hooks.json.template"
+        if not registration_path.is_file():
+            registration_path = HOOK_DIR.parent / "hooks.json"
+        registration = json.loads(registration_path.read_text(encoding="utf-8"))
+        matches = [
+            (group.get("matcher"), hook)
+            for group in registration["hooks"]["PreToolUse"]
+            for hook in group.get("hooks", [])
+            if "pre_tool_use_sdlc_policy.py" in hook.get("command", "")
+        ]
+
+        self.assertEqual(len(matches), 1)
+        matcher, hook = matches[0]
+        self.assertEqual(matcher, "Bash|apply_patch|Edit|Write|mcp__.*")
+        self.assertNotIn("statusMessage", hook)
+
     def test_pretool_allows_git_status(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", "git status --short"), self.codex_home
         )
         self.assertEqual(result, {})
 
+    def test_pretool_skips_sdlc_policy_without_active_run(self) -> None:
+        private_key_marker = "-----BEGIN " + "PRIVATE KEY-----"
+        private_key_end = "-----END " + "PRIVATE KEY-----"
+        cases = (
+            ("Bash", {"command": "git commit -m ordinary-task"}),
+            ("Bash", {"command": "rm -rf /"}),
+            (
+                "apply_patch",
+                {
+                    "command": (
+                        "*** Begin Patch\n"
+                        "*** Add File: src/secret.txt\n"
+                        f"+{private_key_marker}\n"
+                        "+abc\n"
+                        f"+{private_key_end}\n"
+                        "*** End Patch\n"
+                    )
+                },
+            ),
+            (
+                "mcp__slack__send_message",
+                {"channel": "example", "message": "ordinary task"},
+            ),
+        )
+
+        for tool_name, tool_input in cases:
+            with self.subTest(tool_name=tool_name):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload(tool_name, tool_input=tool_input),
+                    self.codex_home,
+                )
+                self.assertEqual(result, {})
+
+    def test_pretool_skips_sdlc_policy_for_unrelated_active_run(self) -> None:
+        run_dir = self.active_run()
+        unrelated_project = self.root / "unrelated-project"
+        unrelated_project.mkdir()
+        lock_path = run_dir.parent / "active.lock"
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock["project_root"] = str(unrelated_project)
+        write_json(lock_path, lock)
+
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "rm -rf /"),
+            self.codex_home,
+        )
+
+        self.assertEqual(result, {})
+
     def test_pretool_allows_public_nebius_metadata_assignments(self) -> None:
+        self.active_run()
         prefix = "NEBIUS" + "_"
         commands = (
             prefix
@@ -298,6 +368,7 @@ class HookTestCase(unittest.TestCase):
                 self.assertEqual(result, {})
 
     def test_pretool_nebius_metadata_cannot_mask_secret_assignment(self) -> None:
+        self.active_run()
         prefix = "NEBIUS" + "_"
         command = (
             prefix
@@ -314,6 +385,7 @@ class HookTestCase(unittest.TestCase):
         self.assert_denied(result, "secret")
 
     def test_pretool_denies_unknown_nebius_assignment(self) -> None:
+        self.active_run()
         prefix = "NEBIUS" + "_"
         command = prefix + "RUNTIME_VALUE=" + "x" * 32 + " command true"
 
@@ -322,6 +394,7 @@ class HookTestCase(unittest.TestCase):
         self.assert_denied(result, "secret")
 
     def test_pretool_allows_project_patch(self) -> None:
+        self.active_run()
         patch = (
             "*** Begin Patch\n*** Add File: src/new.py\n+print('ok')\n*** End Patch\n"
         )
@@ -331,6 +404,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_patch_containing_dockerfile_ownership_text(self) -> None:
+        self.active_run()
         ownership_command = "cho" + "wn " + "-R app:app /app"
         patch = (
             "*** Begin Patch\n"
@@ -359,6 +433,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_global_task_state_patch(self) -> None:
+        self.active_run()
         state_path = (
             self.codex_home
             / "task-state"
@@ -373,6 +448,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_outside_project_patch(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "note.md"
         patch = f"*** Begin Patch\n*** Add File: {outside_path}\n+external note\n*** End Patch\n"
         result = run_hook(
@@ -381,6 +457,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_outside_project_delete_patch(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "old-note.md"
         patch = f"*** Begin Patch\n*** Delete File: {outside_path}\n*** End Patch\n"
         result = run_hook(
@@ -389,6 +466,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_outside_project_bash_write(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "note.md"
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", f"tee {outside_path}"), self.codex_home
@@ -396,6 +474,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_outside_project_bash_delete(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "old-note.md"
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", f"rm {outside_path}"), self.codex_home
@@ -403,6 +482,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_mcp_outside_project_write(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "note.md"
         result = run_hook(
             PRE_TOOL,
@@ -415,6 +495,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_mcp_outside_project_delete(self) -> None:
+        self.active_run()
         outside_path = self.root / "outside-project" / "old-note.md"
         result = run_hook(
             PRE_TOOL,
@@ -426,21 +507,24 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_global_agents_apply_patch(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         agents_path = codex_home / "AGENTS.md"
         patch = f"*** Begin Patch\n*** Add File: {agents_path}\n+# Global AGENTS.md\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_global_agents_delete_patch(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         agents_path = codex_home / "AGENTS.md"
         patch = f"*** Begin Patch\n*** Delete File: {agents_path}\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_move_from_global_agents(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         agents_path = codex_home / "AGENTS.md"
         patch = (
             "*** Begin Patch\n"
@@ -455,7 +539,8 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_move_to_global_agents(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         agents_path = codex_home / "AGENTS.md"
         patch = (
             "*** Begin Patch\n"
@@ -470,21 +555,24 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_global_hooks_apply_patch(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         hook_path = codex_home / "hooks" / "user_prompt_context.py"
         patch = f"*** Begin Patch\n*** Add File: {hook_path}\n+print('blocked')\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_global_config_apply_patch(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         config_path = codex_home / "config.toml"
         patch = f"*** Begin Patch\n*** Add File: {config_path}\n+[features]\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_bash_global_agents_write(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         result = run_hook(
             PRE_TOOL,
             self.pre_payload("Bash", f"tee {codex_home / 'AGENTS.md'}"),
@@ -493,13 +581,15 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_non_obvious_bash_global_agents_write(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         command = f"python3 -c \"open('{codex_home / 'AGENTS.md'}','w').write('x')\""
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_bash_global_agents_read_only_inspection(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         result = run_hook(
             PRE_TOOL,
             self.pre_payload("Bash", f"cat {codex_home / 'AGENTS.md'}"),
@@ -508,7 +598,8 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_mcp_global_agents_write(self) -> None:
-        codex_home = Path("/codex-hook-fixture")
+        self.active_run()
+        codex_home = self.codex_home
         result = run_hook(
             PRE_TOOL,
             self.pre_payload(
@@ -523,6 +614,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_mcp_read(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL,
             self.pre_payload(
@@ -534,6 +626,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_credential_patch(self) -> None:
+        self.active_run()
         patch = "*** Begin Patch\n*** Add File: ~/.ssh/config\n+Host example\n*** End Patch\n"
         result = run_hook(
             PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home
@@ -553,16 +646,19 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_private_state_copy_command(self) -> None:
+        self.active_run()
         command = "cp -R ~/." + "codex/sdlc-runs/demo ."
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_private_state_stage_command(self) -> None:
+        self.active_run()
         command = "git " + "add ~/." + "codex/sdlc-runs/demo"
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assertEqual(result, {})
 
     def test_pretool_allows_external_network_curl(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL,
             self.pre_payload("Bash", "curl -I https://example.com"),
@@ -571,12 +667,14 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_allows_external_network_ssh(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", "ssh example.com true"), self.codex_home
         )
         self.assertEqual(result, {})
 
     def test_pretool_allows_external_network_scp(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL,
             self.pre_payload("Bash", "scp local.txt example.com:/tmp/local.txt"),
@@ -585,6 +683,7 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_pretool_denies_commit_on_main(self) -> None:
+        self.active_run()
         (self.project / "src" / "main_change.py").write_text(
             "print('x')\n", encoding="utf-8"
         )
@@ -724,6 +823,7 @@ class HookTestCase(unittest.TestCase):
         self.assert_denied(result, "secret")
 
     def test_pretool_denies_real_secret_even_with_example_line(self) -> None:
+        self.active_run()
         patch = (
             "*** Begin Patch\n"
             "*** Add File: src/secret.txt\n"
@@ -757,12 +857,14 @@ class HookTestCase(unittest.TestCase):
         self.assert_denied(result, "force push")
 
     def test_pretool_denies_dangerous_rm(self) -> None:
+        self.active_run()
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", "rm -rf /"), self.codex_home
         )
         self.assert_denied(result, "recursive removal")
 
     def test_pretool_denies_recursive_ownership_shell_command(self) -> None:
+        self.active_run()
         ownership_command = "cho" + "wn " + "-R app:app /app"
         result = run_hook(
             PRE_TOOL,

@@ -4,9 +4,10 @@
 # Replace {{CODEX_HOME}}, {{SKILLS_HOME}}, and {{PROJECT_ROOT}} when rendering
 # this file for a real user. Do not commit rendered local files.
 
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 plan_mode_reasoning_effort = "xhigh"
+service_tier = "fast"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 web_search = "live"
@@ -27,7 +28,7 @@ fast_mode = true
 skill_mcp_dependency_install = true
 
 [agents]
-max_threads = 4
+max_threads = 16
 max_depth = 1
 
 [agents.repo_mapper]

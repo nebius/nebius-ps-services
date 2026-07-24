@@ -4,8 +4,42 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ## [Unreleased]
 
+### Changed
+
+- Narrowed `install-grafana-mcp-for-nebius` to explicit installation,
+  configuration, authentication repair, external-Grafana setup, and
+  datasource-list readiness validation. Routine datasource, dashboard,
+  PromQL, LogQL, and trace-tool questions now hand off to the read-only
+  `nebius-grafana-query` skill without a legacy query path in the installer.
+- Aligned the public Codex config template, local preflight, global-context
+  setup guidance, fixture validation, and installed skill copies on
+  `agents.max_threads = 16`.
+- Updated the public Codex config baseline to use `gpt-5.6-sol`, `xhigh`
+  reasoning for normal and Plan modes, and the Fast service tier by default.
+- Refactored the read-only `code-info` skill to accept explicit project-folder
+  paths and report concise project descriptions, documented features, CLI
+  command hierarchies through three levels, separated code/test/docs/config LOC,
+  project packages, direct and statically selected/resolved dependencies, and
+  approximate pinned Redis/SQLite size comparisons. Added temporary-fixture
+  unit coverage and kept project code, manifests, package managers, builds,
+  and tests unexecuted during inspection.
+
 ### Fixed
 
+- Scoped the optional SDLC PreToolUse policy to active SDLC runs and removed its
+  misleading static status message from the registration, so ordinary tasks no
+  longer receive SDLC decisions after the hook's active-run check. Documented a
+  validated, non-forced cleanup path for task-owned temporary trees because
+  Codex command safety handles forced removal separately from SDLC hooks, and
+  aligned the managed-instruction and hook-registration refresh contracts for
+  existing installations.
+- Hardened `agent-nebius-auth-diagnose` to carry one task-authoritative project
+  into every later Nebius-sensitive Bash payload, place exactly one selector at
+  the start of the entire outer payload, and retry shape-only hook denials once
+  without rediscovery, verification, or setup. Later explicit project choices
+  replace the carried selection, conflicting evidence still asks, and mixed
+  local/Nebius payloads are split so unrelated local commands remain outside
+  the injected auth context.
 - Fixed explicit Nebius agent-auth setup after operator deletion of the managed
   service account. A canonical credential whose old account ID receives an
   exact provider-classified `NotFound` now triggers one human-profile-authenticated
@@ -86,6 +120,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the implicitly invokable `nebius-grafana-query` skill for bounded
+  read-only Nebius Grafana datasource, dashboard, metrics, logs, and available
+  trace-tool questions. Added reciprocal trigger evals and a static cross-skill
+  contract test that keep MCP setup and authentication repair explicit.
 - Added a global remediation-budget contract backed by `troubleshoot` and an
   optional `PreToolUse`/`Stop` hook bundle. After the first failed repair, the
   agent records a stable blocker and distinct remediation ledger in private
@@ -1017,8 +1055,8 @@ All notable changes to the reusable Codex skills are tracked here.
   live allocations, existing-network out-of-parent CIDRs must extend an
   attached compatible private pool first, and new-network pool choices should
   hide assigned or empty private pools.
-- Aligned `global-context-management` subagent guidance around the conservative
-  `max_threads = 4` budget: use `repo_mapper` and `test_strategist` early only
+- Aligned `global-context-management` subagent guidance around the configured
+  `max_threads = 16` budget: use `repo_mapper` and `test_strategist` early only
   when useful, close helpers after consolidation, and reserve `risk_reviewer`
   for near-final review of non-trivial or risky changes.
 - Clarified `global-context-management` subagent fallback guidance so, when

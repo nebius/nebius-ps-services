@@ -32,11 +32,17 @@ local Codex home.
   outside-repo files, credential directories, Codex runtime files, global
   `AGENTS.md`, locked SDLC plans, `$CODEX_HOME/task-state`, and private SDLC
   state are all path-allowed for operator flexibility.
+- A user-level registration is matched by tool name before the hook can inspect
+  SDLC state. When no active run covers the current working directory, the
+  PreToolUse hook exits successfully without applying SDLC policy. Keep its
+  optional registration free of a static SDLC status message so ordinary tasks
+  are not mislabeled in the UI.
 - The PreToolUse hook must still block secret-bearing payloads, dangerous shell
-  patterns in Bash tool payloads, and guarded Git/GitHub actions. Patch content
-  that merely contains a shell command is not executed and remains governed by
-  patch target, secret, and spec checks. Ordinary outbound network commands are
-  not restricted by the hook unless they match one of those unsafe checks.
+  patterns in Bash tool payloads, and guarded Git/GitHub actions during an
+  active run. Patch content that merely contains a shell command is not
+  executed and remains governed by patch target, secret, and spec checks.
+  Ordinary outbound network commands are not restricted by the hook unless
+  they match one of those unsafe checks.
   Public Nebius profile, project, and credential-file path assignments are
   metadata rather than secret material. All other long Nebius assignments,
   including token material, remain fail-closed.
@@ -74,15 +80,19 @@ Use the explicit installer option so hook updates are not hidden inside the
 normal skill installation path:
 
 ```bash
-./install-skills.sh --install-all-hooks
-./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks
+./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks --refresh-hook-registrations
 ```
 
 Set `CODEX_HOME` first to target a non-default Codex home. The all-hooks form
 syncs every reviewed hook-only bundle under the source skills folder. The
 single-source form copies only the SDLC hook scripts and tests into
 `${CODEX_HOME:-$HOME/.codex}/hooks`. Add `--register-hooks` when the installer
-should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`. Add
+should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`.
+`--refresh-hook-registrations` replaces only a differing same-event,
+same-script SDLC registration with the same handlers, allowing only
+`statusMessage` metadata to differ and preserving unrelated entries; use it
+when refreshing an existing registration. Add
 `--replace-hooks-json` only when intentionally replacing `hooks.json` with a
 clean file built from the selected source manifests. Registration is
 idempotent, does not trust hooks or install skills, refuses duplicate Python

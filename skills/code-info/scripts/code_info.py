@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import ipaddress
 import json
+import math
 import os
 import re
 import shutil
@@ -24,6 +24,39 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
+
+from cli_analysis import (
+    CommandNode as CommandNode,
+    detect_cli_commands,
+    package_scripts,
+    python_cli_commands as python_cli_commands,
+)
+from dependency_analysis import (
+    DependencyReport as DependencyReport,
+    collect_dependencies,
+    dependency_key as dependency_key,
+    load_benchmarks,
+    nearest_benchmarks,
+    parse_lockfile as parse_lockfile,
+    resolved_dependency_value,
+    transitive_dependency_value,
+    workspace_lock_covers as workspace_lock_covers,
+)
+from metadata_analysis import (
+    MAX_DESCRIPTION_CHARS as MAX_DESCRIPTION_CHARS,
+    documented_features,
+    is_under,
+    loc_category,
+    project_description,
+)
+from scan_common import (
+    EXCLUDED_CODE_DIRS,
+    format_int,
+    is_test_file,
+    iter_files,
+    package_markers,
+    rel,
+)
 
 
 LANGUAGE_BY_EXTENSION = {
@@ -176,32 +209,6 @@ MODULE_FILE_EXTENSIONS = {
     ".ts",
     ".tsx",
 }
-EXCLUDED_CODE_DIRS = {
-    ".cache",
-    ".git",
-    ".gradle",
-    ".hg",
-    ".mypy_cache",
-    ".next",
-    ".nox",
-    ".nuxt",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".svn",
-    ".terraform",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "coverage",
-    "dist",
-    "htmlcov",
-    "node_modules",
-    "site-packages",
-    "target",
-    "vendor",
-    "venv",
-}
 EXCLUDED_SIZE_DIRS = {".git", "node_modules", ".venv", "venv", "site-packages"}
 EXCLUDED_FILE_NAMES = {
     "Cargo.lock",
@@ -212,21 +219,6 @@ EXCLUDED_FILE_NAMES = {
     "poetry.lock",
     "yarn.lock",
 }
-PACKAGE_MARKER_NAMES = {
-    "Chart.yaml",
-    "Cargo.toml",
-    "Gemfile",
-    "build.gradle",
-    "build.gradle.kts",
-    "composer.json",
-    "go.mod",
-    "package.json",
-    "pom.xml",
-    "pyproject.toml",
-    "setup.cfg",
-    "setup.py",
-}
-PACKAGE_MARKER_SUFFIXES = {".csproj", ".fsproj", ".vbproj"}
 ARTIFACT_DIR_NAMES = {
     ".next",
     "build",
@@ -259,6 +251,9 @@ ARTIFACT_EXTENSIONS = {
 PUBLIC_FORGE_HOSTS = {"bitbucket.org", "github.com", "gitlab.com"}
 GITHUB_API_VERSION = "2022-11-28"
 GITHUB_TOKEN_ENV_NAMES = ("GH_TOKEN", "GITHUB_TOKEN")
+MAX_ARCHIVE_MEMBERS = 200_000
+MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -268,14 +263,6 @@ class FileStat:
     loc: int
     size: int
     is_test: bool
-
-
-@dataclass(frozen=True)
-class CliHit:
-    category: str
-    path: Path
-    line: int
-    snippet: str
 
 
 @dataclass(frozen=True)
@@ -295,15 +282,19 @@ class CodeInfoError(Exception):
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Read existing files and print a Markdown report with basic "
-            "project code metrics. Does not modify the project."
+            "Read existing files and print a Markdown report with a project "
+            "description, features, CLI hierarchy, LOC, package/dependency "
+            "statistics, and size comparisons. Does not modify the project."
         )
     )
     parser.add_argument(
         "--path",
         default=".",
         type=Path,
-        help="Project folder to inspect. Defaults to the current directory.",
+        help=(
+            "Explicit project folder to inspect. Accepts relative or absolute "
+            "paths and defaults to the current directory."
+        ),
     )
     parser.add_argument(
         "--github-repo",
@@ -442,6 +433,8 @@ def github_archive_url(owner: str, repo: str, ref: str | None) -> str:
 
 def safe_extract_tar_stream(fileobj, destination: Path) -> None:
     destination_resolved = destination.resolve()
+    extracted_members = 0
+    extracted_bytes = 0
     with tarfile.open(fileobj=fileobj, mode="r|gz") as archive:
         for member in archive:
             parts = member.name.split("/")
@@ -456,11 +449,22 @@ def safe_extract_tar_stream(fileobj, destination: Path) -> None:
             except ValueError:
                 continue
 
+            if not (member.isdir() or member.isfile()):
+                continue
+
+            extracted_members += 1
+            if extracted_members > MAX_ARCHIVE_MEMBERS:
+                raise CodeInfoError("GitHub archive contains too many members")
+
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
-            if not member.isfile():
-                continue
+
+            extracted_bytes += member.size
+            if member.size > MAX_ARCHIVE_MEMBER_BYTES:
+                raise CodeInfoError("GitHub archive contains an oversized file")
+            if extracted_bytes > MAX_ARCHIVE_TOTAL_BYTES:
+                raise CodeInfoError("GitHub archive exceeds the extraction size limit")
 
             target.parent.mkdir(parents=True, exist_ok=True)
             source = archive.extractfile(member)
@@ -571,18 +575,6 @@ def git_root_for(path: Path) -> Path | None:
     return Path(output).resolve() if output else None
 
 
-def iter_files(root: Path, excluded_dirs: set[str]) -> Iterator[Path]:
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(
-            name
-            for name in dirnames
-            if name not in excluded_dirs and not name.endswith(".egg-info")
-        )
-        base = Path(dirpath)
-        for filename in sorted(filenames):
-            yield base / filename
-
-
 def language_for(path: Path) -> str | None:
     if path.name in LANGUAGE_BY_NAME:
         return LANGUAGE_BY_NAME[path.name]
@@ -591,7 +583,8 @@ def language_for(path: Path) -> str | None:
 
 def is_probably_binary(path: Path) -> bool:
     try:
-        sample = path.read_bytes()[:8192]
+        with path.open("rb") as handle:
+            sample = handle.read(8192)
     except OSError:
         return True
     return b"\x00" in sample
@@ -613,26 +606,6 @@ def count_loc(path: Path, language: str) -> int:
     except OSError:
         return 0
     return loc
-
-
-def is_test_file(path: Path, root: Path) -> bool:
-    lowered_name = path.name.lower()
-    try:
-        relative_parts = path.resolve().relative_to(root.resolve()).parts
-    except ValueError:
-        relative_parts = path.parts
-    lowered_parts = {part.lower() for part in relative_parts}
-    if lowered_parts & {"__tests__", "spec", "specs", "test", "tests"}:
-        return True
-    patterns = (
-        "test_*.py",
-        "*_test.py",
-        "*_test.go",
-        "*.test.*",
-        "*.spec.*",
-        "*tests.*",
-    )
-    return any(fnmatch.fnmatchcase(lowered_name, pattern) for pattern in patterns)
 
 
 def collect_file_stats(root: Path) -> list[FileStat]:
@@ -669,25 +642,6 @@ def human_size(num_bytes: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024
     return f"{num_bytes} B"
-
-
-def format_int(value: int) -> str:
-    return f"{value:,}"
-
-
-def rel(path: Path, root: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def is_under(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-    except ValueError:
-        return False
-    return True
 
 
 def table(headers: list[str], rows: list[list[str]]) -> str:
@@ -756,6 +710,8 @@ def tracked_size(git_root: Path | None, target: Path) -> int | None:
         if not raw:
             continue
         path = git_root / raw
+        if path.is_symlink():
+            continue
         try:
             total += path.stat().st_size
         except OSError:
@@ -773,6 +729,17 @@ def normalize_remote_url(raw: str) -> str:
         parsed = urlparse(value)
         path = parsed.path.lstrip("/")
         value = f"https://{parsed.hostname or ''}/{path}"
+    parsed = urlparse(value)
+    if parsed.scheme in {"http", "https"} and parsed.hostname:
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            parsed_port = None
+        port = f":{parsed_port}" if parsed_port else ""
+        value = f"{parsed.scheme}://{host}{port}{parsed.path}"
     if value.endswith(".git"):
         value = value[:-4]
     return value
@@ -813,14 +780,6 @@ def repo_link(git_root: Path | None, mode: str) -> tuple[str, str | None]:
     return normalized, None
 
 
-def package_markers(root: Path) -> list[Path]:
-    markers: list[Path] = []
-    for path in iter_files(root, EXCLUDED_CODE_DIRS):
-        if path.name in PACKAGE_MARKER_NAMES or path.suffix in PACKAGE_MARKER_SUFFIXES:
-            markers.append(path)
-    return sorted(markers)
-
-
 def python_package_dirs(root: Path) -> list[Path]:
     dirs = {
         path.parent
@@ -838,61 +797,6 @@ def source_module_files(stats: list[FileStat]) -> list[Path]:
     )
 
 
-CLI_PATTERNS = [
-    (
-        "Python Click/Typer decorators",
-        {".py"},
-        re.compile(r"@\w+(?:\.\w+)*\.(?:command|group)\s*\("),
-    ),
-    ("Python argparse subparsers", {".py"}, re.compile(r"\.add_parser\s*\(")),
-    ("Python Typer sub-apps", {".py"}, re.compile(r"\.add_typer\s*\(")),
-    (
-        "JavaScript/TypeScript command()",
-        {".js", ".jsx", ".mjs", ".ts", ".tsx"},
-        re.compile(r"\.command\s*\("),
-    ),
-    ("Go Cobra commands", {".go"}, re.compile(r"&cobra\.Command\s*\{")),
-    ("Rust clap commands", {".rs"}, re.compile(r"#\[(?:command|subcommand)\b")),
-]
-
-
-def detect_cli_hits(root: Path) -> list[CliHit]:
-    hits: list[CliHit] = []
-    for path in iter_files(root, EXCLUDED_CODE_DIRS):
-        suffix = path.suffix.lower()
-        matching = [entry for entry in CLI_PATTERNS if suffix in entry[1]]
-        if not matching:
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
-            continue
-        for line_number, line in enumerate(lines, start=1):
-            stripped = line.strip()
-            for category, _, pattern in matching:
-                if pattern.search(stripped):
-                    hits.append(CliHit(category, path, line_number, stripped[:80]))
-    hits.extend(package_script_hits(root))
-    return hits
-
-
-def package_script_hits(root: Path) -> list[CliHit]:
-    hits: list[CliHit] = []
-    for marker in package_markers(root):
-        if marker.name != "package.json":
-            continue
-        try:
-            data = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        scripts = data.get("scripts")
-        if not isinstance(scripts, dict):
-            continue
-        for name in sorted(scripts):
-            hits.append(CliHit("package.json scripts", marker, 0, name))
-    return hits
-
-
 def artifact_dirs(root: Path) -> list[tuple[Path, int]]:
     found: list[tuple[Path, int]] = []
     for dirpath, dirnames, _ in os.walk(root):
@@ -900,6 +804,7 @@ def artifact_dirs(root: Path) -> list[tuple[Path, int]]:
             name
             for name in sorted(dirnames)
             if name not in {".git", "node_modules", ".venv", "venv", "site-packages"}
+            and not (Path(dirpath) / name).is_symlink()
         ]
         current = Path(dirpath)
         for dirname in list(dirnames):
@@ -950,14 +855,31 @@ def parse_coverage(path: Path) -> tuple[str, str] | None:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        total = data.get("total", {})
-        lines = total.get("lines", {}).get("pct")
-        branches = total.get("branches", {}).get("pct")
-        if lines is not None:
-            detail = f"lines {lines}%"
-            if branches is not None:
-                detail += f", branches {branches}%"
-            return detail, "Istanbul coverage summary"
+        if not isinstance(data, dict):
+            return None
+        total = data.get("total")
+        if not isinstance(total, dict):
+            return None
+        line_data = total.get("lines")
+        branch_data = total.get("branches")
+        lines = line_data.get("pct") if isinstance(line_data, dict) else None
+        branches = branch_data.get("pct") if isinstance(branch_data, dict) else None
+        if (
+            isinstance(lines, bool)
+            or not isinstance(lines, (int, float))
+            or not math.isfinite(lines)
+            or not 0 <= lines <= 100
+        ):
+            return None
+        detail = f"lines {lines:g}%"
+        if (
+            not isinstance(branches, bool)
+            and isinstance(branches, (int, float))
+            and math.isfinite(branches)
+            and 0 <= branches <= 100
+        ):
+            detail += f", branches {branches:g}%"
+        return detail, "Istanbul coverage summary"
     if path.name == "lcov.info":
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -981,9 +903,24 @@ def parse_coverage(path: Path) -> tuple[str, str] | None:
         line_rate = root.attrib.get("line-rate")
         branch_rate = root.attrib.get("branch-rate")
         if line_rate is not None:
-            detail = f"lines {float(line_rate) * 100:.1f}%"
+            try:
+                line_value = float(line_rate)
+            except ValueError:
+                return None
+            if not math.isfinite(line_value) or not 0 <= line_value <= 1:
+                return None
+            detail = f"lines {line_value * 100:.1f}%"
             if branch_rate is not None:
-                detail += f", branches {float(branch_rate) * 100:.1f}%"
+                try:
+                    branch_value = float(branch_rate)
+                except ValueError:
+                    branch_value = None
+                if (
+                    branch_value is not None
+                    and math.isfinite(branch_value)
+                    and 0 <= branch_value <= 1
+                ):
+                    detail += f", branches {branch_value * 100:.1f}%"
             return detail, "Cobertura XML"
     if path.name == ".coverage":
         return (
@@ -1018,12 +955,31 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     git_root = analysis_target.git_root
     stats = collect_file_stats(target)
     total_loc = sum(stat.loc for stat in stats)
+    code_loc = sum(stat.loc for stat in stats if loc_category(stat.language) == "code")
+    test_loc = sum(
+        stat.loc
+        for stat in stats
+        if stat.is_test and loc_category(stat.language) == "code"
+    )
+    documentation_loc = sum(
+        stat.loc for stat in stats if loc_category(stat.language) == "documentation"
+    )
+    config_data_loc = sum(
+        stat.loc
+        for stat in stats
+        if loc_category(stat.language) == "configuration/data"
+    )
     total_source_files = len(stats)
     test_stats = [stat for stat in stats if stat.is_test]
     markers = package_markers(target)
     python_packages = python_package_dirs(target)
     module_files = source_module_files(stats)
-    cli_hits = detect_cli_hits(target)
+    description = project_description(target)
+    features, features_source = documented_features(target)
+    commands = detect_cli_commands(target)
+    scripts = package_scripts(target)
+    dependencies = collect_dependencies(target)
+    benchmarks = nearest_benchmarks(code_loc, load_benchmarks())
     artifacts_by_dir = artifact_dirs(target)
     artifacts_by_file = artifact_files(target)
     artifact_dir_paths = [path for path, _ in artifacts_by_dir]
@@ -1059,21 +1015,30 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     )
 
     language_counter: Counter[str] = Counter()
+    language_code: Counter[str] = Counter()
+    language_test: Counter[str] = Counter()
+    language_other: Counter[str] = Counter()
     language_files: Counter[str] = Counter()
     component_loc: Counter[str] = Counter()
     component_files: Counter[str] = Counter()
     test_counter: Counter[str] = Counter()
-    cli_counter: Counter[str] = Counter()
+    command_depths: Counter[int] = Counter()
     for stat in stats:
         language_counter[stat.language] += stat.loc
         language_files[stat.language] += 1
+        if loc_category(stat.language) == "code":
+            language_code[stat.language] += stat.loc
+            if stat.is_test:
+                language_test[stat.language] += stat.loc
+        else:
+            language_other[stat.language] += stat.loc
         component = component_for(stat.path, target)
         component_loc[component] += stat.loc
         component_files[component] += 1
         if stat.is_test:
             test_counter[stat.language] += 1
-    for hit in cli_hits:
-        cli_counter[hit.category] += 1
+    for command in commands:
+        command_depths[len(command.command_path)] += 1
 
     repo_size_value = f"{human_size(tree_scan_size)} working tree scan"
     if tracked is not None:
@@ -1110,15 +1075,26 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     print()
 
     summary_rows = [
-        ["Source LOC", format_int(total_loc)],
-        ["Source files", format_int(total_source_files)],
+        ["Comparable code LOC", format_int(code_loc)],
+        ["Test LOC (included in code LOC)", format_int(test_loc)],
+        ["Documentation LOC", format_int(documentation_loc)],
+        ["Configuration/data LOC", format_int(config_data_loc)],
+        ["Overall analyzed LOC", format_int(total_loc)],
+        ["Analyzed files", format_int(total_source_files)],
         ["Languages", format_int(len(language_counter))],
         ["Repo size", repo_size_value],
         ["Top-level components", format_int(len(component_loc))],
         ["Test files", format_int(len(test_stats))],
-        ["CLI commands/subcommands", f"{format_int(len(cli_hits))} best-effort"],
         [
-            "Modules/packages",
+            "Documented features",
+            format_int(len(features)) if features else "Not detected",
+        ],
+        ["CLI commands through depth 3", f"{format_int(len(commands))} best-effort"],
+        ["Project/workspace packages", format_int(len(dependencies.package_roots))],
+        ["Direct declared dependencies", format_int(len(dependencies.direct))],
+        ["Resolved dependencies", resolved_dependency_value(dependencies)],
+        [
+            "Modules",
             f"{format_int(len(markers))} markers; {format_int(len(module_files))} source module files",
         ],
         ["Build/artifact size", artifact_value],
@@ -1129,14 +1105,74 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     print(table(["Metric", "Value"], summary_rows))
     print()
 
+    print("## Project Description")
+    print()
+    if description:
+        print(description[0])
+        print()
+        print(f"Evidence: `{description[1]}`")
+    else:
+        print("Not detected")
+    print()
+
+    print("## Documented Features")
+    print()
+    if features:
+        feature_rows = [
+            [str(index), feature]
+            for index, feature in enumerate(limited(features, args.top), start=1)
+        ]
+        print(table(["#", "Feature"], feature_rows))
+        print()
+        print(f"Evidence: top-level feature items in `{features_source}`")
+    else:
+        print("Not detected")
+    print()
+
     print("## LOC Per Language")
     print()
     language_rows = [
-        [language, format_int(loc), format_int(language_files[language])]
+        [
+            language,
+            loc_category(language),
+            format_int(language_code[language]),
+            format_int(language_test[language]),
+            format_int(language_other[language]),
+            format_int(loc),
+            format_int(language_files[language]),
+        ]
         for language, loc in language_counter.most_common()
     ]
+    if args.top > 0 and len(language_rows) > args.top:
+        shown_count = max(args.top - 1, 0)
+        omitted_languages = [
+            language for language, _ in language_counter.most_common()[shown_count:]
+        ]
+        language_rows = [
+            *language_rows[:shown_count],
+            [
+                f"Other ({len(omitted_languages)} languages)",
+                "mixed",
+                format_int(sum(language_code[item] for item in omitted_languages)),
+                format_int(sum(language_test[item] for item in omitted_languages)),
+                format_int(sum(language_other[item] for item in omitted_languages)),
+                format_int(sum(language_counter[item] for item in omitted_languages)),
+                format_int(sum(language_files[item] for item in omitted_languages)),
+            ],
+        ]
     print(
-        table(["Language", "LOC", "Files"], limited(language_rows, args.top))
+        table(
+            [
+                "Language",
+                "Category",
+                "Code LOC",
+                "Test LOC",
+                "Other LOC",
+                "Total LOC",
+                "Files",
+            ],
+            language_rows,
+        )
         if language_rows
         else "Not detected"
     )
@@ -1163,35 +1199,72 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     print(table(["Language", "Test files"], test_rows) if test_rows else "Not detected")
     print()
 
-    print("## CLI Commands / Subcommands")
+    print("## CLI Command Hierarchy")
     print()
-    cli_rows = [
-        [category, format_int(count)] for category, count in cli_counter.most_common()
+    command_summary_rows = [
+        [f"Depth {depth}", format_int(command_depths[depth])] for depth in (1, 2, 3)
     ]
-    print(table(["Detection", "Count"], cli_rows) if cli_rows else "Not detected")
-    if cli_hits:
-        example_rows = [
+    print(
+        table(["Command level", "Count"], command_summary_rows)
+        if commands
+        else "Not detected"
+    )
+    if commands:
+        command_rows = [
             [
-                hit.category,
-                f"{rel(hit.path, target)}:{hit.line}"
-                if hit.line
-                else rel(hit.path, target),
-                hit.snippet,
+                " ".join(command.command_path),
+                str(len(command.command_path)),
+                command.framework,
+                command.confidence,
+                f"{rel(command.source_path, target)}:{command.line}"
+                if command.line
+                else rel(command.source_path, target),
             ]
-            for hit in limited(cli_hits, min(args.top, 10) if args.top else 10)
+            for command in limited(commands, args.top)
         ]
         print()
-        print("Examples:")
+        print(
+            table(
+                ["Command path", "Depth", "Framework", "Confidence", "Location"],
+                command_rows,
+            )
+        )
+    if scripts:
+        script_rows = [
+            [name, rel(path, target)] for path, name in limited(scripts, args.top)
+        ]
         print()
-        print(table(["Detection", "Location", "Snippet"], example_rows))
+        print("Package-manager scripts (not counted as application commands):")
+        print()
+        print(table(["Script", "Manifest"], script_rows))
     print()
 
-    print("## Modules / Packages")
+    print("## Packages and Dependencies")
     print()
     module_rows = [
+        [
+            "Project/workspace package roots",
+            format_int(len(dependencies.package_roots)),
+        ],
+        [
+            "Named project/workspace packages",
+            format_int(len(dependencies.project_packages)),
+        ],
         ["Package/project marker files", format_int(len(markers))],
         ["Python package directories", format_int(len(python_packages))],
         ["Source module files", format_int(len(module_files))],
+        ["Direct runtime dependencies", format_int(len(dependencies.direct_runtime))],
+        [
+            "Direct development dependencies",
+            format_int(len(dependencies.direct_development)),
+        ],
+        [
+            "Direct optional/peer dependencies",
+            format_int(len(dependencies.direct_optional)),
+        ],
+        ["Unique direct dependencies", format_int(len(dependencies.direct))],
+        ["Unique resolved dependencies", resolved_dependency_value(dependencies)],
+        ["Derived transitive dependencies", transitive_dependency_value(dependencies)],
     ]
     print(table(["Metric", "Count"], module_rows))
     if markers:
@@ -1200,6 +1273,52 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
         print("Package/project markers:")
         print()
         print(table(["Path"], marker_rows))
+    if dependencies.warnings:
+        print()
+        print("Dependency notes:")
+        for warning in limited(list(dependencies.warnings), args.top):
+            print(f"- {warning}")
+    print()
+
+    print("## Size Comparison")
+    print()
+    if benchmarks:
+        comparison_rows = []
+        for benchmark in benchmarks:
+            benchmark_loc = int(benchmark["code_loc"])
+            ratio = code_loc / benchmark_loc
+            comparison = (
+                f"{ratio:.2f}× as large" if ratio >= 1 else f"{1 / ratio:.2f}× smaller"
+            )
+            comparison_rows.append(
+                [
+                    f"{benchmark['name']} {benchmark['version']}",
+                    format_int(benchmark_loc),
+                    comparison,
+                    str(benchmark["ref"]),
+                    str(benchmark["measured_at"]),
+                    str(benchmark["source_url"]),
+                ]
+            )
+        print(
+            table(
+                [
+                    "Reference",
+                    "Code LOC",
+                    "Approximate comparison",
+                    "Pinned ref",
+                    "Measured",
+                    "Source",
+                ],
+                comparison_rows,
+            )
+        )
+        print()
+        print(
+            "Comparison scope: complete source trees, including tests, using `code-info-code-loc-v1`."
+        )
+    else:
+        print("Unavailable")
     print()
 
     print("## Build Artifacts")
@@ -1231,13 +1350,19 @@ def print_report(args: argparse.Namespace, analysis_target: AnalysisTarget) -> i
     print("## Notes")
     print()
     print(
-        "- LOC counts non-empty, non-comment lines for recognized source/config/documentation file types."
+        "- LOC counts non-empty lines that do not begin with a recognized full-line comment marker."
     )
     print(
         "- Generated, dependency, cache, and common build folders are excluded from LOC counts."
     )
     print(
-        "- CLI command counts are best-effort pattern matches and may need framework-specific review."
+        "- Feature, command, package, and dependency counts are static best-effort evidence; project code and package managers were not executed."
+    )
+    print(
+        "- Resolved/transitive counts use supported lockfiles or Go module selection evidence and are unavailable or partial when that evidence is missing."
+    )
+    print(
+        "- Famous-project comparisons are approximate size context, not measures of complexity, quality, effort, or value."
     )
     print(
         "- Coverage is read from existing artifacts only; no tests or coverage commands were run."

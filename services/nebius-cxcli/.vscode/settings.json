@@ -1,3 +1,4 @@
 {
-    "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose"
+    "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
+    "makefile.configureOnOpen": false
 }

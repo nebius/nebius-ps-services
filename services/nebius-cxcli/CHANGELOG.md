@@ -6,6 +6,151 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Preserve verified GPU worker topology across Kubernetes-only campaign
+  segments. Before any later-segment worker provider operation, cxcli selects
+  one unique completed, target-UID-bound topology replay, compares only its
+  effective CPU/socket/core/thread/parameter/typed-GRES fields rather than Pod
+  provenance, and checkpoints that inheritance in the current segment. If
+  stored Helm values lost those fields, cxcli accepts only the exact static
+  NodeSet topology delta, keeps the target controller command-gated and every
+  checkpoint-owned partition paused, and applies one journaled Helm successor.
+  A partition-pause reset after controller reconciliation is now written
+  through the exact Slurm route that produced its preceding compare-and-swap
+  observation, so a login client cannot update the inert target while
+  verification reads the authoritative bridge. If Helm's bounded
+  admission-webhook startup retry consumes a failed revision, resume accepts
+  the later deployed revision only from the exact contiguous, timestamp-bound,
+  same-values retry history.
+  Worker migration remains blocked until the target NodeSet/Pod lineage is
+  Ready and every Slurm node has the exact topology, typed GRES, zero
+  allocation, no `INVALID_REG`, and no unowned drain reason.
+- Recover the exact target SlurmCluster binding before final Helm
+  reconciliation in later campaign segments. When the current segment has a
+  fresh rolling-compute journal, cxcli now validates the completed
+  campaign-level source-to-target transition against the live target and
+  durably copies that namespace/name/UID authority into the segment journal
+  before recording any Helm mutation intent. The matching-values and
+  mutation-required paths share this accessor; conflicting singleton,
+  checkpoint, transition, or live identities still fail closed.
+- Close the final singleton partition-reset gap before serial worker runtime
+  reload. Singleton activation can reload the canonical `State=UP` definition
+  after the earlier runtime pause; cxcli now checkpoints a reload-specific
+  reassertion intent, accepts only the exact saved `UP` or owned `DOWN` record,
+  restores and proves `DOWN`, and binds the proof to the target authority epoch
+  and final config digest before any UID-bound worker deletion. The existing
+  fresh per-worker zero-allocation and second `DOWN` read remain mandatory.
+- Make controller continuity evidence match the transition that actually ran.
+  A target MUNGE handoff whose effective Secret bytes and accounting marker
+  already match now updates only UID provenance under CAS and keeps both HA
+  controllers serving. If a real Secret-byte change requires the cold path,
+  cxcli preserves an already valid same-target accounting marker, including
+  its numeric accounting ID, byte-for-byte instead of rewriting logical
+  identity. The final bridge fence performs its full all-node process census
+  before scale-to-zero, then reuses the bound Node identities with exact
+  bridge-node runtime fences and fresh API absence checks. The singleton starts
+  with its final one-host config and original timeout values, avoiding a second
+  shared-Jail rewrite after service restoration. Safety reports record
+  executor-owned controller outage boundaries and do not label an otherwise
+  healthy maintenance transition zero-downtime.
+- Keep the cluster-visible execution lease through a transient Kubernetes
+  `etcdserver: leader changed` response. Lease renewal now retries that exact
+  holder-preserving API failover with the existing bounded backoff, while a
+  failed holder compare-and-swap or resource conflict still aborts
+  immediately.
+- Fence every live source-manager authority before a controller bridge
+  cutover. The bridge now pauses the exact current
+  `deployment/soperator-manager` in addition to deployments selected by the
+  locked legacy profile, so a same-version manager cannot recreate
+  `controller-0` after its StatefulSet is scaled to zero. An interruption
+  before the first bridge write continues through the existing UID-bound
+  source-Pod successor recovery, which invalidates and rebuilds the pre-copy
+  and fence proofs.
+- Close the in-place dual-SlurmCluster ownership handoff before rolling
+  migration can be marked complete. The executor now removes only the exact
+  captured old Deployment dependents after independent target capacity is
+  Ready, repeats source-child cleanup, proves a target-only live
+  SlurmCluster inventory, and checkpoints one structured completion proof
+  bound to retirement, immutable-child cleanup, target UID/generation, and
+  target availability. Final health, source-fence removal, report refresh,
+  and campaign-segment advancement consume that proof instead of trusting a
+  standalone `source_cleanup_completed_at` timestamp. A completed in-place
+  phase missing the proof re-enters this narrow cleanup boundary rather than
+  replaying provider rollout or weakening the final-health guard. Later
+  Kubernetes-only segments reuse the campaign-level transition only after its
+  completed origin, cleanup-proof fingerprint, exact source/target identities,
+  and live target UID are revalidated; they do not recreate forbidden
+  segment-local cleanup state.
+- Replace resume-time Helm timestamp inference with an immutable
+  intent/proof/provenance chain. Exact unchanged values may reuse only one
+  target-UID-bound historical apply proof; the known no-op window is
+  classified and retired without manufacturing an apply. A real final-values
+  change checkpoints its complete chart, values, rendered manifest, and target
+  intent before Helm runs. Source-retirement fence rebinds now repeat the live
+  source-absence and Slurm-health proof. Once exact final Helm provenance is
+  selected, cxcli also proves the completed gate/ungate journal and fills only
+  missing controller command-gate-owned fields with target UID/resourceVersion
+  preconditions before proving the full live spec. A resumed alternate
+  singleton adoption may establish that gate through its exact rearm, Pod
+  lineage, workload, target-start, ungate, and restored-admission proof instead
+  of requiring a synthetic historical timestamp. Present values that differ
+  from the manifest block instead of being overwritten, and a validated no-op
+  recovery no longer strands removed probes behind a missing synthetic apply
+  status. Target workers rotate one at a time
+  only while every affected partition remains at its exact checkpoint-owned
+  `DOWN` record and a fresh node-scoped query proves zero active allocations;
+  replacement is UID/resourceVersion-preconditioned. Manager restoration uses
+  one canonical pause journal with UID, resourceVersion, generation, Helm-spec,
+  rollout, and availability checks, and the current controller authority must
+  equal its latest durable history entry. Native controller HA also binds both
+  distinct Node UIDs and the locked OCI index/platform runtime digest set.
+- Make final bridge-to-singleton client propagation an operational runtime
+  boundary, not only a jailed-file hash check. After the final one-host config
+  is proven on every exact login and worker Pod, cxcli durably binds the target
+  authority epoch, config digest, worker Pod/container identities, current Pod
+  IPs, and Kubernetes instance IDs before recreating one UID-bound worker Pod
+  at a time. Each successor must retain its exact workload and node ownership,
+  load the final config, and return to a serving runtime identity before the
+  next worker can rotate; Pod drift or non-serving postconditions remain
+  pending.
+- Harden resumable in-place service rollouts across provider-owned replacement
+  boundaries. The controller command gate now accepts a cross-node Pod
+  successor only when the completed controller node-group operation proves the
+  exact replacement UID, Ready node, role labels, and target Kubernetes
+  version. Accounting continuity similarly accepts only the target cluster's
+  empty-to-active registration endpoint transition after that completed
+  controller rollout and the verified dedicated bridge rebind; RPC identity,
+  legacy registrations, catalogs, history, writer ownership, and PVC identity
+  remain immutable.
+- Preserve the exact jailed controller command environment and restage target
+  MUNGE/config material before controller-gap bridge readiness is trusted.
+  Resume also recognizes checkpointed source or target ConfigMap digests,
+  recovers exact GPU topology zero/subset-drain states, and completes
+  service-provider drain Pod deletion only through UID-bound durable intent.
+- Keep completed worker groups on the post-provider resume path. Their live
+  provider target, replacement Node UIDs, restored strategy, GPU release, and
+  Slurm runtime identities are revalidated without replaying source-retirement
+  alias or epilog gates against replacement nodes. When the target controller
+  remains deliberately inert, refresh the exact bridge authorization after
+  service replay and immediately before the final worker-runtime RPC.
+- Recover target-compatibility resume when the restored Soperator manager has
+  already rewritten the Slurm ConfigMap from the compatible variant to the
+  checkpointed full-target variant before the later Jail-boundary recovery
+  runs. Generic revalidation now promotes that state only with the exact
+  ConfigMap UID and data digests plus the complete checkpointed manager
+  pause/restore generation and spec-fingerprint cycle; unknown drift remains
+  blocked.
+- Recover the exact one-generation target SlurmCluster successor produced when
+  the checkpointed accounting command fence is restored before a later active
+  SConfig compatibility revalidation. Resume requires the same target UID,
+  restored/enabled accounting resource version, original writer command
+  identity, ready accounting owner, source-retirement proof, size-zero state,
+  and a live spec that normalizes exactly to the prior fence; unrelated spec
+  drift remains blocking even when status updates have advanced resourceVersion.
+- Classify an already-propagated full-target login Jail config before the
+  slot-bound writer-refresh checkpoint only when active resume has just sealed
+  the exact accounting restore rebind and every captured worker Pod has a
+  durable deletion plus target-owned replacement proof. The login digest must
+  equal the checkpointed full-target digest; unknown content remains blocked.
 - Recover an in-place service-role provider drain when the exact managed Pod
   named by the provider's latest `Draining` event has already been recreated on the
   same machine. Recovery is limited to login, accounting, controller, and
@@ -145,6 +290,11 @@ All notable changes to this project are tracked here. This changelog follows
   only the command fence. The ownerless source Deployment UID and selector are
   now durably bound before immutable selector replacement instead of failing on
   a missing gate.
+- Retire the exact ownerless source accounting ReplicaSet lineage before final
+  smoke validation. Cleanup now requires verified source retirement and an
+  exact Ready target writer, journals ReplicaSet and non-Ready Pod UIDs before
+  UID/resourceVersion-preconditioned deletion, and refuses Ready, re-owned, or
+  identity-drifted source workloads.
 - Suspend legacy parent Flux Kustomizations with an atomic UID-bound spec patch
   that tolerates unrelated Flux status/resource-version churn. External
   Soperator upgrades no longer stop before controller fencing when the Flux
@@ -327,13 +477,18 @@ All notable changes to this project are tracked here. This changelog follows
 - Reuse the immutable completed-segment Jail slot handoff evidence during later
   Kubernetes-only in-place segments instead of requiring a nonexistent current-
   segment Jail phase. Before the first provider rollout, bind every Ready
-  worker Pod UID and Kubernetes instance identity, reconcile Slurm `NodeAddr` to
-  the stable per-worker service DNS through the serving bridge, resume only a
-  corrected node that still carries `NOT_RESPONDING`, and verify the exact live
-  identities before Slurm-clear gates. At a later segment boundary, bind the
+  worker Pod UID, Pod IP, and Kubernetes instance identity, reconcile Slurm
+  `NodeAddr` to the current Ready Pod IP that dynamic `slurmd` registers through
+  the serving bridge, resume only a corrected node that still carries
+  `NOT_RESPONDING`, and verify the exact live identities before Slurm-clear
+  gates. At a later segment boundary, bind the
   fresh provider resource version only after the immutable reservation and
   failure-domain identity plus the prior segment's exact node-template target
-  are revalidated.
+  are revalidated. The topology-only Helm successor may also materialize the
+  canonical inert-controller command, args, and probes into release storage
+  when that same gate is already proven live; missing or identical gate fields
+  are accepted, while custom commands, probes, replicas, and unrelated values
+  remain blocking drift.
 - Collapse controller process-census preexistence, terminal-state polling, and
   post-delete absence checks into bulk inspector-Pod observations. Exact
   per-node UID, node placement, manifest, log, CRI process binding, and final
@@ -407,6 +562,9 @@ All notable changes to this project are tracked here. This changelog follows
   Cleanup also retains the durable completed Jail fast-verification event when
   its current replay failure describes the intentional singleton successor
   topology; unrelated stale or failed phase verifications remain blocking.
+  Recognize a NodeSet-owned passive worker successor during resumed source
+  cleanup only when its live NodeSet owner UID and workload UID both match the
+  active/passive release gate and immutable-child handoff.
   Treat a checkpoint-completed, expected `SKIP` as terminal for cleanup gates,
   run the final MK8s and Helm proofs once after any resume-time phase mutation
   instead of duplicating them during completed-action reconciliation, and bind

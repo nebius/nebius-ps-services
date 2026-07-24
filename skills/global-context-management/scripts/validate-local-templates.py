@@ -153,7 +153,7 @@ def write_agent_fixture(codex_home: Path, *, enable_policy: bool) -> None:
     (codex_home / "config.toml").write_text(
         """
 [agents]
-max_threads = 4
+max_threads = 16
 max_depth = 1
 
 [agents.alpha_mapper]
@@ -522,6 +522,8 @@ def assert_doc_contracts(root: Path) -> None:
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
         "stop after three distinct failed remediation attempts or 60 active",
+        "Agents may clean up temporary trees they created during the current task",
+        'find "$task_temp_dir" -depth -delete',
         "Preserve an active `codex-remediation-budget:v1` marker exactly",
     )
     for needle in required_agents_template:

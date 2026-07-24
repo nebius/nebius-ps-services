@@ -24,7 +24,6 @@ from lib.sdlc_state import (
     load_active_state,
     now_iso,
     resolve_path,
-    resolve_project_root,
 )
 
 
@@ -103,7 +102,10 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "Blocked: active SDLC state is corrupt and must be repaired before mutating actions.",
         )
 
-    project_root = active.project_root if active else resolve_project_root(cwd)
+    if active is None:
+        return allow()
+
+    project_root = active.project_root
 
     if tool_name == "Bash":
         danger = dangerous_shell_reason(command)

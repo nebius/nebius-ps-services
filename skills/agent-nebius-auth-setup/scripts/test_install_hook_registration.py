@@ -404,6 +404,84 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
 
+    def test_targeted_refresh_can_remove_only_status_message_metadata(self) -> None:
+        command = 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_status_refresh.py"'
+        registration = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "^Bash$",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": command,
+                                "timeout": 30,
+                                "statusMessage": "Old status",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        source = self.make_hook_source(
+            {
+                "pre_tool_use_status_refresh.py": "#!/usr/bin/env python3\n",
+                "hooks.json.template": json.dumps(registration, indent=2) + "\n",
+            }
+        )
+        first = self.run_custom_hook_installer(source, "--register-hooks")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+
+        registration["hooks"]["PreToolUse"][0]["hooks"][0].pop("statusMessage")
+        (source / "hooks.json.template").write_text(
+            json.dumps(registration, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        existing = json.loads(
+            (self.codex_home / "hooks.json").read_text(encoding="utf-8")
+        )
+        existing["owner"] = "preserve-me"
+        (self.codex_home / "hooks.json").write_text(
+            json.dumps(existing, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        refreshed = self.run_custom_hook_installer(
+            source,
+            "--register-hooks",
+            "--refresh-hook-registrations",
+        )
+
+        self.assertEqual(refreshed.returncode, 0, refreshed.stdout + refreshed.stderr)
+        target = json.loads(
+            (self.codex_home / "hooks.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(target["owner"], "preserve-me")
+        handler = target["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertNotIn("statusMessage", handler)
+        self.assertEqual(handler["command"], command)
+        self.assertEqual(handler["timeout"], 30)
+        self.assertIn("registrations: refreshed 1", refreshed.stdout)
+
+    def test_targeted_refresh_rejects_non_status_handler_metadata_change(self) -> None:
+        initial = self.run_installer()
+        self.assertEqual(initial.returncode, 0, initial.stdout + initial.stderr)
+        hooks_path = self.codex_home / "hooks.json"
+        existing = json.loads(hooks_path.read_text(encoding="utf-8"))
+        existing["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = 31
+        original = json.dumps(existing, indent=2) + "\n"
+        hooks_path.write_text(original, encoding="utf-8")
+        payload_before = self.installed_hook_path().read_bytes()
+
+        result = self.run_installer_refresh_hooks()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "differing or mixed handler list beyond statusMessage", result.stderr
+        )
+        self.assertEqual(hooks_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(self.installed_hook_path().read_bytes(), payload_before)
+
     def test_targeted_refresh_rejects_mixed_handler_group_before_mutation(self) -> None:
         initial = self.run_installer()
         self.assertEqual(initial.returncode, 0, initial.stdout + initial.stderr)
@@ -420,7 +498,9 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         result = self.run_installer_refresh_hooks()
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("differing or mixed handler list", result.stderr)
+        self.assertIn(
+            "differing or mixed handler list beyond statusMessage", result.stderr
+        )
         self.assertEqual(hooks_path.read_text(encoding="utf-8"), original)
         self.assertEqual(self.installed_hook_path().read_bytes(), payload_before)
 
