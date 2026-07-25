@@ -24,6 +24,7 @@ MAX_TASK_STATE_BYTES = 1024 * 1024
 MAX_ATTEMPTS = 100
 DEFAULT_ATTEMPT_LIMIT = 3
 DEFAULT_TIME_LIMIT_MINUTES = 60
+SUPPORTED_ATTEMPT_RESULTS = ("failed_same_blocker", "succeeded")
 SAFE_SESSION_RE = re.compile(r"[A-Za-z0-9._-]{1,80}")
 REPORT_MARKER = "REMEDIATION_BUDGET_EXHAUSTED"
 REPORT_HEADINGS = (
@@ -163,6 +164,13 @@ def _nonnegative_int(value: object, field: str) -> int:
     return value
 
 
+def _public_reason(reason: str) -> str:
+    normalized = " ".join(reason.split())
+    if not normalized:
+        return "marker validation failed"
+    return normalized[:512]
+
+
 def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
     if not isinstance(data, dict) or data.get("schema") != SCHEMA:
         raise GuardStateError(f"marker schema must be {SCHEMA}")
@@ -207,8 +215,13 @@ def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
             attempt.get("verification"), f"attempt {index} verification", 512
         )
         result = attempt.get("result")
-        if result not in {"failed_same_blocker", "succeeded"}:
-            raise GuardStateError(f"attempt {index} has an unsupported result")
+        if result not in SUPPORTED_ATTEMPT_RESULTS:
+            supported_results = " or ".join(SUPPORTED_ATTEMPT_RESULTS)
+            raise GuardStateError(
+                f"attempt {index} result must be {supported_results}; "
+                "record unverified progress in prose, and replace the marker with "
+                "a fresh empty attempt ledger for a causally independent blocker"
+            )
         if result == "failed_same_blocker":
             failed_keys.add(distinct_key)
 
@@ -218,13 +231,26 @@ def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
     stop_trigger = data.get("stop_trigger")
     if stop_trigger not in {None, "attempt_limit", "time_limit"}:
         raise GuardStateError("stop_trigger is invalid")
-    if status == "exhausted" and stop_trigger is None:
-        raise GuardStateError("exhausted state requires a stop trigger")
-    if status == "resolved":
-        return data, False, None
 
     attempt_exhausted = attempt_limit is not None and len(failed_keys) >= attempt_limit
     time_exhausted = time_limit is not None and active_seconds >= time_limit * 60
+    if status in {"active", "resolved"} and stop_trigger is not None:
+        raise GuardStateError(f"{status} state requires a null stop_trigger")
+    if status == "exhausted":
+        if stop_trigger is None:
+            raise GuardStateError("exhausted state requires a stop trigger")
+        if stop_trigger == "attempt_limit" and not attempt_exhausted:
+            raise GuardStateError(
+                "attempt_limit stop_trigger requires the failed-attempt limit "
+                "to be reached"
+            )
+        if stop_trigger == "time_limit" and not time_exhausted:
+            raise GuardStateError(
+                "time_limit stop_trigger requires the active-time limit to be reached"
+            )
+    if status == "resolved":
+        return data, False, None
+
     exhausted = status == "exhausted" or attempt_exhausted or time_exhausted
     if stop_trigger is None:
         if attempt_exhausted:
@@ -273,8 +299,15 @@ def load_guard_state(payload: dict[str, Any]) -> GuardState:
             exhausted=exhausted,
             stop_trigger=stop_trigger,
         )
-    except (GuardStateError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return GuardState("invalid", state_file, reason=str(exc))
+    except GuardStateError as exc:
+        reason = _public_reason(str(exc))
+    except json.JSONDecodeError:
+        reason = "marker JSON is malformed"
+    except UnicodeError:
+        reason = "marker text is not valid UTF-8"
+    except OSError:
+        reason = "task-state marker could not be read safely"
+    return GuardState("invalid", state_file, reason=reason)
 
 
 def _deny(reason: str) -> dict[str, Any]:
@@ -305,6 +338,23 @@ def _continue_with_report(reason: str) -> dict[str, Any]:
                 *[f"- {heading}" for heading in REPORT_HEADINGS],
                 f"Include the marker `{REPORT_MARKER}` and the stop trigger.",
                 "Redact secrets, private endpoints, customer data, and raw logs.",
+            ]
+        ),
+    }
+
+
+def _continue_for_marker_repair(reason: str) -> dict[str, Any]:
+    return {
+        "decision": "block",
+        "reason": "\n".join(
+            [
+                reason,
+                "Repair only the exact advertised current.md marker before "
+                "calling another tool.",
+                "Marker validation and repair do not consume a remediation "
+                "attempt and do not exhaust the active blocker budget.",
+                "After repair, continue only if the marker is valid and its "
+                "current blocker budget is still active.",
             ]
         ),
     }
@@ -369,8 +419,11 @@ def evaluate_pre_tool(payload: dict[str, Any], state: GuardState) -> dict[str, A
         if _patch_updates_only_state(payload, state.state_file):
             return {}
         return _deny(
-            "Remediation budget state is present but invalid. Repair only the exact "
-            "advertised current.md marker, then return the troubleshooting report."
+            "Remediation budget state is present but invalid"
+            + (f": {state.reason}" if state.reason else "")
+            + ". Repair only the exact advertised current.md marker before another "
+            "tool call. Marker repair does not consume an attempt or exhaust the "
+            "current blocker budget; resume only after the marker validates."
         )
     if not state.exhausted:
         return {}
@@ -386,6 +439,21 @@ def evaluate_pre_tool(payload: dict[str, Any], state: GuardState) -> dict[str, A
 def evaluate_stop(payload: dict[str, Any], state: GuardState) -> dict[str, Any]:
     if state.kind == "missing" or (state.kind == "valid" and not state.exhausted):
         return {"continue": True}
+    if state.kind == "invalid":
+        if payload.get("stop_hook_active"):
+            return _stop(
+                "The remediation budget marker remained invalid after one repair request.",
+                warning=(
+                    "The remediation guard stopped to avoid an infinite loop. "
+                    "Marker repair is still required, but no remediation attempt "
+                    "was consumed or exhausted."
+                ),
+            )
+        return _continue_for_marker_repair(
+            "The remediation budget marker is invalid"
+            + (f": {state.reason}" if state.reason else "")
+            + "."
+        )
     if _report_complete(payload.get("last_assistant_message"), state.stop_trigger):
         return _stop(
             "Remediation budget exhausted and troubleshooting report delivered."
@@ -397,11 +465,6 @@ def evaluate_stop(payload: dict[str, Any], state: GuardState) -> dict[str, Any]:
                 "The remediation guard stopped further work to avoid an infinite loop; "
                 "the required troubleshooting report was incomplete."
             ),
-        )
-    if state.kind == "invalid":
-        return _continue_with_report(
-            "The remediation budget marker is invalid. Repair the exact current.md "
-            "marker if needed, then report the blocker without another remediation attempt."
         )
     return _continue_with_report(
         "The remediation budget is exhausted. Produce the user-visible report now."

@@ -21,7 +21,9 @@
 When troubleshooting has initialized `codex-remediation-budget:v1`, preserve
 its single bounded marker here exactly. Omit this section when no remediation
 budget is active. Do not place raw errors, logs, secrets, private endpoints, or
-customer data in the marker.
+customer data in the marker. If `troubleshoot` establishes a causally
+independent blocker, replace the marker with that blocker's fresh attempt-1
+budget and retain only a concise earlier outcome in prose.
 
 ## Next action
 

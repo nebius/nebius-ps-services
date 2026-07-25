@@ -1,6 +1,6 @@
 ---
 name: config-codex
-description: Configure a public-safe Codex home setup for a developer machine, including global AGENTS.md policy, config.toml features and MCP servers, hooks, task-state layout, custom read-only agents, optional private task-implementer workspace access, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths or secrets.
+description: Configure or recover a public-safe Codex home setup for a developer machine, including a missing config.toml, global AGENTS.md policy, features and MCP servers, hooks, task-state layout, custom read-only agents, optional private task-implementer workspace access, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths, private state, or secrets.
 ---
 
 # Config Codex
@@ -10,11 +10,15 @@ description: Configure a public-safe Codex home setup for a developer machine, i
 Use this skill to bootstrap or align a user's local Codex runtime setup from
 public-safe templates. The goal is a reusable `$CODEX_HOME` layout with global
 instructions, features, MCP servers, hooks, task-state storage, and custom
-read-only agents that support `global-context-management`.
+read-only agents that support `global-context-management`. A missing
+`config.toml` can be recreated from a reviewed public-safe recovery baseline;
+private, plugin-managed, generated, and machine-specific state remains outside
+that baseline.
 
 ## Use This Skill For
 
 - Creating or updating a local `$CODEX_HOME` layout.
+- Recovering a missing `config.toml` from the sanitized create-only baseline.
 - Adding global `AGENTS.md` guidance without replacing unrelated user rules.
 - Patching `config.toml` for supported Codex features, MCP servers, custom
   agent config layers, and skill discovery.
@@ -29,10 +33,17 @@ read-only agents that support `global-context-management`.
 
 ## Safety Rules
 
-- Never copy a live local config into a public repository.
+- Never copy a live local config verbatim into a public repository. When the
+  user explicitly asks to refresh the recovery baseline, parse the live file
+  without printing it and rebuild the baseline from an allowlist of documented,
+  portable settings.
 - Never persist personal names, absolute home paths, secrets, tokens, private
   URLs, customer data, raw prompts, command output, stack traces, or broad
   environment dumps.
+- Omit personal project lists, shell-environment values, notification commands,
+  private or plugin-managed MCP servers, plugin/marketplace state, desktop
+  preferences, generated notice/TUI state, inline hook state already owned by
+  `hooks.json`, and undocumented feature keys from public recovery assets.
 - Store secret values only in the user's shell, password manager, or external
   secret manager. In `config.toml`, reference secret variable names such as
   `CONTEXT7_API_KEY` or `GITHUB_TOKEN`.
@@ -43,7 +54,8 @@ read-only agents that support `global-context-management`.
 - Do not overwrite, replace, reformat, sort, or regenerate an existing
   `AGENTS.md` or `config.toml`.
 - Do not treat `config.toml.template` as desired state for existing machines.
-  It is a create-only baseline plus examples of supported settings.
+  It is the create-only public-safe recovery baseline plus examples of
+  supported settings.
 - For hooks, custom-agent TOML files, and optional policy files, copy missing
   files directly from templates. Replace an existing file only when it still
   matches the previous template, or after showing the diff and receiving user
@@ -93,9 +105,11 @@ For existing `$CODEX_HOME/config.toml`:
   in and the existing `sandbox_mode` is `workspace-write`. Preserve every
   existing writable root and never change `sandbox_mode` or `approval_policy`
   as part of this opt-in.
-- Treat `hooks = true`, `multi_agent = true`, `agents.max_threads`,
-  `agents.max_depth`, and the three read-only custom-agent config references as
-  the minimal config surface for global context management.
+- Treat `hooks = true`, `multi_agent = true`,
+  `agents.max_concurrent_threads_per_session`, and the three read-only
+  custom-agent config references as the minimal config surface for global
+  context management. Do not add the legacy `agents.max_threads` alias or the
+  undocumented `agents.max_depth` key.
 - Treat explicit `[[skills.config]]` entries for `global-context-management`
   and `config-codex` as optional when the skills are already discoverable from
   the installed user skills directory.
@@ -106,17 +120,31 @@ For existing `$CODEX_HOME/config.toml`:
   exists with different values, report the conflict and patch only after the
   user confirms the desired value.
 
+Read `references/config-recovery.md` before creating a missing `config.toml` or
+refreshing the recovery baseline from a live setup. It owns the allowlist,
+omissions, redacted inspection procedure, file-mode rule, and private-state
+recovery boundary.
+
 ## Workflow
 
 1. Identify the target `$CODEX_HOME`; default to `$HOME/.codex`.
 2. Identify the installed skills directory; default to `$HOME/.agents/skills`.
-3. Inspect existing local Codex files with redaction. Do not print secrets.
+3. Inspect existing local Codex files with redaction. Do not print secrets. If
+   the recovery baseline is being refreshed, use only the structural allowlist
+   procedure in `references/config-recovery.md`; never emit a raw or
+   mechanically redacted live-config dump.
 4. Run an idempotency preflight. If existing files already satisfy the required
    setup, report that no local changes are needed and stop without creating
    backups.
 5. Back up only files that the patch plan will change.
 6. Create missing local files from templates, but patch existing
-   `AGENTS.md` and `config.toml` according to the patch-only contract.
+   `AGENTS.md` and `config.toml` according to the patch-only contract. Create a
+   missing `config.toml` with `scripts/create-recovery-config.py`, which
+   renders `assets/config.toml.template` through an exclusive no-clobber write,
+   rejects a symlink target, and sets mode `0600`. If the target appears before
+   the write, stop and switch to patch-only handling. If the renderer reports a
+   post-publication durability or cleanup warning, do not retry creation; run
+   the read-only preflight against the completed file.
 7. Create the local layout:
    - `$CODEX_HOME/hooks/`
    - `$CODEX_HOME/agents/`
@@ -127,13 +155,14 @@ For existing `$CODEX_HOME/config.toml`:
      user deliberately requests the private prompt-workspace integration
 8. Render or adapt templates from `assets/`:
    - `AGENTS.md.template`
-   - `config.toml.template`
+   - `config.toml.template`, the public-safe missing-config recovery baseline
    - `hooks.json.template`
    - shared task-state helper template
    - hook script templates
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
+   - the missing-config renderer
    The task-state template must keep `current.md` as a compact rolling
    summary, not an append-only transcript: replace stale details with the
    latest validated state, omit raw logs and secrets, and summarize oversized
@@ -174,10 +203,13 @@ For existing `$CODEX_HOME/config.toml`:
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
-    secret hygiene. Audit the full nested task-state tree read-only; use the
-    helper's explicit `repair-permissions --execute` only after the operator
-    approves a content-preserving one-time mode repair. When prompt-workspace integration was requested, run the
-    idempotency preflight with `--require-task-implementer-workspace`.
+    secret hygiene. For missing-config recovery, put `--strict-config` on the
+    required read-only `codex exec` runtime probe so the installed Codex
+    version rejects unknown keys. Audit the full nested task-state tree
+    read-only; use the helper's explicit `repair-permissions --execute` only
+    after the operator approves a content-preserving one-time mode repair. When
+    prompt-workspace integration was requested, run the idempotency preflight
+    with `--require-task-implementer-workspace`.
 11. Produce an alignment report that lists each checked surface as
     `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for
     every `Not aligned` or `Blocked` item. Include the minimal file/scope to
@@ -193,7 +225,6 @@ For existing `$CODEX_HOME/config.toml`:
 Use placeholders in public assets:
 
 - `{{CODEX_HOME}}` for the user's Codex home in rendered TOML and text files.
-- `{{SKILLS_HOME}}` for the user's installed skills directory.
 - `{{PROJECT_ROOT}}` for the user's trusted repository root.
 - `${CODEX_HOME:-$HOME/.codex}` inside `hooks.json.template`, so hook commands
   can resolve against the active shell environment without publishing or
@@ -204,6 +235,11 @@ user's real paths where the target file needs literal paths. Do not commit
 rendered files. Treat full-file templates as source material for missing files;
 for existing `AGENTS.md` and `config.toml`, extract and patch only the missing
 sections or keys.
+
+Do not add a live project's full trust list, private or plugin-managed
+integrations, desktop state, notification command, generated state, or unknown
+config keys to the public template. Restore those through their owning local
+workflows and report them as intentionally outside public recovery.
 
 ## Learning Loop
 
@@ -239,6 +275,9 @@ Use the focused checks in `references/local-setup.md`. At minimum:
   fixtures and does not inspect the user's real Codex home.
 - Syntax-check hook scripts with non-writing `compile(...)`.
 - Parse `config.toml` with `tomllib`.
+- Put `--strict-config` on the required read-only `codex exec` runtime probe
+  for a newly rendered recovery config. The `features` inspection subcommand
+  does not accept this runtime flag.
 - Parse `hooks.json` with `json`.
 - Confirm `codex features list` reports `hooks` and `multi_agent` enabled.
 - Run a targeted secret/path scan over changed public files.
@@ -272,6 +311,8 @@ because the original prompt did not mention subagents.
 
 - Read `README.md` for the human-facing architecture and core concepts.
 - Read `references/local-setup.md` before applying the setup to a real machine.
+- Read `references/config-recovery.md` before recovering a missing config or
+  refreshing the public-safe recovery baseline.
 - Use files in `assets/` as templates for rendered local files.
 
 ## Output Contract
@@ -291,6 +332,8 @@ Return:
 - what backups were made
 - what validations passed or failed
 - which values still need user-specific replacement
+- which private, plugin-managed, generated, or machine-specific config layers
+  were intentionally excluded from public recovery
 - for every `Not aligned` or `Blocked` item, the exact manual out-of-band
   action the user can take, including the narrow file or bullet to edit and
   any files that should be left untouched

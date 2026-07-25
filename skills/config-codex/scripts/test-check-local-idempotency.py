@@ -3,16 +3,24 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
+import stat
 import subprocess
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
+from urllib.parse import urlparse
 
 
 SCRIPT = Path(__file__).resolve().with_name("check-local-idempotency.py")
+CREATE_RECOVERY_SCRIPT = Path(__file__).resolve().with_name(
+    "create-recovery-config.py"
+)
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = SKILL_ROOT / "assets"
 MANAGED_BLOCK = "\n".join(
@@ -28,6 +36,13 @@ MANAGED_BLOCK = "\n".join(
         "  exact private task-state update that records the stop, then call no",
         "  other tool and return the complete troubleshooting report. Only a",
         "  new explicit user instruction may start another bounded tranche.",
+        "- When evidence establishes a causally independent blocker, start its",
+        "  own fresh budget at attempt 1. Use the default three-attempt and",
+        "  60-minute limits unless the current instruction sets lower or higher",
+        "  limits that apply to the new blocker. Do not carry attempts, active",
+        "  time, tranche, exhaustion status, or stop trigger from another",
+        "  blocker. Permission denials and marker validation or repair consume",
+        "  no attempt.",
         "- Agents may clean up temporary trees they created during the current",
         "  task. Resolve and validate the exact task-specific path under the",
         "  system temporary directory first, use a scoped non-forced deletion",
@@ -67,7 +82,9 @@ def copy_template(source: Path, target: Path) -> None:
 
 class CheckLocalIdempotencyTest(unittest.TestCase):
     def test_public_config_template_defaults_to_sol_xhigh_fast(self) -> None:
-        with (ASSETS / "config.toml.template").open("rb") as handle:
+        template_path = ASSETS / "config.toml.template"
+        template_text = template_path.read_text(encoding="utf-8")
+        with template_path.open("rb") as handle:
             config = tomllib.load(handle)
 
         self.assertEqual(config.get("model"), "gpt-5.6-sol")
@@ -75,6 +92,184 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.assertEqual(config.get("plan_mode_reasoning_effort"), "xhigh")
         self.assertEqual(config.get("service_tier"), "fast")
         self.assertIs(config.get("features", {}).get("fast_mode"), True)
+        self.assertEqual(
+            set(config),
+            {
+                "model",
+                "model_reasoning_effort",
+                "plan_mode_reasoning_effort",
+                "service_tier",
+                "approval_policy",
+                "sandbox_mode",
+                "web_search",
+                "personality",
+                "features",
+                "agents",
+                "sandbox_workspace_write",
+                "mcp_servers",
+                "projects",
+            },
+        )
+
+        self.assertEqual(
+            config.get("features"),
+            {
+                "shell_tool": True,
+                "hooks": True,
+                "multi_agent": True,
+                "memories": True,
+                "fast_mode": True,
+            },
+        )
+        self.assertEqual(
+            config.get("agents", {}).get(
+                "max_concurrent_threads_per_session"
+            ),
+            16,
+        )
+        self.assertNotIn("max_threads", config.get("agents", {}))
+        self.assertNotIn("max_depth", config.get("agents", {}))
+        self.assertEqual(
+            set(config.get("mcp_servers", {})),
+            {
+                "context7",
+                "playwright",
+                "terraform",
+                "markitdown",
+                "microsoftdocs",
+                "github",
+                "openaiDeveloperDocs",
+            },
+        )
+        self.assertEqual(
+            config["mcp_servers"],
+            {
+                "context7": {
+                    "command": "npx",
+                    "args": ["-y", "@upstash/context7-mcp@3.2.4"],
+                    "env_vars": ["CONTEXT7_API_KEY"],
+                },
+                "playwright": {
+                    "command": "npx",
+                    "args": ["-y", "@playwright/mcp@0.0.78"],
+                },
+                "terraform": {
+                    "command": "docker",
+                    "args": [
+                        "run",
+                        "-i",
+                        "--rm",
+                        "hashicorp/terraform-mcp-server:0.5.2",
+                    ],
+                },
+                "markitdown": {
+                    "command": "uvx",
+                    "args": ["markitdown-mcp==0.0.1a4"],
+                    "startup_timeout_sec": 30.0,
+                },
+                "microsoftdocs": {
+                    "url": "https://learn.microsoft.com/api/mcp",
+                },
+                "github": {
+                    "url": "https://api.githubcopilot.com/mcp/",
+                    "bearer_token_env_var": "GITHUB_TOKEN",
+                },
+                "openaiDeveloperDocs": {
+                    "url": "https://developers.openai.com/mcp",
+                },
+            },
+        )
+        self.assertEqual(
+            set(config.get("projects", {})),
+            {"{{PROJECT_ROOT}}", "{{CODEX_HOME}}"},
+        )
+        self.assertTrue(
+            {
+                "desktop",
+                "hooks",
+                "marketplaces",
+                "notice",
+                "notify",
+                "plugins",
+                "shell_environment_policy",
+                "tui",
+            }.isdisjoint(config),
+        )
+        self.assertNotIn("skills", config)
+        self.assertNotIn("apps", config)
+        self.assertNotIn("history", config)
+        self.assertNotIn("@latest", template_text)
+        for name in ("context7", "playwright"):
+            package = config["mcp_servers"][name]["args"][-1]
+            self.assertRegex(package, r"^@[^/]+/[^@]+@[0-9]")
+            self.assertFalse(package.endswith("@latest"))
+        terraform_image = config["mcp_servers"]["terraform"]["args"][-1]
+        self.assertRegex(terraform_image, r"^[^:@]+/[^:@]+:[^:@]+$")
+        self.assertFalse(terraform_image.endswith(":latest"))
+
+        self.assertEqual(
+            config["mcp_servers"]["context7"].get("env_vars"),
+            ["CONTEXT7_API_KEY"],
+        )
+        self.assertEqual(
+            config["mcp_servers"]["github"].get("bearer_token_env_var"),
+            "GITHUB_TOKEN",
+        )
+        self.assertRegex("CONTEXT7_API_KEY", r"^[A-Z][A-Z0-9_]*$")
+        self.assertRegex("GITHUB_TOKEN", r"^[A-Z][A-Z0-9_]*$")
+
+        for server in config["mcp_servers"].values():
+            command = server.get("command")
+            if command is not None:
+                self.assertFalse(Path(command).is_absolute())
+            url = server.get("url")
+            if url is not None:
+                self.assertEqual(urlparse(url).scheme, "https")
+                self.assertIn(
+                    urlparse(url).hostname,
+                    {
+                        "api.githubcopilot.com",
+                        "developers.openai.com",
+                        "learn.microsoft.com",
+                    },
+                )
+
+        self.assertNotRegex(template_text, r'(?m)["\']/(?:Users|home)/')
+        self.assertNotRegex(template_text, r"(?i)https?://(?:localhost|127\.0\.0\.1)")
+        self.assertNotRegex(template_text, r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----")
+        self.assertIsNone(
+            re.search(
+                r"(?i)(?:token|secret|password|api[_-]?key)\s*=\s*['\"]"
+                r"(?![A-Z][A-Z0-9_]*['\"])",
+                template_text,
+            )
+        )
+        rendered = (
+            template_text.replace("{{CODEX_HOME}}", "/tmp/codex-recovery")
+            .replace("{{PROJECT_ROOT}}", "/tmp/recovery-project")
+        )
+        rendered_config = tomllib.loads(rendered)
+        self.assertIn("/tmp/recovery-project", rendered_config["projects"])
+        self.assertIn("/tmp/codex-recovery", rendered_config["projects"])
+
+    def test_recovery_docs_use_strict_config_on_runtime_probe(self) -> None:
+        for relative in (
+            "SKILL.md",
+            "README.md",
+            "references/local-setup.md",
+            "references/config-recovery.md",
+        ):
+            with self.subTest(relative=relative):
+                text = (SKILL_ROOT / relative).read_text(encoding="utf-8")
+                self.assertNotIn("codex --strict-config features", text)
+        for relative in (
+            "README.md",
+            "references/local-setup.md",
+            "references/config-recovery.md",
+        ):
+            with self.subTest(runtime_probe=relative):
+                text = (SKILL_ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("codex --strict-config exec", text)
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -88,6 +283,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
     def render_valid_home(self) -> None:
         copy_template(ASSETS / "AGENTS.md.template", self.codex_home / "AGENTS.md")
         copy_template(ASSETS / "config.toml.template", self.codex_home / "config.toml")
+        (self.codex_home / "config.toml").chmod(0o600)
         copy_template(ASSETS / "hooks.json.template", self.codex_home / "hooks.json")
         for source in (ASSETS / "hooks").glob("*.template"):
             target = self.codex_home / "hooks" / source.name.removesuffix(".template")
@@ -109,6 +305,34 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 "--codex-home",
                 str(self.codex_home),
                 *extra_args,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+            timeout=10,
+        )
+
+    def run_recovery_create(
+        self,
+        project_root: Path | None = None,
+        codex_home: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if project_root is None:
+            project_root = Path(self.tmp.name)
+        if codex_home is None:
+            codex_home = self.codex_home
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return subprocess.run(
+            [
+                "python3",
+                str(CREATE_RECOVERY_SCRIPT),
+                "--codex-home",
+                str(codex_home),
+                "--project-root",
+                str(project_root),
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -167,6 +391,139 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
 
     def test_passes_without_optional_policy(self) -> None:
         self.assert_check_passes()
+
+    def test_recovery_create_uses_private_mode_and_renders_placeholders(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.unlink()
+
+        result = self.run_recovery_create()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(stat.S_IMODE(config_path.lstat().st_mode), 0o600)
+        text = config_path.read_text(encoding="utf-8")
+        self.assertNotIn("{{CODEX_HOME}}", text)
+        self.assertNotIn("{{PROJECT_ROOT}}", text)
+        tomllib.loads(text)
+
+    def test_recovery_create_never_clobbers_existing_config(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        before = config_path.read_bytes()
+
+        result = self.run_recovery_create()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("already exists", result.stderr)
+        self.assertEqual(config_path.read_bytes(), before)
+
+    def test_recovery_create_escapes_reviewed_project_path(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.unlink()
+        project_root = Path(self.tmp.name) / 'reviewed-"project"'
+        project_root.mkdir()
+
+        result = self.run_recovery_create(project_root)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        self.assertIn(str(project_root.absolute()), config["projects"])
+
+    def test_recovery_create_rejects_symlink_target_without_mutation(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        target = Path(self.tmp.name) / "existing-config.toml"
+        target.write_text("preserve = true\n", encoding="utf-8")
+        before = target.read_bytes()
+        config_path.unlink()
+        config_path.symlink_to(target)
+
+        result = self.run_recovery_create()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("already exists", result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_recovery_create_cleans_temporary_file_after_sync_failure(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.unlink()
+        spec = importlib.util.spec_from_file_location(
+            "config_codex_create_recovery_config",
+            CREATE_RECOVERY_SCRIPT,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module.os, "fsync", side_effect=OSError("forced")):
+            with self.assertRaises(OSError):
+                module.create_private_file(self.codex_home, b"private = true\n")
+
+        self.assertFalse(config_path.exists())
+        self.assertEqual(
+            list(self.codex_home.glob(".config.toml.recovery-*")),
+            [],
+        )
+
+    def test_recovery_create_reports_post_publication_sync_warning(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.unlink()
+        spec = importlib.util.spec_from_file_location(
+            "config_codex_create_recovery_config_post_publish",
+            CREATE_RECOVERY_SCRIPT,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(
+            module.os,
+            "fsync",
+            side_effect=[None, OSError("forced")],
+        ):
+            warning = module.create_private_file(
+                self.codex_home,
+                b"private = true\n",
+            )
+
+        self.assertTrue(warning)
+        self.assertTrue(config_path.is_file())
+        self.assertEqual(stat.S_IMODE(config_path.lstat().st_mode), 0o600)
+        self.assertEqual(
+            list(self.codex_home.glob(".config.toml.recovery-*")),
+            [],
+        )
+
+    def test_recovery_create_does_not_reflect_private_paths_on_error(self) -> None:
+        sentinel = "PRIVATE_PATH_SENTINEL"
+        missing_home = Path(self.tmp.name) / sentinel
+
+        result = self.run_recovery_create(codex_home=missing_home)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(sentinel, result.stdout)
+        self.assertNotIn(sentinel, result.stderr)
+
+    def test_preflight_rejects_loose_config_mode(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.chmod(0o644)
+
+        result = self.run_check()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("config.toml mode is 0o644, expected 0o600", result.stdout)
+
+    def test_preflight_rejects_symlinked_config(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        target = Path(self.tmp.name) / "linked-config.toml"
+        target.write_bytes(config_path.read_bytes())
+        target.chmod(0o600)
+        config_path.unlink()
+        config_path.symlink_to(target)
+
+        result = self.run_check()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("config.toml must not be a symbolic link", result.stdout)
 
     def test_strict_agents_template_accepts_exact_template(self) -> None:
         self.assert_check_passes("--strict-agents-template")
@@ -235,6 +592,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
             "  other tool and return the complete troubleshooting report. Only a",
             "  new explicit user instruction may start another bounded tranche.",
+            "  60-minute limits unless the current instruction sets lower or higher",
+            "  limits that apply to the new blocker. Do not carry attempts, active",
+            "  no attempt.",
             "  temporary root or an unresolved variable.",
         )
         for required_line in required_lines:
@@ -259,7 +619,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         config_path = self.codex_home / "config.toml"
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
-                "@upstash/context7-mcp@latest",
+                "@upstash/context7-mcp@3.2.4",
                 "@upstash/context7-mcp@1.0.0",
             ),
             encoding="utf-8",
@@ -272,25 +632,50 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             result.stdout,
         )
 
-    def test_rejects_old_max_threads_budget(self) -> None:
+    def test_rejects_wrong_concurrent_thread_budget(self) -> None:
         config_path = self.codex_home / "config.toml"
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
-                "max_threads = 16",
-                "max_threads = 4",
+                "max_concurrent_threads_per_session = 16",
+                "max_concurrent_threads_per_session = 4",
             ),
             encoding="utf-8",
         )
 
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("agents.max_threads is not 16", result.stdout)
+        self.assertIn(
+            "agents.max_concurrent_threads_per_session is not 16",
+            result.stdout,
+        )
+
+    def test_rejects_legacy_and_undocumented_agent_limits(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "max_concurrent_threads_per_session = 16",
+                "\n".join(
+                    [
+                        "max_concurrent_threads_per_session = 16",
+                        "max_threads = 16",
+                        "max_depth = 1",
+                    ]
+                ),
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("agents.max_threads is a legacy alias", result.stdout)
+        self.assertIn("agents.max_depth is undocumented", result.stdout)
 
     def test_template_mcp_audit_detects_drift(self) -> None:
         config_path = self.codex_home / "config.toml"
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
-                "@upstash/context7-mcp@latest",
+                "@upstash/context7-mcp@3.2.4",
                 "@upstash/context7-mcp@1.0.0",
             ),
             encoding="utf-8",

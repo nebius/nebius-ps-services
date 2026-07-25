@@ -15216,6 +15216,61 @@ def test_ext_soperator_upgrade_dry_run_rejects_malformed_v3_journal_without_writ
     assert checkpoint_path.read_bytes() == checkpoint_before
 
 
+def test_external_checkpoint_readers_reconcile_before_strict_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    campaign = payload["deploy"]["targets"][0]["soperator_onboarding"]["upgrade_path"]
+    first_segment = campaign["segments"][0]
+    checkpoint_path = _write_locked_ext_soperator_checkpoint(
+        config_path=config_path,
+        target_ref="external-cluster",
+        upgrade_path=campaign,
+        current_segment_id=first_segment["id"],
+        completed_segment_ids=[],
+        pending_phase="provider-operation",
+    )
+    checkpoint_before = checkpoint_path.read_bytes()
+    reconciled: list[dict[str, object]] = []
+    validated: list[dict[str, object]] = []
+
+    def _reconcile(checkpoint: dict[str, object]) -> bool:
+        checkpoint["test_reconciled_before_validation"] = True
+        reconciled.append(checkpoint)
+        return True
+
+    def _validate(checkpoint: Mapping[str, object]) -> None:
+        assert checkpoint["test_reconciled_before_validation"] is True
+        validated.append(dict(checkpoint))
+
+    monkeypatch.setattr(
+        cli_module,
+        "_reconcile_interrupted_cleaned_login_handoff_replay",
+        _reconcile,
+    )
+    monkeypatch.setattr(cli_module, "_validate_checkpoint_journal_contract", _validate)
+
+    locked = cli_module._locked_upgrade_checkpoint_payload(  # noqa: SLF001
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload_or_config=payload,
+    )
+    loaded_path, campaign_journal = cli_module._external_soperator_campaign_journal(  # noqa: SLF001
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+    )
+
+    assert locked is not None
+    assert campaign_journal is not None
+    assert loaded_path == checkpoint_path
+    assert len(reconciled) == 2
+    assert len(validated) == 2
+    assert checkpoint_path.read_bytes() == checkpoint_before
+
+
 def test_ext_soperator_upgrade_backup_transition_uses_locked_segment_source(
     tmp_path: Path,
 ) -> None:
@@ -17503,7 +17558,9 @@ def test_external_soperator_resume_scope_uses_campaign_transition_after_phase_re
     checkpoint["phase_state"] = {}
     checkpoint["completed_segment_ids"] = ["segment-1"]
     checkpoint["slurmcluster_identity_transition"] = {
-        "schema": "nebius-cxcli-ext-soperator-slurmcluster-identity-transition/v1",
+        "schema": (
+            soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA
+        ),
         "phase_id": "rolling-compute-migration",
         "target_ref": "target-cluster",
         "origin_segment_id": "segment-1",
@@ -17527,6 +17584,7 @@ def test_external_soperator_resume_scope_uses_campaign_transition_after_phase_re
             },
             "started_at": "2026-07-12T00:02:00Z",
             "completed_at": "2026-07-12T00:03:00Z",
+            "completion_proof_sha256": "a" * 64,
         },
     }
 
@@ -17779,7 +17837,9 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         "uid": "target-slurmcluster-uid",
     }
     checkpoint["slurmcluster_identity_transition"] = {
-        "schema": "nebius-cxcli-ext-soperator-slurmcluster-identity-transition/v1",
+        "schema": (
+            soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA
+        ),
         "phase_id": "rolling-compute-migration",
         "target_ref": "external-cluster",
         "origin_segment_id": first_segment_id,
@@ -17791,6 +17851,7 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
             "binding": source_ref,
             "started_at": "2026-07-12T00:02:00Z",
             "completed_at": "2026-07-12T00:03:00Z",
+            "completion_proof_sha256": "a" * 64,
         },
     }
     checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")

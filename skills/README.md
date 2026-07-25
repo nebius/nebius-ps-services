@@ -910,12 +910,16 @@ project files.
 
 ### `config-codex`
 
-`config-codex` bootstraps or aligns a user's local Codex runtime setup from
-public-safe templates. Use it for `$CODEX_HOME` layout, global `AGENTS.md`
-policy, `config.toml` features and MCP servers, hooks, task-state directories,
-custom read-only agents, and validation without copying personal paths or
-secrets into a public repository. Existing laptop `AGENTS.md` and
-`config.toml` files are merge targets, not template replacement targets.
+`config-codex` bootstraps, recovers, or aligns a user's local Codex runtime
+setup from public-safe templates. Use it for `$CODEX_HOME` layout, global
+`AGENTS.md` policy, recovery of a missing `config.toml`, features and MCP
+servers, hooks, task-state directories, custom read-only agents, and validation
+without copying personal paths, private state, or secrets into a public
+repository. The create-only config recovery baseline keeps documented portable
+preferences and placeholders while excluding personal project lists, private
+or plugin-managed integrations, desktop/generated state, and secret-bearing
+values. Existing laptop `AGENTS.md` and `config.toml` files are merge targets,
+not template replacement targets.
 Private prompt-workspace access is opt-in: it can create a `0700`
 `$CODEX_HOME/task-implementer` root and add only that exact root to an existing
 `workspace-write` configuration without changing sandbox or approval policy.

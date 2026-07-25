@@ -1036,6 +1036,11 @@ def test_source_fence_cleanup_is_uid_bound_and_runs_after_source_retirement(
         "_kubectl_get_namespace_resource",
         lambda **_kwargs: (False, {}),
     )
+    monkeypatch.setattr(
+        migration,
+        "_source_cleanup_completion_proof",
+        lambda _phase: {"status": "verified"},
+    )
 
     def get_managed(**kwargs: Any) -> tuple[bool, dict[str, Any]]:
         kind = str(kwargs["desired"]["kind"])
@@ -1111,6 +1116,11 @@ def test_source_fence_cleanup_refuses_a_live_source_slurmcluster(
             True,
             {"metadata": {"uid": "source-uid", "name": "source-cluster"}},
         ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_source_cleanup_completion_proof",
+        lambda _phase: {"status": "verified"},
     )
 
     with pytest.raises(

@@ -16,6 +16,8 @@ from typing import Any, Protocol
 from .runtime_config import to_plain_data
 
 SOPERATOR_UPGRADE_SAFETY_SCHEMA = "nebius-cxcli-soperator-upgrade-safety/v1"
+SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA = "nebius-cxcli-soperator-intentional-delta-proof/v1"
+SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA = "nebius-cxcli-soperator-remediation-approval-plan/v1"
 EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION = 1
 _PROTECTED_PVC_KEYS = ("jail", "controller-spool", "accounting")
 _READONLY_KUBECTL_VERBS = frozenset({"api-resources", "exec", "get", "logs", "rollout", "version"})
@@ -38,6 +40,7 @@ _MUTATING_KUBECTL_VERBS = frozenset(
     }
 )
 _UNAVAILABLE_STATUSES = frozenset({"failed", "pending", "unknown"})
+_SLURM_CONFIG_CAPTURE_BANNER = re.compile(r"\AConfiguration data as of [^\r\n]*(?:\r?\n|$)")
 _BAD_WAITING_REASONS = frozenset(
     {
         "CrashLoopBackOff",
@@ -80,9 +83,59 @@ class ProtectedStateDelta:
             "field": self.field,
             "before": _summary_value(self.before),
             "after": _summary_value(self.after),
+            "before_digest": _stable_hash(self.before),
+            "after_digest": _stable_hash(self.after),
             "classification": self.classification,
             "approval_required": self.approval_required,
             "remediation": self.remediation,
+        }
+
+
+@dataclass(frozen=True)
+class IntentionalDeltaProof:
+    command_kind: str
+    cluster_identity: str
+    target_ref: str
+    namespace: str
+    checkpoint_identity: str
+    phase_id: str
+    operation_fingerprint: str
+    baseline_hash: str
+    kind: str
+    resource: str
+    field: str
+    before_digest: str
+    after_digest: str
+    resource_uid: str = ""
+
+    @property
+    def fingerprint(self) -> str:
+        return _stable_hash(self._material())
+
+    def _material(self) -> dict[str, Any]:
+        return {
+            "schema": SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA,
+            "command_kind": self.command_kind,
+            "cluster_identity": self.cluster_identity,
+            "target_ref": self.target_ref,
+            "namespace": self.namespace,
+            "checkpoint_identity": self.checkpoint_identity,
+            "phase_id": self.phase_id,
+            "operation_fingerprint": self.operation_fingerprint,
+            "baseline_hash": self.baseline_hash,
+            "kind": self.kind,
+            "resource": self.resource,
+            "field": self.field,
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+            "resource_uid": self.resource_uid,
+        }
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            **self._material(),
+            "status": "verified",
+            "proof_fingerprint": self.fingerprint,
         }
 
 
@@ -119,6 +172,12 @@ class ProtectedCustomerState:
             "warnings": list(self.warnings),
             "command_audit": [to_plain_data(item) for item in self.command_audit],
         }
+
+
+IntentionalDeltaProofBuilder = Callable[
+    [ProtectedCustomerState, ProtectedCustomerState, Mapping[str, Any]],
+    Sequence[Mapping[str, Any]],
+]
 
 
 @dataclass(frozen=True)
@@ -446,6 +505,223 @@ def compare_protected_customer_state(
     }
 
 
+def build_intentional_delta_proof(
+    *,
+    delta: Mapping[str, Any],
+    command_kind: str,
+    cluster_identity: str,
+    target_ref: str,
+    namespace: str,
+    checkpoint_identity: str,
+    phase_id: str,
+    operation_fingerprint: str,
+    baseline_hash: str,
+    resource_uid: str = "",
+) -> dict[str, Any]:
+    """Build one immutable proof for one exact protected-state delta."""
+
+    normalized_resource_uid = str(resource_uid or "").strip()
+    required_text = {
+        "command_kind": command_kind,
+        "cluster_identity": cluster_identity,
+        "target_ref": target_ref,
+        "namespace": namespace,
+        "checkpoint_identity": checkpoint_identity,
+        "phase_id": phase_id,
+        "kind": str(delta.get("kind", "") or ""),
+        "resource": str(delta.get("resource", "") or ""),
+        "field": str(delta.get("field", "") or ""),
+        "resource_uid": normalized_resource_uid,
+    }
+    missing = sorted(key for key, value in required_text.items() if not str(value).strip())
+    if missing:
+        raise ValueError(
+            "Intentional protected-state delta proof is missing exact identity fields: "
+            + ", ".join(missing)
+            + "."
+        )
+    digests = {
+        "operation_fingerprint": operation_fingerprint,
+        "baseline_hash": baseline_hash,
+        "before_digest": str(delta.get("before_digest", "") or ""),
+        "after_digest": str(delta.get("after_digest", "") or ""),
+    }
+    invalid = sorted(
+        key for key, value in digests.items() if not re.fullmatch(r"[0-9a-f]{64}", str(value))
+    )
+    if invalid:
+        raise ValueError(
+            "Intentional protected-state delta proof has invalid SHA256 fields: "
+            + ", ".join(invalid)
+            + "."
+        )
+    return IntentionalDeltaProof(
+        **required_text,
+        **digests,
+    ).as_payload()
+
+
+def _intentional_delta_proof_material(proof: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": proof.get("schema"),
+        "command_kind": proof.get("command_kind"),
+        "cluster_identity": proof.get("cluster_identity"),
+        "target_ref": proof.get("target_ref"),
+        "namespace": proof.get("namespace"),
+        "checkpoint_identity": proof.get("checkpoint_identity"),
+        "phase_id": proof.get("phase_id"),
+        "operation_fingerprint": proof.get("operation_fingerprint"),
+        "baseline_hash": proof.get("baseline_hash"),
+        "kind": proof.get("kind"),
+        "resource": proof.get("resource"),
+        "field": proof.get("field"),
+        "before_digest": proof.get("before_digest"),
+        "after_digest": proof.get("after_digest"),
+        "resource_uid": str(proof.get("resource_uid", "") or ""),
+    }
+
+
+def _validated_intentional_delta_proofs(
+    proofs: Sequence[Mapping[str, Any]],
+    *,
+    comparison: Mapping[str, Any],
+    target_ref: str,
+    namespace: str,
+    expected_context: Mapping[str, Any],
+) -> dict[tuple[str, str, str, str, str], dict[str, Any]]:
+    expected_baseline = str(comparison.get("before_hash", "") or "")
+    validated: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    fingerprints: set[str] = set()
+    for raw in proofs:
+        proof = dict(to_plain_data(raw))
+        material = _intentional_delta_proof_material(proof)
+        fingerprint = str(proof.get("proof_fingerprint", "") or "")
+        hash_fields = (
+            "operation_fingerprint",
+            "baseline_hash",
+            "before_digest",
+            "after_digest",
+        )
+        if (
+            proof.get("schema") != SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA
+            or proof.get("status") != "verified"
+            or str(proof.get("target_ref", "") or "") != target_ref
+            or str(proof.get("namespace", "") or "") != namespace
+            or any(
+                str(proof.get(key, "") or "") != str(expected_context.get(key, "") or "")
+                for key in (
+                    "command_kind",
+                    "cluster_identity",
+                    "checkpoint_identity",
+                )
+            )
+            or str(proof.get("baseline_hash", "") or "") != expected_baseline
+            or any(
+                not str(proof.get(key, "") or "").strip()
+                for key in (
+                    "command_kind",
+                    "cluster_identity",
+                    "checkpoint_identity",
+                    "phase_id",
+                    "kind",
+                    "resource",
+                    "field",
+                    "resource_uid",
+                )
+            )
+            or any(
+                not re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key, "") or ""))
+                for key in hash_fields
+            )
+            or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+            or fingerprint != _stable_hash(material)
+        ):
+            raise ValueError(
+                "Intentional protected-state delta proof failed immutable identity validation."
+            )
+        key = (
+            str(proof["kind"]),
+            str(proof["resource"]),
+            str(proof["field"]),
+            str(proof["before_digest"]),
+            str(proof["after_digest"]),
+        )
+        if key in validated or fingerprint in fingerprints:
+            raise ValueError(
+                "Intentional protected-state delta proofs must match unique deltas one-to-one."
+            )
+        validated[key] = proof
+        fingerprints.add(fingerprint)
+    return validated
+
+
+def classify_intentional_deltas_from_proofs(
+    comparison: Mapping[str, Any],
+    *,
+    proofs: Sequence[Mapping[str, Any]],
+    target_ref: str,
+    namespace: str,
+    expected_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Classify only exact one-to-one digest matches from verified proofs."""
+
+    payload = dict(to_plain_data(comparison))
+    proof_by_delta = _validated_intentional_delta_proofs(
+        proofs,
+        comparison=comparison,
+        target_ref=target_ref,
+        namespace=namespace,
+        expected_context=expected_context,
+    )
+    consumed: set[tuple[str, str, str, str, str]] = set()
+    deltas: list[dict[str, Any]] = []
+    for item in payload.get("deltas", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        delta = dict(item)
+        key = (
+            str(delta.get("kind", "") or ""),
+            str(delta.get("resource", "") or ""),
+            str(delta.get("field", "") or ""),
+            str(delta.get("before_digest", "") or ""),
+            str(delta.get("after_digest", "") or ""),
+        )
+        proof = proof_by_delta.get(key)
+        if proof is not None and delta.get("classification") != "blocked":
+            delta["classification"] = "intentional_upgrade"
+            delta["approval_required"] = False
+            delta["remediation"] = (
+                "Exact command-owned protected-state transition matched its checkpoint proof."
+            )
+            delta["intentional_proof"] = {
+                "schema": SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA,
+                "command_kind": proof["command_kind"],
+                "checkpoint_identity": proof["checkpoint_identity"],
+                "phase_id": proof["phase_id"],
+                "operation_fingerprint": proof["operation_fingerprint"],
+                "resource_uid": proof.get("resource_uid") or "",
+                "proof_fingerprint": proof["proof_fingerprint"],
+            }
+            consumed.add(key)
+        deltas.append(delta)
+    if consumed != set(proof_by_delta):
+        raise ValueError(
+            "Intentional protected-state delta proof does not match one current exact delta."
+        )
+    blocked = [delta for delta in deltas if delta.get("classification") == "blocked"]
+    approval = [delta for delta in deltas if bool(delta.get("approval_required"))]
+    payload["deltas"] = deltas
+    payload["blocked_count"] = len(blocked)
+    payload["approval_required_count"] = len(approval)
+    payload["status"] = (
+        "matched"
+        if not deltas
+        else ("blocked" if blocked else ("drift-detected" if approval else "intentional-upgrade"))
+    )
+    payload["intentional_proof_count"] = len(consumed)
+    return payload
+
+
 def _classify_external_intentional_deltas(
     comparison: Mapping[str, Any],
     *,
@@ -577,13 +853,18 @@ def _is_external_checkpointed_transition_delta(
     handoff: Mapping[str, Any] | None,
 ) -> bool:
     proof = handoff if isinstance(handoff, Mapping) else {}
-    if (
-        str(proof.get("status", "") or "") != "verified"
-        or str(proof.get("stage", "") or "") != "source-ha-active"
-        or str(proof.get("authority_owner", "") or "") != "bridge-source"
-        or str(proof.get("manager_pause_status", "") or "") != "verified"
-        or str(proof.get("client_propagation_status", "") or "") != "verified"
-    ):
+    active_source_transition = bool(
+        str(proof.get("status", "") or "") == "verified"
+        and str(proof.get("stage", "") or "") == "source-ha-active"
+        and str(proof.get("authority_owner", "") or "") == "bridge-source"
+        and str(proof.get("manager_pause_status", "") or "") == "verified"
+        and str(proof.get("client_propagation_status", "") or "") == "verified"
+    )
+    historical = _verified_external_terminal_transition_proof(
+        proof.get("historical_transition"),
+        target_ref=target_ref,
+    )
+    if not active_source_transition and historical is None:
         return False
     kind = str(delta.get("kind", "") or "")
     resource = str(delta.get("resource", "") or "")
@@ -596,10 +877,15 @@ def _is_external_checkpointed_transition_delta(
         return True
     if (
         kind == "secrets"
-        and resource.startswith(f"{namespace}/sh.helm.release.v1.soperator.v")
+        and re.fullmatch(
+            rf"{re.escape(namespace)}/sh\.helm\.release\.v1\.soperator\.v[1-9][0-9]*",
+            resource,
+        )
         and field in {"data_sha256_by_key", "labels"}
     ):
         return True
+    if historical is not None:
+        return False
     if (
         kind == "slurm_runtime"
         and field == "slurm_partitions"
@@ -615,6 +901,52 @@ def _is_external_checkpointed_transition_delta(
             "spec_hash_without_controller_open_metrics_enabled",
         }
     )
+
+
+def _verified_external_terminal_transition_proof(
+    value: Any,
+    *,
+    target_ref: str,
+) -> dict[str, Any] | None:
+    proof = dict(value) if isinstance(value, Mapping) else {}
+    proof_sha256 = str(proof.pop("proof_sha256", "") or "").strip()
+    source_transition = (
+        proof.get("source_transition")
+        if isinstance(proof.get("source_transition"), Mapping)
+        else {}
+    )
+    target_transition = (
+        proof.get("target_transition")
+        if isinstance(proof.get("target_transition"), Mapping)
+        else {}
+    )
+    required_fingerprints = [
+        proof.get("checkpoint_identity"),
+        proof.get("chart_operation_fingerprint"),
+        *source_transition.values(),
+        *target_transition.values(),
+    ]
+    if (
+        proof.get("schema") != "nebius-cxcli/external-terminal-transition-proof/v1"
+        or proof.get("status") != "verified"
+        or proof.get("target_ref") != target_ref
+        or not str(proof.get("target_uid", "") or "").strip()
+        or proof.get("terminal_stage") != "cleaned"
+        or proof.get("terminal_authority_owner") != "target-singleton"
+        or set(source_transition)
+        != {
+            "authority_history_fingerprint",
+            "manager_pause_fingerprint",
+            "source_configuration_fingerprint",
+            "client_propagation_fingerprint",
+        }
+        or set(target_transition) != {"takeover_fingerprint", "cleanup_fingerprint"}
+        or any(not re.fullmatch(r"[0-9a-f]{64}", str(item or "")) for item in required_fingerprints)
+        or not re.fullmatch(r"[0-9a-f]{64}", proof_sha256)
+        or proof_sha256 != _stable_hash(proof)
+    ):
+        return None
+    return proof
 
 
 def _is_external_accounting_config_successor_delta(
@@ -1023,15 +1355,84 @@ def build_remediation_approval_plan(
         if item.get("classification") == "remediation_required"
         or bool(item.get("approval_required"))
     ]
+    comparison_envelope = {
+        "comparison_schema": comparison.get("schema"),
+        "status": comparison.get("status"),
+        "before_hash": comparison.get("before_hash"),
+        "after_hash": comparison.get("after_hash"),
+        "blocked_count": len(blocked),
+        "approval_required_count": len(remediation),
+        "deltas": sorted(
+            (
+                {
+                    "kind": item.get("kind"),
+                    "resource": item.get("resource"),
+                    "field": item.get("field"),
+                    "before_digest": item.get("before_digest"),
+                    "after_digest": item.get("after_digest"),
+                    "classification": item.get("classification"),
+                    "approval_required": bool(item.get("approval_required")),
+                    "intentional_proof_fingerprint": (
+                        item.get("intentional_proof", {}).get("proof_fingerprint")
+                        if isinstance(item.get("intentional_proof"), Mapping)
+                        else None
+                    ),
+                }
+                for item in deltas
+            ),
+            key=lambda item: (
+                str(item.get("kind") or ""),
+                str(item.get("resource") or ""),
+                str(item.get("field") or ""),
+                str(item.get("before_digest") or ""),
+                str(item.get("after_digest") or ""),
+            ),
+        ),
+    }
+    comparison_fingerprint = _stable_hash(comparison_envelope)
     return {
-        "schema": SOPERATOR_UPGRADE_SAFETY_SCHEMA,
+        "schema": SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA,
         "status": "blocked"
         if blocked
         else ("approval-required" if remediation else "not-required"),
+        "comparison_fingerprint": comparison_fingerprint,
+        "comparison_envelope": comparison_envelope,
         "blocked": blocked,
         "remediation_required": remediation,
         "requires_approval": bool(remediation),
     }
+
+
+def checkpointed_remediation_approval_fingerprint(
+    safety_payload: Mapping[str, Any] | None,
+    *,
+    approval_requested: bool,
+) -> str | None:
+    """Return only a previously persisted, internally consistent plan fingerprint."""
+
+    if not approval_requested or not isinstance(safety_payload, Mapping):
+        return None
+    plan = safety_payload.get("remediation_approval_plan")
+    plan_map = plan if isinstance(plan, Mapping) else {}
+    verification = safety_payload.get("post_upgrade_verification")
+    verification_map = verification if isinstance(verification, Mapping) else {}
+    comparison = verification_map.get("comparison")
+    comparison_map = comparison if isinstance(comparison, Mapping) else {}
+    if (
+        plan_map.get("schema") != SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA
+        or plan_map.get("status") != "approval-required"
+        or not comparison_map
+    ):
+        return None
+    persisted = str(plan_map.get("comparison_fingerprint", "") or "")
+    recomputed = build_remediation_approval_plan(comparison_map)
+    if not re.fullmatch(r"[0-9a-f]{64}", persisted) or persisted != recomputed.get(
+        "comparison_fingerprint"
+    ):
+        raise ValueError(
+            "Checkpointed protected-state remediation plan fingerprint is inconsistent."
+        )
+    return persisted
 
 
 def _external_open_metrics_handoff_check(
@@ -1166,9 +1567,9 @@ def run_post_upgrade_fast_verification(
     external_jail_storage_handoff: Mapping[str, Any] | None = None,
     external_transition_handoff: Mapping[str, Any] | None = None,
     external_open_metrics_handoff: Mapping[str, Any] | None = None,
-    managed_chart_upgrade: bool = False,
-    managed_node_template_upgrade: bool = False,
-    remediation_approved: bool = False,
+    intentional_delta_proof_builder: IntentionalDeltaProofBuilder | None = None,
+    intentional_delta_proof_context: Mapping[str, Any] | None = None,
+    approved_remediation_fingerprint: str | None = None,
     timeout_seconds: int = 120,
 ) -> PostUpgradeVerificationResult:
     after_state = capture_protected_customer_state(
@@ -1192,8 +1593,6 @@ def run_post_upgrade_fast_verification(
         _activechecks_check(before_state, after_state),
         _observability_check(after_state),
     ]
-    open_metrics_handoff_verified = False
-    open_metrics_comparison_hashes_match = False
     if external_cluster:
         open_metrics_handoff_required = _external_open_metrics_value_changed(
             before_state=before_state,
@@ -1201,7 +1600,7 @@ def run_post_upgrade_fast_verification(
             target_ref=target_ref,
             namespace=namespace,
         )
-        open_metrics_check, open_metrics_handoff_verified = _external_open_metrics_handoff_check(
+        open_metrics_check, _ = _external_open_metrics_handoff_check(
             after_state=after_state,
             target_ref=target_ref,
             namespace=namespace,
@@ -1209,12 +1608,6 @@ def run_post_upgrade_fast_verification(
             required=open_metrics_handoff_required,
         )
         checks.append(open_metrics_check)
-        open_metrics_comparison_hashes_match = _external_open_metrics_comparison_hashes_match(
-            before_state=before_state,
-            after_state=after_state,
-            target_ref=target_ref,
-            namespace=namespace,
-        )
     comparison: dict[str, Any] = {
         "schema": SOPERATOR_UPGRADE_SAFETY_SCHEMA,
         "status": "not-run",
@@ -1226,28 +1619,27 @@ def run_post_upgrade_fast_verification(
     }
     if before_state is not None:
         comparison = compare_protected_customer_state(before=before_state, after=after_state)
-        if external_cluster:
-            comparison = _classify_external_intentional_deltas(
+        if intentional_delta_proof_builder is not None:
+            if not isinstance(intentional_delta_proof_context, Mapping):
+                raise ValueError(
+                    "Intentional protected-state proofs require exact command context."
+                )
+            proofs = intentional_delta_proof_builder(
+                before_state,
+                after_state,
                 comparison,
+            )
+            comparison = classify_intentional_deltas_from_proofs(
+                comparison,
+                proofs=proofs,
                 target_ref=target_ref,
                 namespace=namespace,
-                before_state=before_state,
-                after_state=after_state,
-                jail_storage_handoff=external_jail_storage_handoff,
-                transition_handoff=external_transition_handoff,
-                open_metrics_handoff=external_open_metrics_handoff,
-                open_metrics_handoff_verified=open_metrics_handoff_verified,
-                open_metrics_comparison_hashes_match=(open_metrics_comparison_hashes_match),
+                expected_context=intentional_delta_proof_context,
             )
-        else:
-            if managed_chart_upgrade:
-                comparison = _classify_managed_chart_upgrade_deltas(comparison)
-            if managed_node_template_upgrade:
-                comparison = _classify_managed_node_template_upgrade_deltas(comparison)
         checks.append(
             _protected_comparison_check(
                 comparison,
-                remediation_approved=remediation_approved,
+                approved_remediation_fingerprint=approved_remediation_fingerprint,
             )
         )
     else:
@@ -1266,11 +1658,7 @@ def run_post_upgrade_fast_verification(
     zero_downtime_check_status = (
         "passed"
         if zero_downtime.get("eligible") is True
-        else (
-            "failed"
-            if zero_downtime.get("blocking_reasons")
-            else "skipped"
-        )
+        else ("failed" if zero_downtime.get("blocking_reasons") else "skipped")
     )
     checks.append(
         {
@@ -1393,6 +1781,14 @@ def upgrade_safety_checkpoint_payload() -> dict[str, Any]:
             "status": "not-run",
         },
         "remediation_approvals": [],
+        "remediation_approval_plan": {
+            "schema": SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA,
+            "status": "not-required",
+            "comparison_fingerprint": None,
+            "blocked": [],
+            "remediation_required": [],
+            "requires_approval": False,
+        },
         "post_upgrade_verification": {
             "status": "not-run",
             "passed": False,
@@ -1437,7 +1833,7 @@ def update_safety_payload_with_verification(
     safety_payload: Mapping[str, Any] | None,
     result: PostUpgradeVerificationResult,
     *,
-    remediation_approved: bool = False,
+    approved_remediation_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     payload = _safety_payload_copy(safety_payload)
     comparison = dict(result.comparison)
@@ -1458,24 +1854,34 @@ def update_safety_payload_with_verification(
     ]
     payload["zero_downtime_eligibility"] = to_plain_data(result.zero_downtime_eligibility)
     approval_plan = build_remediation_approval_plan(comparison)
+    current_fingerprint = str(approval_plan.get("comparison_fingerprint", "") or "")
+    approval_consumed = bool(
+        approval_plan.get("requires_approval")
+        and approved_remediation_fingerprint
+        and approved_remediation_fingerprint == current_fingerprint
+    )
     remediation_items = approval_plan.get("remediation_required", [])
     if isinstance(remediation_items, list):
         payload["remediation_approvals"] = [
             {
                 **dict(item),
-                "approved": remediation_approved,
+                "approved": approval_consumed,
+                "comparison_fingerprint": current_fingerprint,
             }
             for item in remediation_items
             if isinstance(item, Mapping)
         ]
     else:
         payload["remediation_approvals"] = []
+    payload["remediation_approval_plan"] = approval_plan
     payload["remediation_approval"] = {
-        "approved": remediation_approved,
+        "approved": approval_consumed,
         "required": bool(approval_plan.get("requires_approval")),
-        "status": "approved"
-        if remediation_approved and approval_plan.get("requires_approval")
-        else str(approval_plan.get("status") or "not-required"),
+        "comparison_fingerprint": current_fingerprint,
+        "approved_fingerprint": (approved_remediation_fingerprint if approval_consumed else None),
+        "status": (
+            "approved" if approval_consumed else str(approval_plan.get("status") or "not-required")
+        ),
     }
     return payload
 
@@ -1486,6 +1892,10 @@ def safety_report_markdown_lines(safety_payload: Mapping[str, Any] | None) -> li
     protected_map = protected if isinstance(protected, Mapping) else {}
     verification = safety.get("post_upgrade_verification")
     verification_map = verification if isinstance(verification, Mapping) else {}
+    approval_plan = safety.get("remediation_approval_plan")
+    approval_plan_map = approval_plan if isinstance(approval_plan, Mapping) else {}
+    terminal = safety.get("terminal_verification")
+    terminal_map = terminal if isinstance(terminal, Mapping) else {}
     checks = verification_map.get("checks") or safety.get("fast_smoke", {}).get("checks", [])
     lines = [
         "## Shared Upgrade Safety",
@@ -1494,6 +1904,10 @@ def safety_report_markdown_lines(safety_payload: Mapping[str, Any] | None) -> li
         f"- After hash: `{protected_map.get('after_hash') or 'not-captured'}`",
         f"- Protected-state result: `{protected_map.get('status') or 'not-run'}`",
         f"- Fast verification: `{verification_map.get('status') or 'not-run'}`",
+        f"- Terminal verification: `{terminal_map.get('status') or 'not-run'}`",
+        "- Remediation comparison fingerprint: `"
+        + str(approval_plan_map.get("comparison_fingerprint") or "not-recorded")
+        + "`",
         "",
         "### Fast Checks",
         "",
@@ -1894,6 +2308,30 @@ def _slurmcluster_protected_spec(
     return protected, enabled
 
 
+def protected_slurmcluster_spec_without_open_metrics_hash(
+    spec: Mapping[str, Any],
+    *,
+    omit_login_sshd_annotation_keys: Sequence[str] = (),
+) -> str:
+    """Hash the protected SlurmCluster spec with narrowly selected fields omitted."""
+
+    protected, _enabled = _slurmcluster_protected_spec(spec)
+    normalized = to_plain_data(protected)
+    if not isinstance(normalized, dict):
+        normalized = dict(protected)
+    annotation_keys = {
+        str(key).strip() for key in omit_login_sshd_annotation_keys if str(key).strip()
+    }
+    if annotation_keys:
+        slurm_nodes = normalized.get("slurmNodes")
+        login = slurm_nodes.get("login") if isinstance(slurm_nodes, dict) else None
+        annotations = login.get("sshdServiceAnnotations") if isinstance(login, dict) else None
+        if isinstance(annotations, dict):
+            for key in annotation_keys:
+                annotations.pop(key, None)
+    return _stable_hash(_redact_secrets(normalized))
+
+
 def _sanitize_custom_resources(payload: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for item in payload.get("items", []) or []:
@@ -1901,10 +2339,9 @@ def _sanitize_custom_resources(payload: Mapping[str, Any], *, kind: str) -> dict
             continue
         spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
         status = item.get("status") if isinstance(item.get("status"), Mapping) else {}
-        comparison_spec: Mapping[str, Any] = spec
         open_metrics_enabled: Any = None
         if kind == "SlurmCluster":
-            comparison_spec, open_metrics_enabled = _slurmcluster_protected_spec(spec)
+            _comparison_spec, open_metrics_enabled = _slurmcluster_protected_spec(spec)
         items.append(
             {
                 **_resource_identity(item, kind=kind),
@@ -1918,8 +2355,8 @@ def _sanitize_custom_resources(payload: Mapping[str, Any], *, kind: str) -> dict
                 **(
                     {
                         "controller_open_metrics_enabled": open_metrics_enabled,
-                        "spec_hash_without_controller_open_metrics_enabled": _stable_hash(
-                            _redact_secrets(comparison_spec)
+                        "spec_hash_without_controller_open_metrics_enabled": (
+                            protected_slurmcluster_spec_without_open_metrics_hash(spec)
                         ),
                     }
                     if kind == "SlurmCluster"
@@ -2054,11 +2491,16 @@ def _capture_slurm_runtime(
             warnings.append(warning)
             captured[key] = {"available": False, "error": warning}
             continue
+        protected_stdout = (
+            _SLURM_CONFIG_CAPTURE_BANNER.sub("", result.stdout, count=1)
+            if key == "slurm_config"
+            else result.stdout
+        )
         captured[key] = {
             "available": True,
-            "stdout_sha256": _sha256_text(result.stdout),
-            "line_count": len([line for line in result.stdout.splitlines() if line.strip()]),
-            "summary": _truncate(_normalize_whitespace(result.stdout), 300),
+            "stdout_sha256": _sha256_text(protected_stdout),
+            "line_count": len([line for line in protected_stdout.splitlines() if line.strip()]),
+            "summary": _truncate(_normalize_whitespace(protected_stdout), 300),
         }
         if key == "slurm_nodes":
             captured[key]["problem_nodes"] = [
@@ -2295,9 +2737,9 @@ def _classify_delta(
 ) -> tuple[str, bool, str]:
     if section == "source_payload":
         return (
-            "intentional_upgrade",
-            False,
-            "Generated config changed as part of the requested upgrade.",
+            "remediation_required",
+            True,
+            "Review and approve this generated source configuration drift.",
         )
     if section.endswith("pvcs"):
         if field == "presence" and before == "present" and after == "absent":
@@ -2595,7 +3037,7 @@ def _observability_check(state: ProtectedCustomerState) -> dict[str, Any]:
 def _protected_comparison_check(
     comparison: Mapping[str, Any],
     *,
-    remediation_approved: bool,
+    approved_remediation_fingerprint: str | None,
 ) -> dict[str, Any]:
     blocked_count = int(comparison.get("blocked_count") or 0)
     approval_count = int(comparison.get("approval_required_count") or 0)
@@ -2606,20 +3048,28 @@ def _protected_comparison_check(
             "summary": f"{blocked_count} blocked protected-state delta(s) were detected.",
         }
     if approval_count:
-        if not remediation_approved:
+        approval_plan = build_remediation_approval_plan(comparison)
+        current_fingerprint = str(approval_plan.get("comparison_fingerprint", "") or "")
+        if not (
+            approved_remediation_fingerprint
+            and approved_remediation_fingerprint == current_fingerprint
+        ):
             return {
                 "name": "protected-state-comparison",
                 "status": "failed",
                 "summary": (
                     f"{approval_count} protected-state delta(s) require remediation approval. "
-                    "Review the report and rerun with --approve-remediation only if the "
-                    "listed remediation-required deltas are acceptable."
+                    "Review the checkpointed comparison fingerprint and rerun with "
+                    "--approve-remediation only if that exact remediation plan is acceptable."
                 ),
             }
         return {
             "name": "protected-state-comparison",
             "status": "passed",
-            "summary": f"{approval_count} protected-state delta(s) were remediation-approved.",
+            "summary": (
+                f"{approval_count} protected-state delta(s) matched the exact "
+                "remediation-approved comparison fingerprint."
+            ),
         }
     return {
         "name": "protected-state-comparison",
@@ -2668,10 +3118,7 @@ def _zero_downtime_eligibility(
     continuity_reasons: list[str] = []
     if controller_outage_boundaries:
         kinds = sorted(
-            {
-                str(item.get("kind") or "controller-gap")
-                for item in controller_outage_boundaries
-            }
+            {str(item.get("kind") or "controller-gap") for item in controller_outage_boundaries}
         )
         continuity_reasons.append(
             "executor-recorded Slurm controller outage boundary: " + ", ".join(kinds)

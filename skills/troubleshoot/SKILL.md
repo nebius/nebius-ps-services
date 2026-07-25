@@ -161,11 +161,18 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   remediation budget before a second repair. Count only distinct failed
   remediation-plus-verification cycles; default to three attempts or 60 active
   minutes, whichever is reached first.
+- When evidence establishes a causally independent blocker, replace the marker
+  with a fresh blocker budget: attempt 1, tranche 1, zero active time, and no
+  inherited attempts or stop trigger. This is not a continuation of the earlier
+  blocker and does not require a new user instruction.
+- Treat permission denials and remediation-marker validation or repair as
+  coordination events, not counted remediation attempts or budget exhaustion.
 - Report failed attempts 1 and 2 to the user. After the third failed attempt or
   time exhaustion, set the marker to `exhausted`, call no other tools, and
   transition directly to `REPORTED`.
-- Never extend or reset a tranche without an explicit current-task user
-  instruction. A bare `continue` after the report starts a fresh default tranche.
+- Never extend or reset a tranche for the same blocker without an explicit
+  current-task user instruction. A bare `continue` after the report starts a
+  fresh default tranche for that blocker.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 

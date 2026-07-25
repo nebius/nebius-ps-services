@@ -698,7 +698,11 @@ def test_partition_pause_after_reconfigure_reasserts_exact_previous_up_observati
         updates.append(tuple(kwargs["args"]))
         return _result(kwargs["args"])
 
-    monkeypatch.setattr(migration, "_kubectl_exec_login", update_partition)
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_observed_slurm_route",
+        update_partition,
+    )
 
     lines = migration._reassert_controller_bridge_partition_pause_after_reconfigure(  # noqa: SLF001
         journal=journal,

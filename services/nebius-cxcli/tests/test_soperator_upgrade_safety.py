@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -12,9 +13,16 @@ import pytest
 from nebius_cxcli.soperator_upgrade_safety import (
     ProtectedCustomerState,
     _classify_external_intentional_deltas,
+    _classify_managed_chart_upgrade_deltas,
+    _classify_managed_node_template_upgrade_deltas,
+    _external_open_metrics_comparison_hashes_match,
     _pvc_check,
+    build_intentional_delta_proof,
+    build_remediation_approval_plan,
     build_stage_fast_verification_payload,
     capture_protected_customer_state,
+    checkpointed_remediation_approval_fingerprint,
+    classify_intentional_deltas_from_proofs,
     compare_protected_customer_state,
     run_post_upgrade_fast_verification,
     stage_fast_verification_check,
@@ -22,6 +30,43 @@ from nebius_cxcli.soperator_upgrade_safety import (
     stage_fast_verification_report,
     stage_fast_verification_status,
 )
+
+_TEST_PROOF_CONTEXT = {
+    "command_kind": "test-upgrade",
+    "cluster_identity": "test-cluster",
+    "checkpoint_identity": "test-checkpoint",
+}
+
+
+def _proof_builder_from_classifier(
+    classifier: Any,
+    *,
+    phase_id: str = "test-operation",
+) -> Any:
+    def _build(
+        before: ProtectedCustomerState,
+        after: ProtectedCustomerState,
+        comparison: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        classified = classifier(comparison, before, after)
+        return [
+            build_intentional_delta_proof(
+                delta=delta,
+                command_kind=_TEST_PROOF_CONTEXT["command_kind"],
+                cluster_identity=_TEST_PROOF_CONTEXT["cluster_identity"],
+                target_ref=before.target_ref,
+                namespace=before.namespace,
+                checkpoint_identity=_TEST_PROOF_CONTEXT["checkpoint_identity"],
+                phase_id=phase_id,
+                operation_fingerprint="a" * 64,
+                baseline_hash=before.content_hash,
+                resource_uid="test-resource-uid",
+            )
+            for delta in classified["deltas"]
+            if delta["classification"] == "intentional_upgrade"
+        ]
+
+    return _build
 
 
 @dataclass(frozen=True)
@@ -402,6 +447,28 @@ class _RuntimeOnlyRunner(_Runner):
         return super()._exec_output(command)
 
 
+class _SlurmConfigBannerRunner(_Runner):
+    def __init__(
+        self,
+        banner: str,
+        *,
+        config_token: str = "stable",
+        protected_config_value: str = "baseline",
+    ) -> None:
+        super().__init__(config_value=protected_config_value)
+        self.banner = banner
+        self.config_token = config_token
+
+    def _exec_output(self, command: Sequence[str]) -> str:
+        joined = " ".join(command)
+        if "show config" in joined:
+            return (
+                f"Configuration data as of {self.banner}\n"
+                f"ClusterName=cluster\nConfigToken={self.config_token}\n"
+            )
+        return super()._exec_output(command)
+
+
 class _UnresponsiveSlurmRunner(_Runner):
     def _exec_output(self, command: Sequence[str]) -> str:
         joined = " ".join(command)
@@ -425,6 +492,63 @@ def _capture(runner: _Runner) -> ProtectedCustomerState:
         kube_context="external-context",
         source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
     )
+
+
+def test_slurm_config_capture_ignores_only_the_volatile_observation_banner() -> None:
+    before = _capture(_SlurmConfigBannerRunner("2026-07-24T12:00:00"))
+    after = _capture(_SlurmConfigBannerRunner("2026-07-24T12:00:01"))
+
+    assert (
+        before.sections["slurm_runtime"]["slurm_config"]
+        == (after.sections["slurm_runtime"]["slurm_config"])
+    )
+    assert before.content_hash == after.content_hash
+    assert compare_protected_customer_state(before=before, after=after)["status"] == "matched"
+
+
+def test_slurm_config_capture_keeps_real_configuration_changes_protected() -> None:
+    before = _capture(_SlurmConfigBannerRunner("2026-07-24T12:00:00", config_token="before"))
+    after = _capture(_SlurmConfigBannerRunner("2026-07-24T12:00:01", config_token="after"))
+
+    comparison = compare_protected_customer_state(before=before, after=after)
+    delta = next(
+        item
+        for item in comparison["deltas"]
+        if item["kind"] == "slurm_runtime" and item["field"] == "slurm_config"
+    )
+    assert delta["classification"] == "remediation_required"
+    assert delta["approval_required"] is True
+
+
+def test_remediation_fingerprint_is_stable_across_slurm_config_banner_changes() -> None:
+    before = _capture(
+        _SlurmConfigBannerRunner(
+            "2026-07-24T12:00:00",
+            protected_config_value="baseline",
+        )
+    )
+    first = _capture(
+        _SlurmConfigBannerRunner(
+            "2026-07-24T12:00:01",
+            protected_config_value="reviewed-drift",
+        )
+    )
+    second = _capture(
+        _SlurmConfigBannerRunner(
+            "2026-07-24T12:00:02",
+            protected_config_value="reviewed-drift",
+        )
+    )
+
+    first_plan = build_remediation_approval_plan(
+        compare_protected_customer_state(before=before, after=first)
+    )
+    second_plan = build_remediation_approval_plan(
+        compare_protected_customer_state(before=before, after=second)
+    )
+
+    assert first_plan["status"] == "approval-required"
+    assert first_plan["comparison_fingerprint"] == second_plan["comparison_fingerprint"]
 
 
 _OPEN_METRICS_UNSET = object()
@@ -488,6 +612,32 @@ def _restored_open_metrics_proof(*, desired_enabled: bool = True) -> dict[str, A
         "restored_at": "2026-07-11T00:00:00Z",
         "post_restore_readiness_verified_at": "2026-07-11T00:00:01Z",
     }
+
+
+def _external_handoff_proof_builder(
+    *,
+    target_ref: str,
+    handoff: dict[str, Any] | None = None,
+    handoff_verified: bool = False,
+) -> Any:
+    return _proof_builder_from_classifier(
+        lambda comparison, before, after: _classify_external_intentional_deltas(
+            comparison,
+            target_ref=target_ref,
+            before_state=before,
+            after_state=after,
+            open_metrics_handoff=handoff,
+            open_metrics_handoff_verified=handoff_verified,
+            open_metrics_comparison_hashes_match=(
+                _external_open_metrics_comparison_hashes_match(
+                    before_state=before,
+                    after_state=after,
+                    target_ref=target_ref,
+                    namespace=before.namespace,
+                )
+            ),
+        )
+    )
 
 
 def test_slurm_runtime_capture_uses_login_sshd_container() -> None:
@@ -639,6 +789,12 @@ def test_external_open_metrics_restoration_is_intentional_with_exact_handoff_pro
         before_state=before,
         external_cluster=True,
         external_open_metrics_handoff=_restored_open_metrics_proof(),
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="cluster",
+            handoff=_restored_open_metrics_proof(),
+            handoff_verified=True,
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -703,7 +859,6 @@ def test_external_open_metrics_restoration_stays_protected_without_exact_proof(
         before_state=before,
         external_cluster=True,
         external_open_metrics_handoff=proof,
-        remediation_approved=True,
     )
 
     assert result.status == "failed"
@@ -733,6 +888,12 @@ def test_external_open_metrics_proof_does_not_exempt_unrelated_slurmcluster_spec
         before_state=before,
         external_cluster=True,
         external_open_metrics_handoff=_restored_open_metrics_proof(),
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="cluster",
+            handoff=_restored_open_metrics_proof(),
+            handoff_verified=True,
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "failed"
@@ -793,7 +954,6 @@ def test_external_open_metrics_after_state_proof_is_nonwaivable(
         before_state=before,
         external_cluster=True,
         external_open_metrics_handoff=proof,
-        remediation_approved=True,
     )
 
     assert result.status == "failed"
@@ -825,6 +985,12 @@ def test_external_open_metrics_restore_keeps_legacy_whole_hash_baseline_protecte
         before_state=legacy_before,
         external_cluster=True,
         external_open_metrics_handoff=_restored_open_metrics_proof(),
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="cluster",
+            handoff=_restored_open_metrics_proof(),
+            handoff_verified=True,
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "failed"
@@ -862,10 +1028,20 @@ def test_external_open_metrics_legacy_baseline_without_handoff_uses_normal_remed
         kube_context="external-context",
         before_state=legacy_before,
         external_cluster=True,
-        remediation_approved=True,
     )
 
-    assert result.status == "passed"
+    assert result.status == "failed"
+    approval_plan = build_remediation_approval_plan(result.comparison)
+    approved = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=legacy_before,
+        external_cluster=True,
+        approved_remediation_fingerprint=approval_plan["comparison_fingerprint"],
+    )
+    assert approved.status == "passed"
     open_metrics_check = next(
         item for item in result.checks if item["name"] == "external-open-metrics-handoff"
     )
@@ -888,7 +1064,11 @@ def test_managed_chart_upgrade_classifies_chart_owned_deltas_as_intentional() ->
         namespace="soperator",
         kube_context="external-context",
         before_state=before,
-        managed_chart_upgrade=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_proof_builder_from_classifier(
+            lambda comparison, _before, _after: _classify_managed_chart_upgrade_deltas(comparison)
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -910,7 +1090,11 @@ def test_managed_chart_upgrade_keeps_non_chart_nodeset_drift_protected() -> None
         namespace="soperator",
         kube_context="external-context",
         before_state=before,
-        managed_chart_upgrade=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_proof_builder_from_classifier(
+            lambda comparison, _before, _after: _classify_managed_chart_upgrade_deltas(comparison)
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "failed"
@@ -930,7 +1114,11 @@ def test_managed_chart_upgrade_classifies_slurm_runtime_hash_deltas_as_intention
         namespace="soperator",
         kube_context="external-context",
         before_state=before,
-        managed_chart_upgrade=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_proof_builder_from_classifier(
+            lambda comparison, _before, _after: _classify_managed_chart_upgrade_deltas(comparison)
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -1006,7 +1194,13 @@ def test_managed_node_template_upgrade_classifies_node_replacement_as_intentiona
         namespace="soperator",
         kube_context="external-context",
         before_state=before,
-        managed_node_template_upgrade=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_proof_builder_from_classifier(
+            lambda comparison, _before, _after: _classify_managed_node_template_upgrade_deltas(
+                comparison
+            )
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -1030,7 +1224,13 @@ def test_managed_node_template_upgrade_keeps_node_label_drift_protected() -> Non
         namespace="soperator",
         kube_context="external-context",
         before_state=before,
-        managed_node_template_upgrade=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_proof_builder_from_classifier(
+            lambda comparison, _before, _after: _classify_managed_node_template_upgrade_deltas(
+                comparison
+            )
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "failed"
@@ -1225,6 +1425,7 @@ def test_remediation_required_drift_requires_explicit_approval() -> None:
         for check in unapproved.checks
     )
 
+    approval_plan = build_remediation_approval_plan(unapproved.comparison)
     approved = run_post_upgrade_fast_verification(
         command_runner=_Runner(config_value="changed"),
         target_ref="gpu",
@@ -1232,7 +1433,7 @@ def test_remediation_required_drift_requires_explicit_approval() -> None:
         kube_context="external-context",
         before_state=before,
         external_cluster=True,
-        remediation_approved=True,
+        approved_remediation_fingerprint=approval_plan["comparison_fingerprint"],
     )
 
     assert approved.status == "passed"
@@ -1242,6 +1443,146 @@ def test_remediation_required_drift_requires_explicit_approval() -> None:
         and "remediation-approved" in check["summary"]
         for check in approved.checks
     )
+
+
+def test_stale_remediation_fingerprint_does_not_approve_fresh_drift() -> None:
+    before = _capture(_Runner(config_value="baseline"))
+    first = run_post_upgrade_fast_verification(
+        command_runner=_Runner(config_value="first-drift"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+    stale_fingerprint = build_remediation_approval_plan(first.comparison)["comparison_fingerprint"]
+
+    changed = run_post_upgrade_fast_verification(
+        command_runner=_Runner(config_value="different-drift"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+        approved_remediation_fingerprint=stale_fingerprint,
+    )
+
+    assert changed.status == "failed"
+    assert build_remediation_approval_plan(changed.comparison)["comparison_fingerprint"] != (
+        stale_fingerprint
+    )
+
+
+def test_checkpointed_remediation_approval_consumes_only_the_persisted_comparison() -> None:
+    before = _capture(_Runner(config_value="baseline"))
+    observed = run_post_upgrade_fast_verification(
+        command_runner=_Runner(config_value="first-drift"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+    plan = build_remediation_approval_plan(observed.comparison)
+    safety_payload = {
+        "post_upgrade_verification": {"comparison": observed.comparison},
+        "remediation_approval_plan": plan,
+    }
+
+    assert (
+        checkpointed_remediation_approval_fingerprint(
+            safety_payload,
+            approval_requested=False,
+        )
+        is None
+    )
+    assert (
+        checkpointed_remediation_approval_fingerprint(
+            safety_payload,
+            approval_requested=True,
+        )
+        == plan["comparison_fingerprint"]
+    )
+
+    changed = run_post_upgrade_fast_verification(
+        command_runner=_Runner(config_value="different-drift"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+    stale_payload = {
+        **safety_payload,
+        "post_upgrade_verification": {"comparison": changed.comparison},
+    }
+    with pytest.raises(ValueError, match="fingerprint is inconsistent"):
+        checkpointed_remediation_approval_fingerprint(
+            stale_payload,
+            approval_requested=True,
+        )
+
+
+def test_intentional_proof_is_bound_to_one_exact_after_digest() -> None:
+    before = _capture(_Runner(config_value="baseline"))
+    first_after = _capture(_Runner(config_value="first-drift"))
+    first_comparison = compare_protected_customer_state(before=before, after=first_after)
+    first_delta = next(
+        delta
+        for delta in first_comparison["deltas"]
+        if delta["kind"] == "configmaps" and delta["field"] == "data_sha256_by_key"
+    )
+    proof = build_intentional_delta_proof(
+        delta=first_delta,
+        command_kind="test-upgrade",
+        cluster_identity="test-cluster",
+        target_ref="gpu",
+        namespace="soperator",
+        checkpoint_identity="test-checkpoint",
+        phase_id="test-operation",
+        operation_fingerprint="a" * 64,
+        baseline_hash=before.content_hash,
+        resource_uid="test-resource-uid",
+    )
+    second_after = _capture(_Runner(config_value="different-drift"))
+    second_comparison = compare_protected_customer_state(before=before, after=second_after)
+
+    with pytest.raises(ValueError, match="does not match one current exact delta"):
+        classify_intentional_deltas_from_proofs(
+            second_comparison,
+            proofs=[proof],
+            target_ref="gpu",
+            namespace="soperator",
+            expected_context=_TEST_PROOF_CONTEXT,
+        )
+
+
+def test_blocked_delta_cannot_be_consumed_as_intentional_proof() -> None:
+    before = _capture(_Runner(include_accounting_pvc=True))
+    after = _capture(_Runner(include_accounting_pvc=False))
+    comparison = compare_protected_customer_state(before=before, after=after)
+    blocked = next(delta for delta in comparison["deltas"] if delta["classification"] == "blocked")
+    proof = build_intentional_delta_proof(
+        delta=blocked,
+        command_kind="test-upgrade",
+        cluster_identity="test-cluster",
+        target_ref="gpu",
+        namespace="soperator",
+        checkpoint_identity="test-checkpoint",
+        phase_id="test-operation",
+        operation_fingerprint="a" * 64,
+        baseline_hash=before.content_hash,
+        resource_uid="test-resource-uid",
+    )
+
+    with pytest.raises(ValueError, match="does not match one current exact delta"):
+        classify_intentional_deltas_from_proofs(
+            comparison,
+            proofs=[proof],
+            target_ref="gpu",
+            namespace="soperator",
+            expected_context=_TEST_PROOF_CONTEXT,
+        )
 
 
 def test_home_mount_and_activechecks_baseline_are_verified() -> None:
@@ -1293,6 +1634,11 @@ def test_external_shared_jail_home_mount_change_is_intentional() -> None:
         kube_context="external-context",
         before_state=before,
         external_cluster=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="gpu",
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -1319,6 +1665,11 @@ def test_external_jail_home_subpath_mount_change_is_intentional() -> None:
         kube_context="external-context",
         before_state=before,
         external_cluster=True,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="gpu",
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
     )
 
     assert result.status == "passed"
@@ -1442,7 +1793,6 @@ def test_external_migration_classifier_allows_owned_cleanup_and_keeps_config_dri
             },
         ],
     }
-
     classified = _classify_external_intentional_deltas(
         comparison,
         target_ref="cxcli-ext-upg-1223b",
@@ -1518,7 +1868,6 @@ def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift
             },
         ],
     }
-
     classified = _classify_external_intentional_deltas(
         comparison,
         target_ref="cxcli-ext-upg-1223b",
@@ -1628,6 +1977,167 @@ def test_external_verified_bridge_transition_classifies_only_owned_temporary_dri
     by_resource = {delta["resource"]: delta for delta in classified["deltas"]}
     assert by_resource["slurm-runtime"]["classification"] == "intentional_upgrade"
     assert by_resource["soperator/customer-config"]["classification"] == ("remediation_required")
+    assert classified["approval_required_count"] == 1
+
+
+def _terminal_transition_handoff() -> dict[str, Any]:
+    material = {
+        "schema": "nebius-cxcli/external-terminal-transition-proof/v1",
+        "status": "verified",
+        "target_ref": "soperator-cluster",
+        "target_uid": "target-slurmcluster-uid",
+        "checkpoint_identity": "a" * 64,
+        "terminal_stage": "cleaned",
+        "terminal_authority_owner": "target-singleton",
+        "source_transition": {
+            "authority_history_fingerprint": "b" * 64,
+            "manager_pause_fingerprint": "c" * 64,
+            "source_configuration_fingerprint": "d" * 64,
+            "client_propagation_fingerprint": "e" * 64,
+        },
+        "target_transition": {
+            "takeover_fingerprint": "f" * 64,
+            "cleanup_fingerprint": "1" * 64,
+        },
+        "chart_operation_fingerprint": "2" * 64,
+    }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+    return {
+        "status": "verified",
+        "stage": "cleaned",
+        "authority_owner": "target-singleton",
+        "historical_transition": {
+            **material,
+            "proof_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+        },
+    }
+
+
+def test_external_terminal_transition_reuses_only_exact_historical_owned_deltas() -> None:
+    comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 4,
+        "deltas": [
+            {
+                "kind": "configmaps",
+                "resource": "soperator/soperator-cluster-slurm-configs",
+                "field": "data_sha256_by_key",
+                "before": "before",
+                "after": "after",
+            },
+            {
+                "kind": "secrets",
+                "resource": "soperator/sh.helm.release.v1.soperator.v7",
+                "field": "data_sha256_by_key",
+                "before": "before",
+                "after": "after",
+            },
+            {
+                "kind": "secrets",
+                "resource": "soperator/sh.helm.release.v1.soperator.v7",
+                "field": "labels",
+                "before": "before",
+                "after": "after",
+            },
+            {
+                "kind": "configmaps",
+                "resource": "soperator/customer-config",
+                "field": "data_sha256_by_key",
+                "before": "before",
+                "after": "after",
+            },
+        ],
+    }
+    for delta in comparison["deltas"]:
+        delta.update(
+            {
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review protected drift.",
+            }
+        )
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="soperator-cluster",
+        transition_handoff=_terminal_transition_handoff(),
+    )
+
+    intentional = {
+        (delta["kind"], delta["resource"], delta["field"])
+        for delta in classified["deltas"]
+        if delta["classification"] == "intentional_upgrade"
+    }
+    assert intentional == {
+        (
+            "configmaps",
+            "soperator/soperator-cluster-slurm-configs",
+            "data_sha256_by_key",
+        ),
+        (
+            "secrets",
+            "soperator/sh.helm.release.v1.soperator.v7",
+            "data_sha256_by_key",
+        ),
+        ("secrets", "soperator/sh.helm.release.v1.soperator.v7", "labels"),
+    }
+    assert classified["approval_required_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "resource"),
+    [
+        ("fingerprint", "soperator/soperator-cluster-slurm-configs"),
+        ("target", "soperator/soperator-cluster-slurm-configs"),
+        ("secret-name", "soperator/sh.helm.release.v1.soperator.v7.invalid"),
+    ],
+)
+def test_external_terminal_transition_rejects_tampered_or_unowned_proof(
+    mutation: str,
+    resource: str,
+) -> None:
+    handoff = _terminal_transition_handoff()
+    historical = handoff["historical_transition"]
+    if mutation == "fingerprint":
+        historical["proof_sha256"] = "0" * 64
+    elif mutation == "target":
+        historical["target_ref"] = "different-cluster"
+    comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 1,
+        "deltas": [
+            {
+                "kind": "secrets" if mutation == "secret-name" else "configmaps",
+                "resource": resource,
+                "field": ("labels" if mutation == "secret-name" else "data_sha256_by_key"),
+                "before": "before",
+                "after": "after",
+            }
+        ],
+    }
+    comparison["deltas"][0].update(
+        {
+            "classification": "remediation_required",
+            "approval_required": True,
+            "remediation": "Review protected drift.",
+        }
+    )
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="soperator-cluster",
+        transition_handoff=handoff,
+    )
+
+    assert classified["deltas"][0]["classification"] == "remediation_required"
     assert classified["approval_required_count"] == 1
 
 

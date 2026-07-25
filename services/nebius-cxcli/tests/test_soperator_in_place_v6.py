@@ -421,17 +421,17 @@ def test_worker_drain_rescheduling_guard_rejects_single_replica_without_peer(
 def test_in_place_batch_impact_reports_aggregate_before_dispatch() -> None:
     lines = migration._in_place_batch_impact_lines(  # noqa: SLF001
         (
-            ({"id": "worker-a", "name": "worker-a", "fixed_size": 100}, 100),
-            ({"id": "worker-b", "name": "worker-b", "fixed_size": 100}, 100),
+            ({"id": "worker-a", "name": "worker-a", "fixed_size": 100}, 99),
+            ({"id": "worker-b", "name": "worker-b", "fixed_size": 100}, 99),
         ),
         ("worker-c: blocked - active Slurm allocations remain",),
     )
 
-    assert "worker-a: permits 100/100 unavailable" in lines
-    assert "worker-b: permits 100/100 unavailable" in lines
+    assert "worker-a: permits 99/100 unavailable" in lines
+    assert "worker-b: permits 99/100 unavailable" in lines
     assert "worker-c: blocked - active Slurm allocations remain" in lines
-    assert "Batch permits up to 200 worker nodes to be unavailable." in lines
-    assert "Each full-group dispatch may temporarily have zero Ready nodes." in lines
+    assert "Batch permits up to 198 worker nodes to be unavailable." in lines
+    assert "Every prepared worker group retains at least one provider capacity member." in lines
     assert "Nebius may process fewer nodes concurrently than this permitted bound." in lines
 
 

@@ -147,7 +147,11 @@ When `troubleshoot` records an active `codex-remediation-budget:v1` marker,
 preserve exactly one valid marker during every rolling-summary rewrite until it
 is resolved, superseded by a causally different blocker, or replaced by a new
 user-authorized tranche. Do not infer attempts, change limits, or copy raw
-failure evidence into it; `troubleshoot` owns those semantics.
+failure evidence into it; `troubleshoot` owns those semantics. When
+`troubleshoot` establishes a causally different blocker, preserve only its
+fresh attempt-1 marker and keep the earlier outcome in prose; do not carry the
+old blocker's attempts, active time, tranche, exhaustion status, or stop trigger
+into the replacement marker.
 
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the

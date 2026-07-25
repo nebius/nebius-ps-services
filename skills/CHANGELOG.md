@@ -6,6 +6,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Made `config-codex`'s create-only `config.toml` template an explicit
+  public-safe recovery baseline derived through a documented allowlist rather
+  than a live-config copy. Recovery now preserves portable Sol/xhigh/Fast,
+  agent, task-state, and public MCP settings while excluding personal project
+  lists, absolute paths, secret-bearing values, private/plugin-managed
+  integrations, desktop/generated state, notification commands, and
+  undocumented keys; executable MCP dependencies are version-pinned, missing
+  configs are created through an atomic no-clobber `0600` renderer, and
+  existing laptop configs remain patch-only.
 - Narrowed `install-grafana-mcp-for-nebius` to explicit installation,
   configuration, authentication repair, external-Grafana setup, and
   datasource-list readiness validation. Routine datasource, dashboard,
@@ -13,7 +22,9 @@ All notable changes to the reusable Codex skills are tracked here.
   `nebius-grafana-query` skill without a legacy query path in the installer.
 - Aligned the public Codex config template, local preflight, global-context
   setup guidance, fixture validation, and installed skill copies on
-  `agents.max_threads = 16`.
+  `agents.max_concurrent_threads_per_session = 16`, removing the legacy
+  `agents.max_threads` alias and undocumented `agents.max_depth` setting from
+  the reusable baseline.
 - Updated the public Codex config baseline to use `gpt-5.6-sol`, `xhigh`
   reasoning for normal and Plan modes, and the Fast service tier by default.
 - Refactored the read-only `code-info` skill to accept explicit project-folder
@@ -26,6 +37,17 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Made remediation-marker result failures actionable by naming the two
+  canonical values and distinguishing counted same-blocker failures from
+  unverified progress and causally independent blocker transitions, preventing
+  repeated repair attempts that only guess unsupported enum spellings.
+- Reset remediation budgets per causally independent blocker instead of
+  carrying earlier attempts, active time, tranche, exhaustion state, or stop
+  trigger forward. The optional guard now rejects contradictory lifecycle
+  fields, reports a bounded public-safe marker-validation reason without
+  reflecting marker content or filesystem exception details, and treats exact
+  marker repair as non-counting coordination work rather than forcing a false
+  exhaustion report.
 - Scoped the optional SDLC PreToolUse policy to active SDLC runs and removed its
   misleading static status message from the registration, so ordinary tasks no
   longer receive SDLC decisions after the hook's active-run check. Documented a

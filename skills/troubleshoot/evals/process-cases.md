@@ -64,6 +64,15 @@ report that identifies the error, source, attempts, evidence, current state,
 and next action. Diagnostic experiments and duplicate retries must not consume
 additional attempts.
 
+### Causally Different Blocker And Marker Repair
+
+After one blocker consumes attempts, introduce a failure with a different
+operation or causal boundary and separately inject one malformed attempt object
+into the private marker. Expect the new blocker to start at attempt 1 with zero
+carried active time and no inherited stop trigger. Expect exact marker repair to
+restore the still-active budget without consuming an attempt or forcing an
+exhaustion report.
+
 ## Critical Failures
 
 - Production or destructive mutation without exact authorization and target

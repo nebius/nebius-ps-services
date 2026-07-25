@@ -4,6 +4,9 @@ Use this reference when applying `config-codex` to a real machine. Public repo
 files must stay generic; rendered local files belong under that user's
 `$CODEX_HOME`.
 
+Read `config-recovery.md` before creating a missing `config.toml` or refreshing
+the public recovery baseline from a reviewed local setup.
+
 ## Inputs
 
 Collect these values first:
@@ -174,7 +177,6 @@ replace-if-unmodified behavior:
 Replace placeholders:
 
 - `{{CODEX_HOME}}` with the user's Codex home.
-- `{{SKILLS_HOME}}` with the user's installed skills directory.
 - `{{PROJECT_ROOT}}` with the user's trusted project root.
 
 The `hooks.json` template intentionally uses
@@ -219,8 +221,13 @@ distinct failed remediations or 60 active minutes unless the current user set a
 different budget, report failures 1 and 2 as progress, and at exhaustion make
 only the exact private state update before stopping all other tools and returning
 the complete report. Another bounded tranche requires a new explicit user
-instruction. Preserve the active `codex-remediation-budget:v1` marker while
-rewriting private task state.
+instruction for the same blocker. A causally independent blocker starts its own
+fresh budget at attempt 1. Use the default three-attempt and 60-minute limits
+unless the current instruction sets lower or higher limits that apply to the new
+blocker. Do not carry attempts, active time, tranche, exhaustion status, or stop
+trigger from the earlier blocker. Permission denials and marker validation or
+repair consume no attempt. Preserve the active
+`codex-remediation-budget:v1` marker while rewriting private task state.
 
 The managed section must also permit agents to clean up temporary trees they
 created during the current task. Require the exact task-specific path to be
@@ -236,9 +243,24 @@ Recommended managed block markers:
 <!-- END config-codex managed context -->
 ```
 
-If `$CODEX_HOME/config.toml` is missing, create it from
-`assets/config.toml.template` after replacing placeholders. If it exists, do not
-replace it. Parse it first, then add only missing settings required by the
+If `$CODEX_HOME/config.toml` is missing, create it through the public-safe
+no-clobber renderer:
+
+```bash
+python3 config-codex/scripts/create-recovery-config.py \
+  --codex-home "$CODEX_HOME" \
+  --project-root <PROJECT_ROOT>
+```
+
+The renderer uses `assets/config.toml.template`, rejects a symlink or
+concurrent target, validates the rendered TOML, and creates the file with mode
+`0600`. Do not create a backup for a file that did not exist. Run the required
+read-only `codex exec` runtime probe with `--strict-config` after rendering.
+If the target appears before the exclusive write, stop and follow the
+existing-file patch-only contract. If it exists from the start, do not replace
+it. A post-publication durability or cleanup warning means the complete file
+already exists; do not retry creation, and run the read-only preflight. Parse
+an existing file first, then add only missing settings required by the
 requested setup:
 
 - `[features]` entries such as `hooks` and `multi_agent`.
@@ -261,11 +283,20 @@ The private task-implementer root is the exception only after explicit opt-in;
 follow the dedicated contract above and preserve the existing policy.
 
 For a missing config, the public-safe MCP baseline in the template restores the
-reusable MCP servers that can be expressed without private values. Existing
-configs may also contain plugin-managed or machine-specific MCP servers with
-absolute commands or private environment values. Preserve those entries during
+reusable MCP servers that can be expressed without private values. Executable
+package and container references are pinned to reviewed upstream releases;
+never replace them with `@latest` or an untagged image. Existing configs may
+also contain plugin-managed or machine-specific MCP servers with absolute
+commands or private environment values. Preserve those entries during
 patching, but restore them through their owning plugin or setup skill rather
 than copying local values into public templates.
+
+The recovery baseline also omits personal project lists, secret-bearing shell
+values, notification commands, desktop preferences, plugin and marketplace
+state, generated notice/TUI state, inline hook state already owned by
+`hooks.json`, and undocumented keys. Re-approve project roots and restore each
+private layer through its owning local workflow. Do not claim byte-for-byte
+recovery from the public template.
 
 ## Optional Hook-Assisted Subagent Policy
 
@@ -381,6 +412,11 @@ print("config.toml is valid TOML")
 PY
 ```
 
+After creating a missing config from the recovery baseline, put
+`--strict-config` on the read-only runtime probe below. Keep
+`codex features list` as the separate feature-status check; the `features`
+subcommand rejects the runtime strict-config flag in the installed CLI.
+
 Parse hooks JSON:
 
 ```bash
@@ -452,7 +488,7 @@ expected scripts under `$CODEX_HOME/hooks/`.
 After trusting hooks, run a non-mutating probe:
 
 ```bash
-codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+codex --strict-config exec --sandbox read-only --cd <PROJECT_ROOT> \
   "Summarize active instruction sources, available skills/custom agents, and the injected durable task-state path. Do not edit files."
 ```
 
@@ -497,7 +533,7 @@ historical task-state contents are not injected into hook context.
 Then run an explicit subagent probe:
 
 ```bash
-codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+codex --strict-config exec --sandbox read-only --cd <PROJECT_ROOT> \
   "Use $global-context-management. Explicitly spawn one read-only repo_mapper subagent to inspect this repository. Do not edit files. Wait for it, close it after the result when close controls are available, then report whether the subagent was spawned and closed."
 ```
 

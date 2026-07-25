@@ -1,8 +1,18 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 #
-# Public-safe Codex config template.
-# Replace {{CODEX_HOME}}, {{SKILLS_HOME}}, and {{PROJECT_ROOT}} when rendering
-# this file for a real user. Do not commit rendered local files.
+# Public-safe Codex recovery template.
+#
+# This is a reviewed, portable recovery baseline derived from a local Codex
+# setup without copying that live file. Replace {{CODEX_HOME}} and
+# {{PROJECT_ROOT}} when rendering this file for a real user. Do not commit
+# rendered local files.
+#
+# Intentionally omitted: personal project lists, absolute local paths, secret
+# values, shell-environment overrides, notification commands, private or
+# plugin-managed MCP servers, plugin/marketplace state, desktop preferences,
+# inline hook state, generated notice/TUI state, and undocumented feature keys.
+# Restore those through their owning setup flow after reviewing the target
+# machine. See references/config-recovery.md.
 
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
@@ -13,23 +23,15 @@ sandbox_mode = "danger-full-access"
 web_search = "live"
 personality = "pragmatic"
 
-project_doc_max_bytes = 65536
-tool_output_token_limit = 12000
-
 [features]
-apps = true
 shell_tool = true
-shell_snapshot = true
-unified_exec = true
 hooks = true
 multi_agent = true
 memories = true
 fast_mode = true
-skill_mcp_dependency_install = true
 
 [agents]
-max_threads = 16
-max_depth = 1
+max_concurrent_threads_per_session = 16
 
 [agents.repo_mapper]
 description = "Read-only codebase explorer for relevant files, symbols, execution paths, dependencies, and conventions."
@@ -46,9 +48,6 @@ description = "Read-only reviewer focused on correctness, regressions, security,
 nickname_candidates = ["Reviewer", "Sentinel", "Auditor"]
 config_file = "agents/risk_reviewer.toml"
 
-[history]
-persistence = "save-all"
-
 [sandbox_workspace_write]
 network_access = true
 # Keep task-implementer prompt storage opt-in. When sandbox_mode is
@@ -56,26 +55,18 @@ network_access = true
 # "{{CODEX_HOME}}/task-implementer" without removing existing roots.
 writable_roots = ["{{CODEX_HOME}}/task-state"]
 
-[[skills.config]]
-path = "{{SKILLS_HOME}}/global-context-management"
-enabled = true
-
-[[skills.config]]
-path = "{{SKILLS_HOME}}/config-codex"
-enabled = true
-
 [mcp_servers.context7]
 command = "npx"
-args = ["-y", "@upstash/context7-mcp@latest"]
+args = ["-y", "@upstash/context7-mcp@3.2.4"]
 env_vars = ["CONTEXT7_API_KEY"]
 
 [mcp_servers.playwright]
 command = "npx"
-args = ["-y", "@playwright/mcp@latest"]
+args = ["-y", "@playwright/mcp@0.0.78"]
 
 [mcp_servers.terraform]
 command = "docker"
-args = ["run", "-i", "--rm", "hashicorp/terraform-mcp-server"]
+args = ["run", "-i", "--rm", "hashicorp/terraform-mcp-server:0.5.2"]
 
 [mcp_servers.markitdown]
 command = "uvx"
@@ -92,9 +83,7 @@ bearer_token_env_var = "GITHUB_TOKEN"
 [mcp_servers.openaiDeveloperDocs]
 url = "https://developers.openai.com/mcp"
 
-[apps._default]
-enabled = true
-
+# Add only the trusted project roots the user explicitly reviews.
 [projects."{{PROJECT_ROOT}}"]
 trust_level = "trusted"
 

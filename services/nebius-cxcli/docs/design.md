@@ -2317,7 +2317,26 @@ Both in-place ownership adapters use one service and worker campaign order:
 `login -> accounting -> controller -> system -> workers`. Accounting captures
 and compares the exact MariaDB/SlurmDBD writer, persistent-volume identities,
 accounts, users, associations, QOS, registrations, and history hashes around
-its provider operation. Before a controller or system provider operation, the
+its provider operation. While source- or target-bridge HA remains authoritative,
+each rolling-compute service or provider replay first revalidates the exact
+phase-owned manager pause and inert target-controller command gate. An
+externally resumed manager is compare-and-swap paused and checkpointed before
+any Slurm RPC, accounting sample, accepted provider-operation reconciliation,
+or new provider mutation; the strict accounting comparison still rejects
+evidence changed during the incident. Across completed campaign segments, the
+bridge pause and current phase pause must retain one manager UID and original
+replica contract; the current phase's non-replica spec fingerprint is then
+checked against the live paused Deployment instead of being compared to an
+older segment's fingerprint. Once target-native cleanup is durably
+post-provider, cxcli validates every completed node-group replacement and
+resumes only controller finalization, runtime identity, and source cleanup.
+Target-chart dependency preparation remains a pre-mutation boundary. Its exact
+locked `helm dependency build` receives two bounded backoff retries only when
+the failure is a transient repository download, gateway, timeout, connection,
+or equivalent transport error. Deterministic chart and lock failures stop
+immediately, and exhausting the transient retry chain checkpoints the last
+error without dispatching Helm or provider mutation.
+Before a controller or system provider operation, the
 bridge member in the opposite placement domain must be the observed healthy
 primary; after the operation, only the journaled domain may present replacement
 Node UIDs. Workers are classified from exact Slurm placement, and only clear
@@ -3088,6 +3107,20 @@ UID, and accepted slot-B binding. The post-OpenMetrics topology proof may
 advance to it only through a one-way successor whose fingerprint binds the
 previous replay; retries reuse that exact successor and reject any unrelated
 Helm or target-spec drift.
+That Helm operation is release-wide and can restore the paused manager as well
+as the target SlurmCluster. Before dispatch, the shared managed/external
+handoff path therefore journals a manager restore intent bound to the selected
+pause UID, replica authority, non-replica and rendered Helm spec fingerprints,
+paused and expected generations, target UID, values fingerprint, and immutable
+Helm apply intent. Crash adoption after Helm is narrower than generic live-state
+adoption: cxcli requires the verified final-values reconciliation, exact
+intent/proof/provenance fingerprints, freshly re-renders the manager from the
+same chart and values, reads the manager manifest from the proof's exact Helm
+release revision, and accepts only the single paused-generation successor. The
+pause journal is required before final Helm dispatch, and the terminal
+restore/proof/live postcondition is replay-safe across another resume. Missing
+pause or intent authority, a generation jump, revision or chart drift, target
+drift, or a merely matching replica count remains recovery-required.
 When this boundary runs in a later campaign segment, the operational
 rolling-compute journal can be empty by design while the completed
 source-to-target identity transition remains at campaign scope. One canonical
@@ -4599,6 +4632,88 @@ The Soperator lifecycle surface is split by ownership:
   and continue through `ext-soperator upgrade`; external targets do not switch
   to the managed `soperator upgrade` path.
 
+### Protected-State Approval Contract
+
+Managed and external upgrades use one fail-closed protected-state approval
+model. Every comparison delta carries canonical full-value before and after
+SHA256 digests in addition to its redacted report summary. Normal
+`--execute --approve` can classify a delta as command-owned only through one
+immutable proof bound to the command kind, cluster and target identity,
+checkpoint or campaign identity, phase, operation fingerprint, frozen baseline
+hash, resource and field, exact before/after digests, and the applicable
+resource or owner UID. Proof matching is one-to-one: wildcard, resource-name,
+mode-boolean, and prefix-only authorization is not part of the execution path,
+and a proof can never downgrade a blocked delta.
+
+The managed producer checkpoints the campaign-wide protected-change intent
+with the baseline, then checkpoints the exact gated chart values before apply
+and consumes only verified chart/provider operations. The external producer
+uses the existing intent-bound Helm proof, provider operation journal,
+controller handoff, and GPU topology release binding. In particular, a
+topology-driven NodeSet spec transition is authorized by the immutable rendered
+apply intent, compatible installed/live proof, exact target SlurmCluster UID,
+NodeSet UID, topology fingerprint, and release gate rather than by the
+`worker` name.
+
+Terminal bridge cleanup does not erase earlier transition authority. When the
+external journal is exactly `cleaned`, the safety producer validates the full
+bridge journal and emits a hash-sealed historical transition proof bound to the
+campaign, target UID, source bridge authority history, manager pause, generated
+source ConfigMap copy, live client propagation, target singleton takeover,
+retained target state, cleanup, and verified Helm operation. The consumer
+recomputes that proof fingerprint and permits it to classify only the exact
+target `*-slurm-configs` data delta and syntactically canonical Soperator Helm
+history Secret data/label deltas. A separate retained-login-allocation proof
+may classify only `spec_hash_without_controller_open_metrics_enabled`: it
+requires one persisted checkpoint allocation decision, the exact target UID,
+the expected internal/external annotation set on the live target, an unchanged
+live capture hash, and equality between the frozen baseline hash and the live
+spec after removing only those two annotation keys. Other SlurmCluster,
+similarly named Secret, and customer ConfigMap drift do not inherit terminal
+authorization. Each resulting intentional-delta proof still binds the current
+full before/after digests one-to-one.
+
+Completed login handoff replay is monotonic after bridge cleanup. Refreshing
+the exact target login Pod and preserved Service route retains `complete`
+instead of checkpointing a transient `target-ready` downgrade that contradicts
+the `cleaned` journal. Loader recovery is intentionally narrower than a general
+journal migration: it requires the exact cleaned terminal proof, zero sessions
+at lock and now, intact target-ready and Service timestamps, a revalidation
+later than cleanup, and successful full journal validation after changing only
+that derived state. It records a hash-bound recovery event; any active session,
+missing proof, or other invalid field remains fail-closed.
+
+External final health also treats `DRAIN` as a non-serving worker state. A
+post-controller-gap recovery is available only when a previously verified GPU
+topology/release gate covers the same Slurm node names, provider nodes, target
+UID, and workload UID, and the completed target-singleton/cleanup journal
+proves that controller outage occurred later. cxcli records the exact current
+Ready Pod UID, container ID, Pod IP, Kubernetes instance ID, and checkpoint
+proof before mutation. Each candidate must have canonical zero-allocation
+topology, typed GRES, `IDLE+DRAIN`, the recognized stale topology reason plus
+Slurm's display-only `Not responding` annotation, and no queued job on the
+exact candidate set. Only then may one journaled `State=RESUME` run. Interrupted
+`resume-intent` and `resume-dispatched` states can adopt an already-converged
+postcondition, but a customer reason, allocation, queue entry, identity change,
+new drain, or non-serving result blocks.
+
+`--approve-remediation` is a separate recovery path for unexpected but
+reviewed drift. The first failed comparison persists a fingerprint over the
+entire comparison envelope, including every exact delta digest and
+classification. A later invocation can consume only that previously stored
+fingerprint. A fresh flag cannot approve a fresh capture; any changed delta,
+classification, baseline, or post-state produces a new plan and stops again.
+Blocked deltas remain non-overrideable. Both upgrade commands perform a second
+protected-state capture after their final cluster mutations and record a
+terminal verification marker; report/checkpoint writes may follow, but no
+cluster mutation may follow that marker.
+
+Protected Slurm configuration capture canonicalizes only the volatile leading
+`Configuration data as of ...` banner emitted by `scontrol show config` before
+computing the protected digest and summary. The command audit retains the raw
+stdout digest. This keeps managed and external remediation fingerprints stable
+across identical observations without masking any actual configuration line.
+
 Jail Upgrade is a shared Soperator lifecycle boundary, not a generic MK8s
 upgrade concept. It is described below because both managed and external
 Soperator upgrade flows can require the same active/passive jail rootfs refresh.
@@ -5397,6 +5512,21 @@ The command boundary is intentional:
   in-place segment
   resolves its active Jail slot from the latest immutable completed-segment
   operation evidence when its own phase list intentionally has no Jail refresh.
+  Its topology restore does not assume that the paused operator will regenerate
+  the serving controller's private configuration. After proving the exact Helm
+  successor, cxcli derives a topology-only successor from the checkpointed
+  source-bridge `slurm.conf`, preserves non-worker directives, pins every
+  checkpoint-owned partition `DOWN`, and journals the bridge ConfigMap UID,
+  source UID, predecessor material, topology/value fingerprints, StatefulSet,
+  and both bridge Pod identities before mutation. The existing jailed-config
+  stager accepts only the recorded predecessor or successor digest. A
+  login-side `scontrol reconfigure` is bracketed by exact partition-pause
+  reassertion, and later handoff/config-recovery digest gates explicitly accept
+  this additive successor without rewriting their historical anchors. Natural
+  worker registration receives a bounded window; only a still-waiting exact
+  Pod-UID/container identity may receive one journaled in-place slurmd
+  `SIGHUP`. An indeterminate prior signal fails closed rather than risking a
+  duplicate signal or Pod recreation.
   Before that segment's first provider rollout, cxcli journals every Ready
   worker Pod UID, Kubernetes instance identity, and current Pod IP, then
   reconciles and re-reads that exact dynamic Slurm runtime identity through the

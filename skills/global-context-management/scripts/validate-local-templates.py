@@ -153,8 +153,7 @@ def write_agent_fixture(codex_home: Path, *, enable_policy: bool) -> None:
     (codex_home / "config.toml").write_text(
         """
 [agents]
-max_threads = 16
-max_depth = 1
+max_concurrent_threads_per_session = 16
 
 [agents.alpha_mapper]
 description = "Read-only repository mapper."
@@ -522,6 +521,9 @@ def assert_doc_contracts(root: Path) -> None:
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
         "stop after three distinct failed remediation attempts or 60 active",
+        "When evidence establishes a causally independent blocker",
+        "lower or higher limits that apply to the new\n  blocker",
+        "Permission denials and marker validation\n  or repair consume no attempt",
         "Agents may clean up temporary trees they created during the current task",
         'find "$task_temp_dir" -depth -delete',
         "Preserve an active `codex-remediation-budget:v1` marker exactly",

@@ -1,9 +1,10 @@
 # Config Codex
 
-`config-codex` is a public Codex skill for bootstrapping a local Codex runtime
-setup similar to the global context-management setup used in this skills repo.
-It packages the design, templates, and validation workflow needed to configure
-Codex without publishing personal paths or secrets.
+`config-codex` is a public Codex skill for bootstrapping or recovering a local
+Codex runtime setup similar to the global context-management setup used in this
+skills repo. It packages the design, templates, and validation workflow needed
+to configure Codex without publishing personal paths, private state, or
+secrets.
 
 ## What It Does
 
@@ -31,15 +32,16 @@ complex prompt initialize only an empty private scaffold; the parent agent owns
 the concise semantic summary. The shared helper also provides read-only nested
 permission auditing and an explicit content-preserving repair command.
 
-It also points Codex at user-installed skills under `$HOME/.agents/skills`,
-including `global-context-management` and `config-codex`.
+It relies on Codex's normal discovery of user-installed skills under
+`$HOME/.agents/skills`, including `global-context-management` and
+`config-codex`. Explicit `[[skills.config]]` entries remain optional.
 
 ## Design Goal
 
-The goal is repeatable local setup, not copying a live laptop configuration.
-Public files in this repo stay generic. Rendered files under a user's
-`$CODEX_HOME` can contain that user's real paths, but they should not be
-committed.
+The goal is repeatable local setup and public-safe recovery, not a verbatim copy
+of a live laptop configuration. Public files in this repo stay generic.
+Rendered files under a user's `$CODEX_HOME` can contain that user's real paths,
+but they should not be committed.
 
 The setup is intentionally split into two layers:
 
@@ -77,11 +79,19 @@ Codex is restarted and hooks are reviewed in /hooks
 ### Public Templates, Local Rendering
 
 Assets in this skill are public templates. Most files use placeholders such as
-`{{CODEX_HOME}}`, `{{SKILLS_HOME}}`, and `{{PROJECT_ROOT}}`;
+`{{CODEX_HOME}}` and `{{PROJECT_ROOT}}`;
 `hooks.json.template` intentionally uses `${CODEX_HOME:-$HOME/.codex}` so hook
 commands can follow the active shell environment without rendering a machine
 path. A user or Codex agent renders or adapts those templates into real files
 on that user's machine.
+
+`assets/config.toml.template` is also the create-only missing-config recovery
+baseline. It is derived by allowlisting current, documented, portable settings
+from a reviewed local setup rather than copying that setup. Read
+`references/config-recovery.md` for the inclusion, exclusion, and validation
+contract. `scripts/create-recovery-config.py` performs the exclusive
+no-clobber render so a symlink, concurrent target, or loose file mode cannot be
+mistaken for a successful recovery.
 
 ### Back Up, Then Patch
 
@@ -116,18 +126,29 @@ the system temporary directory. Use a scoped non-forced deletion such as
 unresolved variable.
 
 Do not treat `assets/config.toml.template` as desired state for existing
-machines. It is the create-only baseline for a missing config plus examples of
-supported settings. Do not add template-only model defaults, app/plugin
-settings, MCP servers, project trust entries, `[[skills.config]]` entries, or
-writable roots unless the user explicitly asked for them or the current setup
-cannot otherwise satisfy the requested behavior. If `global-context-management`
-and `config-codex` are already discoverable from the installed skills
-directory, explicit `[[skills.config]]` entries are optional and should not be
-added just to match the template.
+machines. It is the create-only public-safe recovery baseline for a missing
+config. Do not add template-only model defaults, app/plugin settings, MCP
+servers, project trust entries, `[[skills.config]]` entries, or writable roots
+unless the user explicitly asked for them or the current setup cannot otherwise
+satisfy the requested behavior. If `global-context-management` and
+`config-codex` are already discoverable from the installed skills directory,
+explicit `[[skills.config]]` entries are optional and should not be added just
+to match the template.
 
 The create-only baseline selects `gpt-5.6-sol`, `xhigh` reasoning for both
 normal and Plan modes, and the Fast service tier. Existing configs retain their
 current model preferences unless the user explicitly asks to change them.
+It uses the canonical documented
+`agents.max_concurrent_threads_per_session` key; legacy or undocumented agent
+limit keys are not carried into a recovered config.
+
+The recovery baseline intentionally excludes personal trusted-project lists,
+absolute local paths, secret-bearing environment values, notification
+commands, private or plugin-managed MCP servers, plugin and marketplace state,
+desktop preferences, inline hook state already owned by `hooks.json`, generated
+notice/TUI state, and config keys not verified by current official Codex
+documentation. Restore those private layers through their owning setup flow,
+not by adding them to the public template.
 
 ### Private Prompt Workspace Is Explicitly Opt-In
 
@@ -157,12 +178,13 @@ python3 config-codex/scripts/check-local-idempotency.py \
 
 The public-safe MCP baseline in `assets/config.toml.template` covers reusable
 servers such as Context7, Playwright, Terraform, MarkItDown, Microsoft Learn,
-GitHub, and OpenAI developer docs. Existing local configs may also contain
-plugin-managed or machine-specific MCP servers with absolute commands, private
-environment values, or tool-specific installers. Preserve those entries when
-patching an existing `config.toml`; do not copy their private values into this
-public skill. Restore those integrations through their owning plugin or setup
-skill.
+GitHub, and OpenAI developer docs. Executable package and image references use
+reviewed version pins rather than `@latest` or an untagged image. Existing
+local configs may also contain plugin-managed or machine-specific MCP servers
+with absolute commands, private environment values, or tool-specific
+installers. Preserve those entries when patching an existing `config.toml`; do
+not copy their private values into this public skill. Restore those
+integrations through their owning plugin or setup skill.
 
 Hook scripts, custom-agent TOML files, and optional policy files are template
 assets rather than semantic patch targets. Copy them when missing. If an
@@ -348,6 +370,12 @@ setup.
    $config-codex Configure my local Codex setup using the public templates. Back up existing files, keep secrets out of config, and validate before telling me it is ready.
    ```
 
+   For missing-config recovery:
+
+   ```text
+   $config-codex Recover my missing config.toml from the public-safe baseline. Keep private and plugin-managed state out of the template, render only reviewed placeholders, and validate with the installed Codex version.
+   ```
+
 3. Review the target values:
 
    ```text
@@ -355,6 +383,19 @@ setup.
    skills home=$HOME/.agents/skills
    project root=<PROJECT_ROOT>
    ```
+
+   When `config.toml` is missing, the skill runs:
+
+   ```bash
+   python3 config-codex/scripts/create-recovery-config.py \
+     --codex-home "$CODEX_HOME" \
+     --project-root <PROJECT_ROOT>
+   ```
+
+   The script refuses to replace an existing file or follow a symlink and
+   creates a valid rendered config with mode `0600`. A post-publication
+   durability or cleanup warning means the complete file exists; do not retry
+   creation, and run the read-only preflight.
 
 4. Before writing, run the read-only idempotency preflight. On an already
    configured laptop this should pass and the skill should stop without
@@ -371,7 +412,9 @@ setup.
 
 5. If the preflight fails, let Codex patch only the failed surfaces from the
    templates in `assets/`. Existing `AGENTS.md` and `config.toml` must be
-   patched in place, not replaced.
+   patched in place, not replaced. When `config.toml` is genuinely missing,
+   render the recovery template and create the local file with mode `0600`;
+   do not create a backup for a file that did not exist.
 
 6. If a local guard blocks a safe patch, stop rather than bypassing it. Report
    the blocked surface, the exact intended change, and the manual out-of-band
@@ -487,7 +530,7 @@ setup.
 1. Run a non-mutating probe:
 
    ```bash
-   codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+   codex --strict-config exec --sandbox read-only --cd <PROJECT_ROOT> \
      "Summarize active instruction sources, available skills/custom agents, and the injected durable task-state path. Do not edit files."
    ```
 
@@ -534,7 +577,12 @@ setup.
 - Its managed global defaults include the bounded `troubleshoot` remediation
   policy and preservation of the private remediation marker for existing
   merge-safe installations.
-- `assets/config.toml.template`: public-safe Codex config template.
+- `assets/config.toml.template`: create-only public-safe missing-config recovery
+  baseline.
+- `references/config-recovery.md`: recovery allowlist, explicit omissions,
+  redacted live-config review method, and missing-config validation procedure.
+- `scripts/create-recovery-config.py`: atomic no-clobber renderer for a missing
+  private `config.toml`.
 - `assets/hooks.json.template`: hook registration template using
   `${CODEX_HOME:-$HOME/.codex}` so hook commands follow the active Codex home.
 - `assets/hooks/*.py.template`: context-injection hook templates.

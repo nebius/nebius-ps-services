@@ -21,7 +21,7 @@ import tomllib
 
 
 REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
-REQUIRED_MAX_THREADS = 16
+REQUIRED_MAX_CONCURRENT_THREADS_PER_SESSION = 16
 MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
 MANAGED_END = "<!-- END config-codex managed context -->"
 REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
@@ -37,6 +37,10 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
         "troubleshooting report"
     ),
     "Only a new explicit user instruction may start another bounded tranche",
+    "When evidence establishes a causally independent blocker",
+    "fresh budget at attempt 1",
+    "lower or higher limits that apply to the new blocker",
+    "Permission denials and marker validation or repair consume no attempt",
     "Agents may clean up temporary trees they created during the current task",
     'find "$task_temp_dir" -depth -delete',
     "never target the temporary root or an unresolved variable",
@@ -206,6 +210,26 @@ def check_config_toml(
     failures: list[str],
 ) -> dict:
     config_path = codex_home / "config.toml"
+    try:
+        config_stat = config_path.lstat()
+    except FileNotFoundError:
+        fail("config.toml is missing", failures)
+        return {}
+    if stat.S_ISLNK(config_stat.st_mode):
+        fail("config.toml must not be a symbolic link", failures)
+        return {}
+    if not stat.S_ISREG(config_stat.st_mode):
+        fail("config.toml must be a regular file", failures)
+        return {}
+    config_mode = stat.S_IMODE(config_stat.st_mode)
+    if config_mode != 0o600:
+        fail(
+            f"config.toml mode is {oct(config_mode)}, expected 0o600",
+            failures,
+        )
+        return {}
+    ok("config.toml is a regular non-symlink file with mode 0o600")
+
     config = load_toml(config_path, "config.toml", failures)
     if not config:
         return {}
@@ -218,14 +242,16 @@ def check_config_toml(
             fail(f"features.{key} is not true", failures)
 
     agents = config.get("agents", {})
-    if agents.get("max_threads") == REQUIRED_MAX_THREADS:
-        ok(f"agents.max_threads={REQUIRED_MAX_THREADS}")
+    key = "max_concurrent_threads_per_session"
+    required_threads = REQUIRED_MAX_CONCURRENT_THREADS_PER_SESSION
+    if agents.get(key) == required_threads:
+        ok(f"agents.{key}={required_threads}")
     else:
-        fail(f"agents.max_threads is not {REQUIRED_MAX_THREADS}", failures)
-    if agents.get("max_depth") == 1:
-        ok("agents.max_depth=1")
-    else:
-        fail("agents.max_depth is not 1", failures)
+        fail(f"agents.{key} is not {required_threads}", failures)
+    if "max_threads" in agents:
+        fail("agents.max_threads is a legacy alias and must be removed", failures)
+    if "max_depth" in agents:
+        fail("agents.max_depth is undocumented and must be removed", failures)
 
     for name in REQUIRED_AGENT_NAMES:
         agent = agents.get(name, {})

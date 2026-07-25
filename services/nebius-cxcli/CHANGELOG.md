@@ -6,6 +6,69 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Stabilize shared managed/external protected-state approvals by excluding only
+  the volatile leading `scontrol show config` observation timestamp from the
+  protected digest while retaining its raw command-audit hash. External
+  terminal verification now also recognizes the exact checkpoint-owned login
+  LoadBalancer allocation annotation transition only when the live target UID,
+  persisted decision, expected annotation set, current captured hash, and
+  baseline hash with only those annotation keys removed all match; other
+  SlurmCluster drift still requires remediation approval.
+- Preserve exact external transition authorization through terminal bridge
+  cleanup. The final protected-state verifier now derives a hash-sealed
+  historical proof from the validated source bridge, manager pause, client
+  propagation, target singleton, cleanup, and Helm journals, so only the exact
+  generated Slurm ConfigMap and canonical Helm history Secret data/label
+  deltas remain command-owned after the live bridge is gone. Final worker
+  health now treats `DRAIN` as non-serving and may clear only an
+  identity-bound, zero-allocation, empty-queue stale topology drain carrying
+  Slurm's post-controller-gap `Not responding` annotation. The recovery writes
+  durable intent before `RESUME`, verifies the exact current Pod/workload and
+  registration postcondition, and rejects customer drain reasons, new Pod or
+  runtime identities, active jobs, allocations, and replay drift.
+- Keep a completed external login handoff terminal during replay after bridge
+  cleanup. Target Pod and Service-route refresh no longer checkpoints an
+  invalid `complete -> target-ready` downgrade. Checkpoint loading can recover
+  only that exact interrupted state when the bridge is already cleaned, no SSH
+  sessions ever existed, the full journal validates after changing only the
+  derived state, and the revalidation timestamp is later than cleanup.
+- Checkpoint the exact UID/spec/generation-bound Soperator manager restore
+  before final slot-aware Helm reconciliation in the shared managed/external
+  singleton handoff. Crash recovery now accepts an already-restored manager
+  only through the matching immutable Helm intent, deployed proof, target UID,
+  freshly rendered manager contract, manager manifest from the proof's exact
+  Helm revision, and single expected generation successor. Final Helm dispatch
+  now requires the canonical manager pause, and a terminal verified restore is
+  replay-safe; live replica equality, missing proof, revision drift, and
+  generation jumps still fail closed.
+- Replace broad protected-state mode waivers in managed and external Soperator
+  upgrades with one exact proof contract. Command-owned deltas now bind command,
+  cluster, campaign/checkpoint, phase, operation, baseline, resource identity,
+  and full before/after digests one-to-one under ordinary
+  `--execute --approve`. Unexpected drift requires a separately checkpointed
+  whole-comparison fingerprint before `--approve-remediation` can consume it;
+  fresh or changed drift fails with a new plan, and blocked deltas remain
+  non-overrideable. Both flows now recapture protected state after their last
+  cluster mutation and record a terminal verification marker.
+- Retry target Soperator Helm dependency preparation only for bounded transient
+  download failures. Gateway errors, timeouts, connection resets, and
+  equivalent repository transport failures now receive two backoff retries
+  before the checkpointed phase stops; deterministic chart or lock errors
+  still fail immediately.
+- Reassert bridge-owned controller exclusivity before every in-place service or
+  provider replay. While source- or target-bridge HA is authoritative, cxcli
+  now revalidates the exact phase-owned Soperator manager pause and inert
+  target-controller command gate before any Slurm RPC, accounting sample, or
+  provider-operation reconciliation. An out-of-band manager scale-up is
+  compare-and-swap paused and checkpointed before accounting continuity can be
+  accepted, including when an existing worker provider operation would
+  otherwise enter its reuse path. Once target-native controller cleanup has a
+  durable post-provider checkpoint, resumes validate every terminal node-group
+  replacement and continue only the manager, runtime, and source-cleanup tail.
+  Cross-segment replay binds the current phase pause to the bridge by immutable
+  manager UID and original replicas while validating the current non-replica
+  Deployment spec live, rather than rejecting a completed segment's legitimate
+  manager-spec successor.
 - Preserve verified GPU worker topology across Kubernetes-only campaign
   segments. Before any later-segment worker provider operation, cxcli selects
   one unique completed, target-UID-bound topology replay, compares only its
@@ -21,6 +84,15 @@ All notable changes to this project are tracked here. This changelog follows
   admission-webhook startup retry consumes a failed revision, resume accepts
   the later deployed revision only from the exact contiguous, timestamp-bound,
   same-values retry history.
+  The restore now also advances the authoritative source bridge: it derives a
+  topology-only `slurm.conf` successor from the checkpointed bridge preimage,
+  preserves non-worker directives, pins checkpoint-owned partitions `DOWN`,
+  and journals the exact ConfigMap/material/workload/Pod binding before atomic
+  shared-Jail staging. Bridge reconfigure is bracketed by partition-pause
+  reassertion, downstream handoff digest gates accept only the recorded
+  successor, and a worker that does not naturally re-register may receive one
+  checkpointed in-place slurmd `SIGHUP` bound to its unchanged Pod and container
+  identity. No worker Pod recreation is used.
   Worker migration remains blocked until the target NodeSet/Pod lineage is
   Ready and every Slurm node has the exact topology, typed GRES, zero
   allocation, no `INVALID_REG`, and no unowned drain reason.

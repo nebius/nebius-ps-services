@@ -196,10 +196,164 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             output["hookSpecificOutput"]["permissionDecisionReason"],
         )
 
+    def test_noncanonical_attempt_fails_with_repairable_reason(self) -> None:
+        self.write_state(
+            state_data(
+                attempts=[
+                    {
+                        "attempt": 1,
+                        "finished_at": "2026-01-01T00:45:00Z",
+                        "result": "failed",
+                        "error": "same blocker",
+                    }
+                ]
+            )
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn(
+            "attempt 1 id must be a non-empty bounded string",
+            output["permissionDecisionReason"],
+        )
+        self.assertIn(
+            "does not consume an attempt or exhaust",
+            output["permissionDecisionReason"],
+        )
+
+    def test_unsupported_result_names_the_canonical_repair(self) -> None:
+        invalid_result = "different_blocker"
+        self.write_state(state_data(attempts=[attempt(1, result=invalid_result)]))
+
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        reason = output["permissionDecisionReason"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn(
+            "attempt 1 result must be failed_same_blocker or succeeded",
+            reason,
+        )
+        self.assertIn("record unverified progress in prose", reason)
+        self.assertIn("fresh empty attempt ledger", reason)
+        self.assertNotIn(invalid_result, reason)
+
     def test_continuation_tranche_requires_user_override_summary(self) -> None:
         self.write_state(state_data(tranche=2))
         output = self.evaluate_pre_tool()
         self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_status_trigger_and_limit_state_must_be_consistent(self) -> None:
+        self.write_state(state_data(stop_trigger="attempt_limit"))
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertIn(
+            "active state requires a null stop_trigger",
+            output["permissionDecisionReason"],
+        )
+
+        self.write_state(
+            state_data(
+                attempts=[attempt(1)],
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertIn(
+            "failed-attempt limit to be reached",
+            output["permissionDecisionReason"],
+        )
+
+        self.write_state(
+            state_data(
+                active_seconds=1,
+                status="exhausted",
+                stop_trigger="time_limit",
+            )
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertIn(
+            "active-time limit to be reached",
+            output["permissionDecisionReason"],
+        )
+
+    def test_marker_repair_preserves_active_budget(self) -> None:
+        state_file = self.write_state(
+            state_data(
+                attempts=[
+                    {
+                        "attempt": 1,
+                        "result": "failed",
+                    }
+                ]
+            )
+        )
+        self.assertEqual(
+            self.evaluate_pre_tool()["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Update File: {state_file}",
+                            "@@",
+                            "-old",
+                            "+new",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+
+        self.write_state(state_data(attempts=[attempt(1), attempt(2)]))
+        self.payload.update(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "run-check"},
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Marker repaired; work remains.",
+                "stop_hook_active": False,
+            }
+        )
+        self.assertEqual(guard.evaluate(self.payload), {"continue": True})
+
+    def test_causally_new_blocker_starts_a_fresh_budget(self) -> None:
+        self.write_state(
+            state_data(
+                attempts=[attempt(1), attempt(2), attempt(3)],
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        self.assertEqual(
+            self.evaluate_pre_tool()["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+
+        self.write_state(
+            state_data(
+                blocker_key="other-component|other-operation|other-error|other-boundary",
+                blocker_summary="A causally independent operation now fails.",
+                tranche=1,
+                started_at="2026-01-01T01:00:00Z",
+                active_seconds=0,
+                attempts=[],
+                status="active",
+                stop_trigger=None,
+                override_summary=None,
+            )
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
 
     def test_only_exact_current_state_patch_is_allowed_after_exhaustion(self) -> None:
         state_file = self.write_state(
@@ -254,6 +408,33 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             self.evaluate_pre_tool()["hookSpecificOutput"]["permissionDecision"],
             "deny",
         )
+
+    def test_invalid_state_reason_does_not_reflect_paths_or_marker_content(
+        self,
+    ) -> None:
+        state_file = self.write_state(
+            {},
+            raw='{"private_value": "/private/internal-host/current.md",',
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        reason = output["permissionDecisionReason"]
+        self.assertIn("marker JSON is malformed", reason)
+        self.assertNotIn("private_value", reason)
+        self.assertNotIn("/private/internal-host/current.md", reason)
+
+        self.write_state(state_data())
+        with patch.object(
+            Path,
+            "open",
+            side_effect=PermissionError(
+                f"permission denied: {state_file.parent / 'private-current.md'}"
+            ),
+        ):
+            output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        reason = output["permissionDecisionReason"]
+        self.assertIn("task-state marker could not be read safely", reason)
+        self.assertNotIn("private-current.md", reason)
+        self.assertLessEqual(len(reason), 1024)
 
         state_file = guard.state_file_for_payload(self.payload)
         assert state_file is not None
@@ -352,6 +533,22 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         second = guard.evaluate(self.payload)
         self.assertFalse(second["continue"])
         self.assertIn("incomplete", second["stopReason"])
+
+    def test_stop_requests_marker_repair_without_exhaustion_report(self) -> None:
+        self.write_state({}, raw="{")
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The marker needs repair.",
+                "stop_hook_active": False,
+            }
+        )
+        output = guard.evaluate(self.payload)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("Repair only the exact advertised current.md", output["reason"])
+        self.assertIn("do not exhaust", output["reason"])
+        self.assertNotIn(guard.REPORT_MARKER, output["reason"])
+        self.assertNotIn("## Outcome", output["reason"])
 
     def test_stop_rejects_inexact_heading_or_missing_stop_trigger(self) -> None:
         self.write_state(

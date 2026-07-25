@@ -4271,6 +4271,13 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
 
     report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
     assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert report["upgrade_safety"]["terminal_verification"] == {
+        "status": "passed",
+        "passed": True,
+        "after_hash": report["protected_customer_state"]["after_hash"],
+        "verified_at": report["upgrade_safety"]["terminal_verification"]["verified_at"],
+        "later_cluster_mutations_permitted": False,
+    }
     assert report["protected_customer_state"]["before_hash"]
     assert report["protected_customer_state"]["after_hash"]
     assert report["fast_smoke"]["status"] == "passed"
@@ -8786,7 +8793,7 @@ def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases
         to_chart_version="0.26.0",
     )
 
-    assert calls == ["migration-guard", "shared-safety"]
+    assert calls == ["migration-guard", "shared-safety", "shared-safety"]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["status"] == "completed"
@@ -8923,7 +8930,7 @@ def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verificat
         to_chart_version="0.26.0",
     )
 
-    assert calls == ["migration-guard", "shared-safety"]
+    assert calls == ["migration-guard", "shared-safety", "shared-safety"]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["status"] == "completed"
@@ -8949,7 +8956,7 @@ def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verificat
         to_chart_version="0.26.0",
     )
 
-    assert calls == ["migration-guard", "discovery"]
+    assert calls == ["migration-guard", "discovery", "shared-safety"]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)

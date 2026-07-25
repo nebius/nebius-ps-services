@@ -16,6 +16,12 @@
   exhaustion, make only the exact private task-state update that records the
   stop, then call no other tool and return the complete troubleshooting report.
   Only a new explicit user instruction may start another bounded tranche.
+- When evidence establishes a causally independent blocker, start its own fresh
+  budget at attempt 1. Use the default three-attempt and 60-minute limits unless
+  the current instruction sets lower or higher limits that apply to the new
+  blocker. Do not carry attempts, active time, tranche, exhaustion status, or
+  stop trigger from another blocker. Permission denials and marker validation
+  or repair consume no attempt.
 - Default policy for logic/API/CLI behavior changes is **no legacy
   compatibility layer** and **no backward-compatibility shims**.
 - When behavior changes, prefer fail-fast and a single canonical path instead

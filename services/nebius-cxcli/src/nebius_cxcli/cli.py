@@ -523,6 +523,7 @@ from .soperator_migration import (
     _preflight_persistent_migration_writer_restore_identity,
     _probe_legacy_persistent_mount_sources,
     _provider_operation_id_is_real,
+    _reconcile_interrupted_cleaned_login_handoff_replay,
     _release_journaled_external_upgrade_held_jobs,
     _require_persistent_mount_reprobe_binding,
     _restore_persistent_migration_writers,
@@ -672,8 +673,12 @@ from .soperator_upgrade_campaign import (
 )
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
+    _classify_managed_chart_upgrade_deltas,
+    _classify_managed_node_template_upgrade_deltas,
+    build_intentional_delta_proof,
     build_stage_fast_verification_payload,
     capture_protected_customer_state,
+    checkpointed_remediation_approval_fingerprint,
     protected_customer_state_from_payload,
     run_post_upgrade_fast_verification,
     safety_report_markdown_lines,
@@ -2851,6 +2856,12 @@ class _SdkExternalJailSfsApi:
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-cluster-upgrade/v2"
 _MANAGED_BRIDGE_BINDING_SCHEMA = "nebius-cxcli-managed-bridge-binding/v1"
+_MANAGED_PROTECTED_CHANGE_INTENT_SCHEMA = (
+    "nebius-cxcli-managed-protected-change-intent/v1"
+)
+_MANAGED_CHART_PROTECTED_CHANGE_INTENT_SCHEMA = (
+    "nebius-cxcli-managed-chart-protected-change-intent/v1"
+)
 SOPERATOR_UPGRADE_CHECKPOINT_DIR = ".nebius-cxcli/soperator-upgrades"
 SOPERATOR_UPGRADE_CHECKPOINT_COMMAND_DIR = "soperator-upgrade"
 UPGRADE_NODE_TEMPLATE_REPORT_FILENAME = "upgrade-node-template-report.md"
@@ -5192,16 +5203,258 @@ def _managed_soperator_upgrade_baseline_from_checkpoint(
     return protected_customer_state_from_payload(before if isinstance(before, Mapping) else None)
 
 
+def _managed_protected_change_intent_material(
+    *,
+    checkpoint: Mapping[str, Any],
+    before_state: ProtectedCustomerState,
+    target: _HelmChartUpgradeTarget,
+    namespace: str,
+) -> dict[str, Any]:
+    return {
+        "schema": _MANAGED_PROTECTED_CHANGE_INTENT_SCHEMA,
+        "command_kind": "soperator-upgrade",
+        "cluster_identity": _non_empty_text(checkpoint.get("cluster_id")),
+        "checkpoint_identity": _non_empty_text(checkpoint.get("checkpoint_id")),
+        "campaign_fingerprint": _non_empty_text(checkpoint.get("campaign_fingerprint")),
+        "baseline_hash": before_state.content_hash,
+        "target_ref": target.target_ref,
+        "namespace": namespace,
+        "campaign_request": copy.deepcopy(
+            to_plain_data(_state_mapping(checkpoint.get("campaign_request")))
+        ),
+        "rollout_policy": copy.deepcopy(
+            to_plain_data(_state_mapping(checkpoint.get("rollout_policy")))
+        ),
+    }
+
+
+def _ensure_managed_protected_change_intent(
+    *,
+    checkpoint: dict[str, Any],
+    before_state: ProtectedCustomerState,
+    target: _HelmChartUpgradeTarget,
+    namespace: str,
+) -> None:
+    material = _managed_protected_change_intent_material(
+        checkpoint=checkpoint,
+        before_state=before_state,
+        target=target,
+        namespace=namespace,
+    )
+    if any(
+        not _non_empty_text(material.get(key))
+        for key in (
+            "cluster_identity",
+            "checkpoint_identity",
+            "campaign_fingerprint",
+            "baseline_hash",
+            "target_ref",
+            "namespace",
+        )
+    ):
+        raise RuntimeError(
+            "Managed protected-state change intent lacks exact campaign or baseline identity."
+        )
+    fingerprint = _soperator_upgrade_sha256_text(
+        json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    )
+    expected = {
+        **material,
+        "status": "prepared",
+        "intent_fingerprint": fingerprint,
+    }
+    existing = checkpoint.get("protected_change_intent")
+    if isinstance(existing, Mapping):
+        existing_material = {key: existing.get(key) for key in material}
+        if (
+            existing_material != material
+            or existing.get("intent_fingerprint") != fingerprint
+            or existing.get("status") != "prepared"
+        ):
+            raise RuntimeError(
+                "Managed protected-state change intent changed after it was checkpointed."
+            )
+        return
+    checkpoint["protected_change_intent"] = {
+        **expected,
+        "prepared_at": _soperator_upgrade_now_iso(),
+    }
+
+
+def _managed_upgrade_intentional_delta_proofs(
+    *,
+    checkpoint: Mapping[str, Any],
+    before_state: ProtectedCustomerState,
+    comparison: Mapping[str, Any],
+    target: _HelmChartUpgradeTarget,
+    namespace: str,
+    managed_node_template_upgrade: bool,
+) -> list[dict[str, Any]]:
+    root_intent = _state_mapping(checkpoint.get("protected_change_intent"))
+    expected_root = _managed_protected_change_intent_material(
+        checkpoint=checkpoint,
+        before_state=before_state,
+        target=target,
+        namespace=namespace,
+    )
+    expected_root_fingerprint = _soperator_upgrade_sha256_text(
+        json.dumps(expected_root, sort_keys=True, separators=(",", ":"), default=str)
+    )
+    if (
+        root_intent.get("schema") != _MANAGED_PROTECTED_CHANGE_INTENT_SCHEMA
+        or root_intent.get("status") != "prepared"
+        or root_intent.get("intent_fingerprint") != expected_root_fingerprint
+        or any(root_intent.get(key) != value for key, value in expected_root.items())
+    ):
+        raise RuntimeError(
+            "Managed protected-state proof does not match its immutable pre-mutation intent."
+        )
+    chart_phase = _state_mapping(
+        _state_mapping(checkpoint.get("phase_state")).get("soperator-chart")
+    )
+    chart_intent = _state_mapping(chart_phase.get("protected_change_intent"))
+    chart_material = {
+        "schema": chart_intent.get("schema"),
+        "target_ref": chart_intent.get("target_ref"),
+        "namespace": chart_intent.get("namespace"),
+        "target_version": chart_intent.get("target_version"),
+        "baseline_hash": chart_intent.get("baseline_hash"),
+        "values_sha256": chart_intent.get("values_sha256"),
+        "campaign_fingerprint": chart_intent.get("campaign_fingerprint"),
+    }
+    chart_fingerprint = _soperator_upgrade_sha256_text(
+        json.dumps(chart_material, sort_keys=True, separators=(",", ":"), default=str)
+    )
+    postflight = _state_mapping(
+        _state_mapping(checkpoint.get("config_comparison")).get("postflight")
+    )
+    if (
+        chart_intent.get("schema") != _MANAGED_CHART_PROTECTED_CHANGE_INTENT_SCHEMA
+        or
+        chart_intent.get("status") != "verified"
+        or chart_intent.get("intent_fingerprint") != chart_fingerprint
+        or chart_material["target_ref"] != target.target_ref
+        or chart_material["namespace"] != namespace
+        or chart_material["baseline_hash"] != before_state.content_hash
+        or chart_material["campaign_fingerprint"] != checkpoint.get("campaign_fingerprint")
+        or not re.fullmatch(r"[0-9a-f]{64}", str(chart_material["values_sha256"] or ""))
+        or not chart_phase.get("completed_at")
+        or postflight.get("status") != "matched"
+    ):
+        raise RuntimeError(
+            "Managed protected-state chart proof lacks an exact verified chart operation."
+        )
+    candidate = _classify_managed_chart_upgrade_deltas(comparison)
+    if managed_node_template_upgrade:
+        candidate = _classify_managed_node_template_upgrade_deltas(candidate)
+    candidate_keys = {
+        (
+            str(item.get("kind") or ""),
+            str(item.get("resource") or ""),
+            str(item.get("field") or ""),
+            str(item.get("before_digest") or ""),
+            str(item.get("after_digest") or ""),
+        )
+        for item in candidate.get("deltas", []) or []
+        if isinstance(item, Mapping) and item.get("classification") == "intentional_upgrade"
+    }
+    for item in comparison.get("deltas", []) or []:
+        if isinstance(item, Mapping) and item.get("kind") == "source_payload":
+            candidate_keys.add(
+                (
+                    str(item.get("kind") or ""),
+                    str(item.get("resource") or ""),
+                    str(item.get("field") or ""),
+                    str(item.get("before_digest") or ""),
+                    str(item.get("after_digest") or ""),
+                )
+            )
+    node_fingerprint = ""
+    if any(key[0] == "nodes" for key in candidate_keys):
+        provider_rolls = _state_mapping(checkpoint.get("managed_provider_rolls"))
+        operations = _state_mapping(provider_rolls.get("operations"))
+        verified_operations = {
+            str(name): {
+                "state": operation.get("state"),
+                "domain": operation.get("domain"),
+                "intent_at": operation.get("intent_at"),
+                "provider_terminal_at": operation.get("provider_terminal_at"),
+                "verified_at": operation.get("verified_at"),
+            }
+            for name, raw in sorted(operations.items())
+            if isinstance(raw, Mapping)
+            for operation in [raw]
+        }
+        if (
+            not verified_operations
+            or any(item.get("state") != "verified" for item in verified_operations.values())
+            or _state_mapping(checkpoint.get("mk8s")).get("status") != "completed"
+        ):
+            raise RuntimeError(
+                "Managed protected-state node proof lacks verified provider-roll operations."
+            )
+        node_fingerprint = _soperator_upgrade_sha256_text(
+            json.dumps(
+                verified_operations,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
+    cluster_identity = _non_empty_text(checkpoint.get("cluster_id"))
+    checkpoint_identity = _non_empty_text(checkpoint.get("checkpoint_id"))
+    baseline_hash = before_state.content_hash
+    proofs: list[dict[str, Any]] = []
+    for raw in comparison.get("deltas", []) or []:
+        if not isinstance(raw, Mapping):
+            continue
+        delta = dict(raw)
+        key = (
+            str(delta.get("kind") or ""),
+            str(delta.get("resource") or ""),
+            str(delta.get("field") or ""),
+            str(delta.get("before_digest") or ""),
+            str(delta.get("after_digest") or ""),
+        )
+        if key not in candidate_keys:
+            continue
+        is_node = key[0] == "nodes"
+        proofs.append(
+            build_intentional_delta_proof(
+                delta=delta,
+                command_kind="soperator-upgrade",
+                cluster_identity=cluster_identity,
+                target_ref=target.target_ref,
+                namespace=namespace,
+                checkpoint_identity=checkpoint_identity,
+                phase_id=(
+                    "mk8s-node-template:provider-roll"
+                    if is_node
+                    else "soperator-chart:verified-apply"
+                ),
+                operation_fingerprint=node_fingerprint if is_node else chart_fingerprint,
+                baseline_hash=baseline_hash,
+                resource_uid=cluster_identity,
+            )
+        )
+    return proofs
+
+
 def _managed_soperator_upgrade_run_post_verification(
     *,
     source_payload: Mapping[str, Any],
     target: _HelmChartUpgradeTarget,
     namespace: str,
     before_state: ProtectedCustomerState | None,
+    checkpoint: Mapping[str, Any],
     paths: ProjectPaths,
     managed_node_template_upgrade: bool,
     approve_remediation: bool,
 ) -> Any:
+    approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
+        _state_mapping(checkpoint.get("upgrade_safety")),
+        approval_requested=approve_remediation,
+    )
     result = run_post_upgrade_fast_verification(
         command_runner=_soperator_upgrade_safety_command_runner,
         target_ref=target.target_ref,
@@ -5211,9 +5464,28 @@ def _managed_soperator_upgrade_run_post_verification(
         source_payload=source_payload,
         terraform_plan_command=("nebius-cxcli", "terraform", "plan", str(paths.generated_dir)),
         external_cluster=False,
-        managed_chart_upgrade=True,
-        managed_node_template_upgrade=managed_node_template_upgrade,
-        remediation_approved=approve_remediation,
+        intentional_delta_proof_builder=(
+            (
+                lambda captured_before, _captured_after, comparison: (
+                    _managed_upgrade_intentional_delta_proofs(
+                        checkpoint=checkpoint,
+                        before_state=captured_before,
+                        comparison=comparison,
+                        target=target,
+                        namespace=namespace,
+                        managed_node_template_upgrade=managed_node_template_upgrade,
+                    )
+                )
+            )
+            if before_state is not None
+            else None
+        ),
+        intentional_delta_proof_context={
+            "command_kind": "soperator-upgrade",
+            "cluster_identity": _non_empty_text(checkpoint.get("cluster_id")),
+            "checkpoint_identity": _non_empty_text(checkpoint.get("checkpoint_id")),
+        },
+        approved_remediation_fingerprint=approved_remediation_fingerprint,
     )
     return result
 
@@ -15570,8 +15842,8 @@ def soperator_upgrade_command(
         typer.Option(
             "--approve-remediation/--no-approve-remediation",
             help=(
-                "Record approval for remediation-required protected-state deltas or an "
-                "exact checkpointed Slurm hold recovery. "
+                "Approve only the exact previously checkpointed protected-state comparison "
+                "fingerprint or an exact checkpointed Slurm hold recovery. "
                 "Blocked data-loss or downtime deltas are never overrideable."
             ),
         ),
@@ -18294,6 +18566,12 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 if isinstance(checkpoint.get("backup"), Mapping)
                 else None,
             )
+            _ensure_managed_protected_change_intent(
+                checkpoint=checkpoint,
+                before_state=protected_state_before,
+                target=target,
+                namespace=plan.namespace or "default",
+            )
             _checkpoint("protected-state-captured")
             safety = checkpoint.get("upgrade_safety")
             safety_map = safety if isinstance(safety, Mapping) else {}
@@ -19188,6 +19466,55 @@ def _run_managed_soperator_cluster_upgrade_locked(
                     checkpoint_path, checkpoint
                 ),
             )
+            if protected_state_before is None:
+                raise RuntimeError(
+                    "Managed chart protected-state intent lacks the frozen baseline."
+                )
+            chart_intent_material = {
+                "schema": _MANAGED_CHART_PROTECTED_CHANGE_INTENT_SCHEMA,
+                "target_ref": target.target_ref,
+                "namespace": plan.namespace or "default",
+                "target_version": to_chart_version,
+                "baseline_hash": protected_state_before.content_hash,
+                "values_sha256": _soperator_upgrade_sha256_text(
+                    json.dumps(
+                        gated_target_values,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                ),
+                "campaign_fingerprint": campaign_fingerprint,
+            }
+            chart_intent_fingerprint = _soperator_upgrade_sha256_text(
+                json.dumps(
+                    chart_intent_material,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            )
+            chart_change_intent = chart_state.get("protected_change_intent")
+            if isinstance(chart_change_intent, Mapping):
+                if (
+                    any(
+                        chart_change_intent.get(key) != value
+                        for key, value in chart_intent_material.items()
+                    )
+                    or chart_change_intent.get("intent_fingerprint")
+                    != chart_intent_fingerprint
+                ):
+                    raise RuntimeError(
+                        "Managed chart protected-state intent changed before apply."
+                    )
+            else:
+                chart_state["protected_change_intent"] = {
+                    **chart_intent_material,
+                    "status": "intent",
+                    "intent_fingerprint": chart_intent_fingerprint,
+                    "prepared_at": _soperator_upgrade_now_iso(),
+                }
+                _checkpoint("managed-chart-protected-change-intent")
             _set_soperator_row_values(gated_target_values)
             try:
                 staged_config, staged_paths, staged_manifest = (
@@ -19211,6 +19538,17 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 ),
                 "applied_at": _soperator_upgrade_now_iso(),
             }
+            protected_change_intent = chart_state.get("protected_change_intent")
+            if not isinstance(protected_change_intent, dict):
+                raise RuntimeError(
+                    "Managed chart protected-state intent is not mutable after apply."
+                )
+            protected_change_intent.update(
+                {
+                    "status": "verified",
+                    "verified_at": _soperator_upgrade_now_iso(),
+                }
+            )
             _checkpoint("chart-applied", controller_command_gate="applied")
         else:
             changed = bool(chart_state.get("chart_changed"))
@@ -21127,6 +21465,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 target=target,
                 namespace=plan.namespace or "default",
                 before_state=protected_state_before,
+                checkpoint=checkpoint,
                 paths=staged_paths,
                 managed_node_template_upgrade=requested_mk8s_change,
                 approve_remediation=approve_remediation,
@@ -21136,7 +21475,12 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 if isinstance(checkpoint.get("upgrade_safety"), Mapping)
                 else None,
                 safety_verification,
-                remediation_approved=approve_remediation,
+                approved_remediation_fingerprint=(
+                    checkpointed_remediation_approval_fingerprint(
+                        _state_mapping(checkpoint.get("upgrade_safety")),
+                        approval_requested=approve_remediation,
+                    )
+                ),
             )
             _checkpoint(
                 "shared-safety-verified",
@@ -21399,6 +21743,49 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 slurm_restore_nodes = ()
             if not _non_empty_text(slurm_map.get("partition_restore_manual_command")):
                 slurm_pause_records = ()
+        terminal_safety = _managed_soperator_upgrade_run_post_verification(
+            source_payload=source_payload,
+            target=target,
+            namespace=plan.namespace or "default",
+            before_state=protected_state_before,
+            checkpoint=checkpoint,
+            paths=staged_paths,
+            managed_node_template_upgrade=requested_mk8s_change,
+            approve_remediation=approve_remediation,
+        )
+        approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
+            _state_mapping(checkpoint.get("upgrade_safety")),
+            approval_requested=approve_remediation,
+        )
+        checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+            _state_mapping(checkpoint.get("upgrade_safety")),
+            terminal_safety,
+            approved_remediation_fingerprint=approved_remediation_fingerprint,
+        )
+        terminal_safety_payload = checkpoint["upgrade_safety"]
+        if isinstance(terminal_safety_payload, dict):
+            terminal_safety_payload["terminal_verification"] = {
+                "status": terminal_safety.status,
+                "passed": terminal_safety.passed,
+                "after_hash": terminal_safety.protected_state.content_hash,
+                "verified_at": _soperator_upgrade_now_iso(),
+                "later_cluster_mutations_permitted": False,
+            }
+        _checkpoint(
+            "terminal-shared-safety-verified",
+            status=terminal_safety.status,
+            passed=terminal_safety.passed,
+        )
+        if not terminal_safety.passed:
+            failed = [
+                str(check.get("name") or "check")
+                for check in terminal_safety.checks
+                if isinstance(check, Mapping) and check.get("status") == "failed"
+            ]
+            raise RuntimeError(
+                "Soperator terminal shared safety verification failed"
+                + (": " + ", ".join(failed) if failed else ".")
+            )
         with _phase_spinner(
             "completed",
             "All managed Soperator upgrade gates passed; writing final reports.",
@@ -58432,6 +58819,7 @@ def _external_soperator_campaign_journal(
             f"{schema or 'missing'} in {path}; this cxcli requires "
             f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}. No conversion is supported."
         )
+    _reconcile_interrupted_cleaned_login_handoff_replay(raw)
     try:
         _validate_checkpoint_journal_contract(raw)
     except RuntimeError as exc:
@@ -64298,7 +64686,7 @@ def _locked_upgrade_checkpoint_payload(
         raise RuntimeError(
             f"External Soperator upgrade checkpoint is invalid: {checkpoint_path}: {exc}"
         ) from exc
-    if not isinstance(checkpoint, Mapping):
+    if not isinstance(checkpoint, dict):
         raise RuntimeError(
             f"External Soperator upgrade checkpoint must be a JSON object: {checkpoint_path}"
         )
@@ -64322,6 +64710,7 @@ def _locked_upgrade_checkpoint_payload(
             + ", ".join(sorted(forbidden_desired_keys))
             + ". config.yaml is the only campaign authority."
         )
+    _reconcile_interrupted_cleaned_login_handoff_replay(checkpoint)
     try:
         _validate_checkpoint_journal_contract(checkpoint)
     except RuntimeError as exc:
@@ -66112,9 +66501,10 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--approve-remediation/--no-approve-remediation",
             help=(
-                "Record explicit approval for remediation-required protected-state deltas "
-                "or an exact journaled Slurm hold crash-window recovery. Blocked data-loss "
-                "or downtime deltas and unproven Slurm transitions are never overrideable."
+                "Approve only the exact previously checkpointed protected-state comparison "
+                "fingerprint or an exact journaled Slurm hold crash-window recovery. Blocked "
+                "data-loss or downtime deltas and unproven Slurm transitions are never "
+                "overrideable."
             ),
         ),
     ] = False,

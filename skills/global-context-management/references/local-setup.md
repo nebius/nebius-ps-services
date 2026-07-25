@@ -78,7 +78,10 @@ global file.
   oversized historical task-state file before relying on it.
 - Preserve an active `codex-remediation-budget:v1` marker exactly while
   rewriting the current task state. Attempt classification and limits belong to
-  `troubleshoot`, not the global-context hooks.
+  `troubleshoot`, not the global-context hooks. When `troubleshoot` establishes
+  a causally independent blocker, preserve its fresh attempt-1 marker without
+  carrying the earlier blocker's attempts, active time, tranche, exhaustion
+  state, or stop trigger forward.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
@@ -117,8 +120,7 @@ hooks = true
 multi_agent = true
 
 [agents]
-max_threads = 16
-max_depth = 1
+max_concurrent_threads_per_session = 16
 
 [agents.repo_mapper]
 description = "Read-only codebase explorer for relevant files, symbols, execution paths, dependencies, and conventions."
@@ -153,11 +155,11 @@ When delegation is authorized and useful but the active tool list does not show
 subagent controls, and `tool_search` is available, Codex should search for
 multi-agent/subagent tools before reporting delegation unavailable.
 
-Keep `max_threads = 16` as the configured local thread budget. Do not spawn
-every configured read-only role by default: use `repo_mapper` and
-`test_strategist` early only when useful and independent, close completed
-helpers after consolidation, and use `risk_reviewer` near the end only for
-non-trivial or risky changes.
+Keep `max_concurrent_threads_per_session = 16` as the configured local thread
+budget. Do not spawn every configured read-only role by default: use
+`repo_mapper` and `test_strategist` early only when useful and independent,
+close completed helpers after consolidation, and use `risk_reviewer` near the
+end only for non-trivial or risky changes.
 Completed helpers can still count toward concurrency until closed, so cleanup
 is part of the parent agent's completion contract when close controls exist.
 

@@ -1033,7 +1033,7 @@ def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -
     )
 
 
-def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_absence(
+def test_checkpointed_target_start_revalidates_bridge_fence_and_api_absence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     journal: dict[str, Any] = {
@@ -1050,6 +1050,13 @@ def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_ab
             },
             "target_start": {"state": "dispatching"},
             "bridge_stop_attempt": 1,
+            "bridge_pre_stop_runtime_census": [
+                {
+                    "node_name": f"bridge-node-{slot}",
+                    "node_uid": f"bridge-node-uid-{slot}",
+                }
+                for slot in range(2)
+            ],
             "bridge_stop_pods": [
                 {
                     "pod_name": f"bridge-{slot}",
@@ -1089,12 +1096,17 @@ def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_ab
         "_revalidate_controller_authority_lease",
         lambda **_kwargs: revalidated.append(True),
     )
+    census_revalidations: list[Sequence[Mapping[str, Any]]] = []
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_runtime_census_nodes",
+        lambda **kwargs: census_revalidations.append(kwargs["node_census"]) or [],
+    )
+    absence_proofs: list[bool] = []
     monkeypatch.setattr(
         migration,
         "_prove_cluster_wide_slurmctld_absence",
-        lambda **_kwargs: pytest.fail(
-            "a checkpointed target writer must be adopted before any global absence proof"
-        ),
+        lambda **kwargs: absence_proofs.append(kwargs["process_census"]),
     )
 
     stopped = migration._fence_target_version_bridge_for_takeover(  # noqa: SLF001
@@ -1105,6 +1117,8 @@ def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_ab
     )
 
     assert stopped == ["bridge-pod-uid-0", "bridge-pod-uid-1"]
+    assert len(census_revalidations) == 1
+    assert absence_proofs == [False]
     assert revalidated == [True]
     assert journal["authority"]["owner"] == "target-singleton"
 

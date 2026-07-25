@@ -126,7 +126,10 @@ If `troubleshoot` initializes a `codex-remediation-budget:v1` marker, preserve
 that bounded machine-readable block exactly during compaction and summary
 rewrites. `global-context-management` provides continuity only: it does not
 decide whether failures share a blocker, count semantic remediation attempts,
-or change a user-defined budget.
+or change a user-defined budget. When `troubleshoot` establishes a causally
+independent blocker, preserve its fresh attempt-1 marker rather than carrying
+the earlier blocker's attempt ledger, active time, tranche, exhaustion state, or
+stop trigger forward.
 
 ### Skill
 
@@ -176,10 +179,11 @@ If the parent is finalizing while a helper is still running and the result is
 no longer needed, it should close that handle before the final response. If the
 result is still needed, it should wait for a terminal status, consolidate the
 result, then close the handle.
-Do not spawn every configured role by default. Keep `max_threads = 16` as the
-configured local thread budget. Use `repo_mapper` and `test_strategist` early
-only when their work is useful and independent, close them after consolidation,
-then use `risk_reviewer` near the end only for non-trivial or risky changes.
+Do not spawn every configured role by default. Keep
+`max_concurrent_threads_per_session = 16` as the configured local thread
+budget. Use `repo_mapper` and `test_strategist` early only when their work is
+useful and independent, close them after consolidation, then use
+`risk_reviewer` near the end only for non-trivial or risky changes.
 When several helpers are running, the main agent should close each completed
 handle as soon as its terminal result arrives, then keep waiting for the
 remaining handles until all spawned helpers are closed.
