@@ -143,11 +143,15 @@ remotes.
    ```
 
    This script checks source-installed parity for all required SDLC skills and
-   `worktree`, explicit-only invocation policy, prompt workspace/history/
+   the `worktree`, `nebius-grafana-query`, and conditional `troubleshoot`
+   runtime support, explicit-only invocation policy, prompt workspace/history/
    rename/lifecycle regressions, execution scope/recovery/replan/secret gates,
    sequential fallback, Task Implementer interoperability, the composed
-   managed outer-worktree lease lifecycle, verifier self-tests, and hook
-   fixtures. The disposable fixture is a nested selected folder in a local
+   managed outer-worktree lease lifecycle, bounded observability contract,
+   normalized failure/diagnosis/repair-control and corrective-plan contracts,
+   exact-SHA PR handoff and canonical single-action merge modes, verifier
+   self-tests, and hook fixtures. The disposable fixture is a nested selected
+   folder in a local
    monorepo-shaped Git repository. A clean canonical flat fixture with the
    exact expected tracked tree and no remote is migrated once. Unknown,
    unowned, dirty, remote-backed, or non-canonical directories and repositories
@@ -175,9 +179,12 @@ remotes.
    scoped changes, refreshed evidence, and no duplicate commits.
 7. Verify failure routing and steering behavior.
    Inject one controlled failure at a time in the disposable project, verify
-   `sdlc-classify-failure` routes to the earliest responsible phase, then
-   repair and rerun. Add the pause/no-PR instruction to the same prompt and
-   repeat `run`.
+   a proven mechanical cause bypasses troubleshooting, an ambiguous cause
+   enters `troubleshoot` exactly once and returns its diagnosis to
+   `sdlc-classify-failure`, unresolved evidence stops, and a proven localized
+   defect re-enters through a corrective plan and appended wave. Exercise a
+   budget stop without resetting counters, then repair and rerun. Add the
+   pause/no-PR instruction to the same prompt and repeat `run`.
 8. Verify continuation and optional harness smoke checks.
    Exercise Stop continuation with fake state and, where available, run safe
    GUI and TUI smoke checks against local disposable targets only.
@@ -361,7 +368,9 @@ Use this process only after explicit `--create`, `--create --keep`, or
   the canonical payload under `$CODEX_HOME/hooks`, report FAIL rather than
   treating registration as missing or comparing an unrelated canonical file.
 - If the golden-path SDLC run fails, route through `sdlc-classify-failure` and
-  record the earliest responsible phase in the report.
+  record the earliest responsible phase in the report. Use `troubleshoot` only
+  for the controlled ambiguous-failure lane; it remains absent from the golden
+  sequence.
 - If live evidence is absent, stale, dirty, symlinked, overly permissive,
   outside the verification root, or schema-invalid, never infer success.
 - If a requested profile requires unavailable tooling such as Computer Use,
@@ -431,7 +440,10 @@ URLs, customer data, raw logs, or one-off local state.
 - Prompt workspace initialization, revision, steering, terminal, and legacy
   lifecycle results are recorded.
 - The deterministic capability matrix records prompt, execution, fallback,
-  outer lease, Task Implementer interop, steering, hook, and verifier results.
+  outer lease, Task Implementer interop, steering, observability, hook, and
+  verifier results, including failure-event/diagnosis/repair-control,
+  corrective-plan, explicit-ref/head publication and explicit-PR, canonical
+  single-action merge authorization.
 - The private v3 live manifest records digest-backed semantic assertions for
   all seven live lanes and an explicit evidence row for every required Agentic
   SDLC skill. Profile results also bind exact source schemas to collector-made

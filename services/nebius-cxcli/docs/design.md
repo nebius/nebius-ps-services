@@ -697,7 +697,19 @@ and chart source-family changes.
   post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke; fast stage
   gates record
   `fast_verification` after each completed managed upgrade stage, including the
-  post-MK8s validation and Jail Upgrade boundaries, before advancing;
+  post-MK8s validation and Jail Upgrade boundaries, before advancing. Managed
+  fast stage verification is read-only, so gates whose checks re-read live
+  cluster state (the Jail Upgrade result and the shared safety verifier) retry
+  a failed check in-process for the same bounded convergence budget as the
+  external path (default 300 seconds, 20-second poll) before recording the
+  failure; both paths run one shared convergence loop owned by the external
+  executor module — the managed delegation suppresses transient re-read
+  errors and keeps the previous attempt's failed checks, while the external
+  caller propagates compute failures — so the retry contract cannot drift
+  between them; the recorded verification is always the final attempt with
+  its attempt count, an unconverged failure still writes the report and fails
+  closed, and evidence-only gates (discovery manifest, backup metadata,
+  protected-state hashes, phase-selection skips) stay single-attempt;
   postflight compares protected customer state and runs the required
   Soperator/Slurm smoke plus the shared fast safety verifier. The shared
   authority journal then closes durable job admission, restores checkpointed
@@ -719,7 +731,14 @@ and chart source-family changes.
   continuation authorization after a confirmed involuntary timeout with
   `--authorize-login-timeout-continuation <fingerprint>`. There is no managed or
   external automatic login timeout or force-disconnect path. Both `jobs` commands
-  write the canonical authority-aware Slurm action journal.
+  write the canonical authority-aware Slurm action journal. When an accepted
+  in-place provider operation has already replaced a protected login Pod before
+  the handoff recorded the absent socket, recovery may establish only the
+  absence boundary: the exact released hold, source and successor Pod/workload
+  identities, terminal provider operation, node-group binding, target
+  Kubernetes version, and Ready postcondition must agree. The unresolved
+  fingerprint then follows the normal explicit-disposition path; successor
+  adoption never implies voluntary exit or timeout authorization.
   After a checkpointed managed controller or system provider roll reaches its
   terminal state, cxcli refreshes discovery and permits only that exact domain's
   Node UID set to rebind. The opposite domain, provider group ID, and storage
@@ -1309,9 +1328,19 @@ cluster-visible Kubernetes Lease. Normal context exit immediately expires that
 Lease with the API's six-fractional-digit `MicroTime` representation; the
 120-second duration remains only a crash or release-failure fallback. Renewal
 retries bounded transient MK8s exec-credential, API timeout, TLS, connection,
-etcd leader-change, and rate-limit failures within that duration. Holder-test
-failure or an API conflict still fails immediately because cxcli may no longer
-own the Lease. In legacy
+etcd leader-change, rate-limit, and exec-credential token-expiry Unauthorized
+failures within that duration — the exec plugin serves cached IAM tokens, so a
+call landing on the exact expiry boundary is rejected once and the next
+invocation re-exchanges a fresh token. Acquisition retries a timed-out lease
+kubectl call inside its bounded loop; the acquisition re-read reconciles a
+replace that landed server-side despite the client timeout. Holder-test
+failure, an API conflict, or another workstation's unexpired hold still fails
+immediately because cxcli may no longer own the Lease. Read-only kubectl
+commands retry the same Unauthorized boundary and read timeouts; mutations
+never retry on authorization failures. The bridge's Pod-to-local
+state-artifact copies retry bounded transient stream failures, each attempt
+writing a fresh owner-only partial file promoted only after the stream
+completes, while deterministic copy errors fail immediately. In legacy
 CSI layouts, the Jail filesystem identity is the
 bound PV's `volumeHandle`. Active/passive layouts use local-path slot PVs, so
 onboarding resolves the immutable backing SFS ID from fresh Nebius SDK
@@ -1446,7 +1475,17 @@ checks, required Soperator deployment snapshot, protected-state deltas, and the
 shared bounded fast safety verifier; every executed stage runs a fast
 stage-scoped verification before the next stage starts, prints
 `Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and records
-`phase_state[<stage>].fast_verification`; the full Soperator/Slurm validation
+`phase_state[<stage>].fast_verification`. Fast stage verification is read-only,
+so a failed check re-reads live state inside the same execute invocation for a
+bounded convergence budget (default 300 seconds, 20-second poll) before it
+records the failure; snapshot-consuming stages (rolling compute, final cutover,
+Jail Upgrade) also refresh the live snapshot between attempts. A verification
+that converges on a later attempt records how many attempts it needed; one that
+never converges records the failed verification and fails closed as the same
+pending phase as before, so the retry only removes the full command
+re-invocation (discovery plus preflight) that a still-converging rollout used
+to force. The recorded verification is always the final attempt; intermediate
+read-only attempts are not journaled; the full Soperator/Slurm validation
 suite remains at validation hold rather than after every individual phase; the
 final post-upgrade MK8s and Helm readiness checks record the same
 fast-verification shape before report completion; completion writes the external
@@ -1693,7 +1732,13 @@ checkpointed and the next planned phase remains pending for an uncapped resume.
 Accounting registration/history verification remains deferred through its durable
 `target-enabled` state until the SConfig compatibility pulse has materialized
 and verified the active Jail slot, so target controller init never depends on
-an empty `/etc/slurm`. The transition is checked again in the same executor call
+an empty `/etc/slurm`. The deferral covers every immutable-child stage between
+the manager restore and the pulse — `manager-restored` and
+`target-children-created` alike — because no version-matched `sacctmgr` route
+exists anywhere in that window: active-slot Jail clients are already
+target-version while the still-serving accounting daemon speaks the source
+protocol, and the bridge controllers are outside the accounting network
+contract. The transition is checked again in the same executor call
 that restores the target writer, before controller-backed registration probes.
 At that resume boundary, cxcli revalidates the enabled
 target writer and the completed selector handoff's exact target Deployment UID,
@@ -2327,9 +2372,30 @@ evidence changed during the incident. Across completed campaign segments, the
 bridge pause and current phase pause must retain one manager UID and original
 replica contract; the current phase's non-replica spec fingerprint is then
 checked against the live paused Deployment instead of being compared to an
-older segment's fingerprint. Once target-native cleanup is durably
+older segment's fingerprint. When that fingerprint drifts while the
+Deployment generation still equals the checkpointed pause expectation — a
+control-plane upgrade re-defaulting the identical spec, since any real spec
+mutation bumps the generation — the reserialized fingerprint is adopted
+under an explicit journal record; fingerprint drift with any generation
+movement remains recovery-required. Once target-native cleanup is durably
 post-provider, cxcli validates every completed node-group replacement and
 resumes only controller finalization, runtime identity, and source cleanup.
+The same tail-only resume applies to a checkpointed bridge fence whose
+authority already transferred to the target singleton but whose singleton
+start has not completed: with the journaled bridge stop, post-stop
+API-absence census, verified pre-takeover client propagation proof (accepted
+directly, or as the superseded proof carried by an accepted
+singleton-recovery record after the interrupted-singleton client reconcile
+ran), no active recovery bridge, and every node-group replacement terminal,
+the resume bypasses bridge-client staging (whose direct RPC proof cannot ping
+fenced zero-replica writers) and continues the takeover inside the compute
+tail; any missing fence evidence remains recovery-required. An interrupted
+singleton start is admitted with either recorded intent shape — the
+zero-to-one scale dispatch or the ungate dispatch of the one exact recorded
+inert-gated Pod (replicas already one, gated Pod UID bound) — consistently
+across the journal validator, the client-proof deferral, and the
+client-configuration reconcile; a replicas-one dispatch without the gated Pod
+identity, or any intent recorded between states, remains recovery-required.
 Target-chart dependency preparation remains a pre-mutation boundary. Its exact
 locked `helm dependency build` receives two bounded backoff retries only when
 the failure is a transient repository download, gateway, timeout, connection,
@@ -2400,6 +2466,18 @@ timeout instead, the operator uses
 `--authorize-login-timeout-continuation FINGERPRINT`. This creates a distinct
 timeout disposition bound to the same fingerprint and absence epoch. Neither
 command can release a live or reappeared socket.
+
+Both `jobs` commands (external and managed) also accept
+`--acknowledge-job-ended JOB_ID`: an explicit operator attestation that a
+preserved running-job baseline ended out of band (for example, the operator
+cancelled it directly against the controller). The attestation is journaled
+against the immutable job binding through the durable action journal as a
+cancel action (Queued → Dispatching → Applied) under the checkpoint's current
+controller authority epoch; no live Slurm RPC is issued. Only journaled
+preservation-baseline jobs can be attested, and the running-job preservation
+proof then yields `operator-modified` evidence instead of pending on lineage
+that live accounting can no longer observe (for example after a bridge-era
+JobID reuse or an accounting dump that predated the job's completion).
 
 For a Nebius external target registered by `cluster_id` without a durable
 `kube_context`, the jobs command uses the same non-persisted temporary
@@ -2607,6 +2685,18 @@ each target partition's full pre-mutation record, changes only `UP` to `DOWN`,
 and verifies the exact post-mutation fingerprint. Both the Jail and rolling
 journals receive that target record before GPU drain recovery, so later worker
 release and final restore cannot treat retired source names as a target fence.
+An in-place segment may instead add canonical target partitions while every
+source-era name survives, for example when the bridge-staged target chart
+introduces a new default partition. When the live set is a strict superset of
+the exact all-partitions pause journal, each new name is live `UP`, the bridge
+journal proves exclusive bridge-target write authority, and the name is absent
+from the bridge's source-era partition inventory, cxcli adopts the addition
+through the same intent-first pause: it persists the full pre-mutation record
+to both the Jail and rolling journals, changes only `UP` to `DOWN`, and
+verifies the exact post-mutation fingerprint before reusing the job-free
+boundary. A removed name, a non-`UP` addition, or a source-era inventory name
+missing from the pause journal still pends for review; the source-era case is
+an ownership integrity failure, not a target-chart addition.
 An `IDLE+CLOUD+DRAIN` worker whose live topology now matches may be resumed when
 its remaining reason is exactly the stale typed-GRES count plus low CPU-topology
 registration reason emitted before replay; other drain reasons remain blocking.
@@ -2987,7 +3077,21 @@ rejects every other extra mount. The later OpenMetrics restore is the sole phase
 revision allowed to follow the repair proof: its revision must be exactly next,
 its Helm timestamp must fall inside the checkpointed restore window, and its
 stored values plus target-spec render and loader contract must match before
-cxcli seals a reusable downstream proof. After that restore, the released
+cxcli seals a reusable downstream proof. When the manager restore produced no
+config change, no config successor is journaled and the post-Jail boundary
+rebind legitimately re-verifies the repair's own release revision in place;
+cxcli admits that exact no-revision rebind — same schema, verified status,
+target UID, chart/app version, matching fenced values fingerprint, and the
+repair's release revision — instead of demanding a compatibility-predecessor
+lineage that has no intervening revision to bind, and the restore stays
+exactly next after the repair revision. After the restore, target workers may
+register their typed GRES topology and evolve the desired worker `nodesets`
+values before the topology values replay has run; the repair seal defers only
+that exact delta — the entire stored-versus-desired difference confined to
+`nodesets`, a journaled per-nodeset topology with complete static tokens, and
+no verified replay — to the replay, which remains the sole owner of that
+values reconciliation. Any other stored-values drift still fails closed with
+the failed comparison and differing value paths named. After that restore, the released
 SConfig writer can legitimately expose a newly generated full ConfigMap rather
 than the pre-restore digest. cxcli accepts that state once only when the sealed
 Helm proof, OpenMetrics timestamps, target UID and single bounded generation,
@@ -4987,9 +5091,33 @@ the post-write Slurm health gate is not deferred. cxcli then
 compare-and-set writes the canonical target payload to the target ConfigMap
 first and source ConfigMap second, binds the intended service account only at
 zero, restores the exact original source-writer replica count, and verifies all
-JailedConfig files plus legacy Slurm health again. Any mixed, partial, unknown,
-or drifted payload blocks. This pre-Jail dual bridge is distinct from the later
-target-only compatible slot seed.
+JailedConfig files plus legacy Slurm health again. When the live
+controller-bridge journal has already advanced through its version transition,
+a fourth complete payload is admissible: every file except `slurm.conf` is
+source-legacy-safe and `slurm.conf` carries exactly the journaled
+version-transition staged digest that both bridge controller roles serve. The
+canonical client payload is always derived under the live bridge journal, so a
+canonical intent that an earlier derivation checkpointed without bridge
+awareness is rebound in place to the bridge-aware canonical — but only while
+the dual-writer fence is still mid-zero-window with no written payload, under
+the same exact target-HA journal guards, journaled as a `rebound-pre-write`
+recovery; a completed zero-window still requires the full ready-fence adoption
+proof. Any other mixed, partial, unknown, or drifted payload blocks. This
+pre-Jail dual bridge is distinct from the later target-only compatible slot
+seed.
+The durable manager pause that anchors this sequence is self-healing against
+out-of-band reconcilers: if the exact checkpointed manager Deployment resumes
+after its durable pause (same UID, unchanged selector/template contract,
+replicas back at the exact original count, later generation) while the source
+Flux reconciliation fence holds a verified durable suspension, cxcli journals
+the fenced repause and re-drives the canonical generation-fenced pause instead
+of stopping; foreign spec drift or an unfenced resume still fails closed. The
+checkpoint-owned scheduling pause also remains authoritative from the
+`manager-paused` stage onward: the journaled version-transition shared-Jail
+write changes the live partition set at exactly that stage, so the
+controller-gap partition pause contract matches it while the dual-writer
+zero-window is still unwritten, and live partition revalidation resumes after
+target controller authority.
 
 1. Plan the refresh. `auto` refreshes when the populate-jail image changed, or
    when selected chart/rootfs evidence means compatibility cannot be proven. `force`

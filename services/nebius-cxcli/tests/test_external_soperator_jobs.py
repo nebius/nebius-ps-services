@@ -303,11 +303,11 @@ def test_checkpoint_writer_preserves_concurrent_login_exit_acknowledgement(
         {
             "socket_fingerprint": fingerprint,
             "absence_observed_at": "2026-07-12T10:02:00Z",
-                "acknowledged_at": "2026-07-12T10:03:00Z",
-                "acknowledged_by": "ext-soperator-jobs-cli",
-                "disposition": migration.SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
-            }
-        ]
+            "acknowledged_at": "2026-07-12T10:03:00Z",
+            "acknowledged_by": "ext-soperator-jobs-cli",
+            "disposition": migration.SLURM_LOGIN_EXIT_CONFIRMED_VOLUNTARY,
+        }
+    ]
 
 
 def test_tui_writer_never_overwrites_non_action_checkpoint_progress(tmp_path: Path) -> None:
@@ -800,6 +800,7 @@ def test_managed_soperator_jobs_help_exposes_shared_journal_contract() -> None:
     assert "--target" in normalized
     assert "--acknowledge-login-exit" in normalized
     assert "--authorize-login-timeout-continuation" in normalized
+    assert "--acknowledge-job-ended" in normalized
     assert "controller authority epoch" in normalized
 
 
@@ -851,3 +852,142 @@ def test_managed_soperator_jobs_uses_managed_checkpoint_and_context(
     assert captured["kube_context_override"] == "managed-context"
     assert captured["command_origin"] == "soperator-jobs-tui"
     assert callable(captured["checkpoint_loader"])
+
+
+def _checkpoint_with_preserved_job_binding() -> dict[str, Any]:
+    checkpoint = _checkpoint_with_snapshot()
+    binding = migration._slurm_action_binding_from_observation(_observation())
+    checkpoint["controller_bridge"] = {
+        "preservation_jobs": {
+            "jobs": {"42": {"binding": binding.as_payload()}},
+        }
+    }
+    return checkpoint
+
+
+def test_acknowledge_job_ended_records_attestation_without_live_rpc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _checkpoint_with_preserved_job_binding()
+    checkpoint_path = tmp_path / "checkpoint.json"
+    monkeypatch.setattr(
+        migration,
+        "_active_external_upgrade_jobs_checkpoint",
+        lambda **_kwargs: checkpoint,
+    )
+    monkeypatch.setattr(
+        migration,
+        "soperator_migration_checkpoint_path",
+        lambda *_args, **_kwargs: checkpoint_path,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: pytest.fail("attestation must not issue a live Slurm RPC"),
+    )
+
+    result = migration.run_external_soperator_upgrade_jobs(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        acknowledge_job_ended_ids=("42", " 42 "),
+        prompt_runner=lambda *_args, **_kwargs: pytest.fail("prompt must not open"),
+    )
+
+    assert result == checkpoint_path
+    [action] = checkpoint["slurm"]["action_journal"]["actions"]
+    assert action["kind"] == "cancel"
+    assert action["state"] == "Applied"
+    assert action["binding"]["job_id"] == "42"
+    assert action["intended_postcondition"]["attestation"] == ("operator-confirmed-out-of-band-end")
+    assert "no live RPC was issued" in str(action.get("detail") or action)
+    written = json.loads(checkpoint_path.read_text())
+    [persisted] = written["slurm"]["action_journal"]["actions"]
+    assert persisted["state"] == "Applied"
+
+
+def test_acknowledge_job_ended_unknown_id_fails_closed_without_journal_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _checkpoint_with_preserved_job_binding()
+    checkpoint_path = tmp_path / "checkpoint.json"
+    monkeypatch.setattr(
+        migration,
+        "_active_external_upgrade_jobs_checkpoint",
+        lambda **_kwargs: checkpoint,
+    )
+    monkeypatch.setattr(
+        migration,
+        "soperator_migration_checkpoint_path",
+        lambda *_args, **_kwargs: checkpoint_path,
+    )
+
+    with pytest.raises(RuntimeError, match="does not match any preserved"):
+        migration.run_external_soperator_upgrade_jobs(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            acknowledge_job_ended_ids=("99",),
+            prompt_runner=lambda *_args, **_kwargs: pytest.fail("prompt must not open"),
+        )
+
+    assert checkpoint["slurm"]["action_journal"]["actions"] == []
+    assert not checkpoint_path.exists()
+
+
+def test_managed_soperator_jobs_passes_job_ended_attestations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_payload = {"apps": {"charts": []}}
+    checkpoint_path = tmp_path / "checkpoint.json"
+    captured: dict[str, Any] = {}
+    target = cli._HelmChartUpgradeTarget(  # noqa: SLF001
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_prompt_soperator_upgrade_target_if_needed",
+        lambda **_kwargs: target,
+    )
+    monkeypatch.setattr(
+        cli, "_soperator_upgrade_checkpoint_path", lambda *_args, **_kwargs: checkpoint_path
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (object(), object(), {"deploy": {"targets": []}}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_manifest_kube_context_for_target",
+        lambda _manifest, _target_ref: "managed-context",
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_external_soperator_upgrade_jobs",
+        lambda **kwargs: captured.update(kwargs) or checkpoint_path,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "soperator",
+            "jobs",
+            str(tmp_path / "config.yaml"),
+            "--target",
+            "mk8s",
+            "--acknowledge-job-ended",
+            "42",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["acknowledge_job_ended_ids"] == ("42",)
+    assert captured["command_origin"] == "soperator-jobs-tui"

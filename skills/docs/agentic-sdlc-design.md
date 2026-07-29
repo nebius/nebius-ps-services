@@ -17,6 +17,7 @@
   - [Verification principles](#verification-principles)
   - [Quick preflight test](#quick-preflight-test)
   - [Full workflow test](#full-workflow-test)
+  - [Real three-tier application test](#real-three-tier-application-test)
   - [Report interpretation](#report-interpretation)
   - [Fix and rerun policy](#fix-and-rerun-policy)
 - [Skill Responsibilities](#skill-responsibilities)
@@ -172,6 +173,13 @@ Important files include:
   session ownership, and parallel result isolation.
 - `execution/interop.json`: optional run-level managed-outer-worktree lease
   identity, promoted head, and release state.
+- `repairs/FEAT-*/events/`, `diagnoses/`, and `classifications/`: immutable
+  commit-bound failure records, causal handoffs, and deterministic routes.
+- `repairs/FEAT-*/repair-control.json`: atomic projection of the active stable
+  blocker, route history, invalidations, attempts, active time, and feature
+  dispatch budget.
+- `repairs/FEAT-*/repair-journal.jsonl`: append-only crash-safe repair
+  transitions.
 - `worktrees/FEAT-*/integration/` and `worktrees/FEAT-*/waves/`: persistent
   integration and per-task worker checkouts under the private run root.
 - `evidence/`: validation, test, evaluation, documentation, UAT, PR, review,
@@ -299,9 +307,12 @@ MCP servers are capability providers, not the state machine. Phase skills use
 them when the feature requires external context or interaction:
 
 - official docs and package documentation for version-sensitive behavior
-- Browser or Playwright for GUI evaluation
+- Computer Use, Browser, or Playwright for GUI evaluation according to the
+  declared acceptance harness
 - GitHub for PR creation, PR review, checks, and merge readiness
 - Slack, Confluence, Jira, or internal knowledge sources for approved context
+- `nebius-grafana-query` for narrowly scoped, read-only runtime facts when
+  troubleshooting or evaluation has a decision-changing observability question
 - other domain MCP servers when a feature needs that external system
 
 The selected SDLC skill remains responsible for deciding what evidence is
@@ -311,6 +322,20 @@ committed docs or durable state. When the optional hooks are installed, GitHub
 PR or merge MCP writes require the matching short-lived authorization, while
 other external write MCP calls are gated by active SDLC state plus secret and
 write-target checks.
+
+The observability provider performs one lazy datasource readiness check for an
+evaluation run, then uses a cumulative six-query fast allowance and a
+four-query decision-specific deep allowance. Each embedded provider invocation
+attempts at most one pre-admitted query, then returns for a consumer ledger
+update. Troubleshooting deep queries distinguish hypotheses; evaluation deep
+queries may only distinguish named attribution, coverage, or dependency
+interpretations of one predefined gate. The provider returns redacted
+structured facts, data gaps, and query cost; it does not diagnose root cause or
+grade acceptance. A failed readiness check disables the path for that run
+without setup or repeated checks. Each response returns the connectivity state
+and total, fast, and deep remaining budgets needed for the next call. Invalid
+relevance, authority, selector, window, or budget is rejected before any
+external call and is not classified as an environment outage.
 
 ## Requirements And Design Templates
 
@@ -361,99 +386,10 @@ The design template also records:
 
 The high-level workflow is:
 
-```text
-workspace init -> managed prompt
-  |
-  v
-sdlc-start run <prompt-path-or-unique-filename>
-  |
-  v
-sdlc-create-requirements
-  |
-  v
-<project>/docs/requirements.md
-  |
-  v
-sdlc-start
-  |
-  v
-sdlc-gather-context
-  |
-  v
-sdlc-create-design
-  |
-  v
-<project>/docs/design.md
-  |
-  v
-sdlc-auto-steering
-  |
-  v
-Feature loop
-  |
-  v
-sdlc-create-plan, local and locked
-  |
-  v
-sdlc-prepare-execution
-  |
-  v
-private integration worktree
-  |
-  v
-sdlc-tdd
-  |
-  v
-sdlc-implement-plan dependency waves
-  |
-  +--> TASK-001 fresh agent + branch + worktree --+
-  +--> TASK-002 fresh agent + branch + worktree --+--> ordered integration
-  |
-  v
-sdlc-validate-codes
-  |
-  v
-sdlc-unit-tests
-  |
-  v
-sdlc-evaluate
-  |
-  v
-sdlc-update-documents
-  |
-  v
-sdlc-classify-failure, if a phase fails
-  |
-  v
-fix loop to the earliest responsible phase, if needed
-  |
-  v
-sdlc-align-specs
-  |
-  v
-sdlc-commit
-  |
-  v
-ff-only project-branch promotion and integration cleanup
-  |
-  v
-next feature
-  |
-  v
-sdlc-uat-tests
-  |
-  v
-sdlc-update-documents, if UAT or final steering changed docs
-  |
-  v
-create-pr
-  |
-  v
-review-pr
-  |
-  v
-sdlc-merge-pr, only if explicitly requested
-```
+![Agentic SDLC workflow and architecture: discover and design, isolated task
+execution, validation and promotion, release, product truth, private run state,
+guardrails, external capabilities, feature iteration, and failure
+routing.](images/agentic-sdlc-workflow.png)
 
 The implementation state schema uses this phase order:
 
@@ -483,9 +419,14 @@ after evaluation and may run again in run scope after UAT when UAT or final
 steering changes user-facing docs before PR creation.
 
 `sdlc-classify-failure` is the routing mechanism for failed phases rather than
-a normal happy-path phase. It records the failure class and sends the loop back
-to the earliest responsible phase, or stops for human input, policy, or
-environment blockers.
+a normal happy-path phase. Proven mechanical causes take the shortest route to
+their owning phase. Ambiguous, persistent, intermittent, or cross-boundary
+failures route conditionally to `troubleshoot`; its structured diagnosis always
+returns through classification before a repair owner is selected.
+`troubleshoot` is therefore required runtime support but is absent from the
+golden phase sequence. Missing decisive evidence, competing hypotheses,
+policy/permission/human decisions, and exhausted budgets stop instead of
+guessing.
 
 ## Workflow Verification
 
@@ -495,8 +436,9 @@ workflow against this design, inspect required phase-skill discovery, check
 hook configuration, run disposable PreToolUse and Stop hook fixture tests, and
 write a verification report to `~/.codex/sdlc-verification/report.md`. Its
 no-flag behavior remains the lightweight verifier. Explicit `--create`,
-`--create --keep`, and `--destroy` select a separately owned real three-tier
-profile; they do not change the public `$sdlc-start` workflow interface.
+`--create --keep`, `--resume`, and `--destroy` select a separately owned real
+three-tier profile; they do not change the public `$sdlc-start` workflow
+interface.
 
 ### Verification principles
 
@@ -555,12 +497,16 @@ The preflight must verify and record:
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
-- installed `worktree` availability and source-installed parity for every
-  required SDLC skill, `worktree`, and `sdlc-workflow-test`
+- installed `worktree`, installed `nebius-grafana-query`, and installed
+  conditional `troubleshoot` availability plus
+  source-installed parity for every required SDLC skill, both runtime support
+  classes, and `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
   rename/lifecycle; execution scope, sessions, `task-recover`, resource-free
   `replan-future`, secret gates, and sequential fallback; Task Implementer
   interoperability; and prompt-bound steering continuation
+- deterministic failure-event, diagnosis, repair-control, design-admission,
+  corrective-plan, full task-definition digest, and Stop-hook route contracts
 - a composed real-Git test that selects a nested folder in a managed outer
   worktree, runs schema-v4 execution through promotion, proves the v2 outer
   lease blocks publication, releases after final evidence, and then acquires
@@ -674,8 +620,11 @@ After the happy path, verify these recovery behaviors:
   confirm stable IDs, a new plan version only when needed, scoped code and test
   changes, refreshed evidence, and a new local feature commit
 - inject one controlled validation, test, bad-test, design, spec-gap, or
-  environment failure at a time, then confirm `sdlc-classify-failure` routes to
-  the earliest responsible phase before retry
+  environment failure at a time; prove known mechanical causes bypass
+  troubleshooting, an ambiguous cause enters `troubleshoot` once and returns
+  its diagnosis to classification, incomplete diagnosis and budgets stop, and
+  a localized post-wave repair re-enters through corrective plan/waves before
+  the original oracle and invalidated gates rerun
 - add `Pause after the current feature. Do not create a PR.` to the bound
   prompt, repeat `run`, and confirm `sdlc-start` and Stop continuation honor it
 - edit the same prompt with requirements, design, and docs changes in turn,
@@ -697,11 +646,14 @@ fixture:
 ```text
 $sdlc-workflow-test --create
 $sdlc-workflow-test --create --keep
+$sdlc-workflow-test --resume
 $sdlc-workflow-test --destroy
 ```
 
-`--keep` is valid only with `--create`; create and destroy are mutually
-exclusive. There is one active three-tier application per verification root.
+`--keep` is valid only with `--create`; create, resume, and destroy are mutually
+exclusive. `--resume` revalidates and continues the one exactly owned retained
+failed or partial run; it does not create or replace a lifecycle. There is one
+active three-tier application per verification root.
 Every create first destroys the previous active exactly owned environment and
 then creates a fresh lifecycle. If project safety, resource ownership, or
 cleanup cannot be proven, replacement stops without starting another stack.
@@ -858,6 +810,26 @@ boundaries, vertical end-to-end feature flow, layer map, data flow, control
 flow, state, error handling, security, observability, validation, tests,
 evaluation, rollback, and done criteria.
 
+Failure-driven redesign has an additional admission gate. The accepted
+requirements and evaluator/environment must be valid, the failure must
+reproduce at the recorded integration commit, and `proven` or
+`high_confidence` evidence must name the violated design decision, boundary, or
+invariant. It must also show why a localized implementation, test, evaluator,
+environment, or plan repair cannot satisfy the requirement and identify the
+affected `FEAT-*` closure, invalidations, estimated work, and rollback path.
+Only architecture topology, component/service responsibility, public
+API/CLI/config/integration contracts, data ownership/lifecycle, migration,
+security/trust boundaries, or cross-component workflow changes qualify.
+Difficult work inside one existing private boundary does not.
+
+Internal reconsideration may proceed automatically only when requirements,
+public contracts, data lifecycle, security, permissions, deployment scope, and
+external behavior remain unchanged. Broader redesign requires durable human
+approval. Reaffirming the design returns evidence to classification without a
+new fingerprint or loop; an admitted design change preserves stable feature
+IDs, records the decision/change log and new fingerprint, and requires plan
+vN+1.
+
 ### `sdlc-auto-steering`
 
 Refreshes private runtime steering for the active run. It records every accepted
@@ -879,6 +851,11 @@ plans are never edited in place; changed design or context creates a new plan
 version. For serial multi-layer features, the plan preserves the end-to-end
 slice and expresses implementation as stable `TASK-*` records. Dependencies,
 write claims, and conflict domains define which tasks can safely share a wave.
+After completed waves, a proven localized defect creates only adjacent,
+immutable corrective plan vN+1. It preserves every existing task definition
+and completed-task digest, binds the exact diagnosis and original regression
+oracle, and appends contiguous corrective tasks and dependency waves. If that
+history cannot be preserved, the workflow stops for human direction.
 
 ### `sdlc-prepare-execution`
 
@@ -891,6 +868,9 @@ schema-v4 private execution state, supports confirmed interrupted-worker
 transfer and resource-free future-wave replanning, and acquires an
 `agentic-sdlc` v2 lease when nested in a managed outer worktree. It never
 implements behavior, promotes, or force-cleans resources.
+`replan-future` serializes the transition, compares full canonical definitions
+and definition digests for every resource-owning wave, and replaces only
+resource-free planned future waves.
 
 ### `sdlc-tdd`
 
@@ -914,7 +894,12 @@ coordinator screens staged content and evidence for obvious secrets/private
 endpoints, then produces one direct-child commit with normal Git hooks. The
 coordinator verifies results, merges in stable order with explicit merge
 commits, runs combined evidence, and performs non-force worker cleanup before
-advancing. Plan or design defects route backward instead of widening scope.
+advancing. A corrective assignment carries its exact diagnosis and original
+regression oracle. After the bounded repair it runs that oracle first, then the
+counterfactual or affected-boundary check, normal validation and
+unit/integration tests, and every failed or invalidated evaluation criterion at
+the new integration commit. Plan or design defects return through
+classification instead of widening scope.
 
 ### `sdlc-validate-codes`
 
@@ -950,6 +935,29 @@ it may use that environment within the recorded allowed actions; missing,
 unsafe, or unconfirmed live access is classified instead of guessed around.
 Passing tests alone are not treated as evaluation.
 
+On failure, evaluation emits `failure-event-v1` with the criterion/test ID,
+expected and observed behavior, reproduction oracle, evidence digests, exact
+integration commit, environment identity, and requirements/design/plan
+fingerprints. It distinguishes an already-proven mechanical owner from a
+diagnosis-required symptom; it does not speculate about implementation or
+design.
+
+Observability is eligible only for a predefined runtime operational criterion
+such as release/canary behavior, performance, reliability, resilience,
+capacity, or efficiency. Before Grafana readiness, one criterion must define
+one exact measurement and Grafana-backed signal with non-Grafana provenance,
+explicit authority, candidate and baseline/control attribution and absolute
+windows, required coverage, and exact pass, fail, and inconclusive conditions.
+Each provider call admits at most one grade-changing query; another query
+requires an updated criterion ledger, and query budgets are ceilings rather
+than batch targets. Missing signal provenance or criterion fit makes a required
+criterion inconclusive with `SPEC_GAP` and causes zero Grafana calls.
+Passive read-only production telemetry may pass or fail only that operational
+criterion when those requirements are complete; otherwise the result is
+inconclusive. It never authorizes a production workload or substitutes for
+functional, semantic, end-to-end, or agent-trace evaluation. Offline skill
+regression evals use frozen or mocked sanitized telemetry.
+
 ### `sdlc-update-documents`
 
 Updates project-facing documentation after feature evaluation, resolved
@@ -965,7 +973,8 @@ evidence routes back to the responsible phase.
 ### `sdlc-gui-test`
 
 Controls and observes browser UI behavior when the evaluation plan requires
-GUI evidence. It uses Browser or Playwright MCP when available, captures
+GUI evidence. It uses Computer Use when desktop/browser state is part of the
+acceptance contract, otherwise Browser or Playwright when suitable, captures
 screenshots or accessibility snapshots, and records pass/fail results against
 acceptance criteria.
 
@@ -977,11 +986,19 @@ criteria without storing credentials in transcripts.
 
 ### `sdlc-classify-failure`
 
-Classifies failed phases before the loop retries. It identifies the primary
-failure cause, maps it to the earliest responsible phase, updates retry counts,
-and routes back to requirements, context, design, plan, TDD, implementation,
-validation, tests, evaluation, documents, UAT, environment, policy, or human
-input.
+Classifies failed phases before the loop retries. The deterministic helper
+validates and deduplicates `failure-event-v1`, optional `diagnosis-v1`, and the
+stable blocker identity; owns taxonomy routing, design admission, budget
+enforcement, invalidations, and crash-safe intent/commit transitions; and
+derives the human-readable failure log.
+
+Proven test, local implementation, specification, evaluator, environment,
+policy, or human causes bypass troubleshooting. An ambiguous or persistent
+failure routes to `troubleshoot` exactly as a conditional diagnostic branch.
+The diagnosis result returns here and is either routed to its proven owner or
+stopped as missing evidence/unresolved. Failure to find an implementation bug
+never proves design. Probable or incomplete diagnoses cannot authorize repair
+or redesign.
 
 ### `sdlc-align-specs`
 
@@ -1015,32 +1032,74 @@ zero internal resources release the Agentic SDLC lease before PR publication.
 ### `create-pr`
 
 Reuses the existing PR creation skill as the SDLC PR handoff. In an SDLC run,
-it creates or reuses a PR only after UAT evidence says the product is ready,
-unless the user explicitly requests an early draft PR. It records PR evidence
-when local run state is available. Managed worktrees acquire the normal
-`create-pr` publication reservation only after the Agentic SDLC lease releases.
+it uses publication-only mode after UAT passes and the Agentic SDLC lease
+releases. Current clean `HEAD`, commit/execution evidence, the exact promoted
+SHA, and any existing remote PR head must agree. It does not stage, edit,
+commit, merge the base, resolve conflicts, repair checks, switch branches, or
+publish another SHA. Any required branch change routes through
+`sdlc-classify-failure` and `sdlc-start`, reruns every invalidated gate, and
+produces a newly promoted exact SHA before publication is retried. It records PR
+evidence when local run state is available.
 
 ### `review-pr`
 
 Reuses the existing PR review skill for merge-readiness review. For SDLC PRs,
-it checks the PR against requirements, design, local validation, tests,
-evaluation, UAT, and commit evidence when available, while keeping normal PR
-review priorities such as correctness, regressions, missing tests, checks, and
-conflicts.
+it uses findings-and-readiness-only mode. It requires the PR head to equal the
+clean exact promoted SHA and checks requirements, design, local validation,
+tests, evaluation, UAT, commit evidence, correctness, regressions, missing
+tests, checks, reviews, and conflicts without checking out, editing, committing,
+merging, rebasing, updating, resolving, or pushing the branch. Findings that
+require a head change return through `sdlc-classify-failure` and the coordinator
+before review resumes.
 
 ### `sdlc-merge-pr`
 
 Merges only after an explicit user request for a specific PR. It verifies PR
-status, checks, reviews, branch state, and UAT evidence, writes short-lived
-merge authorization immediately before the guarded merge action, records merge
-evidence, and marks the run complete when applicable.
+status, checks, reviews, branch state, and UAT evidence. The current remote PR
+head, clean local HEAD, promoted SHA, and review evidence must all identify one
+commit. It writes short-lived authorization for one exact
+`gh pr merge <pr-number-or-url> [--merge|--rebase|--squash]
+--match-head-commit <promoted-sha>` command immediately before the guarded
+action; the merge-queue form omits the strategy. Implicit PR selection,
+administrator bypass, branch deletion, repository override, other flags, shell
+operators, and appended actions fail closed. The skill records merge evidence
+and marks the run complete when applicable. Drift returns through failure
+classification; active Agentic SDLC does not use a race-prone GitHub merge MCP
+path.
 
 ## Failure And Retry Model
 
 The loop does not retry blindly. A failing validation, test, evaluation, UAT,
 policy, or PR step is routed through `sdlc-classify-failure` so the state
-records the failure class, responsible phase, retry count, next skill, and any
-human blocker.
+records the immutable failure, stable blocker, responsible phase, repair
+history, invalidations, budgets, next skill, and any human blocker.
+
+The normalized records are:
+
+- `failure-event-v1`: the exact failed criterion, expected/observed behavior,
+  reproduction, evidence digests, integration commit, environment identity,
+  and requirements/design/plan fingerprints.
+- `diagnosis-v1`: causal proof, confidence, remedy scale, regression oracle,
+  evidence references, and proposed classification.
+- `repair-control-v1`: the atomic active-blocker projection with route history,
+  attempts, active time, feature dispatches, invalidations, and status.
+- `repair-journal`: append-only intent/commit transitions used for crash-safe
+  replay.
+
+`event_id` is the hash of exact commit-bound content and evidence.
+`blocker_key` is the stable
+`component | operation | error class | source boundary` identity and excludes
+timestamps, temporary IDs, line numbers, checkpoints, and commits.
+
+If a responsible cause is already proven, classification routes directly to
+the owner. Otherwise, ambiguous, persistent, intermittent, or cross-boundary
+failure enters Agentic SDLC diagnostic mode in `troubleshoot`. That mode
+preserves the exact failed commit and criteria, builds the failure contract and
+causal model, finds the earliest divergence, and returns `diagnosis-v1`. It may
+use explicitly scoped, reversible, uncommitted instrumentation only in the
+private integration worktree and must remove it before handoff. It cannot
+commit a product repair, change tests/specifications, call design, or select a
+repair phase.
 
 Typical routes are:
 
@@ -1053,7 +1112,16 @@ Typical routes are:
 - worktree identity drift -> the owning execution phase with resources retained
 - undeclared task ownership or changed plan digest -> `REPLAN_REQUIRED`
 - wrong or missing tests -> `sdlc-tdd`
-- implementation defects -> `sdlc-implement-plan`
+- proven implementation defect in an active task -> that task's existing
+  attempt contract in `sdlc-implement-plan`
+- proven implementation defect after waves complete -> immutable corrective
+  plan vN+1 and appended waves before `sdlc-implement-plan`
+- ambiguous evaluation failure -> `troubleshoot`, then back to
+  `sdlc-classify-failure`
+- missing decisive evidence or competing hypotheses -> stop as
+  `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`, never design
+- proven system-contract defect -> the design admission gate, then
+  `sdlc-create-design`
 - ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
 - unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
 - moved project/integration state -> `PROMOTION_BLOCKED`
@@ -1061,12 +1129,58 @@ Typical routes are:
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
-- documentation drift -> `sdlc-update-documents`
+- documentation drift -> `sdlc-update-documents`, then `sdlc-align-specs`
+- local/remote/promoted/reviewed PR head drift -> `PR_HEAD_DRIFT` and human
+  ownership input without push, overwrite, or merge
 - environment defects -> stop or request the minimum missing setup
 - policy blocks -> stop unless the required explicit authorization exists
 
-Retry budgets live in local run state. When a blocker needs human input or the
-retry budget is exceeded, the run stops instead of guessing.
+Implementation or test changes invalidate validation, tests, evaluation,
+documentation/alignment, and commit evidence at the old commit. Plan changes
+invalidate execution preparation and downstream evidence; design changes
+invalidate plan and downstream evidence for the affected feature closure;
+requirements changes invalidate design and all downstream evidence.
+Environment-only correction reruns the failed gate at the same commit.
+Acceptance criteria cannot be weakened to make a repair pass.
+
+A successful remediation with invalidations enters
+`revalidation_required`, not terminal `resolved`. The authoritative
+`revalidation-cursor-v1` orders each invalidated surface and exact next skill.
+Every gate advances it with immutable `revalidation-evidence-v1` whose source
+is a structured phase-owned `passed` result. Its source digest, current
+requirements/design/plan fingerprints, immutable classification, successful
+dispatch, and cursor identity are bound to the active repair. Pre-commit gates
+must match the live integration HEAD. The final commit gate is recorded only
+after promotion and non-force cleanup complete; it must match the
+coordinator's promoted SHA, the clean project checkout HEAD, and verified
+presence on the recorded base branch plus absence of the integration worktree
+and branch. The Stop hook rejects UAT, PR, and
+publication routing until the cursor has cleared every invalidation, including
+fresh commit evidence.
+
+One stable blocker tranche permits at most two localized remediations, one
+design-scale remediation, three total remediation attempts, and 60 active
+minutes across diagnosis, repair, verification, and reporting. A feature
+permits at most four repair dispatches across causally independent blockers.
+Diagnostic experiments consume active time but not remediation attempts; three
+low-information experiments require a rebuilt model, and diagnosis stops when
+no new decision-changing experiment exists. Before every remediation retry,
+new evidence and a genuinely new falsifiable hypothesis are mandatory. A first
+direct repair that fails with the same blocker requires troubleshooting before
+attempt two. The same blocker after design remediation, semantic A-to-B-to-A
+cycling, or phase churn without new evidence stops immediately.
+
+Exact duplicate events, classification replays, permission denials, and crash
+recovery consume no attempt. A causally independent blocker receives a fresh
+blocker budget but continues to consume the feature total. Only a new explicit
+user instruction authorizes another tranche; counters never reset silently.
+
+No sealed, promoted, or completed execution is reopened. A post-promotion UAT
+defect starts a corrective run from the exact promoted commit. Every successful
+repair reruns the original oracle, the counterfactual or affected-boundary
+check, validation and unit/integration tests at the new integration commit, and
+every failed or invalidated evaluation criterion before documentation,
+alignment, or commit may continue.
 
 ## Guarded Git Actions
 
@@ -1076,9 +1190,12 @@ Git actions are intentionally split:
   helper; the coordinator creates ordered merge commits.
 - `sdlc-commit` seals final integration changes, performs exact ff-only local
   promotion, and never pushes.
-- `create-pr` pushes and opens or reuses a PR after UAT is ready.
-- `review-pr` reviews and may safely fix a writable PR branch.
-- `sdlc-merge-pr` merges only with explicit user instruction.
+- In active Agentic SDLC mode, `create-pr` only publishes the clean exact
+  promoted SHA after UAT passes; it never changes that SHA.
+- In active Agentic SDLC mode, `review-pr` is findings-and-readiness-only and
+  never changes the PR head.
+- `sdlc-merge-pr` merges only with explicit user instruction and only while the
+  remote head still equals the exact promoted and reviewed SHA.
 
 The optional PreToolUse hook can require short-lived local authorization files
 under the active run's `permissions/` directory:
@@ -1090,10 +1207,22 @@ under the active run's `permissions/` directory:
 
 These files are written immediately before the guarded action, scoped to the
 branch or PR, include an expiry, and are removed or allowed to expire after the
-attempt. Raw execution authorization also binds action, canonical worktree, Git
+attempt. PR authorization additionally binds `phase: "create-pr"`, the exact
+branch, `expected_head` equal to the clean promoted SHA, and
+`uat_status: "passed"`; it guards active-run Git pushes, `gh pr create`, and
+GitHub PR-creation MCP calls without blocking GitHub PR reads. The guarded push
+allows exactly `origin` plus one `HEAD:<authorized-branch>` refspec, and CLI/MCP
+PR creation must name that same head branch. Sensitive shell actions use one
+direct executable action; executable wrappers, absolute executable paths,
+prepended commands, shell operators, redirections, and appended actions fail
+closed. Raw execution authorization also binds action, canonical worktree, Git
 common directory, branch, expected HEAD, and exact target/command. Normal
 execution-plane mutations use the private helper, which revalidates the same
 identity before and after each transition.
+Merge authorization binds `phase: "sdlc-merge-pr"`, the exact branch, PR,
+promoted/reviewed head, explicit user request, passing checks/review/UAT,
+expiry, and the one canonical, explicit-PR, single-action head-matched CLI
+command. Only the optional long-form merge strategy is variable.
 
 ## Resume And Idempotency
 
@@ -1118,8 +1247,8 @@ Stable IDs are part of the design:
   whether to resume, retain, or block.
 - Worker and merge commits are retained. No rebase, squash, amend, reset,
   cherry-pick, or force cleanup is used by the execution plane.
-- Unfinished schema v1 execution is not migrated. It fails closed with
-  `WORKFLOW_UPGRADE_REQUIRED`; completed v1 history remains readable.
+- Every execution coordinator schema v1, v2, or v3 record fails closed with
+  `WORKFLOW_UPGRADE_REQUIRED` without mutation, including completed records.
 - An unfinished pre-prompt run also fails with `WORKFLOW_UPGRADE_REQUIRED`;
   completed unbound history remains readable without an adoption shim.
 
@@ -1131,6 +1260,9 @@ The workflow intentionally does not:
   performs only deterministic workspace, snapshot, intake, and disposition
   transitions
 - let hooks choose phases or implement workflow logic
+- treat literal command classification as a shell sandbox or construct guarded
+  Git/GitHub actions indirectly through variables, substitutions, interpreters,
+  or generated programs
 - treat worktree separation as an operating-system security boundary
 - run two parallel tasks with overlapping write claims or conflict domains
 - rewrite worker/merge history or force-clean unverified Git resources

@@ -94,15 +94,18 @@ Hook installation is separate and explicit:
   --register-hooks
 ```
 
-Selected commands use:
+Commands with an explicit task project use:
 
 ```bash
 CODEX_NEBIUS_PROJECT_ID=<project-id> <command>
 ```
 
-The hook injects renewable project/profile/credential context and clears
-ambient bearer variables. Raw-token children use the injected protected helper
-rather than printing or persisting tokens.
+When that selector is absent, the hook clears ambient Nebius auth variables,
+uses `nebius profile current` to resolve the config-owned default profile, and
+reads only that profile's configured `parent-id`. It then injects the matching
+renewable project/profile/credential context. Explicit task selectors still
+win, malformed selectors fail closed, and raw-token children require an
+explicit selector.
 
 ## Validation
 

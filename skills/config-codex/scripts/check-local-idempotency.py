@@ -29,18 +29,23 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
         "After one remediation fails against the same blocker, use "
         "`troubleshoot` before another repair."
     ),
-    "stop after three distinct failed remediation attempts or 60 active minutes",
-    "Report attempts 1 and 2 as progress",
-    (
-        "at exhaustion, make only the exact private task-state update that "
-        "records the stop, then call no other tool and return the complete "
-        "troubleshooting report"
-    ),
-    "Only a new explicit user instruction may start another bounded tranche",
+    "maximum of three",
+    "remediation attempts or 60 active minutes",
+    "never raise",
+    "disable the attempt maximum",
+    "newly acquired evidence",
+    "evidence-derived hypothesis",
+    "attempts 1 and 2 as progress",
+    "at exhaustion, make only the exact",
+    "private task-state update that records the stop",
+    "call no other",
+    "complete troubleshooting report",
+    "Only a new explicit user",
+    "instruction may start another bounded tranche",
     "When evidence establishes a causally independent blocker",
-    "fresh budget at attempt 1",
-    "lower or higher limits that apply to the new blocker",
-    "Permission denials and marker validation or repair consume no attempt",
+    "budget at attempt 1",
+    "another time limit",
+    "marker validation or repair consume no",
     "Agents may clean up temporary trees they created during the current task",
     'find "$task_temp_dir" -depth -delete',
     "never target the temporary root or an unresolved variable",
@@ -363,7 +368,7 @@ def check_task_implementer_workspace(
         fail_task_implementer_workspace(
             (
                 "task-implementer private directory mode is not 0700; run "
-                "chmod 700 \"${CODEX_HOME:-$HOME/.codex}/task-implementer\""
+                'chmod 700 "${CODEX_HOME:-$HOME/.codex}/task-implementer"'
             ),
             failures,
         )
@@ -433,7 +438,9 @@ def check_task_implementer_workspace(
     )
 
 
-def check_required_mcp_servers(config: dict, template: dict, failures: list[str]) -> None:
+def check_required_mcp_servers(
+    config: dict, template: dict, failures: list[str]
+) -> None:
     required = template.get("mcp_servers", {})
     actual = config.get("mcp_servers", {})
     if not isinstance(required, dict) or not required:
@@ -454,7 +461,9 @@ def check_required_mcp_servers(config: dict, template: dict, failures: list[str]
             fail(f"mcp_servers.{name} differs from template and needs review", failures)
 
 
-def check_template_asset(relative: str, template_relative: str, codex_home: Path, failures: list[str]) -> None:
+def check_template_asset(
+    relative: str, template_relative: str, codex_home: Path, failures: list[str]
+) -> None:
     actual_path = codex_home / relative
     template_path = skill_root() / "assets" / template_relative
     try:
@@ -557,13 +566,18 @@ def check_hooks_json(codex_home: Path, failures: list[str]) -> None:
             fail(f"hooks.json.template {event_name} entries are invalid", failures)
             continue
         if not isinstance(actual_entries, list):
-            fail(f"hooks.json missing required {event_name} hook registration", failures)
+            fail(
+                f"hooks.json missing required {event_name} hook registration", failures
+            )
             continue
         for expected_entry in expected_entries:
             if expected_entry in actual_entries:
                 ok(f"hooks.json includes required {event_name} hook registration")
             else:
-                fail(f"hooks.json missing required {event_name} hook registration", failures)
+                fail(
+                    f"hooks.json missing required {event_name} hook registration",
+                    failures,
+                )
 
 
 def main(argv: list[str]) -> int:
@@ -583,7 +597,9 @@ def main(argv: list[str]) -> int:
     if failures:
         print(f"Idempotency preflight failed: {len(failures)} issue(s)")
         return 1
-    print("Idempotency preflight passed: no local changes required for checked surfaces")
+    print(
+        "Idempotency preflight passed: no local changes required for checked surfaces"
+    )
     return 0
 
 

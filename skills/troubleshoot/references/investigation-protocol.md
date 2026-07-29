@@ -75,7 +75,12 @@ system model and choose another localization dimension.
 Diagnostic experiments are not remediation attempts. Once a remediation is
 applied and the original reproducer still shows the same blocker, record the
 failed attempt under [remediation-budget.md](remediation-budget.md) before
-another repair.
+another repair. Do not admit the retry until a new log observation, stack
+trace, code inspection, runtime-state observation, or equivalent evidence
+updates the model and supports a genuinely new falsifiable hypothesis.
+Rephrasing the previous hypothesis or reusing its evidence is not a retry plan.
+If the evidence or hypothesis gate cannot be satisfied, stop and return the
+structured investigation report with the missing evidence and next action.
 
 ## Minimal System Model
 
@@ -135,6 +140,9 @@ next experiment. Do not convert incomplete access into false certainty.
 - **Model-reset gate:** rebuild after three low-information experiments.
 - **Scope gate:** broaden searches or rebuilds only after localization evidence.
 - **Evidence gate:** retain negative and contradictory evidence.
+- **Retry-admission gate:** require new evidence and a genuinely new
+  evidence-derived hypothesis before each remediation retry.
 - **Completion gate:** one passing test or restart is not closure.
-- **Remediation-budget gate:** after three distinct failed remediations or the
-  active time limit, stop all tools and report instead of widening the search.
+- **Remediation-budget gate:** permit no more than three remediation attempts
+  for one blocker tranche; after the third failure or the active time limit,
+  stop all tools and report instead of widening the search.

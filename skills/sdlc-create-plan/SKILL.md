@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; use when one ready Agentic SDLC feature from `docs/design.md` needs a locked local execution plan and dependency-safe `TASK-*` graph before execution preparation, tests, or implementation. Plans are private local artifacts and must not be committed."
+description: "Use only as part of the Agentic SDLC workflow; use when one ready feature needs a locked dependency-safe plan, or a classified post-evaluation repair needs immutable corrective plan vN+1 with preserved completed task definitions and appended corrective waves."
 ---
 
 # Create Plan
@@ -16,6 +16,8 @@ a dependency-safe task graph.
 - A ready `FEAT-*` needs an execution plan.
 - Design or context changed and the old plan must be superseded.
 - The SDLC loop reaches the planning phase for the current feature.
+- A proven post-evaluation implementation defect occurs after execution waves
+  completed and requires corrective plan vN+1.
 
 ## When Not To Use
 
@@ -29,6 +31,8 @@ a dependency-safe task graph.
 - Corresponding `REQ-*` blocks.
 - Context pack.
 - Current repo and feature state.
+- For correction: `diagnosis-v1`, original regression oracle, failed criterion,
+  current execution lifecycle, and completed task manifest.
 
 ## Required Reads
 
@@ -36,12 +40,16 @@ a dependency-safe task graph.
 - `docs/design.md`.
 - `context/FEAT-*.context.md`.
 - Existing source, tests, and local plans for the feature.
+- Active repair-control, diagnosis, execution coordinator, completed task
+  records, and result digests when creating a correction.
 
 ## Writes
 
 - `plans/FEAT-*.plan.vN.md`.
 - `plans/FEAT-*.plan.vN.lock`.
 - Plan fingerprint and state transition to `plan_locked`.
+- `corrective-plan-validation-v1` from
+  `scripts/corrective_plan.py` for a corrective version.
 
 ## Process
 
@@ -63,6 +71,15 @@ a dependency-safe task graph.
 - Record planned dependency waves for human review. Treat them as informative:
   `sdlc-prepare-execution` recomputes and verifies the graph before mutation.
 - Lock the plan.
+- For a post-evaluation correction, create only adjacent immutable plan vN+1.
+  Set `Plan kind: corrective`; bind the exact superseded plan, diagnosis,
+  original regression oracle, and completed task manifest digest.
+- Preserve every existing task definition byte-for-byte and every completed
+  task digest exactly. Append contiguous corrective `TASK-*` IDs and dependency
+  waves; each corrective task must reference the diagnosis and regression
+  oracle. Never reinterpret completed work under a new plan digest.
+- Run `scripts/corrective_plan.py` before routing to execution. If append-only
+  correction cannot preserve history safely, stop for human direction.
 
 ## Idempotency
 
@@ -73,12 +90,16 @@ a dependency-safe task graph.
   create a new locked plan version. Preserve started assignments, results,
   commits, and worktrees until the coordinator can prove a safe reconciliation;
   never reset or silently reuse them against a new plan digest.
+- Freeze dispatch while corrective replanning. Resource-owning waves remain
+  immutable; only resource-free planned future waves may be replaced.
 
 ## Failure Handling
 
 - If design is not implementable, route to `sdlc-create-design`.
 - If context is missing, route to `sdlc-gather-context`.
 - If project tooling is unknown, route to a relevant project skill.
+- If completed definitions, digests, or plan lineage cannot be preserved, stop
+  with `HUMAN_INPUT_REQUIRED`; do not synthesize a compatibility plan.
 
 ## Must Not
 
@@ -86,6 +107,7 @@ a dependency-safe task graph.
 - Edit locked plans.
 - Implement code or write tests.
 - Expand feature scope.
+- Reopen sealed, promoted, or completed execution.
 
 ## Completion Criteria
 
@@ -96,6 +118,8 @@ a dependency-safe task graph.
   and conflict domains.
 - Plan identifies the end-to-end slice or records why no vertical slice applies.
 - Plan references exact feature and requirement IDs.
+- A corrective plan passes the append-only validator and names the original
+  evaluation oracle.
 
 ## SDLC Invariants
 
@@ -132,3 +156,5 @@ Return a concise result with:
 ## References
 
 - Use `assets/templates/feature-plan.md.template` when creating the corresponding artifact.
+- Use `scripts/corrective_plan.py` before locking or dispatching a corrective
+  plan version.

@@ -34,4 +34,5 @@ independent API/database/service oracle for data-backed GUI flows.
 - Full UAT report exists.
 - All P0 acceptance criteria pass or blockers are classified.
 - Cross-feature flows pass.
-- Product is ready for `create-pr` only on pass.
+- Product is ready for publication-only `create-pr` only on pass and only for
+  the clean exact promoted SHA tested by UAT.

@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Create Plan"
   short_description: "Lock one feature plan"
-  default_prompt: "Use $sdlc-create-plan to create a local, locked Agentic SDLC execution plan for exactly one feature, preserving the vertical end-to-end slice when the feature spans serial application layers."
+  default_prompt: "Use $sdlc-create-plan to create a local locked plan for exactly one feature. For a classified post-evaluation repair, create only immutable corrective plan vN+1, preserve all existing task definitions and completed digests, append diagnosis-bound corrective tasks and waves, and bind the original evaluator oracle."
 policy:
   allow_implicit_invocation: false

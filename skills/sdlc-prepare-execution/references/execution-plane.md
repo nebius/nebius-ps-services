@@ -50,9 +50,13 @@ batches; batches do not change logical dependencies or wave IDs.
 
 Private execution state uses `agentic-sdlc/execution-coordinator-v4`,
 `execution-wave-v2`, `execution-task-v3`, `worker-assignment-v2`, and
-`worker-result-v3`. Wave, task, assignment, incoming-handoff, and result files are
+`worker-result-v4`. Wave, task, assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
-results carry SHA-256 digests. Task records retain append-only hashes of every
+results carry SHA-256 digests. A corrective result must include
+`regression-oracle-evidence-v1` with the assignment's exact diagnosis and
+oracle, a `passed` outcome, evidence reference, worker commit, and content
+digest; missing or mismatched proof fails before integration. Task records
+retain append-only hashes of every
 worker session that has owned the task. A process-safe execution transition
 lock serializes task ownership, atomic private session claims prevent one
 identity from owning multiple tasks, and recovery requires the exact current
@@ -100,10 +104,12 @@ success from a command error; classify observed Git state first.
 `task-start` and `task-recover` derive identity from `CODEX_THREAD_ID`; callers
 cannot supply arbitrary runtime session tokens. `task-recover` requires
 explicit previous-worker-stopped confirmation, the exact current attempt, a
-fresh hashed session identity, and exact scope cwd. It preserves only a clean base,
-claimed dirty state, or one clean direct-child commit. `replan-future` replaces
-only planned waves without assignments, worktrees, branches, results, commits,
-or active journals; completed and current waves remain immutable.
+fresh hashed session identity, and exact scope cwd. It preserves only a clean
+base, claimed dirty state, or one clean direct-child commit. `replan-future`
+holds the execution transition lock and replaces only planned waves without
+assignments, worktrees, branches, results, commits, or active journals.
+Completed and current waves remain immutable, and every task in them must match
+both its full canonical definition and recorded definition digest.
 
 When execution starts inside a managed outer worktree, acquire the shared v2
 lease as owner `agentic-sdlc`, register integration/worker resources, and record

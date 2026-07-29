@@ -14,7 +14,17 @@ feature while safe implementation tasks run in dependency waves, and returns
 to the project checkout only after exact promotion. In a managed outer
 worktree, it releases Agentic SDLC ownership only after final alignment, UAT,
 documentation evidence, exact promoted-HEAD validation, and internal-resource
-cleanup; PR publication begins afterward.
+cleanup; PR publication begins afterward in exact-SHA publication-only mode,
+followed by findings-and-readiness-only review. Any required branch change
+returns through failure classification and the coordinator.
+
+Gate failures use one private, deterministic repair-control contract.
+Already-proven mechanical causes take the shortest route to their owning
+phase. Ambiguous or persistent failures enter `troubleshoot` as a conditional
+diagnostic branch and return to classification before any repair dispatch.
+Blocker and feature budgets, invalidations, corrective-plan re-entry, and stop
+outcomes remain checkpointed; unresolved evidence never becomes speculative
+redesign.
 
 ## Public Interface
 
@@ -40,6 +50,8 @@ There is no bare `$sdlc-start` resume action.
 - Do not bypass validation, tests, or evaluation.
 - Do not store live environment credentials or raw logs in run state.
 - Do not let hooks, cron, or background daemons select SDLC phases.
+- Do not reopen completed execution or route a troubleshooting diagnosis
+  directly to implementation/design.
 
 ## Primary Inputs
 
@@ -76,7 +88,11 @@ Patch these source files before touching installed runtime copies under
 for `sdlc-start run` and canonical `sdlc-*` skill
 names, while still accepting short phase aliases as input. It validates the
 managed `prompt.json` binding and fails closed if an optional `run.json` prompt
-filename mirror disagrees. The PreToolUse hook does not block file targets
+filename mirror disagrees. When current state includes a repair pointer, the
+Stop hook also validates that the event, stable blocker, control projection,
+optional diagnosis, budget status, and next route agree. Diagnosis-required
+work may continue only to `troubleshoot`; diagnosed work may continue only
+back to `sdlc-classify-failure`. The PreToolUse hook does not block file targets
 by path; repo files, outside-repo files, credential directories, Codex runtime
 files, global `AGENTS.md`, locked SDLC plans, and private SDLC state are all
 path-allowed for operator flexibility. A global registration is selected by

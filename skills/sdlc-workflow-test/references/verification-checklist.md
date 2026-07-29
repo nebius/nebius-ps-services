@@ -57,6 +57,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Workflow Verification`
 - `Quick preflight test`
 - `Full workflow test`
+- `Real three-tier application test` and lifecycle `--resume`
 - `$sdlc-workflow-test`
 - `$sdlc-start`
 - `$sdlc-start workspace init [project-folder]`
@@ -75,6 +76,14 @@ Verify `docs/agentic-sdlc-design.md` includes:
   `docs-update`
 - path-agnostic filesystem target handling and ordinary outbound network
   command allowance, with only unsafe content or guarded action checks
+- bounded observability evaluation with a predefined operational criterion,
+  non-Grafana provenance, explicit attribution/coverage, one grade-changing
+  query per provider call, and pass/fail/inconclusive outcomes
+- publication-only `create-pr` and findings-and-readiness-only `review-pr`
+  modes that preserve the clean exact promoted SHA
+- exact-head `sdlc-merge-pr` authorization for one explicit
+  `gh pr merge --match-head-commit` command with a specific PR target and no
+  extra action or bypass flag
 
 ## Static Discovery
 
@@ -92,9 +101,10 @@ Verify:
   `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
-- The installed `worktree` support skill exists.
-- Every required SDLC skill, `worktree`, and `sdlc-workflow-test` matches its
-  source copy, excluding installer provenance and bytecode artifacts.
+- The installed `worktree` and `nebius-grafana-query` support skills exist.
+- Every required SDLC skill, both runtime support skills, and
+  `sdlc-workflow-test` match their source copies, excluding installer
+  provenance and bytecode artifacts.
 
 ## Hook Configuration
 
@@ -136,8 +146,16 @@ Deny cases:
 - Commit on protected branches.
 - Staged secrets.
 - Push without PR authorization.
+- `gh pr create` or a GitHub PR-creation MCP call without PR authorization.
 - Force push.
 - Merge or PR merge without merge authorization.
+- PR merge whose command, PR target, local/promoted head, explicit user request,
+  or `--match-head-commit` guard differs from its authorization.
+- PR merge with implicit PR selection, admin bypass, branch deletion,
+  repository override, another unsupported flag, a shell operator, or an
+  appended command.
+- Sensitive Git/GitHub action through an executable wrapper, absolute
+  executable path, prepended command, nested shell, operator, or redirection.
 - Broad destructive shell commands.
 - Patches containing obvious secret material.
 
@@ -145,6 +163,17 @@ Authorization handoff:
 
 - Commit, PR, and merge authorization files allow only the matching guarded
   action while valid.
+- PR authorization binds `phase: "create-pr"`, the exact branch, current
+  promoted HEAD, passing UAT status, and expiry. GitHub PR reads remain allowed
+  without PR-creation authorization. Pushes allow exactly `origin` plus one
+  `HEAD:<branch>` refspec, and CLI/MCP PR creation must use the same explicit
+  head.
+- Merge authorization binds `phase: "sdlc-merge-pr"`, the exact branch, current
+  promoted/reviewed HEAD, explicit PR number or URL, explicit user request,
+  passing checks/review/UAT, expiry, and entire canonical single-action
+  head-matched CLI command. Active-run GitHub merge MCP writes are denied.
+- Quoted documentation searches that mention guarded commands remain
+  read-only and allowed.
 - Expired or removed authorization files must deny again.
 - Registered integration and worker worktrees outside the original checkout
   remain inside the active SDLC policy boundary. Identity drift must deny
@@ -235,7 +264,8 @@ unavailable rather than treating deterministic fake-process proof as live proof.
 
 ## Opt-In Three-Tier Live Profile
 
-Use only for explicit `--create` or `--create --keep`; read
+Use only for explicit `--create`, `--create --keep`, `--resume`, or
+`--destroy`; read
 `references/three-tier-live.md` for the authoritative workflow.
 
 Verify before mutation:

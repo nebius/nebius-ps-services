@@ -14,7 +14,8 @@ and feature designs in `docs/design.md`.
 
 - Requirements exist but design is missing.
 - Approved requirements or context changed and design must be updated.
-- An SDLC failure classification routes to a design defect or spec gap.
+- A failure classification with a validated design-admission record routes a
+  proven `DESIGN_DEFECT` here.
 
 ## When Not To Use
 
@@ -31,6 +32,10 @@ and feature designs in `docs/design.md`.
 - Existing `docs/design.md` when present.
 - Current codebase shape.
 - Technology, vendor, security, operational, and testing constraints.
+- For failure-driven reconsideration, the immutable failure event, validated
+  diagnosis and design-admission record, affected `FEAT-*` closure,
+  invalidation scope, estimated work, rollback path, and durable approval when
+  required.
 
 ## Required Reads
 
@@ -49,6 +54,20 @@ and feature designs in `docs/design.md`.
 ## Process
 
 - Use `assets/templates/design.md.template` when creating the file.
+- For failure-driven reconsideration, first verify that requirements and
+  acceptance criteria are stable, the evaluator and environment are valid,
+  the failure reproduces at the recorded integration commit, and the diagnosis
+  is `proven` or `high_confidence`.
+- Require a named violated design decision, boundary, or invariant and evidence
+  that a localized implementation, test, evaluator, environment, or plan
+  repair cannot satisfy the accepted requirement. The admitted change must
+  affect architecture topology, component/service responsibility, a public
+  API/CLI/config/integration contract, data ownership/lifecycle, migration
+  behavior, a security/trust boundary, or a cross-component workflow.
+- Reconsider an internal design automatically only when requirements, public
+  contracts, data lifecycle, security, permissions, deployment scope, and
+  external behavior stay unchanged. Otherwise require durable human approval
+  bound to the admission record before editing design.
 - Understand requirements first: summarize product behavior, non-goals,
   acceptance criteria, priorities, constraints, and open questions.
 - Understand the existing system before designing: inspect current components,
@@ -76,6 +95,12 @@ and feature designs in `docs/design.md`.
   criteria, rollback, and done definition per ready feature.
 - Mark features as ready, draft, blocked, or stale and update the decision log,
   change log, and design fingerprint.
+- If reconsideration reaffirms the current design, do not create a new design
+  loop or fingerprint. Return the reaffirmation evidence through
+  `sdlc-classify-failure` so it can route to the proven localized owner.
+- If design changes, preserve stable feature IDs, record the admitted contract
+  change and decision, create a new design fingerprint, identify the affected
+  feature closure and invalidations, and require immutable plan vN+1.
 
 ## Idempotency
 
@@ -86,10 +111,16 @@ and feature designs in `docs/design.md`.
   integration worktree, supersede the old locked plan through coordinator
   routing, and preserve started assignments/commits/resources. Never rewrite
   or reset the active execution history.
+- Replaying the same design admission and approval against the same fingerprint
+  does not duplicate decision/change-log entries.
 
 ## Failure Handling
 
-- If design cannot satisfy requirements, mark `DESIGN_DEFECT` or `SPEC_GAP`.
+- If requirements are ambiguous or contradictory, return `SPEC_GAP` to
+  `sdlc-classify-failure`; only `sdlc-create-requirements` may resolve it.
+- If design admission lacks positive system-contract proof, valid
+  evaluator/environment evidence, reproducibility, confidence, scope,
+  rollback, or required approval, stop with `DESIGN_ADMISSION_DENIED`.
 - If context is missing, route to `sdlc-gather-context`.
 - If requirements are contradictory, route to `sdlc-create-requirements`.
 - If a feature is not implementable without a risky or irreversible choice,
@@ -102,6 +133,10 @@ and feature designs in `docs/design.md`.
 - Modify tests.
 - Delete feature blocks without explicit requirement removal.
 - Ignore acceptance criteria.
+- Treat implementation size or difficulty inside one existing private boundary
+  as a design defect.
+- Turn missing implementation evidence, probable causation, or “no
+  implementation bug found” into redesign.
 
 ## Completion Criteria
 
@@ -111,6 +146,9 @@ and feature designs in `docs/design.md`.
   boundaries, vertical flow or layer map when applicable, validation, test,
   evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.
+- Failure-driven redesign records admission evidence, approval mode, affected
+  feature closure, invalidations, rollback, decision/change log, and new design
+  fingerprint; reaffirmation returns without changing the fingerprint.
 
 ## SDLC Invariants
 

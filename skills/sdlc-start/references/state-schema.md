@@ -49,8 +49,18 @@ All run artifacts are private local state under
           tasks/WAVE-001/TASK-001.json
           assignments/WAVE-001/TASK-001.json
           incoming-handoffs/WAVE-001/TASK-001.json
+          sessions/<session-hash>.json
           results/WAVE-001/TASK-001.json
           journals/coordinator.jsonl
+      repairs/
+        FEAT-001/
+          repair-control.json
+          repair-journal.jsonl
+          events/<event-id>.json
+          diagnoses/<diagnosis-id>.json
+          approvals/<approval-id>.json
+          classifications/<classification-id>.json
+          revalidations/<revalidation-id>.json
       worktrees/
         FEAT-001/integration/
         FEAT-001/waves/WAVE-001/TASK-001/
@@ -116,6 +126,8 @@ bodies.
     "validation": 0,
     "test": 0,
     "evaluation": 0,
+    "failure_classification": 0,
+    "troubleshoot": 0,
     "sdlc-update-documents": 0,
     "sdlc-align-specs": 0,
     "sdlc-commit": 0,
@@ -126,6 +138,7 @@ bodies.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
+  "repair": null,
   "execution": {
     "schema": "agentic-sdlc/execution-coordinator-v4",
     "feature_id": "FEAT-001",
@@ -142,12 +155,49 @@ bodies.
 }
 ```
 
+When a repair cycle is active, `repair` is a pointer projection rather than a
+second mutable budget:
+
+```json
+{
+  "schema": "agentic-sdlc/repair-state-pointer-v1",
+  "failure_event": "repairs/FEAT-001/events/<event-id>.json",
+  "diagnosis": "repairs/FEAT-001/diagnoses/<diagnosis-id>.json",
+  "control": "repairs/FEAT-001/repair-control.json"
+}
+```
+
+`diagnosis` is `null` until causal diagnosis exists. The immutable
+`failure-event-v1`, optional immutable `diagnosis-v1`, optional immutable
+`design-approval-v1`, deterministic classification, append-only repair
+journal, and process-locked atomic `repair-control-v1` projection are
+authoritative. A broader-design approval also binds the digest and exact
+approval excerpt of its private user-input snapshot. `event_id` identifies exact commit-bound
+evidence; `blocker_key` identifies recurrence across commits and excludes
+timestamps, temporary IDs, line numbers, checkpoints, and commits. The
+human-readable `evidence/FEAT-*/failure-log.md` is derived and never
+authoritative.
+
+After a successful remediation, any non-empty invalidation set creates an
+`agentic-sdlc/revalidation-cursor-v1`. It names the ordered surfaces and exact
+next skill. Each phase advances it with immutable, digest-verified
+`revalidation-evidence-v1` bound to current requirements/design/plan
+fingerprints. Pre-commit evidence follows the live integration HEAD; final
+commit evidence follows the promoted project HEAD on the recorded base branch
+only after worktree and branch cleanup. The evidence source is a structured
+phase-owned `passed` result; the cursor is content-identified and bound to the
+immutable classification plus a completed successful dispatch. `resolved` is
+valid only when the cursor is complete; the Stop hook rejects UAT, PR, or
+publication routing while any invalidated gate remains.
+
 Coordinator v4 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
 Execution wave v2 enforces an active capacity-batch cursor. Mutable task v3
 records store append-only hashed worker-session history plus attempt count;
-assignment v2 binds an immutable `incoming-handoff-v1`, and result v3 carries
-an explicit summary, decisions, and open risks. Atomic private
+assignment v2 binds an immutable `incoming-handoff-v1`, and
+`worker-result-v4` carries an explicit summary, decisions, open risks, and,
+for corrective tasks, digest-protected `regression-oracle-evidence-v1` bound
+to the exact diagnosis, oracle, and worker commit. Atomic private
 `execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
 one session identity across tasks. A private execution transition lock and
 expected-attempt recovery guard make each task ownership transfer exclusive.
@@ -185,6 +235,8 @@ without conversation history.
     "validation": 0,
     "test": 0,
     "evaluation": 0,
+    "failure_classification": 0,
+    "troubleshoot": 0,
     "sdlc-update-documents": 0,
     "sdlc-align-specs": 0,
     "sdlc-commit": 0,
@@ -195,6 +247,7 @@ without conversation history.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
+  "repair": null,
   "fingerprint_ids": [
     "requirements:sha256:<digest>",
     "design:sha256:<digest>"
@@ -259,10 +312,24 @@ directory. They are local runtime state only and must not be committed.
 - `commit-authorization.json`: written immediately before `sdlc-commit` runs
   `git commit`, after validation, tests, and evaluation evidence passes.
 - `pr-authorization.json`: written immediately before `create-pr` publishes a
-  branch or opens/reuses a PR, after UAT evidence passes unless the user
-  explicitly requested an early draft PR.
+  branch or opens/reuses a PR, after UAT evidence passes for the clean exact
+  SHA promoted by `sdlc-commit`. It must include `phase: "create-pr"`, the
+  exact branch, `expected_head` equal to the recorded promoted HEAD,
+  `uat_status: "passed"`, and a short expiry. A guarded Git push may contain
+  only `origin` and one exact `HEAD:<branch>` refspec; CLI or MCP PR creation
+  must name the same head branch. Shell execution must use one direct action
+  without executable wrappers, absolute executable paths, prepended commands,
+  shell operators, or redirections.
 - `merge-authorization.json`: written immediately before `sdlc-merge-pr` merges a
-  specific PR, after the explicit user merge request and final readiness checks.
+  specific PR, after the explicit user merge request and final readiness
+  checks. It binds `phase: "sdlc-merge-pr"`, the named branch and PR,
+  `expected_head` equal to the promoted and reviewed SHA, the one
+  canonical single-action `exact_command` containing an explicit PR number or
+  URL and `--match-head-commit <expected_head>`, `explicit_user_request: true`,
+  `checks_status: "passed"`, `review_status: "passed"`,
+  `uat_status: "passed"`, and expiry. Only an optional long-form
+  `--merge`/`--rebase`/`--squash` strategy is allowed; implicit PR selection,
+  other flags, shell operators, and appended commands fail closed.
 - `execution/<action-id>.json`: optional, single-action authorization for an
   operator-visible raw Git command inside a registered integration/worker
   worktree. It must scope the action (`worker-commit`, `integration-merge`,
@@ -273,8 +340,8 @@ directory. They are local runtime state only and must not be committed.
 
 Each file must include `allowed: true`, an `expires_at` timestamp, and the
 branch or PR scope it authorizes. Sensitive actions should remove or expire the
-file after use. The PreToolUse hook treats missing, expired, corrupt, or
-wrong-scope authorization as a policy block.
+file after use. The PreToolUse hook treats missing, expired, corrupt,
+wrong-scope, wrong-phase, or wrong-HEAD authorization as a policy block.
 
 ## Checkpoint Write Order
 
@@ -309,6 +376,23 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 17. review-pr
 18. sdlc-merge-pr, only after explicit user request
 
+`troubleshoot` is a conditional diagnostic branch, not an additional
+golden-path phase. A proven cause routes directly from
+`sdlc-classify-failure` to its owning phase. An ambiguous, persistent,
+intermittent, or cross-boundary failure routes once to `troubleshoot`, whose
+`diagnosis-v1` must return to `sdlc-classify-failure` before any repair owner is
+selected. Missing decisive evidence, competing hypotheses, policy, permission,
+human decisions, and exhausted budgets stop the run.
+
+The repair control enforces, per stable blocker tranche, at most two localized
+repairs, one design-scale repair, three total repair attempts, and 60 active
+minutes. It also enforces at most four repair dispatches per feature.
+Diagnostic experiments consume time but not remediation attempts; three
+low-information experiments require a rebuilt causal model. Exact duplicate
+events, classification replays, permission denials, and crash recovery do not
+consume attempts. Counters reset only for causally independent blocker
+evidence or a new explicit user-authorized tranche.
+
 `plan_locked` routes to `sdlc-prepare-execution`; `execution_prepared` routes to
 `sdlc-tdd`. From preparation through final seal, the persistent integration
 worktree is the canonical feature checkout. The original project branch must
@@ -317,7 +401,11 @@ integration tip with `git merge --ff-only`.
 
 After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
 before `create-pr` when UAT or final steering changes require project-facing
-documentation updates.
+documentation updates. Once routed forward, `create-pr` is publication-only
+for the clean exact promoted SHA and `review-pr` is
+findings-and-readiness-only; branch-changing findings return through
+`sdlc-classify-failure` and `sdlc-start`. `sdlc-merge-pr` then requires the
+current PR head to remain that exact promoted and reviewed SHA.
 
 ## Steering
 

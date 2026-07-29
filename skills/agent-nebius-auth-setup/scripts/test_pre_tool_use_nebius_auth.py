@@ -55,7 +55,47 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
         self.old_home = os.environ.get("HOME")
+        self.old_path = os.environ.get("PATH")
         os.environ["HOME"] = str(self.home)
+        fake_bin = self.home / "bin"
+        fake_bin.mkdir()
+        fake_nebius = fake_bin / "nebius"
+        fake_nebius.write_text(
+            """#!/usr/bin/env python3
+import os
+import sys
+
+managed = (
+    "CODEX_NEBIUS_PROJECT_ID",
+    "CODEX_NEBIUS_TOKEN_HELPER",
+    "NEBIUS_AUTH_CREDENTIALS_FILE",
+    "NEBIUS_IAM_TOKEN",
+    "NEBIUS_IMPERSONATE_SERVICE_ACCOUNT_ID",
+    "NEBIUS_PROFILE",
+    "NEBIUS_PROJECT_ID",
+    "TOKEN",
+)
+if any(os.environ.get(name) for name in managed):
+    raise SystemExit(90)
+
+args = [arg for arg in sys.argv[1:] if arg != "--no-check-update"]
+if args == ["profile", "current"]:
+    print(os.environ.get("FAKE_DEFAULT_PROFILE", "human-default"))
+    raise SystemExit(0)
+if args[:3] == ["config", "get", "parent-id"]:
+    project = os.environ.get("FAKE_DEFAULT_PROJECT", "project-test")
+    if not project:
+        raise SystemExit(91)
+    print(project)
+    raise SystemExit(0)
+raise SystemExit(92)
+""",
+            encoding="utf-8",
+        )
+        fake_nebius.chmod(0o700)
+        os.environ["PATH"] = (
+            f"{fake_bin}{os.pathsep}{self.old_path or os.defpath}"
+        )
         credential_dir = self.home / ".nebius"
         credential_dir.mkdir()
         self.credential_file = (
@@ -68,6 +108,12 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self.old_home
+        if self.old_path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = self.old_path
+        os.environ.pop("FAKE_DEFAULT_PROFILE", None)
+        os.environ.pop("FAKE_DEFAULT_PROJECT", None)
         self.tmp.cleanup()
 
     def write_credential(self, account_id: str = "serviceaccount-test") -> None:
@@ -167,6 +213,26 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.evaluate(command, selector=False), {})
 
+    def test_grafana_installer_helper_preserves_auth_hook_boundary(self) -> None:
+        helper = (
+            "./install-grafana-mcp-for-nebius/scripts/"
+            "ensure-local-config.sh --check --user-profile human-primary"
+        )
+        self.assertEqual(self.evaluate(helper, selector=False), {})
+
+        inlined_sanitization = (
+            "env -u NEBIUS_PROJECT_ID nebius profile active"
+        )
+        result = self.evaluate(inlined_sanitization, selector=False)
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+        self.assertIn(
+            "assigns or unsets a managed authentication variable",
+            result["hookSpecificOutput"]["permissionDecisionReason"],
+        )
+
     def test_separate_local_call_receives_no_managed_auth_context(self) -> None:
         managed_names = (
             "NEBIUS_PROFILE",
@@ -195,7 +261,7 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_missing_selector_denies_nebius_commands_with_exact_reason(
+    def test_missing_selector_uses_sanitized_default_profile_project(
         self,
     ) -> None:
         commands = (
@@ -206,17 +272,76 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
             with self.subTest(command=command):
                 result = self.evaluate(command, selector=False)
                 self.assertEqual(
-                    result["hookSpecificOutput"]["permissionDecision"], "deny"
-                )
-                reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-                self.assertIn(
-                    "the required leading project selector is missing",
-                    reason,
+                    result["hookSpecificOutput"]["permissionDecision"], "allow"
                 )
                 self.assertIn(
-                    "'CODEX_NEBIUS_PROJECT_ID=<project-id> <command>'",
-                    reason,
+                    f"PROJECT_ID_VALUE={PROJECT}",
+                    result["hookSpecificOutput"]["updatedInput"]["command"],
                 )
+
+    def test_default_profile_current_probe_is_sanitized_and_allowed(self) -> None:
+        managed = {
+            "CODEX_NEBIUS_PROJECT_ID": "ambient-project",
+            "CODEX_NEBIUS_TOKEN_HELPER": "/tmp/ambient-helper",
+            "NEBIUS_AUTH_CREDENTIALS_FILE": "/tmp/ambient-credential",
+            "NEBIUS_IAM_TOKEN": "ambient-token",
+            "NEBIUS_IMPERSONATE_SERVICE_ACCOUNT_ID": "ambient-account",
+            "NEBIUS_PROFILE": "ambient-profile",
+            "NEBIUS_PROJECT_ID": "ambient-project",
+            "TOKEN": "ambient-token",
+        }
+        saved = {name: os.environ.get(name) for name in managed}
+        os.environ.update(managed)
+        try:
+            result = self.evaluate("nebius profile current", selector=False)
+            self.assertEqual(
+                result["hookSpecificOutput"]["permissionDecision"], "allow"
+            )
+            command = result["hookSpecificOutput"]["updatedInput"]["command"]
+            completed = subprocess.run(
+                ["bash", "-c", command],
+                cwd=self.home,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "human-default")
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_default_profile_project_discovery_failure_denies(self) -> None:
+        os.environ["FAKE_DEFAULT_PROJECT"] = ""
+        result = self.evaluate("nebius iam group list", selector=False)
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("sanitized default-profile discovery failed", reason)
+        self.assertIn("Configure the default profile's parent-id", reason)
+
+    def test_explicit_selector_does_not_need_default_profile_discovery(
+        self,
+    ) -> None:
+        os.environ["FAKE_DEFAULT_PROJECT"] = ""
+        self.assertEqual(self.decision("nebius iam group list"), "allow")
+
+    def test_missing_selector_failure_keeps_exact_selector_escape_hatch(
+        self,
+    ) -> None:
+        os.environ["FAKE_DEFAULT_PROJECT"] = ""
+        result = self.evaluate("nebius iam group list", selector=False)
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn(
+            "'CODEX_NEBIUS_PROJECT_ID=<project-id> <command>'",
+            reason,
+        )
 
     def test_nonleading_selector_denies_with_exact_reason(self) -> None:
         commands = (

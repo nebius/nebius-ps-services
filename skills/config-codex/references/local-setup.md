@@ -216,17 +216,21 @@ and leave unrelated user rules untouched. Marker presence alone is not enough:
 empty or stale managed blocks must be updated in place.
 
 The managed section must include the global remediation default: after one
-failed repair against the same blocker, use `troubleshoot`, stop after three
-distinct failed remediations or 60 active minutes unless the current user set a
-different budget, report failures 1 and 2 as progress, and at exhaustion make
-only the exact private state update before stopping all other tools and returning
-the complete report. Another bounded tranche requires a new explicit user
-instruction for the same blocker. A causally independent blocker starts its own
-fresh budget at attempt 1. Use the default three-attempt and 60-minute limits
-unless the current instruction sets lower or higher limits that apply to the new
-blocker. Do not carry attempts, active time, tranche, exhaustion status, or stop
-trigger from the earlier blocker. Permission denials and marker validation or
-repair consume no attempt. Preserve the active
+failed repair against the same blocker, use `troubleshoot`, cap the blocker
+tranche at three remediation attempts or 60 active minutes, and allow a current
+instruction to lower but never raise or disable the attempt maximum. Require
+newly acquired evidence and a genuinely new evidence-derived hypothesis before
+every retry. Report failures 1 and 2 as progress; at exhaustion make only the
+exact private state update before stopping all other tools and returning the
+complete report. If the evidence or hypothesis gate cannot be satisfied
+earlier, stop and return the structured investigation report. Another bounded
+tranche requires a new explicit user instruction for the same blocker. A
+causally independent blocker starts its own fresh budget at attempt 1. Use the
+three-attempt maximum and default 60-minute limit unless the current instruction
+sets a lower attempt limit or another time limit for the new blocker. Do not
+carry attempts, active time, tranche, exhaustion status, or stop trigger from
+the earlier blocker. Permission denials and marker validation or repair consume
+no attempt. Preserve the active
 `codex-remediation-budget:v1` marker while rewriting private task state.
 
 The managed section must also permit agents to clean up temporary trees they

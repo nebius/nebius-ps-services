@@ -4,8 +4,129 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ## [Unreleased]
 
+### Added
+
+- Added the explicit-only `nosleep4mac` skill with one no-argument,
+  idempotent workflow that atomically converges a public-safe per-user macOS
+  LaunchAgent running `/usr/bin/caffeinate -s`. It preserves display and
+  battery sleep, verifies the exact AC-only assertion, repairs stopped or
+  safely drifted managed state with rollback, and leaves healthy repeated runs
+  byte-for-byte and PID-stable.
+
 ### Changed
 
+- Added an evidence-guided Agentic SDLC repair loop with immutable
+  `failure-event-v1` and `diagnosis-v1` records, stable blocker identity,
+  deterministic classification, atomic `repair-control-v1`, an append-only
+  repair journal, and bounded blocker/feature dispatch budgets. Proven
+  mechanical causes now bypass diagnosis; ambiguous or persistent failures use
+  `troubleshoot` as a conditional, no-committed-fix diagnostic branch that
+  returns through classification. Inconclusive evidence stops instead of
+  becoming speculative redesign, while positive system-contract proof and
+  durable approval gate broader design changes. Post-wave implementation
+  repairs use immutable corrective plan vN+1, preserve full task definitions
+  and digests, append diagnosis/oracle-bound waves, require digest-protected
+  oracle proof in `worker-result-v4`, and rerun the original
+  evaluator oracle plus invalidated gates at the new integration commit. A
+  process-locked revalidation cursor prevents successful repairs from reaching
+  UAT or publication until immutable commit-bound evidence clears every
+  invalidated gate. Pre-commit evidence follows the live integration HEAD;
+  final commit evidence is accepted only after promotion, a clean matching
+  project HEAD on the recorded base branch, and verified integration worktree
+  and branch cleanup.
+  Added deterministic classifier, evaluator, corrective-plan, execution,
+  worker, Stop-hook, troubleshooting, and workflow-verifier coverage and
+  regenerated the workflow diagram around the bounded repair and design loops.
+- Replaced the dense text-only Agentic SDLC workflow diagram with a colorful,
+  accessible architecture image while retaining the precise searchable phase
+  order in the design document.
+- Bound every canonical remediation attempt to its marker's exact blocker key.
+  The optional `troubleshoot` guard now rejects missing, mixed, or carried
+  attempt identities as invalid marker state, so three repairs against one issue
+  cannot exhaust a causally independent issue. Added adversarial PreToolUse and
+  Stop regressions plus aligned skill, hook, eval, metadata, and catalog
+  contracts; semantic blocker classification remains parent-owned.
+- Aligned the Agentic SDLC PR handoff around one immutable promoted SHA.
+  Active-run `create-pr` is now publication-only after passing UAT and lease
+  release, while `review-pr` is findings-and-readiness-only; any branch-changing
+  fix returns through failure classification and the coordinator so affected
+  validation, documentation, alignment, commit, UAT, and publication gates
+  rerun. `sdlc-merge-pr` now accepts only an explicit, exact-command merge while
+  the remote head still equals the promoted and reviewed SHA. Updated the
+  design, state schema, failure taxonomy, skill metadata, catalog, and verifier
+  contracts to match the coordinator-v4 workflow, lifecycle `--resume`,
+  Computer Use GUI routing, session claims, and bounded observability
+  evaluation. The verifier now treats `nebius-grafana-query` as an installed
+  runtime dependency and includes its source digest in parity and verification
+  identity checks.
+- Integrated `nebius-grafana-query` as a narrowly gated structured evidence
+  provider for `troubleshoot` and `sdlc-evaluate`. The consumers now decide
+  relevance, authority, deployed scope, interpretation, and grading; the
+  provider performs one lazy readiness/discovery check per workflow run, skips
+  the path without repair or retry when unavailable, applies six-query fast
+  and four-query deep limits within one cumulative ten-query budget, round-trips
+  connectivity plus total and per-stage remaining budgets, rejects invalid
+  requests before tool use, redacts untrusted telemetry, and returns a fixed
+  facts envelope with data gaps and query cost without claiming root cause or
+  acceptance. Evaluation deep queries are limited to named attribution,
+  coverage, or dependency interpretations of predefined gates, and canonical
+  rejection reasons map deterministically to the SDLC failure taxonomy.
+  Troubleshooting retains causal proof and maps decisive missing telemetry to
+  `BLOCKED_MISSING_EVIDENCE`; SDLC evaluation limits live observability to
+  predefined operational gates, keeps production workloads prohibited, and
+  records pass, fail, or inconclusive criteria. Embedded troubleshooting now
+  requires a decision-changing question plus non-Grafana provenance for one
+  matching signal before readiness, passes that admission as a provider-checked
+  structured signal fit, starts with one cheapest matching query per provider
+  invocation, treats query allowances as ceilings rather than targets, and
+  forbids speculative datasource discovery or telemetry-family fan-out. SDLC
+  evaluation now applies the same zero-call signal-fit gate plus a
+  provider-checked criterion fit containing the exact measurement,
+  candidate/control attribution, coverage, and pass/fail/inconclusive rules;
+  it also admits only one grade-changing query per provider invocation instead
+  of batching generic telemetry families.
+- Hardened `nebius-grafana-query` with one pinned absolute query window,
+  explicit `any` versus broad-scope semantics, evidence-gated federation,
+  cardinality preflight, exact decomposition of recomposable backend failures,
+  and ranked signal-aware reports. Reports now sort problem-first on the
+  requested field, display a bounded top 20 with coverage disclosure, use
+  per-group minimum/average/maximum only where valid, derive counter
+  increase/rate instead of averaging raw counters, and separate access
+  evidence from query and tool health.
+- Made the config-owned default Nebius CLI profile's configured project the
+  automatic runtime authority when no explicit task selector exists. The auth
+  hook resolves it with sanitized `nebius profile current` plus
+  `nebius config get parent-id`, while explicit task selectors keep precedence
+  and raw-token helper children remain explicit-selector-only. Added
+  `nebius/references/project-selection.md` so other Nebius implementations can
+  reuse the same authority, validation, and fail-closed lookup contract without
+  parsing the CLI configuration YAML directly.
+- Refactored `install-grafana-mcp-for-nebius` to pin and revalidate one human
+  Nebius CLI profile, isolate private token state by server/profile, sanitize
+  agent and competing Grafana credentials, rotate token-file auth with bounded
+  failure handling and stale-lock recovery, require current token-file support,
+  pre-mint and reuse a fresh startup token, renew stale startup state before MCP
+  launch with foreground browser authentication when necessary, enforce a
+  bounded 300-second Codex startup timeout, compare exact structured Codex MCP
+  values while digest-binding and atomically changing only that timeout, use
+  separate 90-second background and 210-second foreground refresh-lock budgets,
+  validate the complete trusted wrapper path, and enforce read-only MCP
+  arguments. Expanded
+  `nebius-grafana-query` with
+  fail-closed one-or-many tenant/project/resource scoping, attributed
+  multi-datasource fan-out and aggregation provenance, bounded
+  metrics/logs/traces, proxied Tempo tools, and strict GET-only
+  datasource-proxy fallbacks.
+- Hardened `troubleshoot` retry admission so each blocker tranche has a
+  non-overridable three-attempt maximum, every retry requires newly acquired
+  evidence and a genuinely new evidence-derived hypothesis, repeated or
+  evidence-free retries fail closed, and all repeated-failure stops return a
+  structured investigation report before further work.
+- Routed system-contract-changing `troubleshoot` remediations through `design`
+  after causal proof and before implementation, while keeping even difficult
+  repairs inside one existing private boundary in `troubleshoot`, preserving
+  its verification and reporting ownership, and sending active Agentic SDLC
+  failures through classification and coordinator routing first.
 - Made `config-codex`'s create-only `config.toml` template an explicit
   public-safe recovery baseline derived through a documented allowlist rather
   than a live-config copy. Recovery now preserves portable Sol/xhigh/Fast,
@@ -37,6 +158,82 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Guarded active-run `gh pr create` and GitHub PR-creation MCP calls with
+  branch-, phase-, exact-HEAD-, UAT-, and expiry-bound authorization while
+  allowing read-only PR inspection without publication authorization. Guarded
+  pushes now allow only `origin` plus one exact current-branch refspec, and CLI
+  or MCP PR creation rejects another head. Added regression coverage for exact
+  authorized pushes, stale heads, missing expiry/UAT, extra refs, CLI PR
+  creation, MCP read-versus-create classification, and explicit
+  `--match-head-commit` merge authorization. The guarded merge command now
+  requires one explicit PR number or URL and one canonical single-action shape;
+  implicit PR selection, admin bypass, branch deletion, repository override,
+  unsupported flags, shell operators, appended actions, PR-scope mismatch, and
+  non-passing readiness evidence fail closed. Active Agentic SDLC GitHub merge
+  MCP writes now fail closed in favor of the race-safe CLI path. Sensitive
+  publication and merge actions must also be direct: wrappers, absolute
+  executable paths, prepended commands, nested shells, operators, and
+  redirections are denied, while quoted documentation searches remain allowed.
+  CLI PR creation now requires an explicit matching `--head`.
+- Made repeated `install-grafana-mcp-for-nebius` checks and applies explicitly
+  no-change on canonical state, including avoiding redundant directory-mode
+  writes, preserving private state and Codex registration bytes and metadata,
+  and refusing a mismatched pinned registration without an explicit migration
+  flag.
+  Documented and tested the Nebius-auth hook boundary so denied parent commands
+  are correctly treated as command-shape enforcement rather than setup failure.
+- Fixed `grafana-nebius` startup closing before `initialize` when its private
+  startup token was stale. The registered wrapper now runs the pinned,
+  identity-checked `nebius iam get-access-token --profile` flow before
+  launching `mcp-grafana`; only foreground startup may open browser
+  authentication, background refresh remains noninteractive, and the canonical
+  MCP registration provides the bounded startup time needed for that flow.
+- Fixed the Nebius auth selector-discovery loop where even
+  `nebius profile current` was denied for lacking the project selector it was
+  intended to help discover. Default-profile lookup now clears ambient auth,
+  validates bounded single-value output, and fails closed when the profile or
+  configured `parent-id` is absent or malformed.
+- Fixed `install-grafana-mcp-for-nebius` token-file capability detection on
+  macOS binaries where `strings` embeds
+  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` inside a larger record, preventing a
+  false unsupported-build result for compatible official releases. The runtime
+  wrapper now also preserves the client's stdin stream when it backgrounds the
+  stdio server instead of allowing non-interactive Bash to replace it with
+  `/dev/null`. Scheduled token rotation now closes stdio so the next process
+  loads the fresh credential, returns an explicit restart-required failure,
+  and does not assume same-chat recovery, working around the upstream
+  static-client behavior through `mcp-grafana` `v0.17.2`; unexpected
+  refresh-worker exits also stop MCP with failure. Parent-side supervision now
+  keeps the child unreaped, uses a process-start-bound STOP/KILL handshake
+  before confirming restart-required state, and preserves natural exit status
+  at the refresh boundary. Canonical registration post-write verification now
+  includes the exact wrapper command, replacement rejects concurrent changes
+  before removal, requires a typed simple stdio shape, and never replays prior
+  command, argument, or environment values through process arguments. A failed
+  canonical add now reports the recoverable missing-entry state without legacy
+  rollback. Post-write drift is left intact for inspection instead of being
+  deleted without ownership proof. Stopped-child supervision now KILLs the
+  unreaped direct child on every post-STOP inspection failure, timeout, and
+  parent-interrupt cleanup path so no suspended process can deadlock `wait`.
+- Hardened the `global-context-management` local template validator by parsing
+  Python templates without dynamic code compilation and by rejecting a
+  non-canonical SessionStart command before running its smoke test without a
+  shell.
+- Fixed `troubleshoot` Stop-hook handling for historical exhausted markers and
+  incomplete reports. Attempt labels now derive from ledger order, only
+  exhausted v1 data markers receive a report-only compatibility path, and
+  canonical v2 markers require new evidence in every state. Report validation
+  now requires substantive per-attempt remediation, verification, result, and
+  evidence fields bound to the guard's bounded redacted marker summaries and
+  rejects sensitive assistant-authored reports. The single correction prompt
+  contains a bounded redacted minimum report; if ignored, Stop terminates with
+  that fallback in a UI/event-stream warning instead of recursing indefinitely.
+  Fallback attempt fields escape report delimiters so the generated report
+  validates itself, and a user-lowered attempt limit now also bounds the ledger
+  length.
+  Fallback redaction covers secrets, URLs, private IPv4/IPv6 addresses,
+  internal hostnames and localhost, cloud access-key shapes, and Unix or
+  Windows personal paths.
 - Made remediation-marker result failures actionable by naming the two
   canonical values and distinguishing counted same-blocker failures from
   unverified progress and causally independent blocker transitions, preventing
@@ -142,6 +339,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the implicitly invokable `optimize-pytest` skill for safe pytest
+  performance measurement, cumulative fixture and collection-cost review,
+  focused optimization, like-for-like validation, and evidence-gated
+  parallelism, affected-test selection, CI sharding, and performance
+  governance.
 - Added the implicitly invokable `nebius-grafana-query` skill for bounded
   read-only Nebius Grafana datasource, dashboard, metrics, logs, and available
   trace-tool questions. Added reciprocal trigger evals and a static cross-skill

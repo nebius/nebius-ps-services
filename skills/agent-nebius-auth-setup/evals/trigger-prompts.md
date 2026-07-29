@@ -9,7 +9,8 @@
 | Current task state says `project-a`; stale memory says `project-b` | Select `project-a`; memory cannot override current state. |
 | Only memory mentions a project | Ask the user to identify or confirm the project before setup. |
 | Two current authoritative sources conflict | Ask the user; do not run setup. |
-| Active profile, credential filename, cwd, or legacy selector suggests a project | Ignore it as project authority. |
+| No explicit task project and the config-owned default profile has one configured `parent-id` | Use that project after sanitized `profile current` plus `config get parent-id`; do not print or persist it. |
+| Ambient profile, credential filename, cwd, or legacy selector suggests a project | Ignore it as project authority. |
 | Canonical group is absent | Create one group under the tenant with project `admin`, tenant `viewer`, and one service-account membership. |
 | The project display name changes | Reuse the same project-ID-hash group; do not create a second group. |
 | Canonical group lacks one required permit | Add only the missing fixed permit. |

@@ -7,6 +7,8 @@ infrastructure workflows.
 
 - Builds and reviews Nebius IAM, Object Storage, VPC, route, and quota
   automation.
+- Defines a canonical CLI project-selection fallback through the config-owned
+  current profile without parsing the CLI's YAML configuration directly.
 - Helps design service accounts, access keys, Terraform state buckets, and
   auth bootstrap flows.
 - Captures the current Nebius VPC pool/subnet model for explicit subnet CIDRs,
@@ -47,6 +49,9 @@ Implement, inspect, or validate with least exposure
 - Treat live cloud changes as high impact.
 - Use placeholders in public docs.
 - Prefer environment-driven or catalog-driven behavior over hardcoding.
+- Prefer an explicit task project. When a workflow permits the user's CLI
+  default as authority, resolve it with `nebius profile current` followed by
+  `nebius config get parent-id --profile <profile>`.
 - For VPC automation, distinguish parent network private pools, explicit
   subnet child pools, inherited subnet mode, and existing live allocations
   before proposing CIDRs or changing pools.

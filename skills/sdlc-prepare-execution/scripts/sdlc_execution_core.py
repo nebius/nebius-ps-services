@@ -29,7 +29,7 @@ COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v4"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
 TASK_SCHEMA = "agentic-sdlc/execution-task-v3"
 ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v2"
-RESULT_SCHEMA = "agentic-sdlc/worker-result-v3"
+RESULT_SCHEMA = "agentic-sdlc/worker-result-v4"
 INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v1"
 FEATURE_ID_RE = re.compile(r"FEAT-[0-9]{3,}")
 REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}")
@@ -98,6 +98,8 @@ class TaskPlan:
     validation: str
     done_criteria: str
     rollback: str
+    diagnosis_id: str | None
+    regression_oracle: str | None
     ownership_complete: bool
 
 
@@ -500,6 +502,16 @@ def _field(section: str, label: str, task_id: str) -> str:
     return match.group(1).strip()
 
 
+def _optional_field(section: str, label: str) -> str | None:
+    match = re.search(rf"(?m)^- {re.escape(label)}:\s*(.+?)\s*$", section)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    if not value or value.lower() in {"none", "n/a", "na"}:
+        return None
+    return value
+
+
 def _split_values(value: str) -> tuple[str, ...]:
     if value.lower() in {"none", "n/a", "na"}:
         return ()
@@ -564,6 +576,19 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 )
         if not claims:
             ownership_complete = False
+        diagnosis_id = _optional_field(section, "Diagnosis")
+        regression_oracle = _optional_field(section, "Regression oracle")
+        if (diagnosis_id is None) != (regression_oracle is None):
+            raise ExecutionError(
+                "PLAN_INVALID",
+                f"{task_id} must bind both Diagnosis and Regression oracle",
+            )
+        if diagnosis_id is not None and re.fullmatch(
+            r"[0-9a-f]{64}", diagnosis_id
+        ) is None:
+            raise ExecutionError(
+                "PLAN_INVALID", f"{task_id} has malformed diagnosis ID"
+            )
         tasks.append(
             TaskPlan(
                 task_id=task_id,
@@ -576,6 +601,8 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 validation=_field(section, "Validation", task_id),
                 done_criteria=_field(section, "Done criteria", task_id),
                 rollback=_field(section, "Rollback or stop conditions", task_id),
+                diagnosis_id=diagnosis_id,
+                regression_oracle=regression_oracle,
                 ownership_complete=ownership_complete,
             )
         )
@@ -756,8 +783,14 @@ def journal_path(run_dir: Path, feature_id: str, name: str) -> Path:
 
 def _task_json(task: TaskPlan) -> dict[str, Any]:
     value = asdict(task)
+    for field in ("requirements", "dependencies", "conflict_domains"):
+        value[field] = list(value[field])
     value["write_claims"] = [asdict(item) for item in task.write_claims]
     return value
+
+
+def _task_definition_digest(task: TaskPlan) -> str:
+    return sha256_json(_task_json(task))
 
 
 def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
@@ -1073,6 +1106,7 @@ def prepare_execution(
                 "wave_id": wave_id,
                 "status": "planned",
                 "task": _task_json(task),
+                "task_definition_digest": _task_definition_digest(task),
                 "assignment_digest": None,
                 "result_digest": None,
                 "commit": None,
@@ -1087,6 +1121,8 @@ def prepare_execution(
                     existing_task.get("schema") != TASK_SCHEMA
                     or existing_task.get("wave_id") != wave_id
                     or existing_task.get("task") != expected_task["task"]
+                    or existing_task.get("task_definition_digest")
+                    != expected_task["task_definition_digest"]
                 ):
                     raise ExecutionError(
                         "EXECUTION_STATE_INVALID",
@@ -1105,6 +1141,21 @@ def prepare_execution(
 
 
 def replan_future(
+    run_dir: Path,
+    feature_id: str,
+    plan_path: Path,
+    capacity: int,
+) -> dict[str, Any]:
+    with _execution_transition_lock(run_dir, feature_id):
+        return _replan_future_locked(
+            run_dir,
+            feature_id,
+            plan_path,
+            capacity,
+        )
+
+
+def _replan_future_locked(
     run_dir: Path,
     feature_id: str,
     plan_path: Path,
@@ -1159,6 +1210,26 @@ def replan_future(
             raise ExecutionError(
                 "REPLAN_REQUIRED", "replacement plan changes completed or active waves"
             )
+        for task in new_waves[index]:
+            recorded = read_json(
+                task_path(
+                    run_dir,
+                    feature_id,
+                    old_wave_ids[index],
+                    task.task_id,
+                )
+            )
+            expected_definition = _task_json(task)
+            expected_digest = _task_definition_digest(task)
+            if (
+                recorded.get("task") != expected_definition
+                or recorded.get("task_definition_digest") != expected_digest
+                or sha256_json(expected_definition) != expected_digest
+            ):
+                raise ExecutionError(
+                    "REPLAN_REQUIRED",
+                    "replacement plan changes a completed or active task definition",
+                )
     feature_execution = execution_dir(run_dir, feature_id)
     integration = Path(str(coordinator["integration_worktree"]))
     registered_worktrees = worktrees(integration)
@@ -1253,6 +1324,7 @@ def replan_future(
                     "wave_id": wave_id,
                     "status": "planned",
                     "task": _task_json(task),
+                    "task_definition_digest": _task_definition_digest(task),
                     "assignment_digest": None,
                     "result_digest": None,
                     "commit": None,
@@ -1398,6 +1470,14 @@ def _task_plan_from_state(value: dict[str, Any]) -> TaskPlan:
         validation=str(raw["validation"]),
         done_criteria=str(raw["done_criteria"]),
         rollback=str(raw["rollback"]),
+        diagnosis_id=(
+            str(raw["diagnosis_id"]) if raw.get("diagnosis_id") is not None else None
+        ),
+        regression_oracle=(
+            str(raw["regression_oracle"])
+            if raw.get("regression_oracle") is not None
+            else None
+        ),
         ownership_complete=bool(raw["ownership_complete"]),
     )
 
@@ -1450,7 +1530,9 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
         )
 
 
-def _validate_result_record(result: dict[str, Any]) -> None:
+def _validate_result_record(
+    result: dict[str, Any], assignment: dict[str, Any]
+) -> None:
     unsigned = dict(result)
     recorded = unsigned.pop("result_digest", None)
     if (
@@ -1461,6 +1543,90 @@ def _validate_result_record(result: dict[str, Any]) -> None:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker result digest is invalid"
         )
+    expected_oracle = assignment.get("regression_oracle")
+    evidence = result.get("regression_oracle_evidence")
+    if expected_oracle:
+        if not isinstance(evidence, dict):
+            raise ExecutionError(
+                "INTEGRATION_VALIDATION_FAILED",
+                "corrective result is missing regression-oracle evidence",
+            )
+        evidence_unsigned = dict(evidence)
+        evidence_digest = evidence_unsigned.pop("evidence_digest", None)
+        if (
+            evidence.get("schema") != "agentic-sdlc/regression-oracle-evidence-v1"
+            or evidence.get("diagnosis_id") != assignment.get("diagnosis_id")
+            or evidence.get("oracle") != expected_oracle
+            or evidence.get("outcome") != "passed"
+            or evidence.get("commit") != result.get("commit")
+            or not isinstance(evidence.get("evidence_reference"), str)
+            or not evidence["evidence_reference"].strip()
+            or evidence_digest != sha256_json(evidence_unsigned)
+        ):
+            raise ExecutionError(
+                "INTEGRATION_VALIDATION_FAILED",
+                "corrective regression-oracle evidence is invalid",
+            )
+    elif evidence is not None:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID",
+            "non-corrective result must not carry regression-oracle evidence",
+        )
+
+
+def _validate_regression_oracle_claim(
+    assignment: dict[str, Any],
+    supplied: dict[str, Any] | None,
+) -> tuple[str, str, str] | None:
+    expected_oracle = assignment.get("regression_oracle")
+    if not expected_oracle:
+        if supplied is not None:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID",
+                "non-corrective task supplied regression-oracle evidence",
+            )
+        return None
+    if not isinstance(supplied, dict):
+        raise ExecutionError(
+            "INTEGRATION_VALIDATION_FAILED",
+            "corrective task requires structured regression-oracle evidence",
+        )
+    oracle = supplied.get("oracle")
+    outcome = supplied.get("outcome")
+    evidence_reference = supplied.get("evidence_reference")
+    if (
+        oracle != expected_oracle
+        or outcome != "passed"
+        or not isinstance(evidence_reference, str)
+        or not evidence_reference.strip()
+    ):
+        raise ExecutionError(
+            "INTEGRATION_VALIDATION_FAILED",
+            "corrective task did not prove the exact original regression oracle passed",
+        )
+    _reject_sensitive_evidence(oracle, outcome, evidence_reference)
+    return oracle, outcome, evidence_reference.strip()
+
+
+def _build_regression_oracle_evidence(
+    assignment: dict[str, Any],
+    supplied: dict[str, Any] | None,
+    commit: str,
+) -> dict[str, Any] | None:
+    claim = _validate_regression_oracle_claim(assignment, supplied)
+    if claim is None:
+        return None
+    oracle, outcome, evidence_reference = claim
+    evidence = {
+        "schema": "agentic-sdlc/regression-oracle-evidence-v1",
+        "diagnosis_id": assignment["diagnosis_id"],
+        "oracle": oracle,
+        "outcome": outcome,
+        "evidence_reference": evidence_reference,
+        "commit": commit,
+    }
+    evidence["evidence_digest"] = sha256_json(evidence)
+    return evidence
 
 
 def _find_task_wave(
@@ -1735,6 +1901,8 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "validation": task.validation,
             "done_criteria": task.done_criteria,
             "rollback": task.rollback,
+            "diagnosis_id": task.diagnosis_id,
+            "regression_oracle": task.regression_oracle,
             "incoming_handoff_path": str(handoff_file),
             "incoming_handoff_digest": incoming_handoff["handoff_digest"],
             "created_at": created_at,
@@ -2260,6 +2428,7 @@ def finish_task(
     summary: str,
     decisions: Iterable[str] = (),
     open_risks: Iterable[str] = (),
+    regression_oracle_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not validation.strip() or not review.strip():
         raise ExecutionError(
@@ -2294,12 +2463,23 @@ def finish_task(
     )
     if task_record["status"] == "committed":
         result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
-        _validate_result_record(result)
+        _validate_result_record(result, assignment)
         if head(worktree_path) != result["commit"] or not clean(worktree_path):
             raise ExecutionError("WORKTREE_CONFLICT", "accepted worker result drifted")
         return result
     if task_record["status"] != "running":
         raise ExecutionError("EXECUTION_STATE_INVALID", "task is not running")
+    if assignment.get("regression_oracle") and regression_oracle_evidence is None:
+        raise ExecutionError(
+            "INTEGRATION_VALIDATION_FAILED",
+            "corrective task requires structured regression-oracle evidence",
+        )
+    if not assignment.get("regression_oracle") and regression_oracle_evidence is not None:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID",
+            "non-corrective task supplied regression-oracle evidence",
+        )
+    _validate_regression_oracle_claim(assignment, regression_oracle_evidence)
     if branch(worktree_path) != assignment["branch"]:
         raise ExecutionError("WORKTREE_CONFLICT", "worker branch changed")
     if not clean(worktree_path):
@@ -2390,6 +2570,9 @@ def finish_task(
         raise ExecutionError(
             "SECURITY_BLOCKER", "worker commit contains sensitive content"
         )
+    oracle_evidence = _build_regression_oracle_evidence(
+        assignment, regression_oracle_evidence, task_head
+    )
     result: dict[str, Any] = {
         "schema": RESULT_SCHEMA,
         "feature_id": feature_id,
@@ -2403,6 +2586,7 @@ def finish_task(
         "open_risks": risk_values,
         "validation": validation,
         "review": review,
+        "regression_oracle_evidence": oracle_evidence,
         "attempt": int(task_record.get("attempt") or 1),
         "completed_at": utc_now(),
     }
@@ -2475,7 +2659,7 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
             assignment,
             _task_plan_from_state(task_record),
         )
-        _validate_result_record(result)
+        _validate_result_record(result, assignment)
         worker = Path(assignment["worktree"])
         if (
             result["assignment_digest"] != assignment["assignment_digest"]

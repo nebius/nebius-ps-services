@@ -31,11 +31,17 @@ Resolve exactly one project ID in this order:
 2. A project ID labeled for this task in the current conversation or injected
    task state.
 3. Workspace configuration explicitly tied to this task.
-4. Persistent memory only as a hint corroborated by current-session evidence.
-5. Ask the user if no single authoritative candidate remains.
+4. The config-owned default Nebius CLI profile's configured `parent-id`,
+   resolved with sanitized `nebius profile current` followed by
+   `nebius config get parent-id --profile <profile>`.
+5. Persistent memory only as a hint corroborated by current-session evidence.
+6. Ask the user if no single authoritative candidate remains.
 
-When equally authoritative sources conflict, stop and ask. Never infer the
-project from credential filenames, active profiles, inherited environment,
+Explicit task evidence wins over the default-profile fallback. Clear ambient
+Nebius selectors, profiles, credentials, tokens, and impersonation while
+reading the default profile and accept only one valid configured project ID.
+When equally authoritative task sources conflict, stop and ask. Never infer the
+project from credential filenames, ambient profiles, inherited environment,
 working-directory names, a legacy default selector, or unrelated task state.
 
 ## Canonical IAM Shape
@@ -166,15 +172,19 @@ Hook installation remains separate and explicit:
   --register-hooks
 ```
 
-Runtime Nebius commands opt in with exactly one leading selector:
+Runtime Nebius commands with an explicit task project opt in with exactly one
+leading selector:
 
 ```bash
 CODEX_NEBIUS_PROJECT_ID=<project-id> <command>
 ```
 
-The hook injects the matching renewable profile, project, credential-file, and
-token-helper context. It does not use a global default selector or inject one
-universal bearer token. A raw-token child uses:
+Without an explicit selector, the hook resolves the config-owned default
+profile name and its configured `parent-id` under a sanitized environment,
+then injects the matching renewable profile, project, credential-file, and
+token-helper context. It does not persist a global selector or inject one
+universal bearer token. Malformed or conflicting selectors fail closed, and a
+raw-token child still requires an explicit selector:
 
 ```bash
 python3 "$CODEX_NEBIUS_TOKEN_HELPER" exec-token -- <command> [args...]

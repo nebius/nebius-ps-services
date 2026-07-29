@@ -24,6 +24,15 @@ applications, and produces a Codex `/plan` handoff.
 
 - Use `design` when the user wants a concrete software design and
   implementation-ready plan before coding.
+- Accept an evidence-backed handoff from `troubleshoot` when the causal
+  mechanism is already proven and the durable remediation changes architecture
+  topology, component or service responsibilities or boundaries, a public
+  interface, data ownership or lifecycle, a migration, or a cross-component
+  workflow. Preserve the causal chain and return only if design work finds
+  concrete contradictory evidence.
+- Leave a complex or large repair inside one existing private boundary with
+  `troubleshoot`; implementation difficulty alone does not create design work.
+- Use `troubleshoot` instead when the failure mechanism is unknown or disputed.
 - Use `research` for substantial topic, feature-requirement, product,
   standard, architecture-pattern, or technology due diligence needed by the
   design.

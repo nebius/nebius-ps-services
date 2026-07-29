@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route due diligence through `research` when available, route undecided or reconsidered application-stack and layer technology choices through `app-stack`, apply `system-design-rules` to standard/deep solution decisions, design vertical end-to-end slices, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a complete design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, stack-selection-only requests, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, route missing due diligence through `research`, undecided application-layer technology through `app-stack`, apply `system-design-rules` to standard or deep decisions, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture or design docs, ADR-like decisions, new applications, and proven remediations that change architecture topology, component or service boundaries, public interfaces, data ownership or lifecycle, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one existing private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
 ---
 
 # Design
@@ -22,6 +22,10 @@ codebase yet.
   delegated to `app-stack` when they are not already fixed.
 - Designing applications whose frontend, API, service, data, or infrastructure
   layers are connected in a serial end-to-end flow.
+- Designing a durable remediation after `troubleshoot` has already proven the
+  causal mechanism when the remedy changes architecture topology, component or
+  service responsibilities or boundaries, a public interface, data ownership
+  or lifecycle, a migration, or a cross-component workflow.
 - Producing a final `/plan` handoff that another Codex run can execute.
 - Updating or drafting a design document only when the user asks for a
   committed design artifact.
@@ -30,6 +34,12 @@ codebase yet.
 
 - Do not implement production code, tests, migrations, infrastructure, or
   workflow changes. Hand off to `/plan` or an implementation skill after design.
+- Do not diagnose an unknown or disputed failure mechanism; use `troubleshoot`.
+  For a troubleshooting handoff, preserve the proven causal chain unless new
+  design evidence directly contradicts it.
+- Do not take over a complex or large repair that stays inside one existing
+  private boundary; implementation difficulty alone remains `troubleshoot`
+  work.
 - Do not use as open-ended ideation when the user wants discussion only; use
   `brainstorm` for chat-only exploration.
 - Do not use as a checklist-only review of an existing architecture proposal;
@@ -48,6 +58,9 @@ codebase yet.
   links, files, paths, or product context.
 - Existing code, tests, README files, `design.md` files, ADRs, architecture
   docs, package manifests, configs, deployment files, and runbooks when present.
+- An evidence-backed `troubleshoot` handoff containing the proven causal chain,
+  violated invariant, requirements, constraints, non-goals, fixed
+  technologies, and regression oracle.
 - Technology names, products, frameworks, SDKs, APIs, CLIs, clouds, databases,
   or package managers involved in the task.
 - User preference for output shape: chat design, design doc patch, ADR, or
@@ -86,6 +99,10 @@ Restate the objective, users, expected behavior, success criteria, constraints,
 non-goals, and open questions. If requirements are ambiguous but progress is
 possible, state assumptions and proceed; ask only for answers that materially
 change the design.
+
+For a `troubleshoot` handoff, treat the proven causal chain, violated invariant,
+and regression oracle as design inputs rather than reopening diagnosis. Return
+to `troubleshoot` only if design work uncovers concrete contradictory evidence.
 
 ### Phase 2: Understand Existing System
 

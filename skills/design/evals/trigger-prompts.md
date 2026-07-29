@@ -57,6 +57,12 @@ app-stack to decide whether the data layer should remain on the current database
 or move to a different database technology.
 ```
 
+```text
+Troubleshooting already proved the causal chain and identified the violated
+invariant. Design the required cross-service ownership change from that handoff
+and produce the /plan without reopening the diagnosis.
+```
+
 ## Should Not Trigger
 
 ```text
@@ -90,6 +96,24 @@ Implement the selected design now.
 ```
 
 Use `/plan` and the relevant implementation or project skill.
+
+```text
+This service fails intermittently and we do not know why. Find the root cause
+and repair it.
+```
+
+Use `troubleshoot`; route to `design` only if the proven durable remediation
+later changes a system contract such as a component boundary, public interface,
+data owner, migration, or cross-component workflow.
+
+```text
+The cause is proven and the fix is a difficult concurrency rewrite, but it
+stays inside one existing private component boundary and preserves every
+external contract. Design a new architecture before fixing it.
+```
+
+Keep this repair in `troubleshoot`; implementation difficulty without a
+system-contract change must not trigger `design`.
 
 ```text
 Create a PR for the design changes.

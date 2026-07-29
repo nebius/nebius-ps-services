@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import sys
 from typing import Any
 
@@ -40,6 +41,7 @@ MAX_TERRAFORM_FILES_TO_SCAN = 20
 MAX_TERRAFORM_FILE_BYTES = 524288
 
 PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 PROJECT_SELECTOR_RE = re.compile(
     rf"^{PROJECT_ID_ENV}=([^\s;&|]+)[ \t]+(.+)$", re.DOTALL
 )
@@ -933,6 +935,92 @@ MANAGED_AUTH_ENV_NAMES = {
     TOKEN_ENV,
     TOKEN_HELPER_ENV,
 }
+DEFAULT_PROJECT_DISCOVERY_ENV_NAMES = MANAGED_AUTH_ENV_NAMES | {
+    "NEBIUS_IMPERSONATE_SERVICE_ACCOUNT_ID",
+}
+DEFAULT_PROJECT_DISCOVERY_TIMEOUT_SECONDS = 5
+MAX_DEFAULT_PROJECT_DISCOVERY_OUTPUT_BYTES = 4096
+
+
+def default_profile_discovery_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in DEFAULT_PROJECT_DISCOVERY_ENV_NAMES:
+        environment.pop(name, None)
+    return environment
+
+
+def capture_default_profile_value(
+    arguments: list[str],
+    *,
+    label: str,
+) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            [NEBIUS_CLI, *arguments, "--no-check-update"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=default_profile_discovery_environment(),
+            timeout=DEFAULT_PROJECT_DISCOVERY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "", "the Nebius CLI is unavailable"
+    except subprocess.TimeoutExpired:
+        return "", f"{label} timed out"
+    except OSError:
+        return "", f"{label} could not start"
+
+    if result.returncode != 0:
+        return "", f"{label} failed"
+    if len(result.stdout.encode("utf-8")) > MAX_DEFAULT_PROJECT_DISCOVERY_OUTPUT_BYTES:
+        return "", f"{label} returned oversized output"
+
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(values) != 1:
+        return "", f"{label} did not return exactly one value"
+    return values[0], ""
+
+
+def discover_default_profile_project() -> tuple[str, str]:
+    profile, error = capture_default_profile_value(
+        ["profile", "current"],
+        label="default profile discovery",
+    )
+    if error:
+        return "", error
+    if not PROFILE_NAME_RE.fullmatch(profile):
+        return "", "default profile discovery returned an invalid profile name"
+
+    project_id, error = capture_default_profile_value(
+        ["config", "get", "parent-id", "--profile", profile],
+        label="default profile project discovery",
+    )
+    if error:
+        return "", error
+    if not validate_project_id(project_id):
+        return "", "default profile project discovery returned an invalid project ID"
+    return project_id, ""
+
+
+def is_default_profile_current_probe(command: str) -> bool:
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(words) == 3
+        and Path(words[0]).name == NEBIUS_CLI
+        and words[1:] == ["profile", "current"]
+    )
+
+
+def sanitized_default_profile_current_command(command: str) -> str:
+    names = " ".join(sorted(DEFAULT_PROJECT_DISCOVERY_ENV_NAMES))
+    return f"""\
+unset {names}
+{command}
+"""
 
 
 def segment_mutates_managed_auth_env(words: list[str]) -> bool:
@@ -1292,13 +1380,33 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if selector_error:
         if not requires_auth and not has_selector_assignment:
             return {}
-        return deny(
-            f"Nebius auth required, but {selector_error}. Start the Bash command "
-            f"exactly with '{PROJECT_ID_ENV}=<project-id> <command>'. Run "
-            "$agent-nebius-auth-diagnose to discover or verify the current-session "
-            "project. Correct the command and retry; no setup or user confirmation "
-            "is required."
-        )
+        if (
+            selector_error == "the required leading project selector is missing"
+            and not has_selector_assignment
+            and not invokes_token_helper
+        ):
+            project_id, discovery_error = discover_default_profile_project()
+            if discovery_error:
+                return deny(
+                    "Nebius auth required, but no explicit project selector was "
+                    f"provided and sanitized default-profile discovery failed: "
+                    f"{discovery_error}. Configure the default profile's parent-id "
+                    f"or start the Bash command exactly with "
+                    f"'{PROJECT_ID_ENV}=<project-id> <command>'."
+                )
+            selector_error = ""
+            if is_default_profile_current_probe(command):
+                return allow_rewrite(
+                    sanitized_default_profile_current_command(command)
+                )
+        else:
+            return deny(
+                f"Nebius auth required, but {selector_error}. Start the Bash command "
+                f"exactly with '{PROJECT_ID_ENV}=<project-id> <command>'. Run "
+                "$agent-nebius-auth-diagnose to discover or verify the current-session "
+                "project. Correct the command and retry; no setup or user confirmation "
+                "is required."
+            )
 
     profile = f"{AGENT_PROFILE_PREFIX}{project_id}"
     if mutates_auth_env:

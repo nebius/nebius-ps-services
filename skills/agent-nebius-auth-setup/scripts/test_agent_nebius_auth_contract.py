@@ -23,7 +23,9 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
         self.assertIn("allow_implicit_invocation: true", diagnose)
         self.assertIn("allow_implicit_invocation: false", setup)
 
-    def test_diagnose_carries_task_project_into_sensitive_payloads(self) -> None:
+    def test_diagnose_carries_explicit_task_project_into_sensitive_payloads(
+        self,
+    ) -> None:
         skill = self.read(DIAGNOSE / "SKILL.md")
         metadata = self.read(DIAGNOSE / "agents" / "openai.yaml")
         evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
@@ -39,9 +41,8 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
         self.assertIn("split it into separate Bash calls", skill)
         self.assertIn("leave local-only commands", skill)
         self.assertIn("retry the corrected payload once", skill)
-        self.assertIn(
-            "carry it into every Nebius-sensitive Bash payload", metadata
-        )
+        self.assertIn("prefer an explicit task selector", metadata)
+        self.assertIn("config-owned default profile project", metadata)
         self.assertIn("split mixed local/Nebius payloads", metadata)
         self.assertIn(
             "Known task project, then missing-selector hook denial", evals
@@ -57,7 +58,39 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
             "Project selection is task execution context, not a typed skill argument.",
             readme,
         )
+        self.assertIn(
+            "explicit or config-owned default-profile Nebius project", readme
+        )
         self.assertIn("Mixed local/Nebius payloads are split", readme)
+
+    def test_default_profile_project_fallback_is_aligned(self) -> None:
+        diagnose_skill = self.read(DIAGNOSE / "SKILL.md")
+        diagnose_evals = self.read(DIAGNOSE / "evals" / "trigger-prompts.md")
+        setup_skill = self.read(SETUP / "SKILL.md")
+        setup_readme = self.read(SETUP / "README.md")
+        setup_evals = self.read(SETUP / "evals" / "trigger-prompts.md")
+        hook = self.read(
+            SETUP / "assets" / "hooks" / "pre_tool_use_nebius_auth.py"
+        )
+        readme = self.read(ROOT / "README.md")
+
+        for text in (diagnose_skill, setup_skill, setup_readme, readme):
+            self.assertIn("nebius profile current", text)
+            self.assertIn("parent-id", text)
+            self.assertIn("config-owned", text)
+            self.assertIn("default", text)
+
+        self.assertIn("An explicit task project always wins", diagnose_skill)
+        self.assertIn(
+            "Raw-token helper children always require an explicit leading selector",
+            diagnose_skill,
+        )
+        self.assertIn(
+            "Raw-token helper child has no leading selector", diagnose_evals
+        )
+        self.assertIn("No explicit task project", setup_evals)
+        self.assertIn("discover_default_profile_project", hook)
+        self.assertIn("default_profile_discovery_environment", hook)
 
     def test_explicit_setup_needs_no_second_confirmation(self) -> None:
         skill = self.read(SETUP / "SKILL.md")

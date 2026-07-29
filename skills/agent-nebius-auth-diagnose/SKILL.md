@@ -16,20 +16,29 @@ Resolve exactly one project ID in this order:
 1. Explicit project ID in the current user turn.
 2. Project ID labeled for this task in the conversation or injected task state.
 3. Workspace configuration explicitly tied to this task.
-4. Persistent memory only as a corroborated hint.
-5. Ask when the result is absent or ambiguous.
+4. The config-owned default Nebius CLI profile's configured `parent-id`.
+5. Persistent memory only as a corroborated hint.
+6. Ask when the result is absent or ambiguous.
 
-Never infer authority from an active profile, inherited environment,
-credential filename or count, cwd, a legacy default selector, or unrelated
-task state.
+For the default-profile fallback, use sanitized `nebius profile current` to
+resolve the profile name, then
+`nebius config get parent-id --profile <profile>` to resolve the project. Clear
+ambient Nebius selectors, profiles, credentials, tokens, and impersonation
+before both reads. Accept exactly one syntactically valid profile name and
+project ID. An explicit task project always wins.
+
+Never infer authority from an ambient profile, inherited environment,
+credential filename or count, cwd, a legacy default selector, or unrelated task
+state.
 
 Project selection is task execution context, not a typed skill argument.
-Implicit skill selection and hook feedback do not inject a project ID into a
-later tool call. After resolving exactly one project, carry that selection for
-the current task only. Replace it when a later user turn explicitly selects a
-different project. When no explicit current-turn project exists and task
-evidence becomes conflicting, discard the prior selection and ask rather than
-guessing. Never persist the selection into files, profiles, or ambient
+Implicit skill selection and hook feedback do not persist a project selection.
+After resolving exactly one explicit task project, carry that selection for the
+current task only. Replace it when a later user turn explicitly selects a
+different project. When no explicit task project exists, the runtime hook may
+repeat the sanitized default-profile lookup for each Nebius-sensitive command.
+When task evidence conflicts, discard the carried selection and ask rather
+than guessing. Never persist the selection into files, profiles, or ambient
 environment state.
 
 ## Carry the Selected Project
@@ -42,7 +51,7 @@ If a proposed payload mixes local-only and Nebius-sensitive segments,
 split it into separate Bash calls before execution. Leave the local-only call
 unprefixed and apply the selector only to the Nebius-sensitive call.
 
-For every Nebius-sensitive Bash payload:
+When an explicit task project is known, every Nebius-sensitive Bash payload:
 
 - make exactly one `CODEX_NEBIUS_PROJECT_ID=<project-id>` assignment the first
   raw shell token at byte zero;
@@ -54,6 +63,11 @@ For every Nebius-sensitive Bash payload:
   script, or duplicate it; and
 - leave local-only commands such as `git`, `rg`, and unrelated help probes
   unprefixed.
+
+When no explicit task project exists, omit the selector and let the hook derive
+the config-owned default profile's project under its sanitized local lookup.
+Malformed, non-leading, nested, and duplicate selectors still fail closed.
+Raw-token helper children always require an explicit leading selector.
 
 ## Diagnose Read-Only
 

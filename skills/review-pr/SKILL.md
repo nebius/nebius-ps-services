@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Use for GitHub PR review by number, URL, or current branch: inspect base/head, issues, checks, reviews, conflicts, and changed files; fix safe issues or conflicts on writable branches; route to sibling skills; report merge readiness and blockers."
+description: "Use for GitHub PR review by number, URL, or current branch: inspect base/head, issues, checks, reviews, conflicts, and changed files; fix safe issues or conflicts on writable branches; route to sibling skills; report merge readiness and blockers. In an active Agentic SDLC run, use findings-and-readiness-only mode and never mutate the exact promoted PR head."
 ---
 
 # Review PR
@@ -33,6 +33,30 @@ permissions allow, and leave it closer to merge-ready.
   `origin`, or available through `gh pr checkout` for same-repository or fork
   PRs.
 - GitHub CLI (`gh`) authenticated for the target repository.
+
+## Active Agentic SDLC Review Mode
+
+When the PR maps to a matching active Agentic SDLC run, this mode overrides the
+generic review-and-fix behavior below. Review is findings-and-readiness-only:
+
+- Reload the active run, current checkpoint, execution coordinator, commit
+  evidence, UAT evidence, recorded PR evidence, and current GitHub PR state.
+- Require the local clean `HEAD`, recorded `promoted_head`, and PR head SHA to
+  be identical before calling the handoff reviewable. Disagreement maps to
+  `PR_HEAD_DRIFT`.
+- Read the base/head diff, checks, review decision, comments, conflicts, specs,
+  and SDLC evidence. Record a concise local readiness result when private run
+  state is writable.
+- Do not check out or switch branches, edit files, run mutating formatters,
+  commit, amend, merge, rebase, update the branch, resolve conflicts, push, or
+  otherwise change the PR head.
+
+Any finding that requires a branch change is a coordinator input, not a repair
+inside `review-pr`. Classify it with `sdlc-classify-failure`, route it through
+`sdlc-start`, and invalidate every affected downstream gate. The workflow must
+validate, test, evaluate, update documentation, align, seal/promote, rerun UAT,
+and republish a new exact SHA before review resumes. `sdlc-merge-pr` remains the
+only Agentic SDLC merge path and requires a separate explicit user request.
 
 ## Sibling Skill Routing
 
@@ -84,6 +108,8 @@ surfaces.
    - merge status
    - check status
    - review decision and unresolved reviewer concerns when visible
+   - whether the PR maps to an active Agentic SDLC run; if so, use the
+     restricted review mode above
 2. Inspect the review surface.
    Read the changed files, diff, existing review comments, and failing checks.
    Compare the branch locally against `origin/<base>`, not only against the PR
@@ -125,6 +151,8 @@ surfaces.
    instead of stopping at a report. Keep tests, docs, and automation aligned
    with the code changes. If the branch is not writable, report the exact fix
    or patch shape without creating a misleading local-only resolution.
+   In active Agentic SDLC review mode, do not apply the fix here; classify and
+   route it through the coordinator.
 7. Run focused validation.
    Choose validation based on the files changed:
    - Python: `ruff`, focused `pytest`
@@ -150,6 +178,9 @@ surfaces.
      made it necessary
    - if the branch cannot be pushed, keep the local conflict analysis and report
      the unresolved files plus the safest next action
+   In active Agentic SDLC review mode, this entire step is inspection-only:
+   report drift or conflicts and route any required branch change through the
+   coordinator.
 9. Report readiness.
    Return findings first, then summarize:
    - what was fixed
@@ -181,7 +212,9 @@ URLs, customer data, raw logs, or one-off local state.
 ## Guardrails
 
 - Default behavior is review-and-fix, not report-only, unless the user asks for
-  audit-only output.
+  audit-only output or active Agentic SDLC review mode applies.
+- In active Agentic SDLC review mode, never mutate the exact promoted PR head;
+  findings that require changes must return to `sdlc-classify-failure`.
 - A PR link or number is authoritative. Do not ignore it and review the current
   branch instead.
 - Use sibling skills selectively by changed surface; do not turn every PR review

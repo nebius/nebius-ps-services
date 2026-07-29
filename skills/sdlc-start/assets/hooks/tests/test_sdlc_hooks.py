@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -150,17 +152,309 @@ class HookTestCase(unittest.TestCase):
         (run_dir / "evidence" / "FEAT-001").mkdir(parents=True, exist_ok=True)
         return run_dir
 
-    def authorize(self, run_dir: Path, name: str) -> None:
-        expires = datetime.now(timezone.utc) + timedelta(hours=1)
-        write_json(
-            run_dir / "permissions" / name,
+    def write_repair_state(
+        self,
+        run_dir: Path,
+        *,
+        status: str,
+        next_skill: str,
+        with_diagnosis: bool = False,
+        classification_route: str | None = None,
+    ) -> None:
+        event_id = "a" * 64
+        diagnosis_id = "b" * 64 if with_diagnosis else None
+        blocker_key = "component|operation|error-class|source-boundary"
+        classification_record = (
             {
-                "allowed": True,
-                "branch": "agent/test",
-                "phase": name.removesuffix("-authorization.json"),
-                "expires_at": expires.isoformat().replace("+00:00", "Z"),
+                "schema": "agentic-sdlc/failure-classification-v1",
+                "feature_id": "FEAT-001",
+                "event_id": event_id,
+                "blocker_key": blocker_key,
+                "next_recommended_skill": classification_route,
+            }
+            if classification_route
+            else None
+        )
+        classification_id = (
+            hashlib.sha256(
+                json.dumps(
+                    classification_record,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            if classification_record
+            else None
+        )
+        event_path = run_dir / "repairs" / "FEAT-001" / "events" / f"{event_id}.json"
+        control_path = (
+            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
+        )
+        write_json(
+            event_path,
+            {
+                "schema": "agentic-sdlc/failure-event-v1",
+                "feature_id": "FEAT-001",
+                "event_id": event_id,
+                "blocker_key": blocker_key,
             },
         )
+        write_json(
+            control_path,
+            {
+                "schema": "agentic-sdlc/repair-control-v1",
+                "feature_id": "FEAT-001",
+                "current_event_id": event_id,
+                "current_diagnosis_id": diagnosis_id,
+                "current_classification_id": classification_id,
+                "status": status,
+                "feature_dispatches": 0,
+                "feature_dispatch_limit": 4,
+                "route_history": (
+                    [
+                        {
+                            "classification_id": classification_id,
+                            "next_recommended_skill": classification_route,
+                        }
+                    ]
+                    if classification_id
+                    else []
+                ),
+                "active_blocker": {
+                    "blocker_key": blocker_key,
+                    "active_seconds": 0,
+                    "time_limit_seconds": 3600,
+                },
+            },
+        )
+        pointer = {
+            "schema": "agentic-sdlc/repair-state-pointer-v1",
+            "failure_event": str(event_path.relative_to(run_dir)),
+            "diagnosis": None,
+            "control": str(control_path.relative_to(run_dir)),
+        }
+        if with_diagnosis:
+            diagnosis_path = (
+                run_dir
+                / "repairs"
+                / "FEAT-001"
+                / "diagnoses"
+                / f"{diagnosis_id}.json"
+            )
+            write_json(
+                diagnosis_path,
+                {
+                    "schema": "agentic-sdlc/diagnosis-v1",
+                    "feature_id": "FEAT-001",
+                    "event_id": event_id,
+                    "diagnosis_id": diagnosis_id,
+                    "blocker_key": blocker_key,
+                },
+            )
+            pointer["diagnosis"] = str(diagnosis_path.relative_to(run_dir))
+        if classification_id:
+            classification_path = (
+                run_dir
+                / "repairs"
+                / "FEAT-001"
+                / "classifications"
+                / f"{classification_id}.json"
+            )
+            assert classification_record is not None
+            classification_record["classification_id"] = classification_id
+            write_json(classification_path, classification_record)
+        state_path = run_dir / "current-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["next_recommended_skill"] = next_skill
+        state["repair"] = pointer
+        write_json(state_path, state)
+
+    def authorize(self, run_dir: Path, name: str, **overrides: object) -> None:
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        authorization = {
+            "allowed": True,
+            "branch": "agent/test",
+            "phase": name.removesuffix("-authorization.json"),
+            "expires_at": expires.isoformat().replace("+00:00", "Z"),
+        }
+        authorization.update(overrides)
+        write_json(
+            run_dir / "permissions" / name,
+            authorization,
+        )
+
+    def write_revalidation_cursor(
+        self,
+        run_dir: Path,
+        *,
+        complete: bool,
+    ) -> None:
+        control_path = (
+            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
+        )
+        control = json.loads(control_path.read_text(encoding="utf-8"))
+        blocker_key = control["active_blocker"]["blocker_key"]
+        surface = "commit" if complete else "validation"
+        owner_skill = "sdlc-commit" if complete else "sdlc-validate-codes"
+        classification = {
+            "schema": "agentic-sdlc/failure-classification-v1",
+            "feature_id": "FEAT-001",
+            "event_id": control["current_event_id"],
+            "blocker_key": blocker_key,
+            "invalidates": [surface],
+        }
+        classification_id = hashlib.sha256(
+            json.dumps(
+                classification,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        classification["classification_id"] = classification_id
+        write_json(
+            run_dir
+            / "repairs"
+            / "FEAT-001"
+            / "classifications"
+            / f"{classification_id}.json",
+            classification,
+        )
+        required = [
+            {
+                "surface": surface,
+                "next_recommended_skill": owner_skill,
+            }
+        ]
+        cursor_projection = {
+            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "classification_id": classification_id,
+            "repair_dispatch_id": "dispatch-1",
+            "required": required,
+        }
+        cursor_id = hashlib.sha256(
+            json.dumps(
+                cursor_projection,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        completed_ids: list[str] = []
+        fingerprints = {
+            "requirements": "1" * 64,
+            "design": "2" * 64,
+            "plan": "3" * 64,
+        }
+        integration_head = None
+        if complete:
+            integration = run_dir / "worktrees" / "FEAT-001" / "integration"
+            branch_name = "codex/test/revalidation"
+            git(self.project, "branch", branch_name, "HEAD")
+            integration.parent.mkdir(parents=True, exist_ok=True)
+            git(self.project, "worktree", "add", str(integration), branch_name)
+            integration_head = git(integration, "rev-parse", "HEAD")
+            gate = {
+                "schema": "agentic-sdlc/gate-evidence-v1",
+                "feature_id": "FEAT-001",
+                "surface": surface,
+                "owner_skill": owner_skill,
+                "status": "passed",
+                "integration_commit": integration_head,
+                "fingerprints": fingerprints,
+                "evidence": ["promotion and cleanup passed"],
+            }
+            content = (
+                json.dumps(gate, sort_keys=True, indent=2) + "\n"
+            ).encode("utf-8")
+            source = run_dir / "evidence" / "FEAT-001" / "commit.json"
+            source.write_bytes(content)
+            git(self.project, "worktree", "remove", str(integration))
+            git(self.project, "branch", "-d", branch_name)
+            write_json(
+                run_dir / "execution" / "FEAT-001" / "coordinator.json",
+                {
+                    "schema": "agentic-sdlc/execution-coordinator-v4",
+                    "status": "done",
+                    "base_branch": "main",
+                    "project_root": str(self.project),
+                    "selected_project_root": str(self.project),
+                    "integration_branch": branch_name,
+                    "integration_worktree": str(integration),
+                    "integration_head": integration_head,
+                    "promoted_head": integration_head,
+                    "cleanup_retained": [],
+                },
+            )
+            evidence = {
+                "schema": "agentic-sdlc/revalidation-evidence-v1",
+                "feature_id": "FEAT-001",
+                "event_id": control["current_event_id"],
+                "classification_id": classification_id,
+                "repair_dispatch_id": "dispatch-1",
+                "cursor_id": cursor_id,
+                "blocker_key": blocker_key,
+                "surface": surface,
+                "next_recommended_skill": owner_skill,
+                "integration_commit": integration_head,
+                "fingerprints": fingerprints,
+                "evidence_reference": "evidence/FEAT-001/commit.json",
+                "evidence_digest": hashlib.sha256(content).hexdigest(),
+                "recorded_at": "2026-07-28T10:20:00Z",
+            }
+            revalidation_id = hashlib.sha256(
+                json.dumps(
+                    evidence,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            evidence["revalidation_id"] = revalidation_id
+            write_json(
+                run_dir
+                / "repairs"
+                / "FEAT-001"
+                / "revalidations"
+                / f"{revalidation_id}.json",
+                evidence,
+            )
+            completed_ids.append(revalidation_id)
+        control["current_classification_id"] = classification_id
+        control["active_blocker"]["attempts"] = [
+            {
+                "dispatch_id": "dispatch-1",
+                "classification_id": classification_id,
+                "status": "completed",
+                "result": "succeeded",
+            }
+        ]
+        control["invalidations"] = [
+            {
+                "event_id": control["current_event_id"],
+                "classification_id": classification_id,
+                "surface": surface,
+            }
+        ]
+        control["revalidation"] = {
+            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "classification_id": classification_id,
+            "repair_dispatch_id": "dispatch-1",
+            "cursor_id": cursor_id,
+            "status": "complete" if complete else "pending",
+            "cursor": 1 if complete else 0,
+            "required": required,
+            "completed_revalidation_ids": completed_ids,
+            "integration_commit": integration_head,
+        }
+        write_json(control_path, control)
+        state_path = run_dir / "current-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["fingerprint_ids"] = [
+            f"{name}:{value}" for name, value in fingerprints.items()
+        ]
+        write_json(state_path, state)
 
     def registered_integration(self) -> tuple[Path, Path]:
         run_dir = self.active_run(phase="execution_prepared", next_skill="sdlc-tdd")
@@ -846,6 +1140,552 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_denied(result, "PR authorization")
 
+    def test_pretool_allows_push_with_exact_create_pr_authorization(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:agent/test"),
+            self.codex_home,
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_denies_push_when_authorized_head_is_stale(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head="0" * 40,
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD"), self.codex_home
+        )
+        self.assert_denied(result, "expected HEAD")
+
+    def test_pretool_denies_push_without_passing_uat_authorization(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+        )
+        result = run_hook(
+            PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD"), self.codex_home
+        )
+        self.assert_denied(result, "UAT status")
+
+    def test_pretool_denies_push_with_wrong_authorization_phase(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="review-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:agent/test"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "not create-pr")
+
+    def test_pretool_denies_push_without_expiring_authorization(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+            expires_at=None,
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:agent/test"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "missing expires_at")
+
+    def test_pretool_denies_authorized_push_to_a_different_ref(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:main"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "exact HEAD:agent/test refspec")
+
+    def test_pretool_denies_authorized_push_with_extra_refs_or_tags(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        commands = (
+            "git push origin HEAD:agent/test other:other",
+            "git push origin HEAD:agent/test --tags",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "exact HEAD:agent/test refspec")
+
+    def test_pretool_denies_wrapped_authorized_push(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        command = "env git push origin HEAD:agent/test"
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", command),
+            self.codex_home,
+        )
+        self.assert_denied(result, "without a wrapper or prepended command")
+
+    def test_pretool_denies_gh_pr_create_without_authorization(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "gh pr create --fill"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "PR authorization")
+
+    def test_pretool_allows_gh_pr_create_with_exact_authorization(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "gh pr create --head agent/test --fill"),
+            self.codex_home,
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_denies_gh_pr_create_without_explicit_head(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "gh pr create --fill"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "head must match")
+
+    def test_pretool_denies_compound_gh_pr_create(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        command = "gh pr create --head agent/test --fill && git status"
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", command),
+            self.codex_home,
+        )
+        self.assert_denied(result, "one direct shell action")
+
+    def test_pretool_denies_gh_pr_create_for_a_different_head(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        commands = (
+            "gh pr create --head other --fill",
+            "gh pr create -H other --fill",
+            "gh pr create -Hother --fill",
+            "gh pr create -H",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "head must match")
+
+    def test_pretool_allows_github_pr_read_without_authorization(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "mcp__github__pull_request_read",
+                tool_input={"owner": "example", "repo": "demo", "pullNumber": 1},
+            ),
+            self.codex_home,
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_guards_only_github_pr_creation_writes(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        payload = self.pre_payload(
+            "mcp__github__create_pull_request",
+            tool_input={"owner": "example", "repo": "demo", "head": "agent/test"},
+        )
+        denied = run_hook(PRE_TOOL, payload, self.codex_home)
+        self.assert_denied(denied, "PR authorization")
+
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        allowed = run_hook(PRE_TOOL, payload, self.codex_home)
+        self.assertEqual(allowed, {})
+
+        wrong_head = self.pre_payload(
+            "mcp__github__create_pull_request",
+            tool_input={"owner": "example", "repo": "demo", "head": "other"},
+        )
+        denied = run_hook(PRE_TOOL, wrong_head, self.codex_home)
+        self.assert_denied(denied, "head must match")
+
+    def test_pretool_denies_gh_pr_merge_without_authorization(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "merge authorization")
+
+    def test_pretool_denies_wrapped_or_prepended_gh_pr_merge(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        commands = (
+            f"command gh pr merge 42 --squash --match-head-commit {head}",
+            f"env gh pr merge 42 --squash --match-head-commit {head}",
+            f"/opt/example/bin/gh pr merge 42 --squash --match-head-commit {head}",
+            f"true && gh pr merge 42 --squash --match-head-commit {head}",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "without a wrapper or prepended command")
+
+    def test_pretool_denies_nested_shell_gh_pr_merge(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        nested = f"gh pr merge 42 --squash --match-head-commit {head}"
+        command = f"bash -lc {shlex.quote(nested)}"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "must not run through a nested shell")
+
+    def test_pretool_allows_quoted_gh_pr_merge_documentation_search(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        command = "rg 'gh pr merge' docs"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_exact_authorized_gh_pr_merge(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_exact_authorized_merge_queue_command(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_exact_authorized_pr_url_merge(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        pr_url = "https://github.example/example/demo/pull/42"
+        command = f"gh pr merge {pr_url} --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr=pr_url,
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_denies_merge_without_exact_head_guard(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = "gh pr merge 42 --squash"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "match the authorized current HEAD")
+
+    def test_pretool_denies_merge_command_outside_exact_authorization(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        authorized = f"gh pr merge 42 --squash --match-head-commit {head}"
+        attempted = f"gh pr merge 43 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=authorized,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(
+            PRE_TOOL, self.pre_payload("Bash", attempted), self.codex_home
+        )
+        self.assert_denied(result, "exact_command")
+
+    def test_pretool_denies_merge_without_explicit_pr_target(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "explicit PR number or URL")
+
+    def test_pretool_denies_merge_admin_bypass(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --admin --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "unsupported strategy or flag")
+
+    def test_pretool_denies_merge_branch_deletion(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --delete-branch --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "canonical single-action form")
+
+    def test_pretool_denies_compound_merge_command(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head} && git status"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "one direct shell action")
+
+    def test_pretool_denies_merge_pr_scope_mismatch(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="43",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "PR does not match")
+
+    def test_pretool_denies_merge_without_passing_readiness(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="failed",
+            review_status="passed",
+            uat_status="passed",
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "checks status")
+
+    def test_pretool_denies_github_merge_mcp_in_active_sdlc(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "mcp__github__merge_pull_request",
+                tool_input={"owner": "example", "repo": "demo", "pullNumber": 42},
+            ),
+            self.codex_home,
+        )
+        self.assert_denied(result, "must use the exact authorized gh pr merge")
+
     def test_pretool_denies_force_push(self) -> None:
         self.switch_feature()
         self.active_run()
@@ -940,6 +1780,168 @@ class HookTestCase(unittest.TestCase):
                 )
                 self.assertIn(canonical_name, reason)
                 self.assertNotIn(f"Next recommended skill: {short_name}", reason)
+
+    def test_stop_allows_one_conditional_troubleshooting_route(self) -> None:
+        run_dir = self.active_run(next_skill="troubleshoot")
+        self.write_repair_state(
+            run_dir,
+            status="diagnosis_required",
+            next_skill="troubleshoot",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("Next recommended skill: troubleshoot", result.get("reason", ""))
+
+    def test_stop_rejects_diagnosis_required_route_that_bypasses_troubleshoot(
+        self,
+    ) -> None:
+        run_dir = self.active_run(next_skill="sdlc-implement-plan")
+        self.write_repair_state(
+            run_dir,
+            status="diagnosis_required",
+            next_skill="sdlc-implement-plan",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("must route to troubleshoot", result["stopReason"])
+
+    def test_stop_requires_every_diagnosis_to_return_through_classifier(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-implement-plan")
+        self.write_repair_state(
+            run_dir,
+            status="diagnosed",
+            next_skill="sdlc-implement-plan",
+            with_diagnosis=True,
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("return through sdlc-classify-failure", result["stopReason"])
+
+        self.write_repair_state(
+            run_dir,
+            status="diagnosed",
+            next_skill="sdlc-classify-failure",
+            with_diagnosis=True,
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-classify-failure", result.get("reason", ""))
+
+    def test_stop_enforces_repair_budget_status(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-classify-failure")
+        self.write_repair_state(
+            run_dir,
+            status="exhausted",
+            next_skill="sdlc-classify-failure",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("stopped with status exhausted", result["stopReason"])
+
+    def test_stop_rejects_routed_owner_mismatch(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-create-design")
+        self.write_repair_state(
+            run_dir,
+            status="routed",
+            next_skill="sdlc-create-design",
+            classification_route="sdlc-implement-plan",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("authoritative owner", result["stopReason"])
+
+        self.write_repair_state(
+            run_dir,
+            status="routed",
+            next_skill="sdlc-implement-plan",
+            classification_route="sdlc-implement-plan",
+        )
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-implement-plan", result.get("reason", ""))
+
+    def test_stop_blocks_publication_until_invalidations_are_revalidated(
+        self,
+    ) -> None:
+        run_dir = self.active_run(next_skill="create-pr")
+        self.write_repair_state(
+            run_dir,
+            status="revalidation_required",
+            next_skill="create-pr",
+        )
+        self.write_revalidation_cursor(run_dir, complete=False)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("authoritative gate", result["stopReason"])
+
+        state_path = run_dir / "current-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["next_recommended_skill"] = "sdlc-validate-codes"
+        write_json(state_path, state)
+        control_path = (
+            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
+        )
+        control = json.loads(control_path.read_text(encoding="utf-8"))
+        control["revalidation"]["repair_dispatch_id"] = "foreign-dispatch"
+        projection = {
+            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "classification_id": control["revalidation"]["classification_id"],
+            "repair_dispatch_id": "foreign-dispatch",
+            "required": control["revalidation"]["required"],
+        }
+        control["revalidation"]["cursor_id"] = hashlib.sha256(
+            json.dumps(
+                projection,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        write_json(control_path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("not repair-authorized", result["stopReason"])
+
+        self.write_revalidation_cursor(run_dir, complete=False)
+        control = json.loads(control_path.read_text(encoding="utf-8"))
+        control["revalidation"]["required"] = []
+        write_json(control_path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("cursor is inconsistent", result["stopReason"])
+
+        self.write_revalidation_cursor(run_dir, complete=False)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
+
+        control = json.loads(control_path.read_text(encoding="utf-8"))
+        control["status"] = "resolved"
+        write_json(control_path, control)
+        state["next_recommended_skill"] = "create-pr"
+        write_json(state_path, state)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("still has invalidated evidence", result["stopReason"])
+
+        self.write_revalidation_cursor(run_dir, complete=True)
+        self.assertFalse(
+            (run_dir / "worktrees" / "FEAT-001" / "integration").exists()
+        )
+        self.assertEqual(git(self.project, "status", "--porcelain"), "")
+        control = json.loads(control_path.read_text(encoding="utf-8"))
+        control["status"] = "resolved"
+        write_json(control_path, control)
+        state["next_recommended_skill"] = "sdlc-uat-tests"
+        write_json(state_path, state)
+        git(self.project, "checkout", "--detach", "HEAD")
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("revalidation evidence is stale", result["stopReason"])
+        git(self.project, "switch", "main")
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-uat-tests", result.get("reason", ""))
 
     def test_stop_continues_for_pause_steering(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-validate-codes")

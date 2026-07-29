@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Implement Plan"
   short_description: "Implement locked feature plan"
-  default_prompt: "Use $sdlc-implement-plan to implement Agentic SDLC production code for one feature while staying inside the locked plan and its vertical end-to-end slice when present."
+  default_prompt: "Use $sdlc-implement-plan to implement one locked Agentic SDLC feature or diagnosis-bound corrective plan, preserving completed task digests and rerunning the original regression oracle before affected downstream gates."
 policy:
   allow_implicit_invocation: false

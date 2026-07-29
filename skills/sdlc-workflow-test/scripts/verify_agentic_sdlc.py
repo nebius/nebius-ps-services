@@ -55,6 +55,16 @@ REQUIRED_SDLC_SKILLS = (
     "sdlc-unit-tests",
     "sdlc-validate-codes",
 )
+REQUIRED_RUNTIME_SUPPORT_SKILLS = (
+    "worktree",
+    "nebius-grafana-query",
+    "troubleshoot",
+)
+SOURCE_PARITY_SKILLS = (
+    *REQUIRED_SDLC_SKILLS,
+    *REQUIRED_RUNTIME_SUPPORT_SKILLS,
+    "sdlc-workflow-test",
+)
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
@@ -67,9 +77,7 @@ VERIFICATION_CONTEXT_SCHEMA = "agentic-sdlc/verification-context-v1"
 VERIFICATION_ROOT_MARKER_SCHEMA = "agentic-sdlc/verification-root-v1"
 VERIFICATION_ROOT_MARKER = ".sdlc-workflow-test-root.json"
 DISPOSABLE_FIXTURE_MARKER = ".sdlc-workflow-test-fixture.json"
-DISPOSABLE_FIXTURE_MARKER_CONTENT = (
-    '{"schema":"agentic-sdlc/disposable-fixture-v2"}\n'
-)
+DISPOSABLE_FIXTURE_MARKER_CONTENT = '{"schema":"agentic-sdlc/disposable-fixture-v2"}\n'
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 LIVE_LANES = (
     "golden-path",
@@ -106,8 +114,17 @@ LIVE_LANE_REQUIRED_ASSERTIONS = {
         "clean_final_head",
         "private_state_excluded",
     },
-    "idempotency": {"stable_prompt_and_feature_ids", "no_duplicate_revision", "no_duplicate_commit"},
-    "change-request": {"stable_ids", "immutable_locked_plan", "scoped_change", "evidence_refreshed"},
+    "idempotency": {
+        "stable_prompt_and_feature_ids",
+        "no_duplicate_revision",
+        "no_duplicate_commit",
+    },
+    "change-request": {
+        "stable_ids",
+        "immutable_locked_plan",
+        "scoped_change",
+        "evidence_refreshed",
+    },
     "failure-routing": {
         "validation_failure",
         "implementation_test_failure",
@@ -117,10 +134,28 @@ LIVE_LANE_REQUIRED_ASSERTIONS = {
         "environment_failure",
         "earliest_responsible_phase",
         "repair_rerun_passed",
+        "known_cause_bypassed_troubleshooting",
+        "ambiguous_failure_diagnosed_once",
+        "diagnosis_returned_to_classifier",
+        "corrective_plan_reentry",
+        "unresolved_or_budget_stop",
     },
-    "auto-steering": {"classification_recorded", "disposition_applied", "next_phase_routed"},
-    "documentation-update": {"evaluation_preceded_docs", "documents_evidence_recorded", "final_docs_aligned"},
-    "steering-continuation": {"pause_honored", "no_pr_honored", "prompt_bound_continuation", "no_private_identity_exposed"},
+    "auto-steering": {
+        "classification_recorded",
+        "disposition_applied",
+        "next_phase_routed",
+    },
+    "documentation-update": {
+        "evaluation_preceded_docs",
+        "documents_evidence_recorded",
+        "final_docs_aligned",
+    },
+    "steering-continuation": {
+        "pause_honored",
+        "no_pr_honored",
+        "prompt_bound_continuation",
+        "no_private_identity_exposed",
+    },
 }
 SKILL_EVIDENCE_BASES = {skill: "live" for skill in REQUIRED_SDLC_SKILLS}
 SKILL_EVIDENCE_BASES.update(
@@ -132,9 +167,15 @@ SKILL_EVIDENCE_BASES.update(
     }
 )
 SKILL_REQUIRED_ASSERTIONS = {
-    "sdlc-align-specs": ["requirements_design_traceability", "implemented_behavior_alignment"],
+    "sdlc-align-specs": [
+        "requirements_design_traceability",
+        "implemented_behavior_alignment",
+    ],
     "sdlc-auto-steering": ["revision_classified", "disposition_routed"],
-    "sdlc-classify-failure": ["controlled_failure_classified", "earliest_phase_selected"],
+    "sdlc-classify-failure": [
+        "controlled_failure_classified",
+        "earliest_phase_selected",
+    ],
     "sdlc-commit": [
         "clean_promoted_head",
         "canonical_uat_handoff",
@@ -142,7 +183,10 @@ SKILL_REQUIRED_ASSERTIONS = {
     ],
     "sdlc-create-design": ["stable_feature_ids", "vertical_slice_boundaries"],
     "sdlc-create-plan": ["immutable_locked_plan", "dependency_wave_scope"],
-    "sdlc-create-requirements": ["stable_requirement_ids", "acceptance_methods_recorded"],
+    "sdlc-create-requirements": [
+        "stable_requirement_ids",
+        "acceptance_methods_recorded",
+    ],
     "sdlc-evaluate": ["cross_layer_evaluation", "gui_api_database_correlation"],
     "sdlc-gather-context": ["source_traceability", "boundary_context_recorded"],
     "sdlc-gui-test": ["computer_use_harness", "semantic_gui_assertions"],
@@ -154,7 +198,10 @@ SKILL_REQUIRED_ASSERTIONS = {
     "sdlc-tui-test": ["disposable_tui_smoke", "terminal_state_asserted"],
     "sdlc-uat-tests": ["acceptance_criteria_exercised", "restart_persistence_proved"],
     "sdlc-unit-tests": ["unit_api_database_suites", "negative_case_covered"],
-    "sdlc-update-documents": ["evaluation_preceded_docs", "runtime_instructions_aligned"],
+    "sdlc-update-documents": [
+        "evaluation_preceded_docs",
+        "runtime_instructions_aligned",
+    ],
     "sdlc-validate-codes": ["planned_scope_validated", "security_boundary_reviewed"],
 }
 EVIDENCE_PROFILES = {
@@ -255,8 +302,10 @@ def valid_profile_source_path(profile: str, relative: str) -> bool:
         return False
     suffix = relative.removeprefix(prefix)
     path = PurePosixPath(suffix)
-    return bool(suffix) and not path.is_absolute() and all(
-        part not in {"", ".", ".."} for part in path.parts
+    return (
+        bool(suffix)
+        and not path.is_absolute()
+        and all(part not in {"", ".", ".."} for part in path.parts)
     )
 
 
@@ -427,8 +476,7 @@ def validated_three_tier_claims(
         if (
             state.get("run_root") != str(run_root)
             or state.get("verification_id") != verification_id_value
-            or state.get("git")
-            != {"baseline_sha": baseline, "promoted_sha": final}
+            or state.get("git") != {"baseline_sha": baseline, "promoted_sha": final}
         ):
             return None
         keep = state.get("cleanup", {}).get("status") == "KEPT"
@@ -631,7 +679,7 @@ def verification_id(ctx: Context, baseline_head: str) -> str:
         baseline_head,
         file_digest(ctx.design_path),
     ]
-    for name in (*REQUIRED_SDLC_SKILLS, "worktree", "sdlc-workflow-test"):
+    for name in SOURCE_PARITY_SKILLS:
         values.append(name)
         values.append(tree_digest(ctx.skills_root / name))
     digest.update("\n".join(values).encode("utf-8"))
@@ -753,7 +801,9 @@ def verification_root_problem(ctx: Context, requested_root: Path) -> str | None:
             return "Verification-root ownership marker is invalid."
     if resolved_root.exists() and resolved_root != canonical_root:
         if marker_value is None:
-            return "Existing custom verification root is not owned by sdlc-workflow-test."
+            return (
+                "Existing custom verification root is not owned by sdlc-workflow-test."
+            )
     return None
 
 
@@ -801,7 +851,9 @@ def check_design(ctx: Context) -> None:
         "Workflow Verification",
         "Quick preflight test",
         "Full workflow test",
+        "Real three-tier application test",
         "$sdlc-workflow-test",
+        "--resume",
         "$sdlc-start",
         "$sdlc-start workspace init [project-folder]",
         "$sdlc-start run <prompt-path-or-unique-filename>",
@@ -821,6 +873,13 @@ def check_design(ctx: Context) -> None:
         "sequential fallback",
         "v2 outer",
         "verification-live-results-v3",
+        "predefined runtime operational criterion",
+        "non-Grafana provenance",
+        "installed `nebius-grafana-query`",
+        "publication-only mode",
+        "findings-and-readiness-only mode",
+        'phase: "create-pr"',
+        'uat_status: "passed"',
     ]
     missing = [term for term in required_terms if term not in text]
     status = "PASS" if not missing else "FAIL"
@@ -949,6 +1008,15 @@ def check_vertical_slice_contract(ctx: Context) -> None:
                 "planned end-to-end slice",
                 "Layer-isolated checks alone",
                 "Planned end-to-end slice observation",
+                "$nebius-grafana-query",
+                "predefined runtime operational criterion",
+                "query-admission record for one criterion",
+                "non-Grafana provenance",
+                "structured `criterion_fit`",
+                "at most one data query per provider invocation",
+                "Remaining query budget is a ceiling, not a target",
+                "Passive read-only production telemetry",
+                "`pass`, `fail`, or `inconclusive`",
             ],
         ),
         "sdlc-evaluate template": (
@@ -961,6 +1029,24 @@ def check_vertical_slice_contract(ctx: Context) -> None:
                 "## End-To-End Slice Observation",
                 "Layer Boundaries Exercised",
                 "Cross-Layer Result",
+                "## Observability Evidence",
+                "Admitted Criterion ID",
+                "Signal Family And Candidate",
+                "Signal Provenance",
+                "Candidate Selector Attribution",
+                "Baseline Or Control Selector Attribution",
+                "Pass Condition",
+                "Fail Condition",
+                "Inconclusive Conditions",
+                "Grade-Change Relation",
+                "Observed Comparison",
+                "Criterion Interpretation",
+                "Connectivity Checks",
+                "Remaining Query Budget",
+                "Remaining Fast Query Budget",
+                "Remaining Deep Query Budget",
+                "Provider Stages Used",
+                "<pass, fail, inconclusive>",
             ],
         ),
         "sdlc-update-documents skill": (
@@ -1064,7 +1150,85 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "agentic-sdlc/execution-coordinator-v4",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
+                "sessions/<session-hash>.json",
+                'phase: "create-pr"',
+                "expected_head",
+                'uat_status: "passed"',
                 "WORKFLOW_UPGRADE_REQUIRED",
+            ],
+        ),
+        "active SDLC PR publication mode": (
+            ctx.skills_root / "create-pr" / "SKILL.md",
+            [
+                "Active Agentic SDLC Publication Mode",
+                "publication-only mode",
+                "promoted_head",
+                "PR_HEAD_DRIFT",
+                "sdlc-classify-failure",
+                "expected_head: <promoted_head>",
+                'uat_status: "passed"',
+                "gh pr create --head <branch>",
+                "Do not use a shell wrapper",
+            ],
+        ),
+        "active SDLC PR review mode": (
+            ctx.skills_root / "review-pr" / "SKILL.md",
+            [
+                "Active Agentic SDLC Review Mode",
+                "findings-and-readiness-only",
+                "PR_HEAD_DRIFT",
+                "Do not check out or switch branches",
+                "sdlc-classify-failure",
+                "sdlc-merge-pr",
+            ],
+        ),
+        "active SDLC exact merge mode": (
+            ctx.skills_root / "sdlc-merge-pr" / "SKILL.md",
+            [
+                "exact promoted and reviewed SHA",
+                "--match-head-commit <promoted-sha>",
+                "exact_command",
+                "explicit_user_request: true",
+                "explicit PR number or URL",
+                "--admin",
+                "--delete-branch",
+                "compound merge command",
+                "does not use a GitHub merge MCP call",
+            ],
+        ),
+        "guarded PR creation actions": (
+            ctx.skills_root
+            / "sdlc-start"
+            / "assets"
+            / "hooks"
+            / "lib"
+            / "sdlc_policy.py",
+            [
+                "is_gh_pr_create",
+                "is_github_pr_create_tool",
+                "explicit_current_branch_refspec",
+                "gh_pr_create_head_matches",
+                "is_github_pr_merge_tool",
+                "canonical_gh_pr_merge_target",
+                "merge_auth_valid",
+                "sensitive_command_wrapper_reason",
+                "expected_checks_status",
+                "expected_review_status",
+                "pr_auth_valid",
+                'expected_phase="create-pr"',
+                'expected_uat_status="passed"',
+            ],
+        ),
+        "failure taxonomy": (
+            ctx.skills_root
+            / "sdlc-classify-failure"
+            / "references"
+            / "failure-taxonomy.md",
+            [
+                "DOCUMENTATION_DRIFT",
+                "PR_HEAD_DRIFT",
+                "coordinator schema v1, v2, or v3",
+                "sdlc-update-documents, then sdlc-align-specs",
             ],
         ),
     }
@@ -1077,6 +1241,90 @@ def check_execution_plane_contract(ctx: Context) -> None:
             detail = f"Missing or unreadable: {path}"
         elif missing:
             detail = "Missing expected execution-plane terms: " + ", ".join(missing)
+        ctx.add("Environment checked", name, status, detail)
+
+
+def check_repair_loop_contract(ctx: Context) -> None:
+    checks = {
+        "repair-control helper": (
+            ctx.skills_root
+            / "sdlc-classify-failure"
+            / "scripts"
+            / "repair_control.py",
+            [
+                "agentic-sdlc/failure-event-v1",
+                "agentic-sdlc/diagnosis-v1",
+                "agentic-sdlc/design-approval-v1",
+                "agentic-sdlc/repair-control-v1",
+                "agentic-sdlc/revalidation-evidence-v1",
+                "blocked_missing_evidence",
+                "localized_limit",
+                "design_limit",
+                "feature_dispatch_limit",
+                "blocked_semantic_cycle",
+            ],
+        ),
+        "conditional troubleshooting contract": (
+            ctx.skills_root / "troubleshoot" / "SKILL.md",
+            [
+                "Agentic SDLC Diagnostic Mode",
+                "Return one `diagnosis-v1` to `sdlc-classify-failure`",
+                "Do not commit product fixes",
+                "No implementation bug found",
+            ],
+        ),
+        "corrective plan contract": (
+            ctx.skills_root / "sdlc-create-plan" / "SKILL.md",
+            [
+                "corrective plan vN+1",
+                "Preserve every existing task definition byte-for-byte",
+                "Append contiguous corrective `TASK-*` IDs",
+                "original regression oracle",
+            ],
+        ),
+        "design admission contract": (
+            ctx.skills_root / "sdlc-create-design" / "SKILL.md",
+            [
+                "validated design-admission record",
+                "localized implementation",
+                "durable human approval",
+                "missing implementation evidence",
+            ],
+        ),
+        "coordinator repair pointer": (
+            ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
+            [
+                "agentic-sdlc/repair-state-pointer-v1",
+                "repair-control-v1",
+                "conditional diagnostic branch",
+                "60 active",
+                "four repair dispatches",
+                "revalidation-cursor-v1",
+            ],
+        ),
+        "corrective execution assignment": (
+            ctx.skills_root
+            / "sdlc-prepare-execution"
+            / "scripts"
+            / "sdlc_execution_core.py",
+            [
+                "diagnosis_id",
+                "regression_oracle",
+                "regression-oracle-evidence-v1",
+                "_task_definition_digest",
+                "replacement plan changes a completed or active task definition",
+            ],
+        ),
+    }
+    for name, (path, terms) in checks.items():
+        content = read_text(path)
+        missing = [term for term in terms if term not in content]
+        status = "PASS" if content and not missing else "FAIL"
+        detail = f"Repair-loop contract terms present in {path}."
+        if not content:
+            detail = f"Missing or unreadable: {path}"
+        elif missing:
+            detail = "Missing expected repair-loop terms: " + ", ".join(missing)
         ctx.add("Environment checked", name, status, detail)
 
 
@@ -1157,21 +1405,37 @@ def check_skill_discovery(ctx: Context) -> None:
             "No duplicate sdlc-* names found.",
         )
 
-    support = ctx.global_skills_dir / "worktree"
-    ctx.add(
-        "Skill discovery results",
-        "Managed worktree runtime dependency",
-        "PASS" if (support / "SKILL.md").is_file() else "FAIL",
-        "Installed worktree support skill is available."
-        if (support / "SKILL.md").is_file()
-        else f"Missing runtime dependency: {support}",
-        capability_id="runtime.worktree-dependency",
-    )
+    support_checks = {
+        "worktree": (
+            "Managed worktree runtime dependency",
+            "runtime.worktree-dependency",
+        ),
+        "nebius-grafana-query": (
+            "Observability evidence runtime dependency",
+            "runtime.observability-dependency",
+        ),
+        "troubleshoot": (
+            "Conditional diagnosis runtime dependency",
+            "runtime.troubleshoot-dependency",
+        ),
+    }
+    for support_name in REQUIRED_RUNTIME_SUPPORT_SKILLS:
+        support = ctx.global_skills_dir / support_name
+        check_name, capability_id = support_checks[support_name]
+        available = (support / "SKILL.md").is_file()
+        ctx.add(
+            "Skill discovery results",
+            check_name,
+            "PASS" if available else "FAIL",
+            f"Installed {support_name} support skill is available."
+            if available
+            else f"Missing runtime dependency: {support}",
+            capability_id=capability_id,
+        )
 
-    parity_names = (*REQUIRED_SDLC_SKILLS, "worktree", "sdlc-workflow-test")
     mismatches: list[str] = []
     unsafe_symlinks: list[str] = []
-    for name in parity_names:
+    for name in SOURCE_PARITY_SKILLS:
         source = ctx.skills_root / name
         installed = ctx.global_skills_dir / name
         source_digest = tree_digest(source)
@@ -1259,7 +1523,10 @@ def flatten_hook_commands(
                 if not isinstance(entry, dict):
                     return commands, f"hook event {event!r} contains an invalid entry"
                 if entry.get("type") != "command":
-                    return commands, f"hook event {event!r} contains a non-command entry"
+                    return (
+                        commands,
+                        f"hook event {event!r} contains a non-command entry",
+                    )
                 command = entry.get("command")
                 if not isinstance(command, str) or not command.strip():
                     return commands, f"hook event {event!r} has an invalid command"
@@ -1273,9 +1540,9 @@ def hook_command_targets(
     *,
     codex_home: Path,
 ) -> bool:
-    expanded = command.replace(
-        "${CODEX_HOME:-$HOME/.codex}", str(codex_home)
-    ).replace("${CODEX_HOME}", str(codex_home))
+    expanded = command.replace("${CODEX_HOME:-$HOME/.codex}", str(codex_home)).replace(
+        "${CODEX_HOME}", str(codex_home)
+    )
     expanded = expanded.replace("$CODEX_HOME", str(codex_home))
     if any(token in expanded for token in ("\n", "\r", "$(", "`")):
         return False
@@ -1374,9 +1641,7 @@ def check_hook_config(ctx: Context) -> None:
             f"{len(source_commands)} command hook(s) discovered in {source}",
         )
 
-    def registration(
-        event: str, filename: str, label: str
-    ) -> tuple[bool, list[str]]:
+    def registration(event: str, filename: str, label: str) -> tuple[bool, list[str]]:
         matching = [
             command
             for hook_event, command in all_commands
@@ -1922,9 +2187,7 @@ def check_prompt_workspace(ctx: Context) -> None:
 def parse_unittest_results(output: str) -> tuple[set[str], set[str]]:
     passed: set[str] = set()
     skipped: set[str] = set()
-    pattern = re.compile(
-        r"^(test_[A-Za-z0-9_]+).*\.\.\.\s+(ok|skipped\b.*)$"
-    )
+    pattern = re.compile(r"^(test_[A-Za-z0-9_]+).*\.\.\.\s+(ok|skipped\b.*)$")
     ansi_escape = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
     for line in output.splitlines():
         match = pattern.match(ansi_escape.sub("", line).strip())
@@ -2004,6 +2267,71 @@ def check_capability_regressions(ctx: Context) -> None:
             ],
             ctx.skills_root,
         ),
+        "observability": (
+            [
+                sys.executable,
+                str(
+                    ctx.skills_root
+                    / "sdlc-evaluate"
+                    / "scripts"
+                    / "test_observability_contract.py"
+                ),
+                "-v",
+            ],
+            ctx.skills_root,
+        ),
+        "repair-control": (
+            [
+                sys.executable,
+                str(
+                    ctx.skills_root
+                    / "sdlc-classify-failure"
+                    / "scripts"
+                    / "test_repair_control.py"
+                ),
+                "-v",
+            ],
+            ctx.skills_root,
+        ),
+        "evaluation-failure": (
+            [
+                sys.executable,
+                str(
+                    ctx.skills_root
+                    / "sdlc-evaluate"
+                    / "scripts"
+                    / "test_failure_contract.py"
+                ),
+                "-v",
+            ],
+            ctx.skills_root,
+        ),
+        "corrective-plan": (
+            [
+                sys.executable,
+                str(
+                    ctx.skills_root
+                    / "sdlc-create-plan"
+                    / "scripts"
+                    / "test_corrective_plan_contract.py"
+                ),
+                "-v",
+            ],
+            ctx.skills_root,
+        ),
+        "troubleshoot-contract": (
+            [
+                sys.executable,
+                str(
+                    ctx.skills_root
+                    / "troubleshoot"
+                    / "scripts"
+                    / "test_skill_contract.py"
+                ),
+                "-v",
+            ],
+            ctx.skills_root,
+        ),
         "verifier": (
             [
                 sys.executable,
@@ -2030,9 +2358,7 @@ def check_capability_regressions(ctx: Context) -> None:
             ctx.skills_root,
         ),
     }
-    results: dict[
-        str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]
-    ] = {}
+    results: dict[str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]] = {}
     for suite, (command, cwd) in suites.items():
         result = run(command, cwd=cwd, env=env, timeout=120)
         passed, skipped = parse_unittest_results(result.stderr + result.stdout)
@@ -2067,6 +2393,64 @@ def check_capability_regressions(ctx: Context) -> None:
                 (
                     "three-tier",
                     "test_semantic_rejects_duplicate_test_evidence_content",
+                ),
+            ),
+        ),
+        "evaluation.observability-contract": (
+            "Bounded observability evaluation contract",
+            (
+                (
+                    "observability",
+                    "test_observability_is_limited_to_predefined_operational_criteria",
+                ),
+                (
+                    "observability",
+                    "test_production_read_and_experiment_boundaries_are_distinct",
+                ),
+                (
+                    "observability",
+                    "test_inconclusive_is_a_first_class_criterion_result",
+                ),
+                (
+                    "observability",
+                    "test_template_records_bounded_observability_provenance",
+                ),
+                (
+                    "observability",
+                    "test_eval_cases_require_zero_call_admission_and_sequential_queries",
+                ),
+            ),
+        ),
+        "repair.control-contract": (
+            "Evidence-guided repair-control contract",
+            (
+                (
+                    "repair-control",
+                    "test_ambiguous_evaluation_routes_to_troubleshoot_exactly_once",
+                ),
+                (
+                    "repair-control",
+                    "test_failed_direct_repair_requires_troubleshooting_before_attempt_two",
+                ),
+                (
+                    "repair-control",
+                    "test_no_bug_found_remains_unresolved_never_design",
+                ),
+                (
+                    "repair-control",
+                    "test_design_requires_positive_system_contract_proof",
+                ),
+                (
+                    "evaluation-failure",
+                    "test_ambiguous_failure_requires_diagnosis",
+                ),
+                (
+                    "corrective-plan",
+                    "test_valid_corrective_plan_preserves_history_and_appends_task",
+                ),
+                (
+                    "troubleshoot-contract",
+                    "test_agentic_sdlc_diagnostic_mode_has_strict_handoff_boundary",
                 ),
             ),
         ),
@@ -2211,6 +2595,59 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("hooks", "test_stop_uses_repaired_renamed_prompt_filename"),
             ),
         ),
+        "publication.authorization": (
+            "Exact Agentic SDLC publication authorization",
+            (
+                (
+                    "hooks",
+                    "test_pretool_allows_push_with_exact_create_pr_authorization",
+                ),
+                (
+                    "hooks",
+                    "test_pretool_denies_authorized_push_with_extra_refs_or_tags",
+                ),
+                ("hooks", "test_pretool_denies_wrapped_authorized_push"),
+                ("hooks", "test_pretool_allows_gh_pr_create_with_exact_authorization"),
+                (
+                    "hooks",
+                    "test_pretool_denies_gh_pr_create_without_explicit_head",
+                ),
+                ("hooks", "test_pretool_denies_compound_gh_pr_create"),
+                ("hooks", "test_pretool_guards_only_github_pr_creation_writes"),
+            ),
+        ),
+        "merge.authorization": (
+            "Exact Agentic SDLC merge authorization",
+            (
+                ("hooks", "test_pretool_denies_gh_pr_merge_without_authorization"),
+                ("hooks", "test_pretool_allows_exact_authorized_gh_pr_merge"),
+                (
+                    "hooks",
+                    "test_pretool_allows_exact_authorized_merge_queue_command",
+                ),
+                ("hooks", "test_pretool_allows_exact_authorized_pr_url_merge"),
+                ("hooks", "test_pretool_denies_merge_without_exact_head_guard"),
+                (
+                    "hooks",
+                    "test_pretool_denies_merge_command_outside_exact_authorization",
+                ),
+                (
+                    "hooks",
+                    "test_pretool_denies_merge_without_explicit_pr_target",
+                ),
+                (
+                    "hooks",
+                    "test_pretool_denies_wrapped_or_prepended_gh_pr_merge",
+                ),
+                ("hooks", "test_pretool_denies_nested_shell_gh_pr_merge"),
+                ("hooks", "test_pretool_denies_merge_admin_bypass"),
+                ("hooks", "test_pretool_denies_merge_branch_deletion"),
+                ("hooks", "test_pretool_denies_compound_merge_command"),
+                ("hooks", "test_pretool_denies_merge_pr_scope_mismatch"),
+                ("hooks", "test_pretool_denies_merge_without_passing_readiness"),
+                ("hooks", "test_pretool_denies_github_merge_mcp_in_active_sdlc"),
+            ),
+        ),
         "verifier.self-tests": (
             "Verifier contract self-tests",
             (
@@ -2278,16 +2715,8 @@ def check_capability_regressions(ctx: Context) -> None:
             for suite, test in requirements
             if test not in results[suite][1] and test not in results[suite][2]
         ]
-        skipped = [
-            test for suite, test in requirements if test in results[suite][2]
-        ]
-        status = (
-            "FAIL"
-            if failed_suites or missing
-            else "WARN"
-            if skipped
-            else "PASS"
-        )
+        skipped = [test for suite, test in requirements if test in results[suite][2]]
+        status = "FAIL" if failed_suites or missing else "WARN" if skipped else "PASS"
         if failed_suites:
             detail = "Required regression suite failed: " + ", ".join(failed_suites)
         elif missing:
@@ -2295,8 +2724,9 @@ def check_capability_regressions(ctx: Context) -> None:
                 missing
             )
         elif skipped:
-            detail = "Required platform-specific regression tests were skipped: " + ", ".join(
-                skipped
+            detail = (
+                "Required platform-specific regression tests were skipped: "
+                + ", ".join(skipped)
             )
         else:
             detail = f"Executed {len(requirements)} required regression test(s)."
@@ -2638,7 +3068,7 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         and "explicit user request" in str(stop_merge.get("stopReason"))
         else "FAIL",
         str(stop_merge.get("stopReason") or stop_merge),
-        capability_id="hook.merge-explicit-authorization",
+        capability_id="hook.merge-explicit-request",
     )
 
 
@@ -2697,9 +3127,7 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
 
     if (
         has_symlink_component(manifest, verification_root)
-        or has_non_directory_parent_or_non_file_target(
-            manifest, verification_root
-        )
+        or has_non_directory_parent_or_non_file_target(manifest, verification_root)
         or not inside(manifest.resolve(strict=False), verification_root)
     ):
         reject(
@@ -2789,17 +3217,18 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
         for check in ctx.checks
         if check.capability_id is not None and check.status == "PASS"
     }
-    deterministic_capabilities = set().union(
-        *DETERMINISTIC_SKILL_CAPABILITIES.values()
-    )
+    deterministic_capabilities = set().union(*DETERMINISTIC_SKILL_CAPABILITIES.values())
     validated_profiles: set[str] = set()
     profile_claims: dict[str, set[str]] = {}
     if deterministic_capabilities.issubset(passing_capabilities):
         validated_profiles.add("deterministic")
         profile_claims["deterministic"] = set().union(
-            *(set(SKILL_REQUIRED_ASSERTIONS[skill]) for skill in DETERMINISTIC_SKILL_CAPABILITIES)
+            *(
+                set(SKILL_REQUIRED_ASSERTIONS[skill])
+                for skill in DETERMINISTIC_SKILL_CAPABILITIES
+            )
         )
-    if "hook.merge-explicit-authorization" in passing_capabilities:
+    if "merge.authorization" in passing_capabilities:
         validated_profiles.add("safety")
         profile_claims["safety"] = set(SKILL_REQUIRED_ASSERTIONS["sdlc-merge-pr"])
     registered_profiles: set[str] = set()
@@ -2868,19 +3297,14 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
                 reject(f"Evidence profile source reference is invalid: {profile}.")
                 return None
             relative = source_ref["path"]
-            unresolved_source = verification_root / Path(
-                *PurePosixPath(relative).parts
-            )
+            unresolved_source = verification_root / Path(*PurePosixPath(relative).parts)
             source_artifact = unresolved_source.resolve(strict=False)
             if (
                 not inside(source_artifact, verification_root)
                 or has_symlink_component(unresolved_source, verification_root)
                 or not source_artifact.is_file()
                 or source_artifact.stat().st_nlink != 1
-                or (
-                    os.name == "posix"
-                    and source_artifact.stat().st_mode & 0o077
-                )
+                or (os.name == "posix" and source_artifact.stat().st_mode & 0o077)
                 or file_sha256(source_artifact) != source_ref["sha256"]
                 or relative in used_profile_sources
             ):
@@ -2991,8 +3415,7 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
                     or set(evidence_ref) != {"path", "sha256"}
                     or not isinstance(evidence_ref.get("path"), str)
                     or not isinstance(evidence_ref.get("sha256"), str)
-                    or re.fullmatch(r"[0-9a-f]{64}", evidence_ref["sha256"])
-                    is None
+                    or re.fullmatch(r"[0-9a-f]{64}", evidence_ref["sha256"]) is None
                     or not valid_assertion_artifact_path(
                         owner_prefix, evidence_ref["path"]
                     )
@@ -3014,7 +3437,9 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
                             semantic_claims is None
                             or assertion_name not in semantic_claims
                         )
-                        and not assertion_artifact_semantics_valid(assertion_name, artifact)
+                        and not assertion_artifact_semantics_valid(
+                            assertion_name, artifact
+                        )
                     )
                 ):
                     return False
@@ -3071,7 +3496,9 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
                 return None
             resolved.append(relative)
         try:
-            result_value = json.loads((verification_root / resolved[0]).read_text(encoding="utf-8"))
+            result_value = json.loads(
+                (verification_root / resolved[0]).read_text(encoding="utf-8")
+            )
         except (OSError, UnicodeError, json.JSONDecodeError):
             reject(f"Live lane {lane} result is unreadable or invalid JSON.")
             return None
@@ -3085,7 +3512,9 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
             "status",
             "assertions",
         }
-        assertions = result_value.get("assertions") if isinstance(result_value, dict) else None
+        assertions = (
+            result_value.get("assertions") if isinstance(result_value, dict) else None
+        )
         if (
             not isinstance(result_value, dict)
             or set(result_value) != expected_result_fields
@@ -3175,7 +3604,10 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
                 owner=f"skill:{skill}",
                 status=entry["status"],
                 semantic_claims=set().union(
-                    *(profile_claims.get(profile, set()) for profile in result_value.get("profiles", []))
+                    *(
+                        profile_claims.get(profile, set())
+                        for profile in result_value.get("profiles", [])
+                    )
                 ),
             )
         ):
@@ -3206,10 +3638,12 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
             merge_guard = [
                 check
                 for check in ctx.checks
-                if check.capability_id == "hook.merge-explicit-authorization"
+                if check.capability_id == "merge.authorization"
             ]
             if not merge_guard or merge_guard[-1].status != "PASS":
-                reject("Merge safety evidence is not backed by the explicit-authorization hook test.")
+                reject(
+                    "Merge safety evidence is not backed by the explicit-authorization hook test."
+                )
                 return None
         ctx.add(
             "Agentic SDLC skill results",
@@ -3352,7 +3786,9 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
 def summarize_skill_matrix(ctx: Context) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
     for skill in REQUIRED_SDLC_SKILLS:
-        checks = [check for check in ctx.checks if check.capability_id == f"skill.{skill}"]
+        checks = [
+            check for check in ctx.checks if check.capability_id == f"skill.{skill}"
+        ]
         if any(check.status == "FAIL" for check in checks):
             status = "FAIL"
         elif any(check.status == "WARN" for check in checks) or not checks:
@@ -3394,7 +3830,15 @@ def report(ctx: Context) -> str:
     ]
     for label, value in summarize_matrix(ctx):
         lines.append(f"| {label} | {value} |")
-    lines.extend(["", "## Agentic SDLC Skill Matrix", "", "| Skill | Evidence basis | Status |", "| --- | --- | --- |"])
+    lines.extend(
+        [
+            "",
+            "## Agentic SDLC Skill Matrix",
+            "",
+            "| Skill | Evidence basis | Status |",
+            "| --- | --- | --- |",
+        ]
+    )
     for skill, basis, value in summarize_skill_matrix(ctx):
         lines.append(f"| {skill} | {basis} | {value} |")
     lines.append("")
@@ -3434,6 +3878,7 @@ def report(ctx: Context) -> str:
             "- `python3 worktree/scripts/test-worktree-manager.py -v`",
             "- `python3 task-implementer/scripts/test-worktree-interoperability.py -v`",
             "- `python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py -v`",
+            "- `python3 sdlc-evaluate/scripts/test_observability_contract.py -v`",
             "- `python3 sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py -v`",
         ]
     )
@@ -3522,6 +3967,7 @@ def main(argv: list[str]) -> int:
     check_design(ctx)
     check_vertical_slice_contract(ctx)
     check_execution_plane_contract(ctx)
+    check_repair_loop_contract(ctx)
     check_skill_discovery(ctx)
     check_hook_config(ctx)
     setup_disposable_project(ctx)

@@ -59,7 +59,7 @@ print(json.dumps({
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def assignment(self, task_id: str) -> Path:
+    def assignment(self, task_id: str, *, corrective: bool = False) -> Path:
         scope = self.root / "workers" / task_id / "services" / "a"
         scope.mkdir(parents=True)
         path = (
@@ -104,6 +104,9 @@ print(json.dumps({
             "incoming_handoff_path": str(handoff_path),
             "incoming_handoff_digest": handoff["handoff_digest"],
         }
+        if corrective:
+            value["diagnosis_id"] = "d" * 64
+            value["regression_oracle"] = "python3 -m unittest test_regression.py"
         value["assignment_digest"] = dispatch.stable_digest(value)
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
@@ -160,6 +163,14 @@ print(json.dumps({
                 [assignment], self.schema, codex_binary=str(self.root / "missing")
             )
         self.assertEqual(caught.exception.code, "ENVIRONMENT_BLOCKER")
+
+    def test_corrective_assignment_preserves_oracle_ordering_in_prompt(self) -> None:
+        assignment_path = self.assignment("TASK-001", corrective=True)
+        assignment = dispatch.load_assignment(assignment_path)
+        prompt = dispatch.worker_prompt(assignment_path, assignment)
+        self.assertIn("corrective task", prompt)
+        self.assertIn("regression_oracle first", prompt)
+        self.assertIn("Do not reinterpret", prompt)
 
     def test_tampered_handoff_fails_before_worker_spawn(self) -> None:
         assignment = self.assignment("TASK-001")

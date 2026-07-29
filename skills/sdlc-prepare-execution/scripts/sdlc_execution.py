@@ -39,6 +39,7 @@ PRIVATE_OUTPUT_KEYS = {
     "goal",
     "open_risks",
     "promotion_evidence",
+    "regression_oracle_evidence",
     "review",
     "validation",
 }
@@ -65,6 +66,20 @@ def string_list_json(value: str, label: str) -> list[str]:
     ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", f"{label} must be a JSON string array"
+        )
+    return parsed
+
+
+def optional_object_json(value: str, label: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", f"{label} must be a JSON object or null"
+        ) from exc
+    if parsed is not None and not isinstance(parsed, dict):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", f"{label} must be a JSON object or null"
         )
     return parsed
 
@@ -143,6 +158,7 @@ def parser() -> argparse.ArgumentParser:
     task_finish.add_argument("--summary", required=True)
     task_finish.add_argument("--decisions-json", required=True)
     task_finish.add_argument("--open-risks-json", required=True)
+    task_finish.add_argument("--oracle-evidence-json", default="null")
 
     integrate = sub.add_parser("wave-integrate")
     integrate.add_argument("--run-dir", type=Path, required=True)
@@ -226,6 +242,9 @@ def execute(args: argparse.Namespace) -> Any:
             summary=args.summary,
             decisions=string_list_json(args.decisions_json, "decisions-json"),
             open_risks=string_list_json(args.open_risks_json, "open-risks-json"),
+            regression_oracle_evidence=optional_object_json(
+                args.oracle_evidence_json, "oracle-evidence-json"
+            ),
         )
     if args.command == "wave-integrate":
         return integrate_wave(args.run_dir, args.feature, args.wave)

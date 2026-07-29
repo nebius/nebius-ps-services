@@ -2,7 +2,9 @@
 
 | Prompt or state | Expected behavior |
 | --- | --- |
-| Hook denies a command with no leading selector and no project is selected | Discover exactly one task-authoritative project, correct the command, and retry without setup. |
+| Nebius command has no leading selector and no explicit task project | Let the hook resolve sanitized `profile current` plus that profile's configured `parent-id`; do not print or persist the project ID. |
+| Default profile has no valid configured `parent-id` | Deny and ask for an explicit task project or a corrected default profile; do not choose from credentials, cwd, or memory. |
+| Ambient `NEBIUS_PROFILE` conflicts with the config-owned default | Ignore the ambient profile during fallback discovery. |
 | Known task project, then missing-selector hook denial | Reuse the selected project and retry the original outer payload once with exactly one leading selector; do not rediscover, verify, or invoke setup. |
 | Selected project A, then a later user turn explicitly selects project B | Replace A with B for later Nebius-sensitive payloads; do not carry the stale A selector forward. |
 | Selected project A, then non-explicit task evidence conflicts between A and B | Discard the carried selection and ask; do not choose from profiles, filenames, cwd, or memory. |
@@ -18,6 +20,7 @@
 | Command assigns or unsets managed auth | Remove the command-local mutation and retry without setup. |
 | Command prints an access token | Replace it with the intended operation or exact redirected verification. |
 | Raw-token child is required | Use the protected `exec-token` helper so the token exists only in the child. |
+| Raw-token helper child has no leading selector | Deny; automatic default-profile discovery does not authorize a raw-token child. |
 | Idempotent API adapter maps real auth failure to `77` | Use one protected `retry-idempotent` refresh and retry. |
 | Admin profile is expired but runtime may work | Run read-only `verify`; do not activate or require admin auth. |
 | Runtime works but later explicit IAM setup lacks admin auth | Report `blocked-admin-auth`, not agent credential failure. |

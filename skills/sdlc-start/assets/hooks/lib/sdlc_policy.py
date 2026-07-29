@@ -261,7 +261,18 @@ def staged_private_paths(
 
 
 def auth_valid(
-    active: ActiveRun | None, filename: str, expected_branch: str | None = None
+    active: ActiveRun | None,
+    filename: str,
+    expected_branch: str | None = None,
+    *,
+    expected_phase: str | None = None,
+    expected_head: str | None = None,
+    expected_uat_status: str | None = None,
+    expected_command: str | None = None,
+    expected_pr: str | None = None,
+    expected_checks_status: str | None = None,
+    expected_review_status: str | None = None,
+    require_explicit_user_request: bool = False,
 ) -> tuple[bool, str]:
     if not active:
         return False, "no active SDLC run"
@@ -278,20 +289,55 @@ def auth_valid(
     if not auth.get("allowed"):
         return False, f"{filename} does not allow this action"
     expires_at = auth.get("expires_at")
-    if expires_at:
-        try:
-            parsed = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                return False, f"{filename} expires_at must include a timezone"
-            if parsed < datetime.now(timezone.utc):
-                return False, f"{filename} expired"
-        except ValueError:
-            return False, f"{filename} has invalid expires_at"
-    if expected_branch and auth.get("branch") and auth.get("branch") != expected_branch:
+    if not expires_at:
+        return False, f"{filename} is missing expires_at"
+    try:
+        parsed = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return False, f"{filename} expires_at must include a timezone"
+        if parsed < datetime.now(timezone.utc):
+            return False, f"{filename} expired"
+    except ValueError:
+        return False, f"{filename} has invalid expires_at"
+    if expected_branch and auth.get("branch") != expected_branch:
         return (
             False,
             f"{filename} is for branch {auth.get('branch')}, not {expected_branch}",
         )
+    if expected_phase and auth.get("phase") != expected_phase:
+        return (
+            False,
+            f"{filename} is for phase {auth.get('phase')}, not {expected_phase}",
+        )
+    if expected_head and auth.get("expected_head") != expected_head:
+        return (
+            False,
+            f"{filename} expected HEAD {auth.get('expected_head')}, not {expected_head}",
+        )
+    if expected_uat_status and auth.get("uat_status") != expected_uat_status:
+        return (
+            False,
+            f"{filename} has UAT status {auth.get('uat_status')}, "
+            f"not {expected_uat_status}",
+        )
+    if expected_command and auth.get("exact_command") != expected_command:
+        return False, f"{filename} exact_command does not match this action"
+    if expected_pr and str(auth.get("pr") or "") != expected_pr:
+        return False, f"{filename} PR does not match this action"
+    if expected_checks_status and auth.get("checks_status") != expected_checks_status:
+        return (
+            False,
+            f"{filename} has checks status {auth.get('checks_status')}, "
+            f"not {expected_checks_status}",
+        )
+    if expected_review_status and auth.get("review_status") != expected_review_status:
+        return (
+            False,
+            f"{filename} has review status {auth.get('review_status')}, "
+            f"not {expected_review_status}",
+        )
+    if require_explicit_user_request and auth.get("explicit_user_request") is not True:
+        return False, f"{filename} lacks an explicit user merge request"
     return True, "authorized"
 
 
@@ -362,6 +408,67 @@ def command_words(command: str) -> list[str]:
         return command.split()
 
 
+def shell_command_words(command: str) -> list[str]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+    except ValueError:
+        return command.split()
+
+
+def sensitive_command_wrapper_reason(command: str) -> str | None:
+    words = shell_command_words(command)
+    normalized = [word.rsplit("/", 1)[-1] for word in words]
+    sequences = (
+        ("gh", "pr", "merge"),
+        ("gh", "pr", "create"),
+        ("git", "commit"),
+        ("git", "push"),
+        ("git", "merge"),
+        ("git", "rebase"),
+        ("git", "reset"),
+        ("git", "clean"),
+        ("git", "branch"),
+        ("git", "worktree", "remove"),
+    )
+    for sequence in sequences:
+        width = len(sequence)
+        for index in range(len(words) - width + 1):
+            if tuple(normalized[index : index + width]) != sequence:
+                continue
+            if index != 0 or tuple(words[:width]) != sequence:
+                return (
+                    "Blocked: sensitive GitHub/Git action must be invoked "
+                    "directly without a wrapper or prepended command."
+                )
+            if any(re.fullmatch(r"[();<>|&]+", word) is not None for word in words):
+                return (
+                    "Blocked: sensitive GitHub/Git action must be one direct "
+                    "shell action without operators or redirections."
+                )
+            return None
+    shell_name = normalized[0] if normalized else ""
+    if shell_name in {"bash", "sh", "zsh"}:
+        for index, word in enumerate(words[1:], start=1):
+            if word.startswith("-") and "c" in word[1:] and index + 1 < len(words):
+                nested = shell_command_words(words[index + 1])
+                nested_normalized = [item.rsplit("/", 1)[-1] for item in nested]
+                if any(
+                    tuple(nested_normalized[offset : offset + len(sequence)])
+                    == sequence
+                    for sequence in sequences
+                    for offset in range(len(nested) - len(sequence) + 1)
+                ):
+                    return (
+                        "Blocked: sensitive GitHub/Git action must not run "
+                        "through a nested shell."
+                    )
+                break
+    return None
+
+
 def is_git_command(words: list[str], subcommand: str) -> bool:
     return len(words) >= 2 and words[0] == "git" and words[1] == subcommand
 
@@ -375,12 +482,140 @@ def is_gh_pr_merge(words: list[str]) -> bool:
     )
 
 
+def is_gh_pr_create(words: list[str]) -> bool:
+    return (
+        len(words) >= 3
+        and words[0] == "gh"
+        and words[1] == "pr"
+        and words[2] == "create"
+    )
+
+
+def is_github_pr_create_tool(tool_name: str) -> bool:
+    lower = tool_name.lower()
+    return "github" in lower and lower.endswith(
+        ("create_pull_request", "create_pr", "pull_request_create")
+    )
+
+
+def is_github_pr_merge_tool(tool_name: str) -> bool:
+    lower = tool_name.lower()
+    return "github" in lower and lower.endswith(
+        ("merge_pull_request", "merge_pr", "pull_request_merge")
+    )
+
+
+def explicit_current_branch_refspec(words: list[str], branch: str) -> bool:
+    refspecs = {f"HEAD:{branch}", f"HEAD:refs/heads/{branch}"}
+    args = words[2:]
+    while args and args[0] in {"-u", "--set-upstream"}:
+        args = args[1:]
+    return len(args) == 2 and args[0] == "origin" and args[1] in refspecs
+
+
+def gh_pr_create_head_matches(words: list[str], branch: str) -> bool:
+    matched = False
+    index = 3
+    while index < len(words):
+        word = words[index]
+        if word in {"--head", "-H"}:
+            if index + 1 >= len(words) or words[index + 1] != branch:
+                return False
+            matched = True
+            index += 2
+            continue
+        if word.startswith("--head="):
+            if word.removeprefix("--head=") != branch:
+                return False
+            matched = True
+        if word.startswith("-H") and word != "-H":
+            if word.removeprefix("-H").removeprefix("=") != branch:
+                return False
+            matched = True
+        index += 1
+    return matched
+
+
+def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, str]:
+    branch = detect_current_branch(project_root)
+    current_head = git_head(project_root)
+    if not branch:
+        return False, "current checkout must have a named branch"
+    if not current_head:
+        return False, "current checkout has no resolvable HEAD"
+    return auth_valid(
+        active,
+        "pr-authorization.json",
+        branch,
+        expected_phase="create-pr",
+        expected_head=current_head,
+        expected_uat_status="passed",
+    )
+
+
+def canonical_gh_pr_merge_target(
+    words: list[str], expected_head: str
+) -> tuple[str | None, str]:
+    if len(words) < 6:
+        return None, "merge command must match the authorized current HEAD"
+    if len(words) > 7:
+        return None, "merge command must use the canonical single-action form"
+    target = words[3]
+    numeric_target = target.isdecimal() and int(target) > 0
+    url_target = bool(
+        re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/pull/[1-9]\d*", target)
+    )
+    if not numeric_target and not url_target:
+        return None, "merge command must name one explicit PR number or URL"
+    option_index = 4
+    if len(words) == 7:
+        if words[option_index] not in {"--merge", "--rebase", "--squash"}:
+            return None, "merge command contains an unsupported strategy or flag"
+        option_index += 1
+    if words[option_index:] != ["--match-head-commit", expected_head]:
+        return None, "merge command must match the authorized current HEAD"
+    return target, "canonical merge command"
+
+
+def merge_auth_valid(
+    active: ActiveRun | None, project_root: Path, command: str, words: list[str]
+) -> tuple[bool, str]:
+    branch = detect_current_branch(project_root)
+    current_head = git_head(project_root)
+    if not branch:
+        return False, "current checkout must have a named branch"
+    if not current_head:
+        return False, "current checkout has no resolvable HEAD"
+    pr_target, shape_reason = canonical_gh_pr_merge_target(words, current_head)
+    if pr_target is None:
+        return False, shape_reason
+    ok, reason = auth_valid(
+        active,
+        "merge-authorization.json",
+        branch,
+        expected_phase="sdlc-merge-pr",
+        expected_head=current_head,
+        expected_uat_status="passed",
+        expected_command=command,
+        expected_pr=pr_target,
+        expected_checks_status="passed",
+        expected_review_status="passed",
+        require_explicit_user_request=True,
+    )
+    if not ok:
+        return ok, reason
+    return True, "authorized"
+
+
 def git_policy_reason(
     command: str, project_root: Path, active: ActiveRun | None
 ) -> str | None:
     words = command_words(command)
     if not words:
         return None
+    wrapper_reason = sensitive_command_wrapper_reason(command)
+    if wrapper_reason:
+        return wrapper_reason
     branch = detect_current_branch(project_root)
     default_branch = detect_default_branch(project_root)
     protected = DEFAULT_BRANCHES | {default_branch}
@@ -433,10 +668,15 @@ def git_policy_reason(
         if branch in protected:
             return f"Blocked: git push from protected branch {branch or '<detached>'}."
         if active:
-            ok, reason = auth_valid(active, "pr-authorization.json", branch)
+            ok, reason = pr_auth_valid(active, project_root)
             if not ok:
                 return (
                     f"Blocked: git push requires valid SDLC PR authorization: {reason}."
+                )
+            if not explicit_current_branch_refspec(words, branch):
+                return (
+                    "Blocked: active SDLC git push must use origin and an exact "
+                    f"HEAD:{branch} refspec."
                 )
         return None
     if is_git_command(words, "reset") and "--hard" in words:
@@ -476,10 +716,22 @@ def git_policy_reason(
     if is_git_command(words, "push") and "--tags" in words:
         return "Blocked: pushing tags requires explicit authorization."
     if is_gh_pr_merge(words):
-        ok, reason = auth_valid(active, "merge-authorization.json", branch)
+        ok, reason = merge_auth_valid(active, project_root, command, words)
         if not ok:
             return (
                 f"Blocked: PR merge requires valid SDLC merge authorization: {reason}."
+            )
+    if active and is_gh_pr_create(words):
+        ok, reason = pr_auth_valid(active, project_root)
+        if not ok:
+            return (
+                "Blocked: GitHub PR creation requires valid SDLC PR "
+                f"authorization: {reason}."
+            )
+        if not gh_pr_create_head_matches(words, branch):
+            return (
+                "Blocked: GitHub PR creation head must match the authorized "
+                f"branch {branch}."
             )
     return None
 
@@ -495,22 +747,23 @@ def mcp_policy_reason(
     payload = _json_text(tool_input)
     if contains_secret(payload):
         return "Blocked: MCP arguments appear to contain a secret."
-    if "github" in lower and "merge" in lower:
-        ok, reason = auth_valid(
-            active, "merge-authorization.json", detect_current_branch(project_root)
+    if is_github_pr_merge_tool(lower) and active:
+        return (
+            "Blocked: active Agentic SDLC merge must use the exact authorized "
+            "gh pr merge command with --match-head-commit."
         )
-        if not ok:
-            return f"Blocked: GitHub merge requires valid SDLC merge authorization: {reason}."
-    if "github" in lower and (
-        "create_pull_request" in lower
-        or "create_pr" in lower
-        or "pull_request" in lower
-    ):
-        ok, reason = auth_valid(
-            active, "pr-authorization.json", detect_current_branch(project_root)
-        )
+    if is_github_pr_create_tool(lower):
+        ok, reason = pr_auth_valid(active, project_root)
         if active and not ok:
             return f"Blocked: GitHub PR creation requires valid SDLC PR authorization: {reason}."
+        if active and (
+            not isinstance(tool_input, dict)
+            or tool_input.get("head") != detect_current_branch(project_root)
+        ):
+            return (
+                "Blocked: GitHub PR creation head must match the authorized "
+                "current branch."
+            )
     if ("slack" in lower or "confluence" in lower) and any(
         word in lower for word in WRITE_TOOL_KEYWORDS
     ):

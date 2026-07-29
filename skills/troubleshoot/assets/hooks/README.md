@@ -26,17 +26,48 @@ blocks supported tool calls after exhaustion, and requires the final report.
   safety limit fails closed instead of being treated as absent.
 - Contradictory lifecycle state fails closed: active or resolved markers cannot
   retain a stop trigger, and an exhausted trigger must match a reached limit.
+- Attempt limits above three or disabled attempt limits fail closed. The marker
+  may lower the limit, and the tranche ledger cannot contain more entries than
+  that configured limit.
+- Attempt labels are derived from list order as `attempt-1` through
+  `attempt-3`; an authored ID is ignored. Every active recorded retry must have
+  a `blocker_key` exactly matching the marker's one blocker, a unique
+  `distinct_key`, normalized hypothesis, and normalized `new_evidence`
+  summary. Missing or mismatched binding makes the marker invalid, so a ledger
+  copied onto a causally independent blocker enters marker repair rather than
+  exhaustion. The guard catches structural or textual inconsistency; the skill
+  remains responsible for blocker classification, semantic novelty, and
+  pre-remediation timing.
+- The canonical data schema is `codex/remediation-budget-v2`. The surrounding
+  `codex-remediation-budget:v1` HTML marker remains the stable locator.
+  Historical v1 data is accepted only when already exhausted and only for
+  report delivery; it may omit `new_evidence`, never authorizes a retry, and
+  requires the missing evidence-record limitation in the report. Active,
+  resolved, or newly written state must use v2.
 - A causally independent blocker starts with a fresh marker and budget. The
-  parent owns that classification; the hook validates the replacement but does
-  not infer semantic blocker identity.
+  parent owns that classification and must write an empty ledger. The hook
+  requires consistent attempt bindings but does not infer semantic blocker
+  identity or detect deliberately false relabeling.
 - The time limit uses parent-accounted active seconds, so time spent waiting for
   the user, model capacity, or an external event does not consume the tranche.
 - Once the attempt or time limit is exhausted, every supported tool call is
   denied except an `apply_patch` that updates only that `current.md` file.
-- For exhausted state, the Stop hook accepts the turn only after the assistant
-  returns the required troubleshooting report. For invalid state, it requests
-  exact marker repair instead of an exhaustion report. Either request is made
-  once before an explicit warning stops an infinite continuation loop.
+- For exhausted state, the Stop hook requests one corrected report with the
+  exact validation issue and includes a bounded, redacted report as the minimum
+  assistant response. Validation requires substantive `Remediation`,
+  `Verification`, `Result`, and `Evidence` fields for every positional attempt,
+  bound to the guard's bounded, redacted marker-derived summaries. A report
+  containing a detected sensitive value is rejected for correction. The
+  fallback normalizes pipe characters in attempt remediation and verification
+  summaries so marker text cannot collide with the report field delimiters.
+  If the continued response remains incomplete, the hook terminates and emits
+  the same fallback as a UI/event-stream `systemMessage` warning; that warning
+  is not an assistant-authored conversation response. Secret-, URL-, private
+  IPv4/IPv6-, internal-hostname/localhost-, cloud-access-key-, and Unix/Windows
+  personal-path-shaped values are replaced with generic summaries even though
+  the marker contract already requires public-safe content. For invalid state,
+  it requests exact marker repair instead of an exhaustion report; one failed
+  repair request then stops with an explicit warning.
 - Hosted tools outside Codex's local hook path remain governed by the skill
   contract rather than this mechanical guardrail.
 - Matching command hooks start concurrently. This guard can deny the underlying

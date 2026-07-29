@@ -1,0 +1,228 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1200" viewBox="0 0 1920 1200" role="img" aria-labelledby="title description">
+  <title id="title">Agentic SDLC workflow with evidence-guided repair control</title>
+  <desc id="description">The golden Agentic SDLC path, direct known-cause routes, conditional troubleshooting, localized corrective implementation, evidence-gated redesign, and bounded stop branches.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#172554" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#3154b8"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#c2410c"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#b91c1c"/>
+    </marker>
+    <style>
+      .title { font: 700 38px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172554; }
+      .subtitle { font: 500 18px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #52617a; }
+      .section { font: 700 18px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #ffffff; letter-spacing: 0.5px; }
+      .box-title { font: 700 17px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172554; }
+      .box-copy { font: 500 14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #52617a; }
+      .route-title { font: 700 16px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172554; }
+      .route-copy { font: 500 13px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #52617a; }
+      .micro { font: 600 12px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .label { font: 700 12px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #3154b8; letter-spacing: 0.4px; }
+      .panel { fill: #ffffff; stroke: #d8e0f0; stroke-width: 2; filter: url(#shadow); }
+      .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.7; }
+      .arrow { fill: none; stroke: #3154b8; stroke-width: 3; marker-end: url(#arrow-blue); }
+      .repair-arrow { fill: none; stroke: #7c3aed; stroke-width: 3; marker-end: url(#arrow-purple); }
+      .design-arrow { fill: none; stroke: #c2410c; stroke-width: 3; marker-end: url(#arrow-orange); }
+      .stop-arrow { fill: none; stroke: #b91c1c; stroke-width: 3; marker-end: url(#arrow-red); }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1200" fill="url(#background)"/>
+  <text x="70" y="62" class="title">Agentic SDLC: Evidence-Guided Delivery and Repair</text>
+  <text x="70" y="92" class="subtitle">Known causes take the shortest route. Ambiguous failures receive bounded diagnosis. Redesign requires positive system-contract proof.</text>
+
+  <!-- Golden path -->
+  <rect x="55" y="125" width="1810" height="350" rx="24" class="panel"/>
+  <rect x="55" y="125" width="1810" height="48" rx="24" fill="#3154b8"/>
+  <rect x="55" y="149" width="1810" height="24" fill="#3154b8"/>
+  <text x="82" y="157" class="section">GOLDEN PATH — TROUBLESHOOT IS NOT A MANDATORY PHASE</text>
+
+  <g>
+    <rect x="86" y="205" width="300" height="220" rx="18" class="node"/>
+    <rect x="86" y="205" width="300" height="42" rx="18" fill="#dbeafe"/>
+    <rect x="86" y="229" width="300" height="18" fill="#dbeafe"/>
+    <text x="108" y="233" class="box-title">1 · Discover &amp; Design</text>
+    <text x="108" y="278" class="box-copy">
+      <tspan x="108" dy="0">Requirements → Context → Design</tspan>
+      <tspan x="108" dy="25">Stable REQ-* and FEAT-* IDs</tspan>
+      <tspan x="108" dy="25">Evidence-backed boundaries</tspan>
+      <tspan x="108" dy="25">Locked plan vN</tspan>
+      <tspan x="108" dy="25">Private fingerprints</tspan>
+    </text>
+  </g>
+
+  <g>
+    <rect x="440" y="205" width="300" height="220" rx="18" class="node"/>
+    <rect x="440" y="205" width="300" height="42" rx="18" fill="#ede9fe"/>
+    <rect x="440" y="229" width="300" height="18" fill="#ede9fe"/>
+    <text x="462" y="233" class="box-title">2 · Isolated Execution</text>
+    <text x="462" y="278" class="box-copy">
+      <tspan x="462" dy="0">Prepare integration worktree</tspan>
+      <tspan x="462" dy="25">TDD at recorded HEAD</tspan>
+      <tspan x="462" dy="25">Dependency-safe task waves</tspan>
+      <tspan x="462" dy="25">One worker / branch / worktree</tspan>
+      <tspan x="462" dy="25">Ordered integration</tspan>
+    </text>
+  </g>
+
+  <g>
+    <rect x="794" y="205" width="300" height="220" rx="18" class="node"/>
+    <rect x="794" y="205" width="300" height="42" rx="18" fill="#dcfce7"/>
+    <rect x="794" y="229" width="300" height="18" fill="#dcfce7"/>
+    <text x="816" y="233" class="box-title">3 · Evidence Gates</text>
+    <text x="816" y="278" class="box-copy">
+      <tspan x="816" dy="0">Validate code and boundaries</tspan>
+      <tspan x="816" dy="25">Unit / integration / regression</tspan>
+      <tspan x="816" dy="25">Evaluate accepted criteria</tspan>
+      <tspan x="816" dy="25">Commit-bound evidence</tspan>
+      <tspan x="816" dy="25">PASS or normalized failure</tspan>
+    </text>
+  </g>
+
+  <g>
+    <rect x="1148" y="205" width="300" height="220" rx="18" class="node"/>
+    <rect x="1148" y="205" width="300" height="42" rx="18" fill="#fef3c7"/>
+    <rect x="1148" y="229" width="300" height="18" fill="#fef3c7"/>
+    <text x="1170" y="233" class="box-title">4 · Product Truth</text>
+    <text x="1170" y="278" class="box-copy">
+      <tspan x="1170" dy="0">Update project documentation</tspan>
+      <tspan x="1170" dy="25">Align requirements and design</tspan>
+      <tspan x="1170" dy="25">Bind current fingerprints</tspan>
+      <tspan x="1170" dy="25">Reject stale evidence</tspan>
+      <tspan x="1170" dy="25">Ready for final seal</tspan>
+    </text>
+  </g>
+
+  <g>
+    <rect x="1502" y="205" width="330" height="220" rx="18" class="node"/>
+    <rect x="1502" y="205" width="330" height="42" rx="18" fill="#fee2e2"/>
+    <rect x="1502" y="229" width="330" height="18" fill="#fee2e2"/>
+    <text x="1524" y="233" class="box-title">5 · Promote &amp; Release</text>
+    <text x="1524" y="278" class="box-copy">
+      <tspan x="1524" dy="0">Seal → ff-only promotion</tspan>
+      <tspan x="1524" dy="25">UAT at promoted commit</tspan>
+      <tspan x="1524" dy="25">Publication-only PR</tspan>
+      <tspan x="1524" dy="25">Findings-only review</tspan>
+      <tspan x="1524" dy="25">Explicit exact-head merge</tspan>
+    </text>
+  </g>
+
+  <path d="M386 315 H428" class="arrow"/>
+  <path d="M740 315 H782" class="arrow"/>
+  <path d="M1094 315 H1136" class="arrow"/>
+  <path d="M1448 315 H1490" class="arrow"/>
+
+  <!-- Failure control -->
+  <rect x="55" y="505" width="1810" height="640" rx="24" class="panel"/>
+  <rect x="55" y="505" width="1810" height="48" rx="24" fill="#6d28d9"/>
+  <rect x="55" y="529" width="1810" height="24" fill="#6d28d9"/>
+  <text x="82" y="537" class="section">CONDITIONAL FAILURE ROUTING — ONE AUTHORITATIVE REPAIR CONTROL</text>
+
+  <rect x="88" y="585" width="220" height="90" rx="16" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="110" y="617" class="route-title">Evaluation FAIL</text>
+  <text x="110" y="642" class="route-copy">criterion + oracle + commit</text>
+  <text x="110" y="662" class="route-copy">evidence + fingerprints</text>
+
+  <rect x="370" y="575" width="260" height="110" rx="16" fill="#eef2ff" stroke="#818cf8" stroke-width="2"/>
+  <text x="394" y="608" class="route-title">failure-event-v1</text>
+  <text x="394" y="634" class="route-copy">event_id = exact evidence</text>
+  <text x="394" y="655" class="route-copy">blocker_key = stable cause</text>
+  <text x="394" y="676" class="route-copy">repair-control-v1 starts</text>
+
+  <rect x="700" y="575" width="270" height="110" rx="16" fill="#ede9fe" stroke="#a78bfa" stroke-width="2"/>
+  <text x="724" y="608" class="route-title">sdlc-classify-failure</text>
+  <text x="724" y="634" class="route-copy">deterministic taxonomy</text>
+  <text x="724" y="655" class="route-copy">dedupe + budgets + routes</text>
+  <text x="724" y="676" class="route-copy">invalidations + journal</text>
+
+  <path d="M308 630 H358" class="repair-arrow"/>
+  <path d="M630 630 H688" class="repair-arrow"/>
+
+  <!-- Direct route -->
+  <rect x="1040" y="575" width="780" height="110" rx="16" fill="#ecfeff" stroke="#67e8f9" stroke-width="2"/>
+  <text x="1065" y="605" class="route-title">CAUSE ALREADY PROVEN → DIRECT OWNER</text>
+  <text x="1065" y="633" class="route-copy">
+    <tspan x="1065" dy="0">TEST → sdlc-tdd   ·   IMPLEMENTATION → active task or corrective plan</tspan>
+    <tspan x="1065" dy="22">SPEC → requirements   ·   EVALUATOR → evaluator owner   ·   ENV / POLICY / HUMAN → stop</tspan>
+  </text>
+  <path d="M970 610 H1028" class="arrow"/>
+  <text x="985" y="596" class="label">PROVEN</text>
+
+  <!-- Troubleshoot branch -->
+  <rect x="88" y="735" width="300" height="145" rx="16" fill="#f5f3ff" stroke="#a78bfa" stroke-width="2"/>
+  <text x="112" y="768" class="route-title">Ambiguous / Persistent</text>
+  <text x="112" y="794" class="route-copy">conditional troubleshoot mode</text>
+  <text x="112" y="817" class="route-copy">no committed product fix</text>
+  <text x="112" y="840" class="route-copy">reversible instrumentation only</text>
+  <text x="112" y="863" class="route-copy">earliest causal divergence</text>
+
+  <rect x="470" y="735" width="300" height="145" rx="16" fill="#f5f3ff" stroke="#a78bfa" stroke-width="2"/>
+  <text x="494" y="768" class="route-title">diagnosis-v1</text>
+  <text x="494" y="794" class="route-copy">proof + confidence + owner</text>
+  <text x="494" y="817" class="route-copy">regression oracle + boundary</text>
+  <text x="494" y="840" class="route-copy">counterfactual + alternatives</text>
+  <text x="494" y="863" class="route-copy">always returns to classifier</text>
+
+  <path d="M760 685 V700 H238 V723" class="repair-arrow"/>
+  <text x="500" y="695" class="label">DIAGNOSIS REQUIRED</text>
+  <path d="M388 807 H458" class="repair-arrow"/>
+  <path d="M770 807 H835 V697" class="repair-arrow"/>
+
+  <!-- Localized repair -->
+  <rect x="850" y="735" width="300" height="145" rx="16" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="2"/>
+  <text x="874" y="768" class="route-title">Localized Implementation</text>
+  <text x="874" y="794" class="route-copy">corrective plan vN+1</text>
+  <text x="874" y="817" class="route-copy">preserve full task digests</text>
+  <text x="874" y="840" class="route-copy">append tasks + waves</text>
+  <text x="874" y="863" class="route-copy">freeze dispatch while replanning</text>
+
+  <rect x="1205" y="735" width="300" height="145" rx="16" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="2"/>
+  <text x="1229" y="768" class="route-title">Repair and Reverify</text>
+  <text x="1229" y="794" class="route-copy">1. original failed oracle</text>
+  <text x="1229" y="817" class="route-copy">2. affected-boundary check</text>
+  <text x="1229" y="840" class="route-copy">3. validation + tests</text>
+  <text x="1229" y="863" class="route-copy">4. invalidated gates → golden path</text>
+
+  <path d="M900 685 V720 H1000 V723" class="repair-arrow"/>
+  <text x="914" y="716" class="label">LOCALIZED</text>
+  <path d="M1150 807 H1193" class="repair-arrow"/>
+
+  <!-- Design branch -->
+  <rect x="1570" y="735" width="250" height="145" rx="16" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+  <text x="1594" y="768" class="route-title">Design Admission</text>
+  <text x="1594" y="794" class="route-copy">system-contract proof</text>
+  <text x="1594" y="817" class="route-copy">valid eval + environment</text>
+  <text x="1594" y="840" class="route-copy">scope + rollback + approval</text>
+  <text x="1594" y="863" class="route-copy">design → plan vN+1</text>
+  <path d="M950 685 V700 H1695 V723" class="design-arrow"/>
+  <text x="1450" y="695" class="label" fill="#c2410c">PROVEN CONTRACT DEFECT</text>
+
+  <!-- Stops and budgets -->
+  <rect x="88" y="955" width="1732" height="145" rx="18" fill="#fff1f2" stroke="#fda4af" stroke-width="2"/>
+  <text x="116" y="990" class="route-title">PRECISE STOP BRANCHES</text>
+  <text x="116" y="1020" class="route-copy">
+    <tspan x="116" dy="0">Missing decisive evidence · competing hypotheses · probable/incomplete diagnosis · policy/permission/human decision</tspan>
+    <tspan x="116" dy="25">Same blocker after design remediation · semantic A→B→A cycle · post-promotion defect starts a new corrective run</tspan>
+  </text>
+  <rect x="116" y="1065" width="1645" height="26" rx="13" fill="#fecdd3"/>
+  <text x="138" y="1083" class="micro">BUDGETS: ≤2 localized · ≤1 design · ≤3 total / blocker tranche · ≤60 active minutes · ≤4 repair dispatches / feature · every retry needs new evidence + a new falsifiable hypothesis</text>
+
+  <path d="M620 880 V930 H388 V943" class="stop-arrow"/>
+  <path d="M1695 880 V930 H1505 V943" class="stop-arrow"/>
+  <text x="630" y="925" class="label" fill="#b91c1c">UNRESOLVED / BUDGET / POLICY / HUMAN</text>
+
+  <text x="70" y="1172" class="micro">Private state: failure events, diagnoses, classifications, repair control, append-only journal, derived failure log, and checkpoint pointers. Acceptance criteria never weaken to make a repair pass.</text>
+</svg>

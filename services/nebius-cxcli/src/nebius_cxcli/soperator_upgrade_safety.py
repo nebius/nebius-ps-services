@@ -19,6 +19,7 @@ SOPERATOR_UPGRADE_SAFETY_SCHEMA = "nebius-cxcli-soperator-upgrade-safety/v1"
 SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA = "nebius-cxcli-soperator-intentional-delta-proof/v1"
 SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA = "nebius-cxcli-soperator-remediation-approval-plan/v1"
 EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION = 1
+_INTENTIONAL_PROOF_REQUIRED_CLASSIFICATION = "intentional_proof_required"
 _PROTECTED_PVC_KEYS = ("jail", "controller-spool", "accounting")
 _READONLY_KUBECTL_VERBS = frozenset({"api-resources", "exec", "get", "logs", "rollout", "version"})
 _MUTATING_KUBECTL_VERBS = frozenset(
@@ -708,7 +709,11 @@ def classify_intentional_deltas_from_proofs(
         raise ValueError(
             "Intentional protected-state delta proof does not match one current exact delta."
         )
-    blocked = [delta for delta in deltas if delta.get("classification") == "blocked"]
+    blocked = [
+        delta
+        for delta in deltas
+        if delta.get("classification") in {"blocked", _INTENTIONAL_PROOF_REQUIRED_CLASSIFICATION}
+    ]
     approval = [delta for delta in deltas if bool(delta.get("approval_required"))]
     payload["deltas"] = deltas
     payload["blocked_count"] = len(blocked)
@@ -776,6 +781,55 @@ def _classify_external_intentional_deltas(
             "or checkpoint-verified OpenMetrics restoration drift."
         ),
     )
+
+
+def _prepare_external_intentional_delta_proof_comparison(
+    comparison: Mapping[str, Any],
+    *,
+    before_state: ProtectedCustomerState | None,
+    after_state: ProtectedCustomerState,
+    namespace: str,
+    jail_storage_handoff: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Keep a verified retired Jail PVC blocked until its exact proof is consumed."""
+
+    payload = dict(to_plain_data(comparison))
+    deltas: list[dict[str, Any]] = []
+    for item in payload.get("deltas", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        delta = dict(item)
+        if delta.get(
+            "classification"
+        ) == "blocked" and _is_external_verified_jail_storage_handoff_delta(
+            delta,
+            before_state=before_state,
+            after_state=after_state,
+            namespace=namespace,
+            handoff=jail_storage_handoff,
+        ):
+            delta["classification"] = _INTENTIONAL_PROOF_REQUIRED_CLASSIFICATION
+            delta["approval_required"] = False
+            delta["remediation"] = (
+                "Verified Jail rootfs storage handoff requires one exact command-owned "
+                "intentional-delta proof."
+            )
+        deltas.append(delta)
+    blocked = [
+        delta
+        for delta in deltas
+        if delta.get("classification") in {"blocked", _INTENTIONAL_PROOF_REQUIRED_CLASSIFICATION}
+    ]
+    approval = [delta for delta in deltas if bool(delta.get("approval_required"))]
+    payload["deltas"] = deltas
+    payload["blocked_count"] = len(blocked)
+    payload["approval_required_count"] = len(approval)
+    payload["status"] = (
+        "matched"
+        if not deltas
+        else ("blocked" if blocked else ("drift-detected" if approval else "intentional-upgrade"))
+    )
+    return payload
 
 
 def _verified_external_jail_storage_successor(
@@ -860,15 +914,31 @@ def _is_external_checkpointed_transition_delta(
         and str(proof.get("manager_pause_status", "") or "") == "verified"
         and str(proof.get("client_propagation_status", "") or "") == "verified"
     )
+    validated_target_handoff = bool(
+        str(proof.get("status", "") or "") == "verified"
+        and str(proof.get("stage", "") or "") == "handoff-validated"
+        and str(proof.get("authority_owner", "") or "") == "target-singleton"
+        and str(proof.get("manager_pause_status", "") or "") == "restored"
+        and str(proof.get("client_propagation_status", "") or "") == "verified"
+    )
     historical = _verified_external_terminal_transition_proof(
         proof.get("historical_transition"),
         target_ref=target_ref,
     )
-    if not active_source_transition and historical is None:
+    if not active_source_transition and not validated_target_handoff and historical is None:
         return False
     kind = str(delta.get("kind", "") or "")
     resource = str(delta.get("resource", "") or "")
     field = str(delta.get("field", "") or "")
+    target_spec_delta = bool(
+        kind == "slurmclusters"
+        and resource == f"{namespace}/{target_ref}"
+        and field
+        in {
+            "spec_hash",
+            "spec_hash_without_controller_open_metrics_enabled",
+        }
+    )
     if (
         kind == "configmaps"
         and resource == f"{namespace}/{target_ref}-slurm-configs"
@@ -885,22 +955,14 @@ def _is_external_checkpointed_transition_delta(
     ):
         return True
     if historical is not None:
-        return False
+        return target_spec_delta
     if (
         kind == "slurm_runtime"
         and field == "slurm_partitions"
         and bool(proof.get("partition_pause_verified"))
     ):
         return True
-    return bool(
-        kind == "slurmclusters"
-        and resource == f"{namespace}/{target_ref}"
-        and field
-        in {
-            "spec_hash",
-            "spec_hash_without_controller_open_metrics_enabled",
-        }
-    )
+    return target_spec_delta
 
 
 def _verified_external_terminal_transition_proof(
@@ -1619,6 +1681,14 @@ def run_post_upgrade_fast_verification(
     }
     if before_state is not None:
         comparison = compare_protected_customer_state(before=before_state, after=after_state)
+        if external_cluster:
+            comparison = _prepare_external_intentional_delta_proof_comparison(
+                comparison,
+                before_state=before_state,
+                after_state=after_state,
+                namespace=namespace,
+                jail_storage_handoff=external_jail_storage_handoff,
+            )
         if intentional_delta_proof_builder is not None:
             if not isinstance(intentional_delta_proof_context, Mapping):
                 raise ValueError(

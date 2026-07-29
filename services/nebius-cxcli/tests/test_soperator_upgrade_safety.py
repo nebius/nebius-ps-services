@@ -619,6 +619,7 @@ def _external_handoff_proof_builder(
     target_ref: str,
     handoff: dict[str, Any] | None = None,
     handoff_verified: bool = False,
+    jail_handoff: dict[str, Any] | None = None,
 ) -> Any:
     return _proof_builder_from_classifier(
         lambda comparison, before, after: _classify_external_intentional_deltas(
@@ -626,6 +627,7 @@ def _external_handoff_proof_builder(
             target_ref=target_ref,
             before_state=before,
             after_state=after,
+            jail_storage_handoff=jail_handoff,
             open_metrics_handoff=handoff,
             open_metrics_handoff_verified=handoff_verified,
             open_metrics_comparison_hashes_match=(
@@ -1930,6 +1932,118 @@ def test_external_verified_jail_successor_replaces_retired_legacy_pvc() -> None:
     assert classified["blocked_count"] == 0
 
 
+def test_external_verified_jail_successor_requires_and_consumes_exact_proof() -> None:
+    class _JailPvcRunner(_Runner):
+        def __init__(self, names: list[str]) -> None:
+            super().__init__()
+            self.names = names
+
+        def __call__(
+            self,
+            args: Sequence[str],
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 120,
+            check: bool = True,
+        ) -> _Result:
+            command = tuple(str(arg) for arg in args)
+            if "pvc" not in command:
+                return super().__call__(
+                    args,
+                    input_text=input_text,
+                    timeout_seconds=timeout_seconds,
+                    check=check,
+                )
+            self.calls.append(command)
+            return _Result(
+                command,
+                0,
+                _json(
+                    {
+                        "items": [
+                            {
+                                "kind": "PersistentVolumeClaim",
+                                "metadata": {
+                                    "namespace": "soperator",
+                                    "name": name,
+                                },
+                                "spec": {
+                                    "resources": {
+                                        "requests": {
+                                            "storage": "512Gi",
+                                        }
+                                    }
+                                },
+                                "status": {
+                                    "phase": "Bound",
+                                    "capacity": {
+                                        "storage": "512Gi",
+                                    },
+                                },
+                            }
+                            for name in self.names
+                        ]
+                    }
+                ),
+            )
+
+    before = _capture(_JailPvcRunner(["jail-pvc", "jail-rootfs-slot-b-pvc"]))
+    after_runner = _JailPvcRunner(["jail-rootfs-slot-b-pvc"])
+    handoff = {
+        "completed_at": "2026-07-19T00:01:00Z",
+        "legacy_jail_pvc": "jail-pvc",
+        "rootfs_handoff_verification": {
+            "status": "verified",
+            "active_pvc": "jail-rootfs-slot-b-pvc",
+        },
+    }
+
+    unproven = run_post_upgrade_fast_verification(
+        command_runner=after_runner,
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        external_cluster=True,
+        external_jail_storage_handoff=handoff,
+    )
+    unproven_delta = next(
+        delta
+        for delta in unproven.comparison["deltas"]
+        if delta["kind"] == "pvcs" and delta["resource"] == "soperator/jail-pvc"
+    )
+    assert unproven.status == "failed"
+    assert unproven.comparison["blocked_count"] == 1
+    assert unproven_delta["classification"] == "intentional_proof_required"
+
+    proven = run_post_upgrade_fast_verification(
+        command_runner=after_runner,
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        source_payload={"deploy": {"targets": [{"instance_id": "gpu"}]}},
+        external_cluster=True,
+        external_jail_storage_handoff=handoff,
+        intentional_delta_proof_builder=_external_handoff_proof_builder(
+            target_ref="gpu",
+            jail_handoff=handoff,
+        ),
+        intentional_delta_proof_context=_TEST_PROOF_CONTEXT,
+    )
+    proven_delta = next(
+        delta
+        for delta in proven.comparison["deltas"]
+        if delta["kind"] == "pvcs" and delta["resource"] == "soperator/jail-pvc"
+    )
+    assert proven.status == "passed"
+    assert proven.comparison["blocked_count"] == 0
+    assert proven.comparison["intentional_proof_count"] == 1
+    assert proven_delta["classification"] == "intentional_upgrade"
+    assert proven_delta["approval_required"] is False
+
+
 def test_external_verified_bridge_transition_classifies_only_owned_temporary_drift() -> None:
     transition = {
         "status": "verified",
@@ -1980,6 +2094,91 @@ def test_external_verified_bridge_transition_classifies_only_owned_temporary_dri
     assert classified["approval_required_count"] == 1
 
 
+def test_external_validated_target_handoff_classifies_only_proven_final_drift() -> None:
+    transition = {
+        "status": "verified",
+        "stage": "handoff-validated",
+        "authority_owner": "target-singleton",
+        "manager_pause_status": "restored",
+        "client_propagation_status": "verified",
+        "partition_pause_verified": True,
+    }
+    comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 4,
+        "deltas": [
+            {
+                "kind": "secrets",
+                "resource": "soperator/sh.helm.release.v1.soperator.v6",
+                "field": "data_sha256_by_key",
+            },
+            {
+                "kind": "secrets",
+                "resource": "soperator/sh.helm.release.v1.soperator.v6",
+                "field": "labels",
+            },
+            {
+                "kind": "slurmclusters",
+                "resource": "soperator/soperator-cluster",
+                "field": "spec_hash_without_controller_open_metrics_enabled",
+            },
+            {
+                "kind": "configmaps",
+                "resource": "soperator/customer-config",
+                "field": "data_sha256_by_key",
+            },
+        ],
+    }
+    for delta in comparison["deltas"]:
+        delta.update(
+            {
+                "before": "before",
+                "after": "after",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review protected drift.",
+            }
+        )
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="soperator-cluster",
+        transition_handoff=transition,
+    )
+
+    intentional = {
+        (delta["kind"], delta["resource"], delta["field"])
+        for delta in classified["deltas"]
+        if delta["classification"] == "intentional_upgrade"
+    }
+    assert intentional == {
+        (
+            "secrets",
+            "soperator/sh.helm.release.v1.soperator.v6",
+            "data_sha256_by_key",
+        ),
+        ("secrets", "soperator/sh.helm.release.v1.soperator.v6", "labels"),
+        (
+            "slurmclusters",
+            "soperator/soperator-cluster",
+            "spec_hash_without_controller_open_metrics_enabled",
+        ),
+    }
+    assert classified["approval_required_count"] == 1
+
+    transition["manager_pause_status"] = "verified"
+    rejected = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="soperator-cluster",
+        transition_handoff=transition,
+    )
+    assert rejected["approval_required_count"] == 4
+
+
 def _terminal_transition_handoff() -> dict[str, Any]:
     material = {
         "schema": "nebius-cxcli/external-terminal-transition-proof/v1",
@@ -2020,7 +2219,7 @@ def test_external_terminal_transition_reuses_only_exact_historical_owned_deltas(
         "before_hash": "before",
         "after_hash": "after",
         "blocked_count": 0,
-        "approval_required_count": 4,
+        "approval_required_count": 6,
         "deltas": [
             {
                 "kind": "configmaps",
@@ -2040,6 +2239,20 @@ def test_external_terminal_transition_reuses_only_exact_historical_owned_deltas(
                 "kind": "secrets",
                 "resource": "soperator/sh.helm.release.v1.soperator.v7",
                 "field": "labels",
+                "before": "before",
+                "after": "after",
+            },
+            {
+                "kind": "slurmclusters",
+                "resource": "soperator/soperator-cluster",
+                "field": "spec_hash",
+                "before": "before",
+                "after": "after",
+            },
+            {
+                "kind": "slurmclusters",
+                "resource": "soperator/soperator-cluster",
+                "field": "spec_hash_without_controller_open_metrics_enabled",
                 "before": "before",
                 "after": "after",
             },
@@ -2084,6 +2297,12 @@ def test_external_terminal_transition_reuses_only_exact_historical_owned_deltas(
             "data_sha256_by_key",
         ),
         ("secrets", "soperator/sh.helm.release.v1.soperator.v7", "labels"),
+        ("slurmclusters", "soperator/soperator-cluster", "spec_hash"),
+        (
+            "slurmclusters",
+            "soperator/soperator-cluster",
+            "spec_hash_without_controller_open_metrics_enabled",
+        ),
     }
     assert classified["approval_required_count"] == 1
 

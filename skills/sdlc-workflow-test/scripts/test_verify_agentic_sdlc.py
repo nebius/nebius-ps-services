@@ -96,7 +96,9 @@ class VerifierContractTests(unittest.TestCase):
         final = final_head or git(self.project, "rev-parse", "HEAD")
         identity = verification_id or verifier.verification_id(self.ctx, baseline)
 
-        def assertion_record(owner: Path, assertion: str, *, passed: bool) -> dict[str, object]:
+        def assertion_record(
+            owner: Path, assertion: str, *, passed: bool
+        ) -> dict[str, object]:
             relative = owner / "artifacts" / f"{assertion}.json"
             artifact = self.verification_root / relative
             artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -136,11 +138,7 @@ class VerifierContractTests(unittest.TestCase):
             evidence = self.verification_root / relative
             evidence.parent.mkdir(parents=True, exist_ok=True)
             source_relative = (
-                Path("evidence")
-                / "profiles"
-                / profile
-                / "sources"
-                / "source.json"
+                Path("evidence") / "profiles" / profile / "sources" / "source.json"
             )
             source = self.verification_root / source_relative
             source.parent.mkdir(parents=True, exist_ok=True)
@@ -149,9 +147,7 @@ class VerifierContractTests(unittest.TestCase):
                     {
                         "schema": verifier.PROFILE_SOURCE_SCHEMAS[profile],
                         (
-                            "verification_id"
-                            if profile == "three-tier"
-                            else "run_id"
+                            "verification_id" if profile == "three-tier" else "run_id"
                         ): f"{profile}:{identity}",
                     }
                 )
@@ -281,7 +277,7 @@ class VerifierContractTests(unittest.TestCase):
                 "Do not auto-continue merge",
                 "PASS",
                 "Explicit user request is required.",
-                capability_id="hook.merge-explicit-authorization",
+                capability_id="merge.authorization",
             )
 
     def commit_selected_change(self) -> str:
@@ -381,7 +377,7 @@ class VerifierContractTests(unittest.TestCase):
             "Do not auto-continue merge",
             "PASS",
             "Explicit authorization is required.",
-            capability_id="hook.merge-explicit-authorization",
+            capability_id="merge.authorization",
         )
         manifest = json.loads(self.ctx.live_evidence_path.read_text(encoding="utf-8"))
         manifest["skills"]["sdlc-merge-pr"]["status"] = "PASS"
@@ -414,6 +410,58 @@ class VerifierContractTests(unittest.TestCase):
             set(verifier.REQUIRED_SDLC_SKILLS),
         )
 
+    def test_observability_provider_is_a_runtime_parity_dependency(self) -> None:
+        self.assertIn(
+            "nebius-grafana-query",
+            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+        )
+        self.assertIn(
+            "nebius-grafana-query",
+            verifier.SOURCE_PARITY_SKILLS,
+        )
+
+        provider = self.ctx.skills_root / "nebius-grafana-query"
+        provider.mkdir(parents=True)
+        skill = provider / "SKILL.md"
+        skill.write_text("provider contract v1\n", encoding="utf-8")
+        first_identity = verifier.verification_id(self.ctx, self.head)
+        skill.write_text("provider contract v2\n", encoding="utf-8")
+        second_identity = verifier.verification_id(self.ctx, self.head)
+
+        self.assertNotEqual(first_identity, second_identity)
+
+        self.ctx.global_skills_dir.mkdir(parents=True)
+        for support_name in verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS:
+            installed = self.ctx.global_skills_dir / support_name
+            installed.mkdir()
+            (installed / "SKILL.md").write_text(
+                f"installed {support_name}\n",
+                encoding="utf-8",
+            )
+        verifier.check_skill_discovery(self.ctx)
+        support_checks = {
+            check.capability_id: check.status
+            for check in self.ctx.checks
+            if check.capability_id
+            in {"runtime.worktree-dependency", "runtime.observability-dependency"}
+        }
+        self.assertEqual(
+            support_checks,
+            {
+                "runtime.worktree-dependency": "PASS",
+                "runtime.observability-dependency": "PASS",
+            },
+        )
+
+    def test_troubleshoot_is_conditional_runtime_support_not_golden_phase(self) -> None:
+        self.assertIn("troubleshoot", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS)
+        self.assertIn("troubleshoot", verifier.SOURCE_PARITY_SKILLS)
+        self.assertNotIn("troubleshoot", verifier.GOLDEN_PHASE_SEQUENCE)
+        self.assertIn(
+            "ambiguous_failure_diagnosed_once",
+            verifier.LIVE_LANE_REQUIRED_ASSERTIONS["failure-routing"],
+        )
+
     def test_generic_skill_assertion_is_rejected(self) -> None:
         self.commit_selected_change()
         self.write_manifest()
@@ -425,7 +473,9 @@ class VerifierContractTests(unittest.TestCase):
         os.chmod(artifact, 0o600)
         self.assertIsNone(verifier.load_live_results(self.ctx))
 
-    def test_all_true_lane_assertions_without_artifact_provenance_are_rejected(self) -> None:
+    def test_all_true_lane_assertions_without_artifact_provenance_are_rejected(
+        self,
+    ) -> None:
         self.commit_selected_change()
         self.write_manifest()
         artifact = self.verification_root / "evidence/golden-path/result.json"
@@ -494,8 +544,7 @@ class VerifierContractTests(unittest.TestCase):
         manifest = json.loads(self.ctx.live_evidence_path.read_text(encoding="utf-8"))
         manifest["skills"]["sdlc-gui-test"]["status"] = "PASS"
         skill_result = (
-            self.verification_root
-            / "evidence/skills/sdlc-gui-test/result.json"
+            self.verification_root / "evidence/skills/sdlc-gui-test/result.json"
         )
         skill_value = json.loads(skill_result.read_text(encoding="utf-8"))
         skill_value["status"] = "PASS"
@@ -938,9 +987,7 @@ class VerifierContractTests(unittest.TestCase):
         parent = self.verification_root / "not-a-directory"
         parent.write_text("preserve\n", encoding="utf-8")
         self.assertIsNone(
-            verifier.private_output_path(
-                parent / "report.md", self.verification_root
-            )
+            verifier.private_output_path(parent / "report.md", self.verification_root)
         )
 
     def test_report_path_rejects_existing_directory_target(self) -> None:
@@ -982,15 +1029,15 @@ class VerifierContractTests(unittest.TestCase):
         )
         verifier.check_hook_config(self.ctx)
         malformed = [
-            check
-            for check in self.ctx.checks
-            if check.name == "Hook source hooks.json"
+            check for check in self.ctx.checks if check.name == "Hook source hooks.json"
         ]
         self.assertEqual([check.status for check in malformed], ["FAIL"])
         self.assertEqual(
             [check.capability_id for check in malformed], ["hooks.registration"]
         )
-        self.assertIn(("Hook registration", "FAIL"), verifier.summarize_matrix(self.ctx))
+        self.assertIn(
+            ("Hook registration", "FAIL"), verifier.summarize_matrix(self.ctx)
+        )
 
     def test_toml_hook_state_metadata_is_not_an_event(self) -> None:
         self.ctx.codex_home.mkdir()
@@ -1033,16 +1080,16 @@ class VerifierContractTests(unittest.TestCase):
         ]
         self.assertEqual([check.status for check in registration], ["FAIL"])
         self.assertFalse(
-            any(check.name == "Configured hook payload parity" for check in self.ctx.checks)
+            any(
+                check.name == "Configured hook payload parity"
+                for check in self.ctx.checks
+            )
         )
 
     def test_canonical_hook_template_entrypoint_is_accepted(self) -> None:
-        expected = (
-            self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
-        )
+        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         command = (
-            'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/'
-            'pre_tool_use_sdlc_policy.py"'
+            'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_sdlc_policy.py"'
         )
         self.assertTrue(
             verifier.hook_command_targets(
@@ -1051,9 +1098,7 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_canonical_hook_path_as_later_argument_is_rejected(self) -> None:
-        expected = (
-            self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
-        )
+        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         command = f"python3 /tmp/wrapper.py {expected}"
         self.assertFalse(
             verifier.hook_command_targets(
@@ -1062,9 +1107,7 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_shell_wrapped_or_extended_hook_commands_are_rejected(self) -> None:
-        expected = (
-            self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
-        )
+        expected = self.ctx.codex_home / "hooks" / "pre_tool_use_sdlc_policy.py"
         commands = (
             f"bash -c python3 {expected}",
             f'python3 {expected} "$(touch /tmp/unexpected)"',

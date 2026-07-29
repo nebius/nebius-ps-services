@@ -62,6 +62,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - `STEERING.md`.
 - `steering/auto-steering.json` when present.
 - Latest feature evidence and failure logs.
+- The active `failure-event-v1`, optional `diagnosis-v1`,
+  `repair-control-v1`, append-only repair journal, and current repair pointer.
 - Active feature execution coordinator and registered worktree state when
   preparation has started.
 - `references/state-schema.md` for state fields and transitions.
@@ -80,6 +82,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - `checkpoints/checkpoint-*.json` and `checkpoints/latest.json`.
 - `history/iteration-*.md` for state transitions.
 - Local blocker summaries.
+- Repair pointers in current state and checkpoints. Structured repair records
+  remain owned by the deterministic `sdlc-classify-failure` helper.
 - Checkpoint pointers to execution state; Git resource mutation remains owned by
   `sdlc-prepare-execution`, `sdlc-implement-plan`, and `sdlc-commit`.
 
@@ -153,6 +157,37 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - During implementation, route repeatedly to `sdlc-implement-plan` until every
   dependency wave is integrated, combined evidence passes, and worker cleanup
   completes. Task agents may run concurrently only inside the current wave.
+- On every gate failure, require an immutable normalized failure event and
+  route to `sdlc-classify-failure`. Preserve the failed criterion, exact
+  integration commit, environment identity, reproduction oracle, evidence
+  digests, and requirements/design/plan fingerprints.
+- Let proven mechanical causes bypass diagnosis. Route an ambiguous,
+  persistent, intermittent, or cross-boundary failure to `troubleshoot`
+  exactly as a conditional diagnostic branch. Persist its diagnosis pointer
+  and return every diagnosis to `sdlc-classify-failure`; troubleshooting never
+  chooses or executes the repair phase directly.
+- Treat `repair-control-v1` as authoritative for blocker identity, route
+  history, invalidations, active time, and repair dispatch budgets. Freeze new
+  worker dispatch while classifying, diagnosing, or replanning. Stop on missing
+  evidence, unresolved competing hypotheses, policy/human decisions, semantic
+  routing cycles, or budget exhaustion.
+- A successful repair with invalidations enters the repair-control
+  revalidation cursor. Route only to its exact next gate, bind each completion
+  to digest-verified evidence and current fingerprints, use the live
+  integration HEAD before commit, and bind final commit evidence to completed
+  promotion plus a clean promoted checkout on the recorded base branch after
+  verified integration cleanup. Do not permit UAT, PR, or publication until
+  the cursor is complete.
+- For a proven implementation defect, use the active task's existing attempt
+  contract only while that task is active. After waves complete, require an
+  immutable corrective plan vN+1 and private `replan-future`, preserving full
+  completed task definitions/digests and resource-owning waves while appending
+  correction tasks and waves.
+- Never reopen sealed, promoted, or completed execution. A post-promotion
+  failure begins a corrective run from the exact promoted commit.
+- Admit failure-driven redesign only after the classifier validates positive
+  system-contract proof and the required approval mode. Missing or
+  inconclusive implementation evidence is not a design defect.
 - Route to `sdlc-commit` only after downstream evidence passes. That phase owns
   final integration sealing, exact fast-forward promotion to the unchanged
   project branch, and integration-resource cleanup. UAT and PR phases use the
@@ -167,9 +202,16 @@ $sdlc-start run <prompt-path-or-unique-filename>
   transition only after final alignment, UAT, and documentation evidence are
   recorded, the exact promoted HEAD is clean, and all Agentic SDLC integration
   and worker resources are absent. Route to `create-pr` only after release.
+- Treat the shared PR skills as restricted SDLC modes after that handoff:
+  `create-pr` may publish only the clean exact promoted SHA, and `review-pr`
+  may record findings/readiness without changing the PR head. Any required
+  branch change returns through `sdlc-classify-failure` and this coordinator.
+  `sdlc-merge-pr` may merge only after an explicit user request and only while
+  the remote PR head still equals that promoted and reviewed SHA.
 - Before returning a next skill, write a checkpoint containing current feature,
   phase, status, blocker, retry counts, last successful phase, fingerprints,
-  evidence pointers, and next recommended skill.
+  evidence pointers, repair event/diagnosis/control pointers, and next
+  recommended skill.
 - Update `checkpoints/latest.json`, then `current-state.json`, after the
   checkpoint is written.
 - Write a history entry only when state changes. A repeated resume with no
@@ -213,6 +255,11 @@ $sdlc-start run <prompt-path-or-unique-filename>
   exact HEAD drifts, stop with the execution-plane failure code rather than
   routing around the coordinator.
 - If a feature loops repeatedly, classify the blocker and stop after retry budget.
+- If a first direct repair fails with the same blocker, require
+  `troubleshoot` before another remediation dispatch. Every retry requires
+  newly acquired evidence and a distinct falsifiable hypothesis.
+- Do not infer design from an unresolved diagnosis. Stop with the precise
+  missing evidence or competing hypotheses.
 - If no checkpoint can be trusted, stop with `HUMAN_INPUT_REQUIRED` instead of
   guessing the phase.
 
@@ -222,6 +269,9 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Implement code directly.
 - Commit, push, create PRs, review PRs, or merge.
 - Bypass validation, tests, or evaluation.
+- Route directly from `troubleshoot` to implementation or design.
+- Reset repair counters without causally independent blocker evidence or a new
+  explicit user-authorized tranche.
 - Record live environment credentials, private endpoints, customer data, or raw
   logs in run state.
 - Persist prompt content containing detected secret material.
@@ -234,6 +284,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Active run state is accurate and backed by a checkpoint.
 - The run is bound to one validated managed prompt and immutable revision.
 - Current feature and next skill are explicit.
+- Active repair state, owner, invalidations, budgets, and stop reason are
+  explicit and checkpointed when a failure cycle exists.
 - Steering has been consumed, refreshed, or routed to `sdlc-auto-steering`.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.

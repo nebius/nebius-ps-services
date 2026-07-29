@@ -159,6 +159,32 @@ class SchedulerTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "PLAN_INVALID")
 
+    def test_corrective_task_binds_diagnosis_and_regression_oracle(self) -> None:
+        corrective = PLAN.replace(
+            "- Rollback or stop conditions: stop on contract drift",
+            "- Rollback or stop conditions: stop on contract drift\n"
+            f"- Diagnosis: {'d' * 64}\n"
+            "- Regression oracle: python3 -m unittest tests.test_regression",
+            1,
+        )
+        task = parse_locked_plan(corrective)[0]
+        self.assertEqual(task.diagnosis_id, "d" * 64)
+        self.assertEqual(
+            task.regression_oracle,
+            "python3 -m unittest tests.test_regression",
+        )
+
+    def test_corrective_task_requires_diagnosis_and_oracle_as_a_pair(self) -> None:
+        malformed = PLAN.replace(
+            "- Rollback or stop conditions: stop on contract drift",
+            "- Rollback or stop conditions: stop on contract drift\n"
+            f"- Diagnosis: {'d' * 64}",
+            1,
+        )
+        with self.assertRaises(ExecutionError) as raised:
+            parse_locked_plan(malformed)
+        self.assertEqual(raised.exception.code, "PLAN_INVALID")
+
 
 class GitLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -206,6 +232,29 @@ class GitLifecycleTests(unittest.TestCase):
             session or f"test-session-{wave_id}-{assignment['task_id']}",
             Path(assignment["scope_cwd"]),
         )
+
+    def complete_first_wave(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignments = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        for assignment in assignments:
+            self.start_assignment(assignment, "WAVE-001")
+            worker = Path(assignment["worktree"])
+            (worker / "src").mkdir(exist_ok=True)
+            filename = "a.py" if assignment["task_id"] == "TASK-001" else "b.py"
+            (worker / "src" / filename).write_text("VALUE = 1\n", encoding="utf-8")
+            finish_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                "focused test passed",
+                "review passed",
+                f"feat: {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
+            )
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
 
     def test_parallel_session_claim_is_atomic(self) -> None:
         def claim(task_id: str) -> str:
@@ -266,6 +315,63 @@ class GitLifecycleTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as executor:
             outcomes = sorted(executor.map(recover, ("worker-a", "worker-b")))
         self.assertEqual(outcomes, ["WORKSPACE_BUSY", "recovered"])
+
+    def test_corrective_finish_requires_exact_oracle_evidence(self) -> None:
+        oracle = "python3 -m unittest tests.test_regression"
+        self.plan.write_text(
+            PLAN.replace(
+                "- Rollback or stop conditions: stop on contract drift",
+                "- Rollback or stop conditions: stop on contract drift\n"
+                f"- Diagnosis: {'d' * 64}\n"
+                f"- Regression oracle: {oracle}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): corrective TDD")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001")
+        worker = Path(assignment["worktree"])
+        (worker / "src").mkdir(exist_ok=True)
+        (worker / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+        common = (
+            self.run_dir,
+            "FEAT-001",
+            "WAVE-001",
+            assignment["task_id"],
+            "focused test passed",
+            "review passed",
+            "fix(FEAT-001): repair diagnosed regression",
+        )
+        with self.assertRaises(ExecutionError) as missing:
+            finish_task(*common, summary="corrective handoff")
+        self.assertEqual(missing.exception.code, "INTEGRATION_VALIDATION_FAILED")
+        with self.assertRaises(ExecutionError) as wrong:
+            finish_task(
+                *common,
+                summary="corrective handoff",
+                regression_oracle_evidence={
+                    "oracle": "a different oracle",
+                    "outcome": "passed",
+                    "evidence_reference": "evidence/wrong-oracle.txt",
+                },
+            )
+        self.assertEqual(wrong.exception.code, "INTEGRATION_VALIDATION_FAILED")
+        result = finish_task(
+            *common,
+            summary="corrective handoff",
+            regression_oracle_evidence={
+                "oracle": oracle,
+                "outcome": "passed",
+                "evidence_reference": "evidence/FEAT-001/original-oracle.txt",
+            },
+        )
+        evidence = result["regression_oracle_evidence"]
+        self.assertEqual(evidence["oracle"], oracle)
+        self.assertEqual(evidence["outcome"], "passed")
+        self.assertEqual(evidence["commit"], result["commit"])
+        self.assertEqual(len(evidence["evidence_digest"]), 64)
 
     def test_nested_project_scope_is_persisted_and_enforced(self) -> None:
         selected = self.project / "services" / "a"
@@ -629,6 +735,100 @@ class GitLifecycleTests(unittest.TestCase):
         with self.assertRaises(ExecutionError) as blocked:
             replan_future(self.run_dir, "FEAT-001", third, capacity=2)
         self.assertEqual(blocked.exception.code, "REPLAN_REQUIRED")
+
+    def test_corrective_replan_preserves_completed_task_definitions_and_digests(
+        self,
+    ) -> None:
+        self.complete_first_wave()
+        original_task_records = {
+            task_id: json.loads(
+                task_path(
+                    self.run_dir, "FEAT-001", "WAVE-001", task_id
+                ).read_text(encoding="utf-8")
+            )
+            for task_id in ("TASK-001", "TASK-002")
+        }
+        addition = """
+
+### TASK-004
+
+- Requirements: REQ-001
+- Goal: implement the diagnosis-bound corrective behavior
+- Depends on: TASK-003
+- Write claims: exact: src/d.py
+- Conflict domains: code:d
+- Validation: run the original evaluator regression oracle
+- Done criteria: original evaluator oracle and affected checks pass
+- Rollback or stop conditions: stop on diagnosis or contract drift
+- Diagnosis: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+- Regression oracle: original AC-001 evaluator oracle
+"""
+        replacement = self.run_dir / "plans" / "FEAT-001.plan.v2.md"
+        replacement.write_text(
+            PLAN.replace("# FEAT-001 Plan v1", "# FEAT-001 Plan v2") + addition,
+            encoding="utf-8",
+        )
+        replacement.with_suffix(replacement.suffix + ".lock").write_text(
+            "locked\n", encoding="utf-8"
+        )
+        replanned = replan_future(
+            self.run_dir, "FEAT-001", replacement, capacity=2
+        )
+        self.assertEqual(
+            replanned["wave_ids"], ["WAVE-001", "WAVE-002", "WAVE-003"]
+        )
+        corrective = json.loads(
+            task_path(
+                self.run_dir, "FEAT-001", "WAVE-003", "TASK-004"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(corrective["task"]["diagnosis_id"], "d" * 64)
+        self.assertEqual(
+            corrective["task"]["regression_oracle"],
+            "original AC-001 evaluator oracle",
+        )
+        for task_id, original in original_task_records.items():
+            preserved = json.loads(
+                task_path(
+                    self.run_dir, "FEAT-001", "WAVE-001", task_id
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(preserved["task"], original["task"])
+            self.assertEqual(
+                preserved["task_definition_digest"],
+                original["task_definition_digest"],
+            )
+
+    def test_corrective_replan_rejects_completed_task_definition_drift(self) -> None:
+        self.complete_first_wave()
+        replacement = self.run_dir / "plans" / "FEAT-001.plan.v2.md"
+        replacement.write_text(
+            PLAN.replace("# FEAT-001 Plan v1", "# FEAT-001 Plan v2").replace(
+                "implement the first independent behavior",
+                "reinterpret the completed first behavior",
+            )
+            + """
+
+### TASK-004
+
+- Requirements: REQ-001
+- Goal: implement the diagnosis-bound corrective behavior
+- Depends on: TASK-003
+- Write claims: exact: src/d.py
+- Conflict domains: code:d
+- Validation: run the original evaluator regression oracle
+- Done criteria: original evaluator oracle and affected checks pass
+- Rollback or stop conditions: stop on diagnosis or contract drift
+""",
+            encoding="utf-8",
+        )
+        replacement.with_suffix(replacement.suffix + ".lock").write_text(
+            "locked\n", encoding="utf-8"
+        )
+        with self.assertRaises(ExecutionError) as blocked:
+            replan_future(self.run_dir, "FEAT-001", replacement, capacity=2)
+        self.assertEqual(blocked.exception.code, "REPLAN_REQUIRED")
+        self.assertIn("task definition", str(blocked.exception))
 
     def test_three_task_golden_path_and_exact_promotion(self) -> None:
         coordinator = self.prepare()

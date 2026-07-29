@@ -8,6 +8,15 @@
 - Requirements: REQ-<id>
 - Plan status: locked when matching `.lock` exists
 
+## Corrective Plan
+
+- Plan kind: <initial or corrective>
+- Supersedes: <exact prior plan filename or none>
+- Diagnosis: <diagnosis-v1 ID or none>
+- Regression oracle: <original failed evaluator oracle or none>
+- Completed task manifest digest: <sha256 digest or none>
+- Corrective tasks: <appended TASK IDs or none>
+
 ## Files To Inspect
 
 - <path>: <reason>
@@ -47,6 +56,8 @@ that task rather than guessing that it is parallel-safe.
 - Validation: <focused command or evidence>
 - Done criteria: <observable completion condition>
 - Rollback or stop conditions: <fail-closed boundary>
+- Diagnosis: <diagnosis-v1 ID for a corrective task, or none>
+- Regression oracle: <original evaluator oracle for a corrective task, or none>
 
 ## Planned Dependency Waves
 

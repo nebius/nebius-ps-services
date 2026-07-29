@@ -7,6 +7,7 @@ write the user's real Codex home.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -59,12 +60,14 @@ def parse_templates(root: Path) -> dict:
         root / "assets" / "session_start_context.py.template",
         root / "assets" / "user_prompt_context.py.template",
     ):
-        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
     return hooks
 
 
-def run_hook(script: Path, payload: dict, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def run_hook(
+    script: Path, payload: dict, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps(payload),
@@ -203,13 +206,18 @@ def assert_agent_delegation_context(context: str) -> None:
     expected = ("alpha_mapper", "beta_test_planner", "gamma_risk_reviewer")
     for name in expected:
         if f"`{name}`" not in context:
-            raise AssertionError(f"configured read-only agent missing from context: {name}")
+            raise AssertionError(
+                f"configured read-only agent missing from context: {name}"
+            )
 
     if "write_worker" in context:
         raise AssertionError("non-read-only agent leaked into context")
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
-    if "Local policy asks the main Codex agent to dynamically spawn bounded" not in context:
+    if (
+        "Local policy asks the main Codex agent to dynamically spawn bounded"
+        not in context
+    ):
         raise AssertionError("delegation policy context missing")
     if "Available read-only roles:" not in context:
         raise AssertionError("read-only role list missing")
@@ -229,7 +237,9 @@ def assert_agent_delegation_context(context: str) -> None:
     )
     for needle in forbidden:
         if needle in context:
-            raise AssertionError(f"delegation context repeats workflow detail: {needle}")
+            raise AssertionError(
+                f"delegation context repeats workflow detail: {needle}"
+            )
 
 
 def assert_no_default_agent_names(context: str) -> None:
@@ -460,7 +470,9 @@ def assert_doc_contracts(root: Path) -> None:
     )
     for needle in required_config_reference:
         if needle not in config_reference:
-            raise AssertionError(f"config-codex local setup reference missing: {needle}")
+            raise AssertionError(
+                f"config-codex local setup reference missing: {needle}"
+            )
 
     forbidden_probe = "Wait for it, then report whether the subagent was spawned"
     for label, text in (
@@ -520,10 +532,12 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat that policy request as sufficient\n  authorization",
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
-        "stop after three distinct failed remediation attempts or 60 active",
+        "hard maximum of three\n  remediation attempts or 60 active",
+        "never raise or disable the attempt maximum",
+        "newly acquired evidence and a genuinely new evidence-derived hypothesis",
         "When evidence establishes a causally independent blocker",
-        "lower or higher limits that apply to the new\n  blocker",
-        "Permission denials and marker validation\n  or repair consume no attempt",
+        "lower attempt limit or another time limit\n  for the new blocker",
+        "Permission denials\n  and marker validation or repair consume no attempt",
         "Agents may clean up temporary trees they created during the current task",
         'find "$task_temp_dir" -depth -delete',
         "Preserve an active `codex-remediation-budget:v1` marker exactly",
@@ -541,7 +555,9 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     user_script = hooks_dir / "user_prompt_context.py"
     helper_script = hooks_dir / "global_context_state.py"
     shutil.copyfile(root / "assets" / "global_context_state.py.template", helper_script)
-    shutil.copyfile(root / "assets" / "session_start_context.py.template", session_script)
+    shutil.copyfile(
+        root / "assets" / "session_start_context.py.template", session_script
+    )
     shutil.copyfile(root / "assets" / "user_prompt_context.py.template", user_script)
 
     env = {
@@ -563,7 +579,9 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     )
     missing_session_context = extract_context(missing_session_result.stdout)
     if "unavailable (hook payload missing session_id)" not in missing_session_context:
-        raise AssertionError("missing-session SessionStart did not report unavailable state")
+        raise AssertionError(
+            "missing-session SessionStart did not report unavailable state"
+        )
     legacy_state = (
         codex_home
         / "task-state"
@@ -663,7 +681,9 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         env,
     )
     if missing_session_simple_result.stdout:
-        raise AssertionError("missing-session simple prompt unexpectedly produced context")
+        raise AssertionError(
+            "missing-session simple prompt unexpectedly produced context"
+        )
     assert_missing_state_path(legacy_state, codex_home)
 
     related_state_one = expected_state_file(
@@ -897,10 +917,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     env_override_context = json.loads(env_override_result.stdout)["hookSpecificOutput"][
         "additionalContext"
     ]
-    if (
-        "Local policy asks the main Codex agent"
-        in env_override_context
-    ):
+    if "Local policy asks the main Codex agent" in env_override_context:
         raise AssertionError("environment override unexpectedly enabled delegation")
 
     write_agent_fixture(codex_home, enable_policy=True)
@@ -918,7 +935,9 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     if SENTINEL_MARKER in delegated_context:
         raise AssertionError("hook echoed prompt content into delegated model context")
     if RELATED_STATE_CONTENT_MARKER in delegated_context:
-        raise AssertionError("hook injected related task-state contents with delegation")
+        raise AssertionError(
+            "hook injected related task-state contents with delegation"
+        )
     assert_no_prompt_leak(state_file)
 
 
@@ -938,6 +957,11 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
     )
 
     command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    expected_command = (
+        'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/session_start_context.py"'
+    )
+    if command != expected_command:
+        raise AssertionError("hooks.json SessionStart command is not canonical")
     env = {
         **os.environ,
         "CODEX_HOME": str(custom_home),
@@ -950,19 +974,17 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
         "source": "startup",
     }
     result = subprocess.run(
-        command,
+        [sys.executable, str(hooks_dir / "session_start_context.py")],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
-        shell=True,
         check=True,
         env=env,
     )
     state_file = extract_state_path(result.stdout)
     if not str(state_file).startswith(str(custom_home / "task-state") + os.sep):
         raise AssertionError(
-            "hooks.json command did not respect CODEX_HOME override: "
-            f"{state_file}"
+            f"hooks.json command did not respect CODEX_HOME override: {state_file}"
         )
 
 

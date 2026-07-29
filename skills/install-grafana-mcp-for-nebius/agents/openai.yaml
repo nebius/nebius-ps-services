@@ -1,6 +1,6 @@
 interface:
   display_name: "Install Grafana MCP for Nebius"
-  short_description: "Install Grafana MCP for Nebius observability"
-  default_prompt: "Use $install-grafana-mcp-for-nebius to explicitly install, configure, validate, or repair the read-only grafana-nebius MCP server for Codex."
+  short_description: "Install Nebius Grafana MCP with human auth"
+  default_prompt: "Use $install-grafana-mcp-for-nebius to explicitly pin my human Nebius CLI profile and install, configure, validate, or repair the read-only grafana-nebius MCP server for Codex."
 policy:
   allow_implicit_invocation: false

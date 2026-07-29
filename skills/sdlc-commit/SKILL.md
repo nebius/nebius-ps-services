@@ -71,8 +71,11 @@ Seal and promote one completed feature locally without pushing.
    project branch to the exact sealed tip, verifies equality, then unlocks and
    removes only the clean registered integration worktree and deletes its
    reachable branch with non-force `git branch -d`.
-6. Record the promoted SHA and cleanup result in commit evidence. Move state to
-   `committed` only after promotion and cleanup both complete.
+6. Only after `promote` reports `done`, record the promoted SHA and empty
+   cleanup result in structured commit evidence. Bind it to the clean project
+   checkout HEAD on the recorded base branch and verified absence of the
+   integration worktree and branch. Advance any repair revalidation cursor
+   with that evidence, then move state to `committed`.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use

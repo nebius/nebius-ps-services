@@ -51,13 +51,14 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `agent-nebius-auth-diagnose` | Implicit allowed | Discover the current-session Nebius project and diagnose agent-auth or hook failures without mutation. |
+| `agent-nebius-auth-diagnose` | Implicit allowed | Resolve an explicit or config-owned default-profile Nebius project and diagnose agent-auth or hook failures without mutation. |
 | `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
-| `install-grafana-mcp-for-nebius` | Explicit only | Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana observability data. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
+| `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
 ### Git, Pull Requests, and Publishing
 
@@ -65,12 +66,12 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `commit` | Explicit only | Create one fast local Git commit on the current branch after repo-root `git add -A` and lightweight staged validation; never pushes. |
 | `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
-| `create-pr` | Explicit only | Create or reuse GitHub pull requests from local work or named branches, with branch-safe preparation, validation, and readiness reporting. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests with branch-safe generic preparation or exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
-| `review-pr` | Explicit only | Review a GitHub pull request by number, URL, or current branch, fix safe issues when possible, and report merge readiness or blockers. |
+| `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `worktree` | Explicit only | Create and manage one project-scoped full-repository worktree from `origin/main`, with serialized publication, nested task ownership, and proof-gated cleanup. |
 
 ### Project Engineering
@@ -79,21 +80,22 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `app-stack` | Implicit allowed | Select, review, simplify, modernize, and coordinate implementation of the smallest justified application technology stack across application archetypes. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
-| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and vertical slices before implementation, using `research`, `app-stack`, and `system-design-rules` where relevant before the `/plan` handoff. |
+| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, and `system-design-rules` before `/plan`. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
-| `nebius-grafana-query` | Implicit allowed | Query already-configured Nebius Grafana datasources, dashboards, metrics, logs, and available trace tools with bounded read-only output. |
+| `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
+| `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
 | `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
-| `troubleshoot` | Implicit allowed | Causally investigate and repair difficult code, shell, installed-software, service, container, network, storage, and infrastructure failures with evidence preservation, competing hypotheses, bounded live safety, and layered verification. |
+| `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
 
 ### Agentic SDLC Workflow
 
@@ -101,24 +103,26 @@ All `sdlc-*` skills are explicit-only. The phase skills run through the
 Agentic SDLC workflow, starting with
 `$sdlc-start workspace init [project-folder]` and then
 `$sdlc-start run <prompt-path-or-unique-filename>`; the external
-`sdlc-workflow-test` verifier is not a phase.
+`sdlc-workflow-test` verifier is not a phase. `troubleshoot` is required
+runtime support for ambiguous failure diagnosis but remains absent from the
+golden phase sequence.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence for consistency. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
-| `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
+| `sdlc-classify-failure` | Explicit only | Validate normalized failure/diagnosis records, enforce repair budgets and design admission, and route proven causes or conditional troubleshooting. |
 | `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
-| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs, vertical feature flow, and implementation-ready design boundaries. |
-| `sdlc-create-plan` | Explicit only | Create a locked private local task graph for one ready feature, including dependencies, write claims, conflict domains, and validation boundaries. |
+| `sdlc-create-design` | Explicit only | Create initial design or perform evidence-gated failure redesign with positive system-contract proof, stable feature IDs, and required approval. |
+| `sdlc-create-plan` | Explicit only | Create a locked task graph or append-only corrective plan vN+1 that preserves completed definitions/digests and binds the diagnosis/oracle. |
 | `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
-| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature and any planned end-to-end slice solve the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
+| `sdlc-evaluate` | Explicit only | Evaluate acceptance criteria and emit normalized, commit-bound failure events; use Grafana only for a predefined evidenced operational gate. |
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
-| `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
-| `sdlc-implement-plan` | Explicit only | Coordinate dependency waves with one fresh agent, branch, and private worktree per safe task, ordered integration, combined evidence, and non-force cleanup. |
-| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
+| `sdlc-gui-test` | Explicit only | Control and evaluate GUI behavior through Computer Use, Browser, or Playwright as required, with screenshots or accessibility snapshots. |
+| `sdlc-implement-plan` | Explicit only | Coordinate immutable dependency/corrective waves, preserve diagnosis/oracle bindings, integrate in order, rerun invalidated evidence, and clean without force. |
+| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request, final readiness checks, and exact promoted/reviewed head verification. |
 | `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
-| `sdlc-start` | Explicit only | Initialize a private prompt workspace, then start, resume, or steer a prompt-bound Agentic SDLC run and choose its next phase. |
+| `sdlc-start` | Explicit only | Coordinate prompt-bound state, authoritative repair-control pointers, conditional diagnosis, and exactly one next phase. |
 | `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
 | `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
@@ -356,7 +360,11 @@ user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
 checklist review of an existing proposal, `app-stack` directly for a
 stack-selection-only request, and `sdlc-create-design` for Agentic SDLC-owned
-`docs/design.md`.
+`docs/design.md`. It also accepts a proven causal handoff from `troubleshoot`
+when the durable remediation changes a system contract such as a component
+boundary, public interface, data owner, migration, or cross-component workflow.
+Unknown causes and complex repairs inside one existing private boundary remain
+in `troubleshoot`.
 
 ### `app-stack`
 
@@ -541,7 +549,9 @@ removes inspection edits inside the exact disposable owned run.
 workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
 skill parity, explicit-only invocation policy, prompt/execution/worktree/
 steering regressions, composed managed-outer lease behavior, and disposable
-hook fixtures. Optional private live-results evidence covers the golden path,
+hook fixtures. It also checks normalized repair-control, conditional
+troubleshooting, positive design admission, and corrective-plan/wave
+contracts. Optional private live-results evidence covers the golden path,
 idempotency, change requests, failure routing, auto-steering, documentation,
 and continuation, plus one explicit evidence row for each of the 20 Agentic
 SDLC skills. Live PASS requires a real selected-scope commit, lane-specific
@@ -596,23 +606,27 @@ continue against the replacement. Repeated destroy returns `ALREADY_DESTROYED`.
 ### `agent-nebius-auth-diagnose` and `agent-nebius-auth-setup`
 
 `agent-nebius-auth-diagnose` is the implicit, read-only runtime entry point. It
-discovers the project from current-session evidence, treats persistent memory
-only as a corroborated hint, and never infers authority from active profiles,
-credential filenames, cwd, legacy default selectors, or unrelated task state.
+discovers the project from current-session evidence and treats persistent
+memory only as a corroborated hint. When no explicit task project exists, the
+runtime hook clears ambient Nebius auth state, resolves the config-owned
+default with `nebius profile current`, and reads only that profile's configured
+`parent-id`. It never infers authority from ambient profiles, credential
+filenames, cwd, legacy default selectors, or unrelated task state.
 
 Project selection is task execution context, not a typed skill argument.
-Implicit skill selection and hook feedback do not inject the project ID into a
-later tool call. Once exactly one project is selected, the agent carries it for
-the current task into every Nebius-sensitive Bash payload. A later explicit
-project replaces that selection, while unresolved conflicting task evidence
-must ask rather than guess.
+Implicit skill selection and hook feedback do not persist the project ID. Once
+an explicit task project is selected, the agent carries it for the current task
+into every Nebius-sensitive Bash payload. Without one, the hook repeats its
+sanitized default-profile lookup. A later explicit project replaces that
+fallback, while unresolved conflicting task evidence must ask rather than
+guess.
 
 Correctable command-policy denials are fixed and retried by the agent without
-running setup: add exactly one selector as the first raw token of the entire
-outer Bash payload, remove a conflicting explicit profile or managed-auth
-assignment, or replace a token-printing command with the normal operation or
-redirected verification form. Help, version, path-discovery, wrapped, and
-all-Nebius compound commands follow the same outer-selector rule.
+running setup: add exactly one explicit task selector as the first raw token of
+the entire outer Bash payload, repair a missing default-profile `parent-id`,
+remove a conflicting explicit profile or managed-auth assignment, or replace a
+token-printing command with the normal operation or redirected verification
+form. Raw-token helpers always require the explicit outer selector.
 Mixed local/Nebius payloads are split into separate Bash calls so local-only
 commands remain unprefixed and receive no injected credential context. When
 the project is already authoritative, the agent retries the corrected payload
@@ -736,6 +750,9 @@ directory; the skills create those files only immediately before the guarded
 action. Registered integration and worker worktrees remain inside hook policy
 even outside the original checkout, with exact Git identity and action-scoped
 authorization checks for sensitive raw Git operations.
+PR publication authorization binds the `create-pr` phase, branch, clean exact
+promoted HEAD, passing UAT status, and expiry. It guards active-run pushes and
+PR creation without blocking read-only PR inspection.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
@@ -757,23 +774,29 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   environment details while preserving stable `REQ-*` IDs.
 - `sdlc-start`: initializes the private prompt workspace, accepts immutable
   prompt revisions, coordinates the active SDLC run, reads steering and local
-  checkpoints, and chooses one next skill without duplicating history. At run
-  start, it encourages safe live experiment environment capture through
-  requirements.
+  checkpoints plus authoritative repair pointers, and chooses one next skill
+  without duplicating history. It keeps troubleshooting conditional and routes
+  every diagnosis back through classification. At run start, it encourages
+  safe live experiment environment capture through requirements.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
   internal sources, code, tests, and layer-boundary evidence when a vertical
   slice may apply.
 - `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
   stable `FEAT-*` blocks, records selected and rejected design options, and
   defines vertical feature flow, layer map, implementation, validation, test,
-  evaluation, rollout, and rollback boundaries.
+  evaluation, rollout, and rollback boundaries. Failure-driven redesign
+  additionally requires positive system-contract proof, valid
+  evaluator/environment, reproducibility, high confidence, affected-feature
+  closure, rollback, and durable approval for broader changes.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
   and routes requirements, design, docs, or human-input changes back through
   `sdlc-start`.
 - `sdlc-create-plan`: creates locked private local execution plans for one feature,
   preserving the end-to-end slice and defining stable dependency-safe task
-  records.
+  records. Post-wave correction creates immutable adjacent plan vN+1,
+  preserves full prior task definitions/digests, and appends
+  diagnosis/oracle-bound tasks and waves.
 - `sdlc-prepare-execution`: validates the task graph and prepares the persistent
   feature integration worktree and deterministic waves before TDD.
 - `sdlc-tdd`: writes or maps tests in the integration worktree before
@@ -781,17 +804,23 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   targets when present.
 - `sdlc-implement-plan`: dispatches one fresh task agent per safe task, verifies
   scoped worker commits, integrates in stable order, runs combined evidence,
-  and non-force-cleans worker resources.
+  and non-force-cleans worker resources. Corrective work runs the original
+  oracle first, then the affected boundary and every invalidated downstream
+  gate at the new integration commit.
 - `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency,
   build, and locked-slice boundary checks where configured, then uses
   `code-review` in review-only mode to catch blocking implementation-quality
   issues before behavior tests.
 - `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
   contract, or mock-based tests, including slice coverage when present.
-- `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
-  to GUI, TUI, API, service, or manual evaluation, using a confirmed safe live
-  experiment environment only within recorded allowed actions, and records
-  planned slice observation when applicable.
+- `sdlc-evaluate`: observes feature behavior against acceptance criteria and
+  routes to GUI, TUI, API, service, observability, or manual evaluation. It uses
+  a confirmed safe live experiment environment only within recorded allowed
+  actions, uses passive production telemetry only for predefined operational
+  gates with one exact grading rule, evidenced matching signal, and complete
+  candidate/control attribution and coverage, admits only one query before
+  updating its criterion ledger, and records planned slice observation when
+  applicable.
 - `sdlc-update-documents`: updates project-facing README, changelog, examples,
   usage docs, docs indexes, or generated docs after evaluated implementation or
   UAT evidence, while routing requirements and design drift to their owner
@@ -799,10 +828,12 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
   implementation, docs, end-to-end slice evidence, and other evidence for
   consistency before commit or PR readiness.
-- `sdlc-classify-failure`: classifies failed phases before retrying and routes to
-  the earliest responsible SDLC phase.
-- `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or
-  accessibility snapshots when available.
+- `sdlc-classify-failure`: validates commit-bound failure events and optional
+  diagnoses, enforces stable-blocker and feature budgets, and either routes a
+  proven cause to its owner, conditionally requests troubleshooting, or stops.
+- `sdlc-gui-test`: controls and evaluates GUI flows through Computer Use when
+  desktop state matters, or Browser/Playwright when suitable, with screenshots
+  or accessibility snapshots.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
 - `sdlc-commit`: seals final integration changes, ff-only promotes the exact
@@ -811,12 +842,17 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-uat-tests`: runs product-level user acceptance testing before PR
   creation, using a confirmed safe live experiment environment only within
   recorded allowed operations and reset rules.
-- `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
-  it opens or reuses the PR and summarizes SDLC evidence.
-- `review-pr`: existing PR review skill reused for SDLC merge-readiness review
-  against specs, checks, reviews, and local evidence.
+- `create-pr`: existing PR skill reused in publication-only mode after UAT
+  passes; it requires the clean exact promoted SHA, never changes it, and routes
+  any repair back through failure classification and the coordinator. Push and
+  CLI PR creation use one direct action with an explicit ref/head.
+- `review-pr`: existing PR review skill reused in findings-and-readiness-only
+  mode; it verifies the exact promoted PR head against specs, checks, reviews,
+  and local evidence without mutating the branch.
 - `sdlc-merge-pr`: merges a specific PR only after an explicit user request and
-  final readiness checks.
+  final readiness checks, using one canonical single-action command with an
+  explicit PR number or URL and exact head guard only while the PR head still
+  equals the promoted and reviewed SHA.
 
 ### `apply-security`
 
@@ -864,6 +900,10 @@ branch before PR creation without rewriting history, reuse the current
 non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
+When a matching active Agentic SDLC run exists, that generic preparation path
+is disabled: `create-pr` requires passing UAT and publishes only the clean exact
+promoted SHA. A conflict, failed check, remote-head mismatch, or required
+change returns through `sdlc-classify-failure` and `sdlc-start`.
 
 ### `worktree`
 
@@ -971,11 +1011,25 @@ templates, schema, and validation.
 ### `install-grafana-mcp-for-nebius`
 
 `install-grafana-mcp-for-nebius` installs and configures the official Grafana
-MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
-external Grafana service-account/static-key setup out of the default path, and
-guides agents through idempotent Codex MCP registration and datasource-list
-readiness validation. Routine observability questions are handed to
-`nebius-grafana-query`; the installer retains no second query path.
+MCP server for Codex. It pins and validates one human Nebius CLI profile,
+stores a private profile/user binding, isolates rotating token state per
+server/profile, renews stale startup credentials before MCP launch under a
+bounded Codex timeout, clears agent and competing Grafana credentials, and
+always enforces read-only MCP arguments. External Grafana
+service-account/static-key setup remains separate. Routine observability
+questions are handed to `nebius-grafana-query`; the installer retains no second
+query path.
+
+### `nosleep4mac`
+
+`nosleep4mac` is an explicit-only, no-argument setup workflow for one per-user
+macOS LaunchAgent running `/usr/bin/caffeinate -s`. Its canonical helper
+creates missing state, repairs stopped or safely drifted managed state, and
+leaves a healthy plist, PID, and launchd job exactly unchanged on repeated
+runs. The assertion is effective only on AC power, continues through screen
+lock while the user remains logged in, preserves normal display and battery
+sleep, and does not change `pmset` or install a system daemon. The helper's
+`--check` mode is reserved for internal verification and tests.
 
 ### `linter`
 
@@ -1000,12 +1054,56 @@ output unless raw output is explicitly requested.
 
 `nebius-grafana-query` is the implicitly selectable, read-only operational
 workflow for an already-configured `grafana-nebius` MCP server. It discovers
-datasource UIDs, metrics, labels, dashboard panel queries, and available trace
-tools before running bounded PromQL or LogQL. It defaults omitted time ranges
-to one hour, requires authoritative project/resource scope for potentially
-cross-project queries, summarizes logs by default, and routes missing server,
-configuration, or authentication back to the explicit
-`install-grafana-mcp-for-nebius` skill.
+datasource UIDs and scope dimensions, resolves one absolute query window, and
+proves federation before running bounded PromQL, LogQL, or Tempo queries as the
+pinned human user. Requests can name one or many tenants, projects, and
+resources; absent scope dimensions fail closed, and bare “any” does not grant
+fleet-wide enumeration.
+
+Results use a ranked, signal-aware Markdown report: explicit user grouping and
+ordering win, otherwise the requested field is sorted problem-first with
+stable scope attribution. The default table displays up to 20 rows with total,
+omitted, and global-completeness notes. Gauges use per-group window minimum,
+average, and maximum; counters use increase or rate; logs use counts and
+exact first/last occurrence when a supported bounded method provides it;
+traces use count/error, exact full-window duration minimum/average/maximum only
+when supported, and supported full-window quantiles with approximation
+disclosed. Coverage/access is separate from query and tool health.
+
+Traces prefer proxied Tempo tools and use only a fixed GET-only
+datasource-proxy fallback when those tools are unavailable. Missing server,
+configuration, or authentication routes back to the explicit installer skill.
+
+The same skill is the structured evidence provider for `troubleshoot` and
+`sdlc-evaluate`. Those callers decide whether telemetry can change a named
+hypothesis or operational criterion and supply explicit authority, deployed
+selectors, absolute windows, one evidenced matching signal, and a query budget.
+Evaluation also supplies one exact criterion fit with candidate/control
+attribution and predefined pass, fail, and inconclusive rules. Invalid or
+missing fits cause zero calls; datasource readiness is never signal discovery.
+One lazy datasource listing is reused as readiness for the workflow run;
+failure disables observability without installer handoff or retry. Each
+embedded provider call attempts at most one admitted query, then returns for a
+caller ledger update; the cumulative six-query fast and four-query deep
+allowances are ceilings, not batch targets. The provider returns redacted facts
+and data gaps without claiming root cause or an evaluation grade. Every
+response returns updated connectivity and total, fast, and deep remaining
+budgets;
+pre-query validation gaps return `rejected` with zero calls and unchanged
+state.
+
+### `optimize-pytest`
+
+`optimize-pytest` measures and improves pytest feedback time without weakening
+test selection, outcomes, isolation, or the complete correctness gate. It
+separates startup, collection, setup, call, and teardown costs, then ranks
+cumulative contributors across fixtures, imports, parametrization, plugins,
+coverage, reporting, and test boundaries.
+
+The skill keeps review and diagnosis report-only, permits focused changes only
+for explicit optimization requests, and evidence-gates xdist, testmon,
+duration-balanced sharding, persistent artifacts, dependency changes, and
+build-system escalation.
 
 ### `publish-helm`
 
@@ -1048,6 +1146,10 @@ Typer, and Pydantic.
 PR by number, URL, or current branch against its base branch, inspect GitHub
 checks and review state, fix safe issues when the branch can be updated safely,
 resolve straightforward conflicts when possible, and report remaining blockers.
+For a matching active Agentic SDLC run it instead becomes
+findings-and-readiness-only: the PR head must equal the clean exact promoted
+SHA, and every required branch change returns to the coordinator before review
+resumes.
 
 ### `shell-scripting`
 
@@ -1071,15 +1173,67 @@ Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
 
+Runtime observability is a gated experiment rather than a default discovery
+step. When a deployed-runtime hypothesis needs scoped facts,
+`troubleshoot` invokes `nebius-grafana-query` in evidence-provider mode after
+one matching signal has non-Grafana provenance and authority, deployed
+selector, and absolute window are proven. It reuses one readiness result,
+admits one cheapest decision-changing query per provider call, enters deep
+queries only when fast evidence leaves named hypotheses indistinguishable, and
+retains all causal interpretation. Unavailable optional telemetry is skipped;
+decisive missing telemetry becomes `BLOCKED_MISSING_EVIDENCE`.
+
+After causal proof, `troubleshoot` keeps localized invariant-restoring repairs
+inside its own workflow. Outside Agentic SDLC, a durable remedy that changes
+architecture topology, component or service responsibilities or boundaries, a
+public interface, data ownership or lifecycle, a migration, or a
+cross-component workflow is routed through `design` before implementation.
+Implementation size, algorithmic complexity, concurrency difficulty, or a
+large rewrite inside one existing private boundary does not trigger `design`.
+That handoff receives the proven causal chain, violated invariant,
+requirements, constraints, non-goals, fixed technologies, and regression
+oracle. `design` owns solution design and the `/plan` handoff;
+`troubleshoot` retains post-implementation verification and final causal
+reporting. Active Agentic SDLC work sends the causal handoff first to
+`sdlc-classify-failure`; after it records the failure class, retry accounting,
+and `next_recommended_skill`, the coordinator routes to the recorded owner.
+In that diagnostic mode, `troubleshoot` preserves the failed integration commit
+and accepted criteria, may use only reversible uncommitted instrumentation in
+the private integration worktree, removes it before handoff, commits no product
+repair, invokes no design phase, and returns one `diagnosis-v1` to
+classification. A known mechanical owner bypasses this branch. Missing
+decisive evidence, competing hypotheses, and “no implementation bug found”
+stop without speculative redesign.
+
+Agentic SDLC uses its own authoritative `repair-control-v1`: two localized
+attempts, one design-scale attempt, three total attempts and 60 active minutes
+per stable blocker tranche, plus four repair dispatches per feature. A failed
+first direct repair requires troubleshooting before attempt two. Each retry
+requires new evidence and a new falsifiable hypothesis; duplicates, permission
+denials, and crash replay do not consume attempts.
+
 After one remediation fails against the same blocker, `troubleshoot` starts a
-bounded tranche before another repair. The defaults are three distinct failed
-remediations or 60 active minutes, whichever comes first. Failures 1 and 2 are
-reported as progress; after the exact private state update records exhaustion,
-all other tool use stops and a complete user-visible report is returned. A new
-explicit user instruction is required for another tranche. The optional
+bounded tranche before another repair. Each tranche has a hard maximum of three
+remediation attempts or 60 active minutes, whichever comes first; the attempt
+maximum cannot be raised or disabled. Every retry requires newly acquired logs,
+stack traces, code inspection, runtime-state evidence, or an equivalent
+observation plus a genuinely new falsifiable hypothesis. If that gate cannot be
+satisfied, no retry runs and a structured investigation report identifies the
+missing evidence and next action. Failures 1 and 2 are reported as progress;
+after the exact private state update records exhaustion, all other tool use
+stops and a complete user-visible report is returned. The Stop hook requests
+one correction containing a bounded, redacted minimum report for an incomplete
+response. If that correction is ignored, it stops and emits the fallback as a
+UI/event-stream warning instead of looping. Historical exhausted v1 data
+markers remain report-only without requiring invented evidence or authored
+attempt IDs; active and resolved state use the canonical v2 data schema. A new
+explicit user instruction is required for another bounded tranche. The optional
 `troubleshoot/assets/hooks` bundle enforces the
 recorded private task-state budget at supported `PreToolUse` and `Stop`
-boundaries; it does not infer attempts from raw command failures.
+boundaries. Every canonical attempt is bound to the marker's exact blocker key,
+so an old ledger copied onto an independent issue is rejected as invalid rather
+than exhausting that issue. The hook does not infer causal identity or attempts
+from raw command failures.
 
 ## Skills Installer
 

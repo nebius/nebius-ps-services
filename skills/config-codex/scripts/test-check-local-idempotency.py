@@ -18,9 +18,7 @@ from urllib.parse import urlparse
 
 
 SCRIPT = Path(__file__).resolve().with_name("check-local-idempotency.py")
-CREATE_RECOVERY_SCRIPT = Path(__file__).resolve().with_name(
-    "create-recovery-config.py"
-)
+CREATE_RECOVERY_SCRIPT = Path(__file__).resolve().with_name("create-recovery-config.py")
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = SKILL_ROOT / "assets"
 MANAGED_BLOCK = "\n".join(
@@ -29,20 +27,24 @@ MANAGED_BLOCK = "\n".join(
         "## Working Defaults",
         "",
         "- After one remediation fails against the same blocker, use",
-        "  `troubleshoot` before another repair. Unless the current user",
-        "  explicitly sets another budget, stop after three distinct failed",
-        "  remediation attempts or 60 active minutes, whichever comes first.",
-        "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
-        "  exact private task-state update that records the stop, then call no",
-        "  other tool and return the complete troubleshooting report. Only a",
-        "  new explicit user instruction may start another bounded tranche.",
+        "  `troubleshoot` before another repair. Each blocker tranche has a hard",
+        "  maximum of three remediation attempts or 60 active minutes, whichever",
+        "  comes first; a current instruction may lower but never raise or",
+        "  disable the attempt maximum. Require newly acquired evidence and a",
+        "  genuinely new evidence-derived hypothesis before every retry. Report",
+        "  attempts 1 and 2 as progress; at exhaustion, make only the exact",
+        "  private task-state update that records the stop, then call no other",
+        "  tool and return the complete troubleshooting report. If the evidence",
+        "  or hypothesis gate cannot be satisfied earlier, stop and return the",
+        "  structured investigation report. Only a new explicit user",
+        "  instruction may start another bounded tranche.",
         "- When evidence establishes a causally independent blocker, start its",
-        "  own fresh budget at attempt 1. Use the default three-attempt and",
-        "  60-minute limits unless the current instruction sets lower or higher",
-        "  limits that apply to the new blocker. Do not carry attempts, active",
-        "  time, tranche, exhaustion status, or stop trigger from another",
-        "  blocker. Permission denials and marker validation or repair consume",
-        "  no attempt.",
+        "  own fresh budget at attempt 1. Use the three-attempt maximum and default",
+        "  60-minute limit unless the current instruction sets a lower attempt",
+        "  limit or another time limit for the new blocker. Do not carry attempts,",
+        "  active time, tranche, exhaustion status, or stop trigger from another",
+        "  blocker. Permission denials and marker validation or repair consume no",
+        "  attempt.",
         "- Agents may clean up temporary trees they created during the current",
         "  task. Resolve and validate the exact task-specific path under the",
         "  system temporary directory first, use a scoped non-forced deletion",
@@ -122,9 +124,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             },
         )
         self.assertEqual(
-            config.get("agents", {}).get(
-                "max_concurrent_threads_per_session"
-            ),
+            config.get("agents", {}).get("max_concurrent_threads_per_session"),
             16,
         )
         self.assertNotIn("max_threads", config.get("agents", {}))
@@ -244,10 +244,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 template_text,
             )
         )
-        rendered = (
-            template_text.replace("{{CODEX_HOME}}", "/tmp/codex-recovery")
-            .replace("{{PROJECT_ROOT}}", "/tmp/recovery-project")
-        )
+        rendered = template_text.replace(
+            "{{CODEX_HOME}}", "/tmp/codex-recovery"
+        ).replace("{{PROJECT_ROOT}}", "/tmp/recovery-project")
         rendered_config = tomllib.loads(rendered)
         self.assertIn("/tmp/recovery-project", rendered_config["projects"])
         self.assertIn("/tmp/codex-recovery", rendered_config["projects"])
@@ -589,12 +588,14 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
 
     def test_default_rejects_incomplete_remediation_policy(self) -> None:
         required_lines = (
-            "  Report attempts 1 and 2 as progress; at exhaustion, make only the",
-            "  other tool and return the complete troubleshooting report. Only a",
-            "  new explicit user instruction may start another bounded tranche.",
-            "  60-minute limits unless the current instruction sets lower or higher",
-            "  limits that apply to the new blocker. Do not carry attempts, active",
-            "  no attempt.",
+            "  maximum of three remediation attempts or 60 active minutes, whichever",
+            "  disable the attempt maximum. Require newly acquired evidence and a",
+            "  genuinely new evidence-derived hypothesis before every retry. Report",
+            "  attempts 1 and 2 as progress; at exhaustion, make only the exact",
+            "  tool and return the complete troubleshooting report. If the evidence",
+            "  instruction may start another bounded tranche.",
+            "  limit or another time limit for the new blocker. Do not carry attempts,",
+            "  blocker. Permission denials and marker validation or repair consume no",
             "  temporary root or an unresolved variable.",
         )
         for required_line in required_lines:
@@ -704,7 +705,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.write_policy([])
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("global_context_policy.json must contain a JSON object", result.stdout)
+        self.assertIn(
+            "global_context_policy.json must contain a JSON object", result.stdout
+        )
 
     def test_default_does_not_require_task_implementer_workspace(self) -> None:
         self.assertFalse((self.codex_home / "task-implementer").exists())
@@ -772,7 +775,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.set_sandbox_mode("read-only")
         result = self.run_check("--require-task-implementer-workspace")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("keep stricter sandbox and approval settings unchanged", result.stdout)
+        self.assertIn(
+            "keep stricter sandbox and approval settings unchanged", result.stdout
+        )
         self.assertIn(
             'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"',
             result.stdout,
@@ -782,7 +787,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         target = Path(self.tmp.name) / "prompt-state"
         target.mkdir()
         target.chmod(0o700)
-        (self.codex_home / "task-implementer").symlink_to(target, target_is_directory=True)
+        (self.codex_home / "task-implementer").symlink_to(
+            target, target_is_directory=True
+        )
         result = self.run_check("--require-task-implementer-workspace")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("private directory must not be a symlink", result.stdout)
@@ -800,7 +807,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.assertIn("must be outside every Git worktree", result.stdout)
         self.assertNotIn(str(self.codex_home), result.stdout)
 
-    def test_opt_in_rejects_task_implementer_directory_inside_git_metadata(self) -> None:
+    def test_opt_in_rejects_task_implementer_directory_inside_git_metadata(
+        self,
+    ) -> None:
         foreign_repo = Path(self.tmp.name) / "foreign"
         subprocess.run(
             ["git", "init", "-q", str(foreign_repo)],
@@ -835,7 +844,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         state_file.chmod(0o644)
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("nested task-state permissions or types are unsafe", result.stdout)
+        self.assertIn(
+            "nested task-state permissions or types are unsafe", result.stdout
+        )
         self.assertEqual(state_file.read_text(encoding="utf-8"), "preserve me\n")
         self.assertEqual(state_file.stat().st_mode & 0o777, 0o644)
 
@@ -850,7 +861,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         state_file.chmod(0o600)
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("nested task-state permissions and types are private", result.stdout)
+        self.assertIn(
+            "nested task-state permissions and types are private", result.stdout
+        )
 
 
 if __name__ == "__main__":

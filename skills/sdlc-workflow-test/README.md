@@ -61,6 +61,16 @@ current meaning when no lifecycle action is selected.
 - Uses `references/verification-checklist.md` as the test plan.
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
+- Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
+  modes and includes bounded observability plus explicit-PR, canonical
+  single-action publication and merge authorization in capability regressions.
+- Requires installed `worktree`, `nebius-grafana-query`, and conditional
+  `troubleshoot` support and includes them in source-installed parity and
+  verification-identity checks. `troubleshoot` is exercised only in controlled
+  failure-routing scenarios and remains absent from the golden path.
+- Deterministically verifies normalized failure events, bounded diagnosis,
+  authoritative repair control, positive design admission, and append-only
+  corrective-plan/wave contracts.
 - Accepts a private `agentic-sdlc/verification-live-results-v3` manifest with
   `--live-evidence PATH`; see `assets/live-results.schema.json`.
 - Rejects symlinked or unowned verification roots, unknown disposable

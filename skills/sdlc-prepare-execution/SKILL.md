@@ -14,6 +14,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - The active feature has a locked plan with stable `TASK-*` records.
 - `sdlc-start` selects the execution-preparation phase before TDD.
 - An interrupted preparation needs exact-state recovery.
+- A validated corrective plan vN+1 must append resource-free future waves
+  without changing active or completed task history.
 
 ## When Not To Use
 
@@ -60,6 +62,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
    claim and worker `scope_cwd` must remain inside the initialized folder.
    Acquire the Agentic SDLC owner lease first when the checkout is managed by
    `worktree`; register integration and worker resource intent before creation.
+   Persist a canonical full-definition digest with every task record.
 4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
    cleanliness, plan digest, and private state before recording completion.
 5. Return the integration cwd and route the next phase to `sdlc-tdd` there.
@@ -71,6 +74,10 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
   closed. Every execution coordinator schema v1, v2, or v3 record returns
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
+- `replan-future` holds the execution transition lock, compares every active or
+  completed task's full canonical definition and recorded definition digest,
+  and changes only resource-free planned future waves. Exact repeat replans are
+  no-ops.
 
 ## Failure Handling
 
@@ -81,6 +88,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   with a fresh worker session and an exactly re-observed clean, claimed-dirty,
   or one-direct-child worktree. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
+- Reject corrective replan when any active/completed task definition or digest
+  changes, any future wave owns a branch/worktree/assignment/result/journal, or
+  execution is sealed, promoted, or done.
 - Treat capacity batches as authoritative: `wave-prepare` creates only the
   active batch, and private `batch-advance` opens the next batch only after all
   current tasks are committed. `task-start` derives worker identity from
@@ -101,6 +111,10 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - The integration worktree is clean, locked, registered, and bound to the exact
   plan digest and project base.
 - Every task belongs to one deterministic logical wave.
+- Every task record binds its full canonical definition digest; corrective
+  replanning preserves those bindings for all active and completed waves.
+- Every corrective worker result binds a passed, digest-protected copy of the
+  assignment's exact regression oracle to its diagnosis and worker commit.
 - Current state and checkpoint point to the integration cwd and
   `sdlc-tdd` as the next skill.
 

@@ -105,19 +105,31 @@ def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
         "--scope-cwd",
         str(assignment["scope_cwd"]),
     ]
-    return "\n".join(
+    instructions = [
+        "Implement exactly one immutable Agentic SDLC worker assignment.",
+        "Run the task-start command represented by this JSON argv before editing:",
+        json.dumps(start),
+        "Read the assignment JSON at:",
+        str(assignment_path.resolve()),
+        "Work only from its scope_cwd and write claims.",
+        "Do not commit, merge, replan, edit coordinator state, or start another task.",
+    ]
+    if assignment.get("diagnosis_id") is not None:
+        instructions.extend(
+            [
+                "This is a corrective task bound to the assignment's diagnosis_id.",
+                "After the smallest bounded repair, run the assignment's original "
+                "regression_oracle first, then its affected-boundary validation.",
+                "Do not reinterpret or modify any completed task definition.",
+            ]
+        )
+    instructions.extend(
         [
-            "Implement exactly one immutable Agentic SDLC worker assignment.",
-            "Run the task-start command represented by this JSON argv before editing:",
-            json.dumps(start),
-            "Read the assignment JSON at:",
-            str(assignment_path.resolve()),
-            "Work only from its scope_cwd and write claims.",
-            "Do not commit, merge, replan, edit coordinator state, or start another task.",
             "Validate the change and perform a focused code review.",
             "Return only the schema-conforming worker result.",
         ]
     )
+    return "\n".join(instructions)
 
 
 def dispatch_sequential(

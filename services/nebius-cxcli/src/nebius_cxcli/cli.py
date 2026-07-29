@@ -59,7 +59,12 @@ from rich.progress import (
 )
 from rich.table import Table
 
+# soperator_migration is also imported as a module so the managed `soperator
+# upgrade` fast stage gate reads the external upgrade's in-process convergence
+# knobs at call time: both paths share one budget, and test monkeypatching of
+# the external constants also governs the managed path.
 from . import __version__, native_logs, runtime_introspection
+from . import soperator_migration as _soperator_migration
 from .capacity_dashboard import CapacityResourceAdvice, capacity_vm_slots_text
 from .component_defaults import (
     default_target_paths,
@@ -514,7 +519,6 @@ from .soperator_migration import (
     _kubectl_exec_login,
     _legacy_persistent_mount_migration_entries,
     _live_home_mount_pending_reason,
-    _live_home_mount_probe_checks,
     _merge_slurm_action_journals,
     _persistent_migration_original_maintenance,
     _persistent_migration_writer_hold_drift,
@@ -543,6 +547,7 @@ from .soperator_migration import (
     _validate_checkpoint_journal_contract,
     _validate_completed_passive_populate_job_checkpoint,
     _verify_target_rootfs_handoff_consumers,
+    _wait_for_live_home_mount_probe_coverage,
     _wait_for_target_slurmcluster_available,
     _wait_for_target_worker_nodesets_ready,
     execute_soperator_migration,
@@ -2856,9 +2861,7 @@ class _SdkExternalJailSfsApi:
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-cluster-upgrade/v2"
 _MANAGED_BRIDGE_BINDING_SCHEMA = "nebius-cxcli-managed-bridge-binding/v1"
-_MANAGED_PROTECTED_CHANGE_INTENT_SCHEMA = (
-    "nebius-cxcli-managed-protected-change-intent/v1"
-)
+_MANAGED_PROTECTED_CHANGE_INTENT_SCHEMA = "nebius-cxcli-managed-protected-change-intent/v1"
 _MANAGED_CHART_PROTECTED_CHANGE_INTENT_SCHEMA = (
     "nebius-cxcli-managed-chart-protected-change-intent/v1"
 )
@@ -5330,8 +5333,7 @@ def _managed_upgrade_intentional_delta_proofs(
     )
     if (
         chart_intent.get("schema") != _MANAGED_CHART_PROTECTED_CHANGE_INTENT_SCHEMA
-        or
-        chart_intent.get("status") != "verified"
+        or chart_intent.get("status") != "verified"
         or chart_intent.get("intent_fingerprint") != chart_fingerprint
         or chart_material["target_ref"] != target.target_ref
         or chart_material["namespace"] != namespace
@@ -10993,6 +10995,29 @@ def _record_soperator_upgrade_stage_fast_verification(
     return payload
 
 
+def _converge_stage_fast_verification_checks(
+    *,
+    summary: str,
+    checks: Sequence[Mapping[str, Any]],
+    checks_provider: Callable[[], tuple[str, Sequence[Mapping[str, Any]]]] | None,
+    comment_emitter: Callable[[str], None] | None = None,
+) -> tuple[str, Sequence[Mapping[str, Any]], int]:
+    """Retry a failed managed fast stage verification in-process until it converges.
+
+    Delegates to the shared convergence loop in ``soperator_migration`` (the
+    external upgrade path uses the same loop) with provider errors suppressed:
+    a transient live re-read failure keeps the previous attempt's failed
+    checks and the loop keeps retrying until the budget expires.
+    """
+    return _soperator_migration._converge_stage_fast_verification_checks(
+        summary=summary,
+        checks=checks,
+        checks_provider=checks_provider,
+        comment_emitter=comment_emitter,
+        suppress_provider_errors=True,
+    )
+
+
 def _write_soperator_upgrade_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
     with _checkpoint_write_lock(path):
         writable: dict[str, Any] = (
@@ -15556,6 +15581,19 @@ def soperator_jobs_command(
             ),
         ),
     ] = None,
+    acknowledge_job_ended: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--acknowledge-job-ended",
+            help=(
+                "Record an explicit operator attestation that the exact preserved "
+                "running-job baseline JOB_ID was ended out of band (for example the "
+                "operator cancelled it directly); repeatable. The attestation is "
+                "journaled against the immutable job binding and never issues a live "
+                "Slurm RPC."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Open the durable during-upgrade managed Slurm job-control screen."""
 
@@ -15614,6 +15652,7 @@ def soperator_jobs_command(
             authorize_login_timeout_continuation_fingerprints=tuple(
                 authorize_login_timeout_continuation or ()
             ),
+            acknowledge_job_ended_ids=tuple(acknowledge_job_ended or ()),
             checkpoint_path_override=checkpoint_path,
             checkpoint_loader=_active_checkpoint,
             kube_context_override=kube_context,
@@ -18059,7 +18098,17 @@ def _run_managed_soperator_cluster_upgrade_locked(
         summary: str,
         checks: Sequence[Mapping[str, Any]],
         report_paths: ProjectPaths | None = None,
+        checks_provider: Callable[[], tuple[str, Sequence[Mapping[str, Any]]]] | None = None,
     ) -> dict[str, Any]:
+        summary, checks, _attempts = _converge_stage_fast_verification_checks(
+            summary=summary,
+            checks=checks,
+            checks_provider=checks_provider,
+            comment_emitter=lambda note: console.print(
+                f"Phase validation {phase_id}: {note}",
+                soft_wrap=True,
+            ),
+        )
         payload = _record_soperator_upgrade_stage_fast_verification(
             checkpoint=checkpoint,
             phase_id=phase_id,
@@ -19501,12 +19550,9 @@ def _run_managed_soperator_cluster_upgrade_locked(
                         chart_change_intent.get(key) != value
                         for key, value in chart_intent_material.items()
                     )
-                    or chart_change_intent.get("intent_fingerprint")
-                    != chart_intent_fingerprint
+                    or chart_change_intent.get("intent_fingerprint") != chart_intent_fingerprint
                 ):
-                    raise RuntimeError(
-                        "Managed chart protected-state intent changed before apply."
-                    )
+                    raise RuntimeError("Managed chart protected-state intent changed before apply.")
             else:
                 chart_state["protected_change_intent"] = {
                     **chart_intent_material,
@@ -21190,11 +21236,12 @@ def _run_managed_soperator_cluster_upgrade_locked(
                         raise SoperatorMigrationPhasePending(
                             _rootfs_handoff_pending_reason(consumer_checks)
                         )
-                    live_home_mount_checks = _live_home_mount_probe_checks(
+                    live_home_mount_checks = _wait_for_live_home_mount_probe_coverage(
                         command_runner=_managed_migration_runner,
                         kube_context=managed_kube_context,
                         values=switched_values,
                         target_ref=target.target_ref,
+                        timeout_seconds=180,
                         namespace=plan.namespace or "default",
                     )
                     handoff_verification["live_home_mount_checks"] = list(live_home_mount_checks)
@@ -21276,41 +21323,66 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 status=populate_jail_result.status,
                 target_image=populate_jail_result.target_image,
             )
-            _run_stage_fast_verification(
-                phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
-                summary=(
+
+            def _populate_jail_result_verification() -> tuple[str, list[Mapping[str, str]]]:
+                result = populate_jail_result
+                summary = (
                     "Jail Upgrade completed."
-                    if populate_jail_result.status == "refreshed"
+                    if result.status == "refreshed"
                     else "Jail Upgrade was not required."
-                ),
-                checks=[
+                )
+                checks: list[Mapping[str, str]] = [
                     stage_fast_verification_check(
                         "Jail Upgrade status",
-                        "passed" if populate_jail_result.status == "refreshed" else "skipped",
-                        (
-                            f"status={populate_jail_result.status}, "
-                            f"reason={populate_jail_result.reason}"
-                        ),
+                        "passed" if result.status == "refreshed" else "skipped",
+                        f"status={result.status}, reason={result.reason}",
                     ),
                     stage_fast_verification_check(
                         "Jail Upgrade target image",
                         "passed"
-                        if populate_jail_result.status != "refreshed"
-                        or not populate_jail_result.target_image
-                        or populate_jail_result.job_image == populate_jail_result.target_image
+                        if result.status != "refreshed"
+                        or not result.target_image
+                        or result.job_image == result.target_image
                         else "failed",
                         (
-                            f"job_image={populate_jail_result.job_image or 'unset'}, "
-                            f"target={populate_jail_result.target_image or 'unset'}"
+                            f"job_image={result.job_image or 'unset'}, "
+                            f"target={result.target_image or 'unset'}"
                         ),
                     ),
                     stage_fast_verification_check(
                         "Populate-jail maintenance restore",
-                        "passed" if populate_jail_result.maintenance_restored else "failed",
-                        f"restored={populate_jail_result.maintenance_restored}",
+                        "passed" if result.maintenance_restored else "failed",
+                        f"restored={result.maintenance_restored}",
                     ),
-                ],
+                ]
+                return summary, checks
+
+            def _reinspected_populate_jail_result_verification() -> tuple[
+                str, list[Mapping[str, str]]
+            ]:
+                # Read-only convergence re-read: a refreshed jail whose live
+                # SlurmCluster/Job identity was still settling is re-inspected
+                # so the final recorded result matches the converged state.
+                nonlocal populate_jail_result
+                if populate_jail_result.status == "refreshed":
+                    populate_jail_result = completed_populate_jail_refresh_result(
+                        mode=populate_jail_plan.mode,
+                        reason=populate_jail_plan.reason,
+                        snapshot=_inspect_populate_jail(),
+                        maintenance_restored=populate_jail_result.maintenance_restored,
+                    )
+                    checkpoint["populate_jail_refresh"]["result"] = (
+                        populate_jail_result.as_payload()
+                    )
+                return _populate_jail_result_verification()
+
+            populate_jail_summary, populate_jail_checks = _populate_jail_result_verification()
+            _run_stage_fast_verification(
+                phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
+                summary=populate_jail_summary,
+                checks=populate_jail_checks,
                 report_paths=staged_paths,
+                checks_provider=_reinspected_populate_jail_result_verification,
             )
             _complete_checkpoint_phase(POPULATE_JAIL_REFRESH_PHASE_ID)
 
@@ -21470,18 +21542,44 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 managed_node_template_upgrade=requested_mk8s_change,
                 approve_remediation=approve_remediation,
             )
-            checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
-                checkpoint.get("upgrade_safety")
-                if isinstance(checkpoint.get("upgrade_safety"), Mapping)
-                else None,
-                safety_verification,
-                approved_remediation_fingerprint=(
-                    checkpointed_remediation_approval_fingerprint(
-                        _state_mapping(checkpoint.get("upgrade_safety")),
-                        approval_requested=approve_remediation,
-                    )
-                ),
-            )
+
+            def _record_shared_safety_payload() -> None:
+                checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+                    checkpoint.get("upgrade_safety")
+                    if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+                    else None,
+                    safety_verification,
+                    approved_remediation_fingerprint=(
+                        checkpointed_remediation_approval_fingerprint(
+                            _state_mapping(checkpoint.get("upgrade_safety")),
+                            approval_requested=approve_remediation,
+                        )
+                    ),
+                )
+
+            def _rerun_shared_safety_verification() -> tuple[str, Sequence[Mapping[str, Any]]]:
+                # Read-only convergence re-read: the shared verifier only
+                # captures and compares live protected state, so a still
+                # settling cluster is re-verified and the final attempt's
+                # verification replaces the checkpointed safety payload.
+                nonlocal safety_verification
+                safety_verification = _managed_soperator_upgrade_run_post_verification(
+                    source_payload=source_payload,
+                    target=target,
+                    namespace=plan.namespace or "default",
+                    before_state=protected_state_before,
+                    checkpoint=checkpoint,
+                    paths=staged_paths,
+                    managed_node_template_upgrade=requested_mk8s_change,
+                    approve_remediation=approve_remediation,
+                )
+                _record_shared_safety_payload()
+                return (
+                    "Shared protected-state and fast safety verification completed.",
+                    safety_verification.checks,
+                )
+
+            _record_shared_safety_payload()
             _checkpoint(
                 "shared-safety-verified",
                 status=safety_verification.status,
@@ -21492,6 +21590,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 summary="Shared protected-state and fast safety verification completed.",
                 checks=safety_verification.checks,
                 report_paths=staged_paths,
+                checks_provider=_rerun_shared_safety_verification,
             )
             if not safety_verification.passed:
                 failed = [
@@ -66272,6 +66371,19 @@ def ext_soperator_jobs_command(
             ),
         ),
     ] = None,
+    acknowledge_job_ended: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--acknowledge-job-ended",
+            help=(
+                "Record an explicit operator attestation that the exact preserved "
+                "running-job baseline JOB_ID was ended out of band (for example the "
+                "operator cancelled it directly); repeatable. The attestation is "
+                "journaled against the immutable job binding and never issues a live "
+                "Slurm RPC."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Open the durable during-upgrade Slurm job-control screen."""
 
@@ -66293,6 +66405,7 @@ def ext_soperator_jobs_command(
                 authorize_login_timeout_continuation_fingerprints=tuple(
                     authorize_login_timeout_continuation or ()
                 ),
+                acknowledge_job_ended_ids=tuple(acknowledge_job_ended or ()),
             )
         console.print(
             f"Durable Slurm action journal: {checkpoint_path}",

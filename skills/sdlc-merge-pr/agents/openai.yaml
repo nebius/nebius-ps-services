@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Merge PR"
-  short_description: "Explicit final PR merge"
-  default_prompt: "Use $sdlc-merge-pr to merge an Agentic SDLC pull request only after explicit human instruction and final readiness verification."
+  short_description: "Merge only the exact reviewed SDLC head"
+  default_prompt: "Use $sdlc-merge-pr to merge a specific Agentic SDLC pull request only after explicit human instruction, require its current head to equal the clean exact promoted and reviewed SHA, and authorize one canonical single-action gh pr merge command with an explicit PR number or URL and --match-head-commit. Reject admin bypass, branch deletion, compound commands, drift, and readiness blockers."
 policy:
   allow_implicit_invocation: false

@@ -19,6 +19,15 @@ uses one sequential ephemeral `codex exec` process per assignment with exact
 scope cwd, `workspace-write`, stdin instructions, and schema-bound output. The
 coordinator—not the worker—performs the sensitive-content gate and task commit.
 
+For diagnosis-bound correction, immutable plan vN+1 preserves every prior task
+definition and digest, then appends corrective tasks and waves. Each corrective
+assignment carries the exact diagnosis and original regression oracle. The
+worker runs that oracle first after the bounded repair, followed by the
+affected-boundary check and normal validation. `task-finish` stores a passed,
+digest-protected oracle proof bound to the diagnosis and worker commit; missing
+or mismatched proof cannot enter integration. Completed, sealed, promoted, or
+completed-run execution is never reopened.
+
 ## Main Boundaries
 
 - Do not change unrelated features.
@@ -30,6 +39,8 @@ coordinator—not the worker—performs the sensitive-content gate and task comm
 - Do not let workers share agents, branches, worktrees, write claims, or
   conflict domains.
 - Do not rewrite history or force-clean resources.
+- Do not speculate from an evaluation symptom, weaken acceptance criteria, or
+  dispatch a probable/incomplete diagnosis.
 
 ## Primary Inputs
 
@@ -39,6 +50,7 @@ coordinator—not the worker—performs the sensitive-content gate and task comm
 - Context pack.
 - Existing codebase.
 - Prepared execution coordinator and task-wave assignments.
+- Exact diagnosis, original oracle, and invalidation set for corrective work.
 
 ## Output
 
@@ -47,4 +59,6 @@ coordinator—not the worker—performs the sensitive-content gate and task comm
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
 - Every task has validation, review, one direct-child commit, and cleanup proof.
+- Corrective work reruns the original oracle and invalidated downstream gates
+  at the new integration commit.
 - State moves to `implemented`.

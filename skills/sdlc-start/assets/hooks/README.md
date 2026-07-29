@@ -21,6 +21,16 @@ local Codex home.
   `sdlc-start run` action and use canonical `sdlc-*` skill names in prompts. Short phase
   aliases may be accepted as input, but they must not be emitted as the next
   recommended skill.
+- When `current-state.json` has an
+  `agentic-sdlc/repair-state-pointer-v1`, the Stop hook validates that its
+  `failure-event-v1`, optional `diagnosis-v1`, and `repair-control-v1` remain
+  inside the run and agree on feature, event, and stable blocker identity. It
+  stops on exhausted budgets or semantic-cycle status, requires
+  diagnosis-required work to route to `troubleshoot`, and requires a recorded
+  diagnosis to return through `sdlc-classify-failure`. After successful repair,
+  it also enforces the authoritative revalidation cursor so commit, UAT, PR,
+  and publication cannot bypass invalidated validation, test, evaluation,
+  documentation, alignment, or commit evidence.
 - `STEERING.md` pause and PR-control text, including `Pause after the current
   feature. Do not create a PR.`, must trigger a continuation through
   the prompt-bound `sdlc-start run` command so the coordinator can persist the
@@ -53,6 +63,29 @@ local Codex home.
   ff-only feature promotion require short-lived action-scoped authorization
   matching the worktree, branch, common directory, expected HEAD, expiry, and
   exact command/target. Force cleanup and identity drift remain denied.
+- Active-run Git pushes, `gh pr create`, and GitHub PR-creation MCP calls
+  require short-lived `create-pr` authorization whose branch and expected HEAD
+  match the clean promoted checkout and whose UAT status is `passed`. GitHub PR
+  reads and review inspection remain read-only and do not consume PR-creation
+  authorization. The push must target exactly `origin` plus one
+  `HEAD:<authorized-branch>` refspec; CLI `--head` and MCP `head` values must
+  name that same branch, and extra refs are denied. Sensitive Git/GitHub
+  actions must be one direct shell action; executable wrappers, absolute
+  executable paths, prepended commands, shell operators, and redirections are
+  denied.
+- The classifier evaluates the literal tool payload. It is not a shell sandbox
+  and cannot prove the behavior of a guarded action synthesized indirectly
+  through variable expansion, command substitution, an interpreter, or another
+  generated program. Workflow skills must issue only the canonical direct
+  commands and must not construct guarded actions indirectly.
+- Active-run PR merge requires one exact, expiring `sdlc-merge-pr`
+  authorization bound to the branch, current promoted/reviewed HEAD, explicit
+  user request, passing checks/review/UAT, explicit PR number or URL, and
+  complete `gh pr merge ... --match-head-commit <HEAD>` command. The canonical
+  command permits only an optional long-form merge strategy; admin bypass,
+  branch deletion, repository override, implicit PR selection, shell operators,
+  and appended actions are denied. GitHub merge MCP writes are denied in favor
+  of this race-safe canonical path.
 
 ## Validate
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "No Sleep for Mac"
+  short_description: "Keep an AC-powered Mac awake"
+  default_prompt: "Use $nosleep4mac to ensure my logged-in Mac stays awake on AC power."
+policy:
+  allow_implicit_invocation: false

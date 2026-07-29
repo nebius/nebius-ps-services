@@ -15,6 +15,19 @@ id_policy: "Feature IDs are stable. Never renumber existing IDs."
 
 # Design
 
+## Failure-Driven Reconsideration
+
+- Admission: none | `<classification and diagnosis IDs>`
+- Approval mode: not-applicable | automatic-internal | `human:<approval-id>`
+- Recorded integration commit: none | `<commit>`
+- Violated design contract: none | <decision, boundary, or invariant>
+- Localized repair insufficiency: none | `<evidence references>`
+- Affected feature closure: none | <FEAT-* IDs>
+- Invalidation scope: none | `<downstream surfaces>`
+- Disposition: initial-design | reaffirmed | changed
+- Previous design fingerprint: none | `sha256:<digest>`
+- Rollback path: TODO
+
 ## Design Summary
 
 ### Source Inputs

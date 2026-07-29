@@ -1,0 +1,6 @@
+interface:
+  display_name: "Optimize Pytest"
+  short_description: "Measure and safely optimize large pytest suites"
+  default_prompt: "Use $optimize-pytest to measure pytest performance, identify cumulative bottlenecks, and make safe evidence-backed improvements."
+policy:
+  allow_implicit_invocation: true

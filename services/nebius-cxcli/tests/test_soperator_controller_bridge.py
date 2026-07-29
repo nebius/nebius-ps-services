@@ -1932,6 +1932,64 @@ def test_bridge_fenced_journal_accepts_interrupted_singleton_client_recovery() -
     validate_bridge_journal(journal)
 
 
+def test_bridge_fenced_journal_accepts_interrupted_dispatching_ungate_recovery() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.BRIDGE_FENCED.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {
+        "state": "dispatching",
+        "preparing_at": "2026-07-28T00:27:10Z",
+        "dispatching_at": "2026-07-28T00:30:21Z",
+        "observed_replicas_before": 1,
+        "ungate_required": True,
+        "gated_pod_uid": "gated-controller-pod-uid",
+    }
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+
+    validate_bridge_journal(journal)
+
+
+def test_bridge_fenced_journal_rejects_dispatching_ungate_without_gated_pod_identity() -> None:
+    journal = _cleaned_journal()
+    journal["stage"] = BridgeStage.BRIDGE_FENCED.value
+    takeover = journal["target_singleton_takeover"]
+    assert isinstance(takeover, dict)
+    superseded = takeover.pop("client_handoff_propagation")
+    takeover["superseded_client_handoff_propagation"] = superseded
+    takeover["target_start"] = {
+        "state": "dispatching",
+        "preparing_at": "2026-07-28T00:27:10Z",
+        "dispatching_at": "2026-07-28T00:30:21Z",
+        "observed_replicas_before": 1,
+        "ungate_required": True,
+    }
+    takeover["client_handoff_singleton_recovery"] = {
+        "schema": "nebius-cxcli/target-takeover-client-singleton-recovery-v1",
+        "status": "accepted",
+        "controller_hosts": [
+            *CONTROLLER_BRIDGE_CONTROLLER_HOSTS,
+            "controller-0(target-cluster-controller-svc)",
+        ],
+        "superseded_proof_sha256": migration._fingerprint(superseded),  # noqa: SLF001
+        "accepted_at": "2026-07-12T10:19:00Z",
+    }
+
+    with pytest.raises(ValueError):
+        validate_bridge_journal(journal)
+
+
 def test_target_singleton_journal_accepts_interrupted_client_recovery() -> None:
     journal = _cleaned_journal()
     journal["stage"] = BridgeStage.TARGET_SINGLETON_ACTIVE.value

@@ -25,8 +25,21 @@ readiness only; fresh-session execution is required to observe activation.
    change production; correlate one failed request and specify the highest-value
    next experiment."
 9. "Forty-three repair attempts have run for hours without resolving the same
-   failure. Stop after three distinct failed remediations, explain the blocker,
-   and wait for me before continuing."
+   failure. Cap this blocker at three remediation attempts, require new evidence
+   and a new hypothesis before each retry, explain the blocker, and wait for me
+   before continuing."
+10. "Three attempts exhausted a parser failure. A later assertion failure is
+    causally independent. Prove the old attempts do not exhaust the new issue,
+    start it at attempt 1, and require human input only after three attempts
+    against that one assertion blocker."
+11. "This cross-service failure has no proven cause yet. Investigate it first;
+    if the durable remedy turns out to require a new service boundary or data
+    owner, hand the proven diagnosis to the design workflow before anyone
+    implements it."
+12. "This production-only latency regression is scoped to service `<service>`
+    in project `<project>` between these UTC timestamps. Use runtime evidence
+    only if it can distinguish the current dependency and saturation
+    hypotheses, and keep production read-only."
 
 ## Should Not Trigger Implicitly
 
@@ -40,6 +53,8 @@ readiness only; fresh-session execution is required to observe activation.
 8. "Create a Terraform module for this new network."
 9. "Publish the next release."
 10. "Explain how this framework's router works."
+11. "The root cause is already proven. Design the replacement service boundary
+    and give me a /plan handoff; do not re-run the investigation."
 
 ## Boundary Cases
 
@@ -55,3 +70,21 @@ readiness only; fresh-session execution is required to observe activation.
 - A dedicated security scan should use `apply-security`; an authentication or
   authorization failure with an unknown causal mechanism may use troubleshooting
   while applying security guardrails.
+- An unknown cause starts in `troubleshoot`. A proven cause whose requested
+  output is only a boundary-changing solution design and `/plan` handoff starts
+  in `design`. A combined solve request stays in `troubleshoot` through
+  `PROVEN`, then hands off only a system-contract-changing remediation.
+- A complex or large repair inside one existing private boundary remains in
+  `troubleshoot`. In active Agentic SDLC, a proven design defect goes first to
+  `sdlc-classify-failure`, not directly to a design or plan phase.
+- A deterministic lint, compile, or isolated unit-test failure makes zero
+  Grafana readiness or data calls. A deployed-runtime symptom still makes zero
+  calls until a decision-changing evidence question, non-Grafana provenance for
+  one matching signal, authority, a deterministic selector, and an absolute
+  window exist. Grafana readiness must not be used to discover whether useful
+  telemetry might exist.
+- An eligible runtime investigation uses one lazy Grafana readiness check for
+  the investigation, then starts with one cheapest matching-signal query rather
+  than spending the fast allowance as a target. Failure disables later
+  observability without installation, repair, credential switching, or repeated
+  checks.

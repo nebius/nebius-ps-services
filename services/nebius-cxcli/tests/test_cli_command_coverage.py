@@ -799,7 +799,7 @@ def _stub_soperator_upgrade_runtime(
     )
     monkeypatch.setattr(
         cli,
-        "_live_home_mount_probe_checks",
+        "_wait_for_live_home_mount_probe_coverage",
         lambda **_kwargs: (
             {"name": "live /home mount", "status": "passed", "summary": "verified"},
         ),

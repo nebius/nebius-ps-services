@@ -1,6 +1,6 @@
 interface:
   display_name: "Troubleshoot"
   short_description: "Prove failures with bounded repairs"
-  default_prompt: "Use $troubleshoot to investigate this failure causally, apply bounded remediation attempts, verify each attempt, and stop with a complete report if the remediation budget is exhausted."
+  default_prompt: "Use $troubleshoot to investigate this failure causally. In active Agentic SDLC, preserve the exact failed commit and criteria, make no committed product fix, remove temporary instrumentation, emit diagnosis-v1, and return only through sdlc-classify-failure. Outside SDLC, keep localized repairs here and route system-contract-changing remediation through design only after causal proof. Enforce bounded evidence, hypotheses, observability, retries, and stop reporting."
 policy:
   allow_implicit_invocation: true

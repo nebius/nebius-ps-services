@@ -10,18 +10,22 @@
 ## Working Defaults
 
 - After one remediation fails against the same blocker, use `troubleshoot`
-  before another repair. Unless the current user explicitly sets another
-  budget, stop after three distinct failed remediation attempts or 60 active
-  minutes, whichever comes first. Report attempts 1 and 2 as progress; at
-  exhaustion, make only the exact private task-state update that records the
-  stop, then call no other tool and return the complete troubleshooting report.
-  Only a new explicit user instruction may start another bounded tranche.
+  before another repair. Each blocker tranche has a hard maximum of three
+  remediation attempts or 60 active minutes, whichever comes first; a current
+  instruction may lower but never raise or disable the attempt maximum. Require
+  newly acquired evidence and a genuinely new evidence-derived hypothesis
+  before every retry. Report attempts 1 and 2 as progress; at exhaustion, make
+  only the exact private task-state update that records the stop, then call no
+  other tool and return the complete troubleshooting report. If the evidence or
+  hypothesis gate cannot be satisfied earlier, stop and return the structured
+  investigation report. Only a new explicit user instruction may start another
+  bounded tranche.
 - When evidence establishes a causally independent blocker, start its own fresh
-  budget at attempt 1. Use the default three-attempt and 60-minute limits unless
-  the current instruction sets lower or higher limits that apply to the new
-  blocker. Do not carry attempts, active time, tranche, exhaustion status, or
-  stop trigger from another blocker. Permission denials and marker validation
-  or repair consume no attempt.
+  budget at attempt 1. Use the three-attempt maximum and default 60-minute limit
+  unless the current instruction sets a lower attempt limit or another time limit
+  for the new blocker. Do not carry attempts, active time, tranche,
+  exhaustion status, or stop trigger from another blocker. Permission denials
+  and marker validation or repair consume no attempt.
 - Default policy for logic/API/CLI behavior changes is **no legacy
   compatibility layer** and **no backward-compatibility shims**.
 - When behavior changes, prefer fail-fast and a single canonical path instead

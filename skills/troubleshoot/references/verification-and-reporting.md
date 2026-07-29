@@ -102,9 +102,34 @@ names so the optional Stop hook can validate delivery: `## Outcome`,
 `## Blocking Error`, `## Source`, `## Attempts`, `## Evidence`,
 `## Current State`, and `## Next Action`. List all counted attempts and the
 highest-information action available to the user or a later authorized tranche.
-Include the exact redacted error class, code, message excerpt, and failing
-operation when known; identify its component, command, test, service, or bounded
-log location under `## Source`.
+Use `Blocker: ...` under `## Blocking Error` and `Blocker key: ...` under
+`## Source`. For every positional attempt, use
+`- attempt-N | Remediation: ... | Verification: ... | Result: ...` and
+`- attempt-N | Evidence: ...`. Include the exact redacted error class, code,
+message excerpt, and failing operation when known; identify its component,
+command, test, service, or bounded log location under `## Source`.
+When the optional guard is active, use its bounded, redacted marker-derived
+summaries in those fields; generic filler or detected sensitive values do not
+satisfy report delivery.
+
+If a retry stops earlier because no new evidence or genuinely new hypothesis is
+available, use the same structured investigation content without
+`REMEDIATION_BUDGET_EXHAUSTED`. Classify the outcome as
+`BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`, state which retry-admission gate
+failed, and identify the highest-information evidence needed next.
+
+Do not use placeholders merely to satisfy the section headings. Every included
+section must summarize the evidence-backed investigation state available at the
+stop boundary, including failed attempts, residual uncertainty, and rollback or
+runtime state where applicable.
+
+The optional Stop hook requests one correction when the report is missing a
+required section or marker-bound attempt and includes a bounded, redacted
+minimum report for the assistant to return. If the continued response is still
+incomplete, it stops instead of recursing indefinitely and emits that fallback
+as a UI/event-stream warning, not an assistant-authored response. For a
+historical exhausted v1 data marker that predates recorded `new_evidence`, the
+fallback states that limitation rather than inventing evidence.
 
 Keep reports public-safe when committed. Do not include secrets, private URLs,
 internal hostnames, customer data, raw production logs, or environment-specific

@@ -1992,9 +1992,8 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
         previous_owner = item_owner
         _required_text(item.get("at"), field="bridge authority history timestamp")
     latest_authority = history[-1]
-    if (
-        authority.get("epoch") != latest_authority.get("epoch")
-        or owner != latest_authority.get("owner")
+    if authority.get("epoch") != latest_authority.get("epoch") or owner != latest_authority.get(
+        "owner"
     ):
         raise ValueError(
             "Controller bridge current authority must equal the latest durable history entry."
@@ -2458,31 +2457,45 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                 and not str(target_start.get("pod_uid") or "")
                 and not str(target_start.get("node_name") or "")
             )
+            # The gated-controller variant: the workload already ran one exact
+            # inert-gated Pod, so the interrupted dispatch is an ungate of
+            # that recorded Pod identity rather than a zero-to-one scale.
+            dispatching_ungate = (
+                target_start_state == "dispatching"
+                and bool(str(target_start.get("preparing_at") or ""))
+                and bool(str(target_start.get("dispatching_at") or ""))
+                and target_start.get("observed_replicas_before") == 1
+                and target_start.get("ungate_required") is True
+                and bool(str(target_start.get("gated_pod_uid") or ""))
+                and not str(target_start.get("pod_uid") or "")
+                and not str(target_start.get("node_name") or "")
+            )
             accepted_start = (
                 target_start_state == "accepted"
                 or preparing_start
                 or dispatching_start
+                or dispatching_ungate
                 or (
-                target_start_state == "dispatching"
-                and bool(
-                    _required_text(
-                        target_start.get("accepted_at"),
-                        field="bridge interrupted singleton accepted timestamp",
+                    target_start_state == "dispatching"
+                    and bool(
+                        _required_text(
+                            target_start.get("accepted_at"),
+                            field="bridge interrupted singleton accepted timestamp",
+                        )
                     )
-                )
-                and bool(
-                    _required_text(
-                        target_start.get("pod_uid"),
-                        field="bridge interrupted singleton Pod UID",
+                    and bool(
+                        _required_text(
+                            target_start.get("pod_uid"),
+                            field="bridge interrupted singleton Pod UID",
+                        )
                     )
-                )
-                and bool(
-                    _required_text(
-                        target_start.get("node_name"),
-                        field="bridge interrupted singleton node name",
+                    and bool(
+                        _required_text(
+                            target_start.get("node_name"),
+                            field="bridge interrupted singleton node name",
+                        )
                     )
-                )
-                and target_start.get("ungate_required") is False
+                    and target_start.get("ungate_required") is False
                 )
             )
             target_stop_pods = takeover.get("target_stop_pods")
