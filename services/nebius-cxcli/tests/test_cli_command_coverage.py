@@ -12,14 +12,18 @@ import threading
 import time
 import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 import yaml
+from click.testing import CliRunner as ClickCliRunner
+from typer.main import get_command as get_typer_command
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
@@ -12164,6 +12168,11 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     )
     monkeypatch.setattr(
         cli,
+        "_verify_external_soperator_campaign_backup",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
         "external_soperator_upgrade_protected_comparison_passed",
         lambda **_kwargs: True,
     )
@@ -12171,26 +12180,28 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     def _execute(**kwargs: Any) -> SimpleNamespace:
         events.append("execute")
         captured.update(kwargs)
-        return SimpleNamespace(pending_phase="none", lines=("done",))
+        return SimpleNamespace(pending_phase="fixture-stop", lines=("done",))
 
     monkeypatch.setattr(cli, "execute_soperator_migration", _execute)
 
-    cli.soperator_external_upgrade_command(
-        config_path=config_path,
-        target_ref_opt="external-cluster",
-        backup_dir=None,
-        job_policy=None,
-        cancel_job=None,
-        requeue_job=None,
-        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        dry_run=False,
-        execute=True,
-        approve=True,
-        approve_remediation=False,
-        interactive=interactive,
-    )
+    with pytest.raises(cli.typer.Exit) as excinfo:
+        cli.soperator_external_upgrade_command(
+            config_path=config_path,
+            target_ref_opt="external-cluster",
+            backup_dir=None,
+            job_policy=None,
+            cancel_job=None,
+            requeue_job=None,
+            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+            dry_run=False,
+            execute=True,
+            approve=True,
+            approve_remediation=False,
+            interactive=interactive,
+        )
 
+    assert excinfo.value.exit_code == 1
     rendered = rich_console.export_text()
     assert f"Slurm job policy: {expected_policy}" in rendered
     assert "Login SSH continuity: protected explicit handoff" in rendered
@@ -12334,38 +12345,43 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
     )
     monkeypatch.setattr(
         cli,
+        "_verify_external_soperator_campaign_backup",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
         "external_soperator_upgrade_protected_comparison_passed",
         lambda **_kwargs: True,
     )
     monkeypatch.setattr(
         cli,
         "execute_soperator_migration",
-        lambda **_kwargs: SimpleNamespace(pending_phase="none", lines=("execute complete",)),
+        lambda **_kwargs: SimpleNamespace(
+            pending_phase="fixture-stop",
+            lines=("execute pending",),
+        ),
     )
 
-    cli.soperator_external_upgrade_command(
-        config_path=config_path,
-        target_ref_opt="external-cluster",
-        backup_dir=None,
-        job_policy=None,
-        cancel_job=None,
-        requeue_job=None,
-        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
-        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        dry_run=False,
-        execute=True,
-        approve=True,
-        approve_remediation=False,
-        interactive=False,
-    )
+    with pytest.raises(cli.typer.Exit) as excinfo:
+        cli.soperator_external_upgrade_command(
+            config_path=config_path,
+            target_ref_opt="external-cluster",
+            backup_dir=None,
+            job_policy=None,
+            cancel_job=None,
+            requeue_job=None,
+            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+            dry_run=False,
+            execute=True,
+            approve=True,
+            approve_remediation=False,
+            interactive=False,
+        )
 
-    assert (False, "execute complete") in printed
-    assert (
-        False,
-        "Campaign segment reconciled successfully; config.yaml remains the immutable "
-        "desired-campaign authority.",
-    ) in printed
-    assert (True, "execute complete") not in printed
+    assert excinfo.value.exit_code == 1
+    assert (False, "execute pending") in printed
+    assert (True, "execute pending") not in printed
     assert not any(active for active, _line in printed)
 
 
@@ -23959,6 +23975,7 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
         assert env is not None
         kubeconfig_path = Path(env["KUBECONFIG"])
         kubeconfig = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
+        kubeconfig_mode = kubeconfig_path.stat().st_mode & 0o777
 
     terraform_output = captured["terraform_output"]
     assert terraform_output[0] == fake_paths.infra_dir
@@ -23979,7 +23996,10 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
         "project-456",
         "--client-name",
         "client-a",
+        "--cache-file",
+        str(kubeconfig_path.parent / "exec-credential-cache.json"),
     ]
+    assert kubeconfig_mode == 0o600
     assert kubeconfig["users"][0]["user"]["exec"]["interactiveMode"] == "Never"
     assert kubeconfig["current-context"] == "context-entry"
 
@@ -24649,6 +24669,240 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     assert payload["status"]["expirationTimestamp"] == "2026-01-02T03:04:05Z"
 
 
+def test_mk8s_exec_credential_cache_reuses_one_exchange_across_process_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchanges = 0
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            nonlocal exchanges
+            exchanges += 1
+            return SimpleNamespace(
+                token="cached-token",
+                expiration=cli.datetime(2099, 1, 2, 3, 4, 5, tzinfo=cli.UTC),
+            )
+
+        def sync_close(self) -> None:
+            pass
+
+    cache_file = tmp_path / "exec-credential-cache.json"
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_init_mk8s_exec_auth_sdk", lambda **_kwargs: _FakeSDK())
+
+    first = runner.invoke(
+        cli.app,
+        ["mk8s-token", "--project-id", "project-456", "--cache-file", str(cache_file)],
+    )
+    second = runner.invoke(
+        cli.app,
+        ["mk8s-token", "--project-id", "project-456", "--cache-file", str(cache_file)],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert json.loads(first.stdout)["status"] == json.loads(second.stdout)["status"]
+    assert exchanges == 1
+    assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_mk8s_exec_credential_cache_rejects_non_owner_only_directory(
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "shared-cache"
+    cache_dir.mkdir(mode=0o755)
+    cache_dir.chmod(0o755)
+
+    with (
+        pytest.raises(RuntimeError, match="directory must be owner-controlled"),
+        cli._locked_mk8s_exec_credential_cache(  # noqa: SLF001
+            cache_dir / "exec-credential-cache.json"
+        ),
+    ):
+        pass
+
+
+def test_mk8s_exec_credential_cache_single_flights_concurrent_callers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchanges = 0
+    exchange_lock = threading.Lock()
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            nonlocal exchanges
+            with exchange_lock:
+                exchanges += 1
+            time.sleep(0.02)
+            return SimpleNamespace(
+                token="shared-token",
+                expiration=cli.datetime(2099, 1, 2, 3, 4, 5, tzinfo=cli.UTC),
+            )
+
+        def sync_close(self) -> None:
+            pass
+
+    cache_file = tmp_path / "exec-credential-cache.json"
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_init_mk8s_exec_auth_sdk", lambda **_kwargs: _FakeSDK())
+
+    def get_status() -> dict[str, str]:
+        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+            project_id="project-456",
+            client_name="client-a",
+            endpoint=None,
+            cache_file=cache_file,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        statuses = list(executor.map(lambda _index: get_status(), range(8)))
+
+    assert exchanges == 1
+    assert {status["token"] for status in statuses} == {"shared-token"}
+
+
+def test_mk8s_exec_credential_cache_uses_still_valid_token_when_refresh_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_file = tmp_path / "exec-credential-cache.json"
+    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+    )
+    status = {
+        "token": "still-valid-token",
+        "expirationTimestamp": (cli.datetime.now(cli.UTC) + timedelta(seconds=120))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    cli._write_text_atomic(  # noqa: SLF001
+        cache_file,
+        json.dumps(
+            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+                binding_sha256=binding_sha256,
+                status=status,
+            )
+        ),
+        file_mode=0o600,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_acquire_mk8s_exec_credential_status",
+        lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("transient")),
+    )
+
+    observed = cli._mk8s_exec_credential_status(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+        cache_file=cache_file,
+    )
+
+    assert observed == status
+
+
+def test_mk8s_exec_credential_cache_single_flights_concurrent_failed_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_file = tmp_path / "exec-credential-cache.json"
+    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+    )
+    status = {
+        "token": "still-valid-token",
+        "expirationTimestamp": (cli.datetime.now(cli.UTC) + timedelta(seconds=120))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    cli._write_text_atomic(  # noqa: SLF001
+        cache_file,
+        json.dumps(
+            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+                binding_sha256=binding_sha256,
+                status=status,
+            )
+        ),
+        file_mode=0o600,
+    )
+    exchanges = 0
+    exchange_lock = threading.Lock()
+
+    def failed_refresh(**_kwargs: Any) -> dict[str, str]:
+        nonlocal exchanges
+        with exchange_lock:
+            exchanges += 1
+        time.sleep(0.02)
+        raise TimeoutError("transient")
+
+    monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", failed_refresh)
+
+    def get_status() -> dict[str, str]:
+        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+            project_id="project-456",
+            client_name="client-a",
+            endpoint=None,
+            cache_file=cache_file,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        statuses = list(executor.map(lambda _index: get_status(), range(8)))
+
+    assert exchanges == 1
+    assert statuses == [status] * 8
+    cached_payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert cached_payload["refresh_failed_at"].endswith("Z")
+
+
+def test_mk8s_exec_credential_cache_does_not_fallback_after_token_expires(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_file = tmp_path / "exec-credential-cache.json"
+    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+    )
+    status = {
+        "token": "expiring-token",
+        "expirationTimestamp": (cli.datetime.now(cli.UTC) + timedelta(seconds=0.03))
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    cli._write_text_atomic(  # noqa: SLF001
+        cache_file,
+        json.dumps(
+            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+                binding_sha256=binding_sha256,
+                status=status,
+            )
+        ),
+        file_mode=0o600,
+    )
+    monkeypatch.setattr(cli, "_MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS", 0.01)
+
+    def timed_out_refresh(**_kwargs: Any) -> dict[str, str]:
+        time.sleep(0.04)
+        raise TimeoutError("transient")
+
+    monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", timed_out_refresh)
+
+    with pytest.raises(TimeoutError, match="transient"):
+        cli._mk8s_exec_credential_status(  # noqa: SLF001
+            project_id="project-456",
+            client_name="client-a",
+            endpoint=None,
+            cache_file=cache_file,
+        )
+
+
 def test_mk8s_exec_auth_sdk_retries_one_timeout_with_fresh_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -24869,7 +25123,9 @@ def test_mk8s_token_command_suppresses_sensitive_sdk_logs(
 
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == "ERROR: Unable to create an MK8s exec credential."
+    assert result.stderr.strip() == (
+        "ERROR: Unable to create an MK8s exec credential (reason: credential-exchange-failed)."
+    )
 
 
 def test_mk8s_token_command_failure_keeps_stdout_empty(
@@ -24910,7 +25166,9 @@ def test_mk8s_token_command_rejects_empty_credential_without_retry_noise(
 
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == "ERROR: Unable to create an MK8s exec credential."
+    assert result.stderr.strip() == (
+        "ERROR: Unable to create an MK8s exec credential (reason: credential-exchange-failed)."
+    )
 
 
 def test_wait_for_cluster_nodes_ready_returns_immediately_when_nodes_are_already_ready(
@@ -25941,12 +26199,17 @@ def test_help_text_maps_commands_to_target_types() -> None:
 
 
 def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
+    # Typer's runner rebuilds the complete Click command tree for every
+    # invocation. This test renders every registered help route at three
+    # widths, so build the equivalent Click command once and reuse it.
+    help_command = get_typer_command(cli.app)
+    help_runner = ClickCliRunner()
     for width in (80, 120, 240):
         help_with_examples: list[tuple[str, ...]] = []
         help_with_comments: list[tuple[str, ...]] = []
         for args in _iter_registered_help_args(cli.app):
-            result = runner.invoke(
-                cli.app,
+            result = help_runner.invoke(
+                help_command,
                 list(args),
                 env={"COLUMNS": str(width)},
                 terminal_width=width,
@@ -25989,8 +26252,8 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
         assert ("upgrade", "node-group", "--help") in help_with_comments
         assert len(help_with_comments) >= 10
 
-    ext_soperator_onboard_result = runner.invoke(
-        cli.app,
+    ext_soperator_onboard_result = help_runner.invoke(
+        help_command,
         ["ext-soperator", "onboard", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
@@ -26738,9 +27001,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "onboard registers one cluster identity or reconciles its complete v6 campaign "
         "in config.yaml"
     ) in normalized_soperator_help
-    assert "upgrade reconciles live state and advances at most one campaign segment" in (
-        normalized_soperator_help
-    )
+    assert (
+        "upgrade reconciles live state and runs every remaining locked campaign segment "
+        "in one approved command"
+    ) in normalized_soperator_help
+    assert (
+        "a pending gate, error, explicit stop, or interrupt remains checkpointed and the "
+        "same execute command resumes it"
+    ) in normalized_soperator_help
     assert (
         "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
         "--cluster-id <mk8scluster-id>"
@@ -26940,6 +27208,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run" in normalized_ext_soperator_upgrade_help
     assert "--execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
+    assert "--approve-backup-recovery --no-approve-backup-recovery" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "missing or corrupt campaign-owned backup" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "never authorizes another segment until a replacement is verified" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--approve-service-role-downtime" not in normalized_ext_soperator_upgrade_help
     assert "checkpointed mutating phase can run" in normalized_ext_soperator_upgrade_help
     assert "Confirm approval for the accepted external upgrade plan" in (
@@ -26961,9 +27238,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "cutover, Jail Upgrade, validation, and retirement phases" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "Execute one accepted campaign segment after live reconciliation" in (
+    assert "Execute every remaining accepted campaign segment in dependency order" in (
         normalized_ext_soperator_upgrade_help
     )
+    assert "one minor hop per locked segment" in normalized_ext_soperator_upgrade_help
+    assert "continue automatically in the same invocation" in normalized_ext_soperator_upgrade_help
     assert "Mutually exclusive with --dry-run" in normalized_ext_soperator_upgrade_help
     assert "Confirm approval for the accepted external upgrade plan" in (
         normalized_ext_soperator_upgrade_help
@@ -27008,19 +27287,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "--execute --approve refreshes discovery, creates or reuses the checkpointed "
+        "--execute --approve refreshes discovery, creates or verifies one campaign-owned "
         "restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
-    assert "runs at most one locked campaign segment" in normalized_ext_soperator_upgrade_help
+    assert "reconciles every remaining locked campaign segment in order" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert (
         "accepted Soperator storage/compute/GPU-stack/Jail Upgrade work assigned to that segment"
         in (normalized_ext_soperator_upgrade_help)
     )
-    assert "If the accepted campaign still contains more segments" in (
+    assert "After each successful terminal segment checkpoint" in (
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "repeat the same ext-soperator upgrade --execute --approve command until it is complete"
+        "the same invocation refreshes discovery, reacquires the cluster lease, revalidates "
+        "the immutable campaign and journal, and continues"
         in (normalized_ext_soperator_upgrade_help)
     )
     assert "reports record cumulative active time spent inside approved execute invocations" in (

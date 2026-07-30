@@ -386,10 +386,14 @@ The design template also records:
 
 The high-level workflow is:
 
-![Agentic SDLC workflow and architecture: discover and design, isolated task
-execution, validation and promotion, release, product truth, private run state,
-guardrails, external capabilities, feature iteration, and failure
-routing.](images/agentic-sdlc-workflow.png)
+![Agentic SDLC task-to-skill workflow: the numbered golden path maps every task
+to its owning skill, followed by conditional failure classification,
+troubleshooting, corrective planning, revalidation, design admission, and
+precise stop branches.](images/agentic-sdlc-workflow.svg)
+
+The SVG is the canonical diagram source. Use the
+[generated PNG rendering](images/agentic-sdlc-workflow.png) where SVG rendering
+is unavailable.
 
 The implementation state schema uses this phase order:
 

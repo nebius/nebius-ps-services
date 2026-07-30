@@ -68,6 +68,111 @@ quality.
 - Nit: optional polish that should never block unless the repository explicitly
   treats it as required.
 
+P0 is the highest priority. Priority describes impact and urgency; it does not
+authorize remediation. A P0 or P1 may be gated, while a bounded P2 may be safe
+to fix.
+
+## Remediation Eligibility
+
+Classify remediation independently from priority.
+
+Mark `Auto-fix: Safe` only when all of these are true:
+
+- the finding is high-confidence and attributable to the active review scope
+- intended behavior is clear from current repository evidence
+- the fix is bounded, minimal, reversible, and preserves unrelated changes
+- the fix does not cross a public, data, security, architecture, dependency, or
+  external-state boundary
+- a focused test or deterministic check can prove the remediation
+
+Mark `Auto-fix: Gated` when any of these apply:
+
+- behavior or business intent is ambiguous
+- the finding is baseline, unknown-attribution, or out of scope
+- the remedy changes architecture, ownership, or a broad implementation shape
+- the remedy changes a public API, CLI, configuration, schema, serialization,
+  data lifecycle, migration, compatibility, or dependency contract
+- the remedy changes authentication, authorization, tenant isolation, crypto,
+  secrets, other sensitive security boundaries, or external exposure
+- the remedy performs destructive work, writes to external systems, changes
+  deployment or production behavior, or requires a broad rewrite
+- focused proof is unavailable or the change cannot be made without absorbing
+  unrelated dirty work
+
+Do not convert a gated finding into a safe fix because it is urgent. Record the
+decision, owner, or additional evidence required to proceed.
+
+## Focused Fix Validation
+
+`code-review` owns proof of only the Safe findings it changes. Before changing
+the implementation, declare a finding-specific regression test or deterministic
+check and establish its negative control:
+
+- run an existing proof and observe it fail for the finding's expected reason,
+  or
+- add only the focused regression test first, run it, and observe the expected
+  failure before changing the implementation
+
+An already-green, irrelevant, or differently failing check cannot prove the
+finding. If a safe negative control cannot be established, do not edit the
+implementation. Reclassify the remediation as `Auto-fix: Gated` and use `Not
+reproduced` or `Deferred` with the missing evidence.
+
+After each attempted fix:
+
+- rerun the same finding-specific proof and require the expected green result
+- add or update the focused regression test when the repository has a suitable
+  test surface
+- mark the finding `Fixed` only when that proof passes
+
+After all attempted fixes:
+
+- run the narrowest repository-native test target that covers the changed
+  behavior and direct consumers
+- run configured syntax, lint, and type checks scoped to changed files when
+  those checks are available
+- run `git diff --check` for a repository diff
+- review only the code-review-touched diff for new regressions, unintended
+  files, and unrelated dirty-worktree absorption
+- prefer validator no-write and no-cache settings, then remove only exact
+  task-created caches, reports, or generated artifacts and confirm none remain
+
+Classify failures before changing disposition:
+
+- If the focused proof still fails, or a broader check fails because of the
+  attempted patch, restore only that attempted patch with a scoped inverse edit,
+  never a destructive Git command. Mark the finding `Deferred`, retain the
+  evidence, stop repairing that finding, and identify troubleshooting as the
+  next responsible workflow.
+- If the focused proof passes and a broader check exposes a causally independent
+  baseline failure, retain the proven fix, report the separate blocker with
+  accurate attribution, and do not absorb it into the current repair.
+- If causality cannot be established, do not report the finding as `Fixed`.
+  Use `Deferred`, `Needs decision`, or `Needs owner review` according to the
+  missing evidence.
+
+Focused validation is not complete project alignment. Any remedy requiring
+coordinated public API, CLI, configuration, schema, CI/workflow, security,
+generated-artifact, or documentation changes remains Gated and may recommend a
+separate explicit alignment workflow.
+
+## Finding Ledger And Disposition
+
+Complete the initial ledger before remediation. Preserve every initial finding
+through the final report, including fixed and unconfirmed items. Give each
+finding:
+
+- a stable ID, title, P0/P1/P2/P3/Nit priority, confidence, and merge or release
+  blocking status
+- scope attribution: introduced, baseline, unknown, or out of scope
+- evidence, impact, smallest remediation, and proof test
+- `Auto-fix: Safe` or `Auto-fix: Gated`, with a reason
+- final disposition: `Fixed`, `Needs decision`, `Needs owner review`,
+  `Deferred`, or `Not reproduced`
+
+Group the final ledger by P0, P1, P2, P3, and Nit, omitting empty groups.
+Within each group, list blockers first and then higher-confidence findings.
+
 ## Blocking Conditions
 
 Request changes when any of these are present:

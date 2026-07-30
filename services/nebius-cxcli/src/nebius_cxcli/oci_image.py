@@ -33,6 +33,7 @@ _MANIFEST_MEDIA_TYPES = frozenset(
         "application/vnd.docker.distribution.manifest.v2+json",
     }
 )
+_MAX_CONTROL_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,31 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _read_control_response_body(
+    response: Any,
+    *,
+    headers: Mapping[str, str],
+) -> bytes:
+    content_length = _header(headers, "Content-Length").strip()
+    if content_length:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            declared_size = -1
+        if declared_size > _MAX_CONTROL_RESPONSE_BYTES:
+            raise RuntimeError(
+                "OCI registry control response exceeded the "
+                f"{_MAX_CONTROL_RESPONSE_BYTES}-byte safety limit."
+            )
+    body = response.read(_MAX_CONTROL_RESPONSE_BYTES + 1)
+    if len(body) > _MAX_CONTROL_RESPONSE_BYTES:
+        raise RuntimeError(
+            "OCI registry control response exceeded the "
+            f"{_MAX_CONTROL_RESPONSE_BYTES}-byte safety limit."
+        )
+    return body
+
+
 def _https_origin(url: str) -> tuple[str, int]:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
@@ -131,11 +157,22 @@ def _default_requester(request: urllib.request.Request) -> Response:
             with opener.open(current, timeout=30) as response:  # noqa: S310
                 status = response.status
                 headers = dict(response.headers.items())
-                body = response.read()
+                body = (
+                    b""
+                    if status in _REDIRECT_STATUSES
+                    else _read_control_response_body(response, headers=headers)
+                )
         except urllib.error.HTTPError as exc:
-            status = exc.code
-            headers = dict(exc.headers.items())
-            body = exc.read()
+            try:
+                status = exc.code
+                headers = dict(exc.headers.items())
+                body = (
+                    b""
+                    if status in _REDIRECT_STATUSES
+                    else _read_control_response_body(exc, headers=headers)
+                )
+            finally:
+                exc.close()
         if status not in _REDIRECT_STATUSES:
             return status, headers, body
         location = _header(headers, "Location")

@@ -15,6 +15,28 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Redesigned the Agentic SDLC workflow image as a taller, readable task-to-skill
+  map with substantially larger typography, an explicit `sdlc-start`
+  coordinator, all 18 golden-path task owners, clearer conditional failure
+  routing, and readable stop-budget and private-evidence text. Arrow paths now
+  meet the base of each arrowhead and every arrowhead tip touches its
+  destination boundary. The design document now embeds the canonical SVG
+  directly, while the generated PNG remains synchronized as a fallback.
+- Changed `code-review` so a direct standalone `$code-review` invocation
+  completes the initial review, fixes only safe in-scope findings, validates
+  each fix with focused red-before/green-after repository-native proof, reviews
+  its touched diff, and returns the complete prioritized fixed and gated
+  ledger. Already-green or unrelated checks cannot authorize remediation. The
+  skill itself no longer resolves, loads, or invokes `align`; a caller or outer
+  orchestrator remains responsible for any separate repository policy
+  requiring alignment. Implicit, nested, and explicit no-write requests such
+  as review-only, audit-only, or report-only remain non-mutating, including
+  exact restoration of their initial worktree state. All modes use no-write or
+  no-cache validation settings where available and clean exact task-created
+  artifacts. P0-P3 priority remains independent of remediation safety. `align`
+  keeps its child `code-review` lane report-only and retains ownership of
+  cross-surface remediation, while its final gate also removes exact
+  task-created validation residue.
 - Added an evidence-guided Agentic SDLC repair loop with immutable
   `failure-event-v1` and `diagnosis-v1` records, stable blocker identity,
   deterministic classification, atomic `repair-control-v1`, an append-only

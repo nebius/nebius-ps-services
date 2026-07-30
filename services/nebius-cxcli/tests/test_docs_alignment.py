@@ -209,17 +209,13 @@ def test_architecture_diagrams_are_referenced_once_and_explained() -> None:
         "soperator-controller-bridge-ha-continuity": (
             "The controller diagram traces single-writer authority"
         ),
-        "soperator-login-node-continuity": (
-            "The login diagram separates connection lifetimes"
-        ),
+        "soperator-login-node-continuity": ("The login diagram separates connection lifetimes"),
         "jail-rootfs-active-passive-storage": (
             "The Jail storage diagram separates replaceable rootfs generations"
         ),
     }
     expected_assets = {
-        f"{basename}.{suffix}"
-        for basename in diagram_explanations
-        for suffix in ("png", "svg")
+        f"{basename}.{suffix}" for basename in diagram_explanations for suffix in ("png", "svg")
     }
     for asset_name in expected_assets:
         asset = REPO_ROOT / "docs" / asset_name
@@ -1863,14 +1859,20 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "`config.yaml` is the only desired-path authority" in readme_flat
-    assert "Execute or reconcile at most one approved campaign segment, then stop" in readme_flat
+    assert (
+        "Execute or reconcile every remaining approved campaign segment in dependency order"
+        in readme_flat
+    )
     assert "Healthy evidence is reported as `gpu-stack: verified`" in readme_flat
     assert "`gpu-rdma: validation-planned`" in readme_flat
     assert "Soperator/operator pins" in readme_flat
     assert (
-        "`ext-soperator upgrade --execute` verifies the live source release, creates or reuses one checkpointed restore-capable backup across pre-mutation and mutating retries"
+        "`ext-soperator upgrade --execute` verifies the live source release, creates one campaign-owned restore-capable backup before the first mutation, and reuses that same verified archive across every retry and locked segment"
         in readme_flat
     )
+    assert "`--approve-backup-recovery` / `--no-approve-backup-recovery`" in readme_flat
+    assert "`completed-with-degraded-protection`" in readme_flat
+    assert "replacement-only repair and does not rerun upgrade phases" in readme_flat
     assert "Each executed stage runs a fast stage-scoped verification" in readme_flat
     assert "leaves that same phase pending" in readme_flat
     assert "completed campaign remains the audit record" in readme_flat
@@ -1924,12 +1926,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`deploy.targets[].soperator_onboarding.upgrade_path`" in readme_flat
     assert "complete provider-supported campaign" in readme_flat
     assert (
-        "Each `ext-soperator upgrade --execute --approve` run advances one locked segment"
+        "One `ext-soperator upgrade --execute --approve` invocation advances every remaining locked segment"
         in readme_flat
     )
-    assert (
-        "each execute invocation resumes or finishes at most one segment and stops" in readme_flat
-    )
+    assert "continues across every successful remaining segment" in readme_flat
     assert "reports `Pending phase: none` and the completed campaign remains" in readme_flat
     assert (
         "With no later provider-supported or catalog-pinned target, config bytes remain unchanged"
@@ -2296,6 +2296,10 @@ def test_docs_define_component_selector_contract() -> None:
         "rechecks the live source release and full discovery fingerprint, creates a restore-capable backup before the first mutation for new/replacement-cluster restore only"
         in design_flat
     )
+    assert "binds it to the campaign rather than one segment" in design_flat
+    assert "Execution identity stays segment-local" in design_flat
+    assert "the next segment is blocked until a newly created archive" in design_flat
+    assert "replacement-only repair without rerunning campaign phases" in design_flat
     assert "The external stage model is explicit" in design_flat
     assert (
         "execute preflight refreshes live discovery, verifies source release/fingerprint"
@@ -2352,14 +2356,16 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        "External control-plane work is one Kubernetes minor hop per accepted locked-path segment and `ext-soperator upgrade` run"
+        "External control-plane work is one Kubernetes minor hop per accepted locked-path segment"
         in (design_flat)
     )
     assert (
-        "repeat the same `ext-soperator upgrade --execute --approve` command until the path is complete"
+        "A single approved `ext-soperator upgrade --execute --approve` invocation drives every remaining segment in order"
         in (design_flat)
     )
-    assert "a fresh `ext-soperator onboard` decision is only for proposing a later campaign" in (
+    assert "live discovery is observation authority for the current segment only" in design_flat
+    assert "derive the committed support-policy rule for every locked segment" in design_flat
+    assert "A fresh `ext-soperator onboard` decision is only for proposing a later campaign" in (
         design_flat
     )
     assert "discovered PVC/PV sizes as lower bounds" in design_flat

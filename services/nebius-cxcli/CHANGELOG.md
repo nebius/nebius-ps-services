@@ -6,6 +6,125 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fix the in-place Jail login handoff so one protected SSH Pod always stages a
+  true extra target login replica instead of reusing the configured replica
+  count. The temporary surge now has checkpointed Helm intent/proof, exact
+  SlurmCluster and OpenKruise desired-replica validation, Ready target-rootfs
+  Pod and Service-endpoint gating, and a separately proven restoration to the
+  configured count after voluntary handoff. Existing v1 surge checkpoints are
+  upgraded only from their exact target binding and accept live replica counts
+  only at the locked configured or surge boundaries. Once the peer is Ready,
+  the Jail phase remains explicitly pending while the original socket and hold
+  are live; both fresh and resume completion paths require the hold released
+  and the temporary surge restored. Surge and restore Helm values retain the
+  canonical bridge-owned manager/controller fence and require exact semantic
+  apply proof. Archived protected-Pod rotations are accepted only from a
+  complete zero-session, drained, timestamped release record. Older exact
+  handoffs that restored the manager before the current phase-owned pause
+  journal existed now rearm that pause only from the immutable manager UID,
+  non-replica spec, exact target SlurmCluster namespace/name/UID, and monotonic
+  capture/pause/restore generations. The rearm checkpoint permits only its
+  original replica count and one generation transition, including exact
+  crash-after-dispatch recovery. Every bridge-gated Helm replay now renders
+  `controllerManager.replicas: 0`, so Helm cannot wake the paused manager
+  between the pre/post replay fences. The post-Jail OpenMetrics restoration
+  pulse now carries the full campaign checkpoint through that same gate at
+  source-HA and target-HA bridge authority. The temporary login Helm pulse also
+  recognizes the exact `target-enabled` accounting predecessor when import,
+  source retirement, target writer enable, restored command fence, and
+  target-owned Deployment evidence are complete but final Slurm registration
+  verification is deliberately waiting for that same SConfig pulse; ordinary
+  target Helm replay still requires fully verified accounting. Each temporary
+  surge or restore intent now also revalidates live source absence and exact
+  target-writer identity/readiness immediately before the Helm mutation. Its
+  post-Helm proof validates the exact restored-writer manifest instead of
+  incorrectly requiring the earlier command-fenced lifecycle state; any
+  unexpected live command fence or other SlurmDBD drift still fails closed.
+  While the exact Soperator manager remains paused, a checkpointed
+  campaign-bound webhook-only Deployment with a unique selector now serves
+  fail-closed chart admission through an exact Deployment/ReplicaSet/Pod
+  lineage. It enables only the SlurmCluster and NodeSet setup paths required to
+  register those webhooks, restricts their controller cache to a repeatedly
+  verified-empty `kube-system` namespace, and fails before mutation if any
+  Soperator resource appears there. The chart Service's sole TCP/443 target
+  must bind one manager port; that port replaces the generic readiness probe
+  and must appear on the exact owned EndpointSlice before admission dry runs.
+  Pod-template proof normalizes only the API-default `default` service account
+  and standard NotReady/Unreachable eviction tolerations; any non-default
+  scheduling drift remains blocking.
+  The bridge derives the bounded NodeSet set from the target SlurmCluster's
+  exact partition references and requires each live NodeSet to be an ownerless,
+  target-parented Helm resource before proving SlurmCluster and NodeSet dry
+  runs. It is UID-precondition deleted after either Helm success or failure;
+  resume reconciles owned-lineage cleanup before every surge/restore early
+  return and re-proves absence from successful inventory reads even for a
+  previously `deleted` checkpoint. Existing v1 bridge records are accepted
+  only for that UID-bound cleanup and archival path; all new bridge intent uses
+  the namespace-isolated v2 schema.
+  A voluntary zero-session hold release can no longer bypass a prepared surge:
+  cxcli proves the exact bounded failed-webhook revision chain and identical
+  intent values, reconstructs the temporary replica count from the immutable
+  surge contract instead of the steady-state input values, establishes the next
+  deployed revision through the owned webhook bridge, reconciles the released
+  peer gate, and restores configured replicas before downstream GPU repair
+  selects Helm release state.
+  If a later active session creates a new protected Pod after that full
+  release, the archived complete release journal authorizes rotation away from
+  the old Pod UID without requiring a synthetic shrink-history entry.
+- Recover a missing in-place ownership-handoff marker only from the exact
+  checkpointed target-child gap proof: current target Helm evidence, immutable
+  child bindings, manager generation, controller authority, and owned Slurm
+  partition pauses must all agree. Resume then reconciles the independently
+  proven temporary login surge before reaching the canonical protected-session
+  gate instead of waiting for a held OpenKruise rollout and reporting a generic
+  accounting-readiness failure; strict rollout and source-retirement checks
+  remain unchanged.
+- Render external-upgrade provider table headings in bold black on
+  color-capable terminals. When a phase signal contains the multiline provider
+  table, the following `Slurm Workers` and `Soperator` summaries now start on a
+  new line at column one instead of being appended to the final provider row;
+  plain and persisted status text remains free of terminal markup.
+- Admit both the source and target Soperator instance labels through the
+  controller-bridge NetworkPolicy before target Helm adoption can relabel
+  clients and before the cold source-to-target bridge transition. Resume
+  performs the same idempotent reconciliation before reusing a checkpointed
+  target-HA proof, preventing target-adopted login and worker Pods from losing
+  Slurm controller connectivity after the new bridge becomes Ready.
+- Share one owner-only, command-lifetime ExecCredential cache across kubectl
+  subprocesses created from a temporary MK8s kubeconfig. File locking
+  single-flights concurrent refreshes, refresh starts before expiry, a still
+  valid cached token remains available during a transient refresh failure,
+  and a sanitized cooldown prevents lock waiters from serially repeating the
+  same failed exchange. The temporary kubeconfig itself is now written
+  atomically with mode `0600`. Redacted failures include a stable timeout or
+  credential-exchange reason without exposing SDK details.
+- Preserve the exact source-retirement checkpoint when an interrupted
+  accounting import revalidates its sealed dump. Post-retirement resumes now
+  prove the retired source UID, retained PVC, and target-only command fence
+  instead of incorrectly requiring the deliberately deleted source
+  SlurmCluster to still exist.
+- Rebind a verified accounting schema-bootstrap proof across an exact
+  checkpointed post-retirement writer Pod rollout. The original binary and
+  network-isolation proof stays immutable; only a successor with the same
+  Deployment UID, owner, image/runtime image, stable labels, Helm proof, and
+  target-only command fence is journaled, while unproved replacements remain
+  blocked.
+- Drive an approved external Soperator v6 campaign to completion in one
+  `ext-soperator upgrade --execute --approve` invocation. Each segment remains
+  checkpointed and limited to one Kubernetes minor hop; after terminal segment
+  success cxcli refreshes discovery, reacquires the campaign lease, revalidates
+  config and journal authority, and continues. Pending phases, errors, explicit
+  stop points, and interrupts still stop immediately for exact-command resume.
+  Upgrade plans now distinguish current-segment support policy and phases from
+  the campaign final target, show the committed support rule for every locked
+  segment, include the executor's final MK8s/Helm postchecks, and safely classify
+  source-fence enumeration failures without persisting raw kubectl output.
+- Bound OCI registry control-response reads before parsing image indexes,
+  manifests, configs, token responses, or error bodies. cxcli now rejects a
+  declared or streamed response larger than 16 MiB instead of reading an
+  unbounded body into memory.
+- Declare the `watchfiles` development dependency used by the committed VS Code
+  `pytest-watch` task so a clean `make env` installs the task's executable.
 - Adopt a same-generation manager-pause fingerprint reserialization. A
   control-plane (API server) upgrade can re-default the identical paused
   soperator-manager Deployment spec, so the checkpointed non-replica spec
@@ -775,13 +894,23 @@ All notable changes to this project are tracked here. This changelog follows
 - Replace the external Soperator upgrade runtime with the v6-only campaign,
   operation-journal, and report contracts. Discovery and execution now share
   one command-start observation, discovery and campaign compilation use one
-  canonical schedule, each segment owns one immutable backup binding, and an
-  accepted provider operation remains attached to its exact operation ID until
-  terminal success or an authentication, lease, or operator interruption. The
-  backup is source-observation-bound, mutation begins only after fresh narrow
-  SlurmCluster/PVC identity reads, delayed provider postconditions remain
-  attached, and the accepted migration-profile execution contract is embedded
-  in the campaign so resumes never reinterpret mutable installed policy.
+  canonical schedule, one immutable campaign-owned backup protects every locked
+  segment, and an accepted provider operation remains attached to its exact
+  operation ID until terminal success or an authentication, lease, or operator
+  interruption. The backup is source-observation-bound, mutation begins only
+  after fresh narrow SlurmCluster/PVC identity reads, delayed provider
+  postconditions remain attached, and the accepted migration-profile execution
+  contract is embedded in the campaign so resumes never reinterpret mutable
+  installed policy. A missing or corrupt campaign archive now requires the
+  dedicated `--approve-backup-recovery` approval: cxcli may finish only the
+  independently proven current segment, blocks every later segment until a
+  fully verified replacement is atomically activated, and supports
+  replacement-only repair after a clean final degraded completion without
+  rerunning upgrade phases. Recovery no longer relabels an invalid reused
+  binding as protected; binding/activation writes are lease-held, exact-checkpoint
+  compare-and-set operations, activation conflicts remain fail-closed, and
+  restore verification rejects unsafe ownership/permissions or archives that
+  exceed member, expansion, or temporary-disk bounds before extraction.
 - Record cumulative active external Soperator upgrade time in the canonical
   Markdown and JSON reports. The resume-safe campaign timing includes every
   approved execute invocation, formats the total as `hh:mm:ss`, and excludes

@@ -1350,6 +1350,26 @@ def _soperator_upgrade_support_status_finding(
     )
 
 
+def soperator_upgrade_support_finding(
+    *,
+    source_version: str,
+    target_version: str,
+    approved_target_chart_version: str = "",
+    current_k8s_version: str,
+    target_k8s_version: str,
+) -> Mapping[str, Any] | None:
+    """Return the committed support-policy finding for one exact upgrade segment."""
+
+    finding = _soperator_upgrade_support_status_finding(
+        source_version=source_version,
+        target_version=target_version,
+        approved_target_chart_version=approved_target_chart_version,
+        current_k8s_version=current_k8s_version,
+        target_k8s_version=target_k8s_version,
+    )
+    return asdict(finding) if finding is not None else None
+
+
 def soperator_upgrade_support_findings(
     report: SoperatorOnboardingReport | Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], ...]:

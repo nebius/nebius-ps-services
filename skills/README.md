@@ -39,10 +39,10 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
+| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, report-only child code review, lint/syntax, and security. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
-| `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
+| `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer technical due diligence with internal Slack/Confluence context first where relevant, MCP fallback for internal systems, vendor verification, alternatives, and recommendations. |
@@ -209,7 +209,7 @@ $design Design this new feature before implementation: read the requirements, in
 
 $app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
 
-$code-review Review the current local branch for bugs, regressions, test gaps, reliability risks, maintainability blockers, and missed structural simplifications.
+$code-review Review the current local branch, fix only safe in-scope findings, validate each fix with focused repository-native checks, and report the prioritized fixed and gated findings.
 
 $system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
 
@@ -279,10 +279,12 @@ pass. It synthesizes the current thread, relevant Agent Memory, and durable
 task-state context, separates active scope from unrelated dirty files, and
 verifies that context against current repository or runtime evidence before
 making safe fixes. Before completion, it runs mandatory changed-scope lanes for
-cross-code validation, `code-review`, `linter`, `apply-security`, and focused
-repository-native tests or builds. It uses safe-only remediation, reports risky
-blockers for explicit approval, and resolves `apply-security/SKILL.md` directly
-when the mandatory security lane is not visible in the initial skills list.
+cross-code validation, report-only `code-review`, `linter`,
+`apply-security`, and focused repository-native tests or builds. `align` owns
+safe remediation from its child review, reports risky blockers for explicit
+approval, and resolves `apply-security/SKILL.md` directly when the mandatory
+security lane is not visible in the initial skills list. Its final gate prefers
+no-write/no-cache settings and removes exact task-created validation artifacts.
 
 ### `align-skill`
 
@@ -395,10 +397,21 @@ branch, local diff, changed files, module, repository area, or provided patch.
 Use it when the user wants findings-first feedback on bugs, regressions, test
 gaps, reliability risks, security-adjacent issues, maintainability,
 abstraction quality, modularity, type boundaries, file-size growth, spaghetti
-branches, and missed structural simplifications. It is review-first and should
-not edit code unless the user explicitly asks for fixes. `review-pr` remains
-the GitHub PR review, readiness, and branch-update workflow, while `align`
-remains the broader project consistency and repair workflow. Use
+branches, and missed structural simplifications. A direct standalone
+`$code-review` invocation completes the review first, fixes only safe in-scope
+findings, validates each fix with declared red-before/green-after focused proof
+plus the narrowest affected repository-native checks, reviews only its touched
+diff, and returns the prioritized fixed and gated ledger. An already-green or
+unrelated check cannot authorize remediation. The skill itself never resolves,
+loads, or invokes `align`, and it does not suppress a separate
+outer-orchestrator policy requiring alignment after changes. Implicit
+selection, nested use, and explicit no-write requests such as review-only,
+audit-only, or report-only remain non-mutating and must not leave validation
+artifacts behind. Priority is independent of auto-fix safety: P0 is Critical
+and highest, followed by P1 High, P2 Medium, P3 Low, and Nit. `review-pr`
+remains the GitHub PR review, readiness, and branch-update workflow, while
+`align` remains the separate project consistency and repair workflow with a
+report-only child review lane. Use
 `apply-security` for security-specific scans, threat modeling, and remediation,
 and `system-design-rules` for design-phase architecture decisions.
 

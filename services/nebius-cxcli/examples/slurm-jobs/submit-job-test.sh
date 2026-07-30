@@ -27,7 +27,8 @@ watch_job_name_pattern="sop-*-job-test*"
 watch_job_ids=""
 login_ip=""
 login_remote_dir=""
-login_shell=0
+login_conflicting_option=""
+help_requested=0
 
 show_usage() {
   cat <<'EOF'
@@ -35,12 +36,10 @@ Submit public Soperator Slurm smoke jobs for upgrade-policy testing.
 
 Usage:
   submit-job-test.sh [submit options]
-  submit-job-test.sh --login <login-external-ip> [submit or watch options]
-  submit-job-test.sh --login <login-external-ip> --login-shell
+  submit-job-test.sh --login <login-external-ip> [--login-remote-dir <path>] [--dry-run]
 
 Options:
-  --login <login-external-ip> Stage and run this command on the Slurm login node.
-  --login-shell               Keep an interactive SSH shell open after staging.
+  --login <login-external-ip> Stage examples and open an interactive login-node shell.
   --login-remote-dir <path>   Private remote staging path. Default: unique /root/testjobs-*.
   --part-type auto|cpu|gpu   CPU/GPU job template to submit. Default: auto.
   --partition <name>         Slurm partition. Defaults to Slurm's default partition.
@@ -63,19 +62,19 @@ Options:
   --watch-duration <seconds> Optional max duration for --watch-jobs. Default: until jobs finish.
   --watch-job-name <pattern> Shell pattern for matching smoke job names. Default: sop-*-job-test*.
   --watch-job-ids <ids>      Comma-separated Slurm job IDs to watch instead of name matching.
-  --dry-run                  Print sbatch commands without submitting.
+  --dry-run                  Print commands without submitting jobs or connecting.
   -h, --help                 Show this help text.
 
 Login mode:
-  --login stages this directory in a unique private path and runs the same submit/watch
-  options remotely. Add --login-shell to open a long-lived interactive SSH session instead.
+  --login stages this directory in a unique private path and opens an interactive SSH shell.
+  Run submit or watch commands from that shell. Submission and watch options cannot be
+  combined with --login.
 
 Examples:
   ./submit-job-test.sh
   ./submit-job-test.sh --login <login-external-ip>
+  ./submit-job-test.sh --login <login-external-ip> --login-remote-dir /root/my-testjobs
   ./submit-job-test.sh --count 10
-  ./submit-job-test.sh --login <login-external-ip> --count 2 --heartbeat-seconds 2
-  ./submit-job-test.sh --login <login-external-ip> --login-shell
   ./submit-job-test.sh --partition main --count 10 --gpus-per-job 1
   ./submit-job-test.sh --part-type cpu --partition cpu --count 10
   ./submit-job-test.sh --partition main --count 10 --submit-mode array --dry-run
@@ -113,6 +112,47 @@ print_watch_sample_header() {
   fi
 
   printf '%s[%s] Slurm job watch sample %s%s\n' "$color_start" "$timestamp" "$sample" "$color_end"
+}
+
+job_state_color_start() {
+  local state="$1"
+  local normalized_state
+
+  normalized_state="${state%% by *}"
+  normalized_state="${normalized_state%+}"
+
+  case "$normalized_state" in
+    RUNNING) printf '\033[1;32m' ;;
+    PENDING | REQUEUED | REQUEUE_FED | REQUEUE_HOLD | RESV_DEL_HOLD)
+      printf '\033[1;33m'
+      ;;
+    COMPLETED) printf '\033[1;36m' ;;
+    CONFIGURING | EXPEDITING | POWER_UP_NODE | RESIZING | UPDATE_DB)
+      printf '\033[1;34m'
+      ;;
+    COMPLETING | SIGNALING | STAGE_OUT) printf '\033[36m' ;;
+    SUSPENDED | STOPPED) printf '\033[1;35m' ;;
+    BOOT_FAIL | CANCELLED | DEADLINE | FAILED | LAUNCH_FAILED | NODE_FAIL | OUT_OF_MEMORY | PREEMPTED | RECONFIG_FAIL | REVOKED | SPECIAL_EXIT | TIMEOUT)
+      printf '\033[1;31m'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+print_job_state() {
+  local state="$1"
+  local color_start=""
+
+  if ! color_enabled; then
+    printf '%s' "$state"
+    return 0
+  fi
+  color_start="$(job_state_color_start "$state" || true)"
+  if [[ -z "$color_start" ]]; then
+    printf '%s' "$state"
+    return 0
+  fi
+  printf '%s%s\033[0m' "$color_start" "$state"
 }
 
 die() {
@@ -191,24 +231,9 @@ run_or_print_command() {
   "$@"
 }
 
-stage_examples_and_run() {
+stage_examples_and_login() {
   local login_target="root@${login_ip}"
   local quoted_remote_dir
-  local remote_command=""
-  local arg
-  local quoted_arg
-  local -a remote_args=(
-    --part-type "$part_type"
-    --count "$count"
-    --run-minutes "$run_minutes"
-    --wall-minutes "$wall_minutes"
-    --heartbeat-seconds "$heartbeat_seconds"
-    --submit-mode "$submit_mode"
-    --gpus-per-job "$gpus_per_job"
-    --nodes "$nodes"
-    --cpus-per-task "$cpus_per_task"
-    --output-dir "$output_dir"
-  )
 
   if ((!dry_run)); then
     require_command ssh
@@ -219,31 +244,16 @@ stage_examples_and_run() {
   run_or_print_command ssh "$login_target" \
     "umask 077; test ! -e ${quoted_remote_dir} && install -d -m 0700 -- ${quoted_remote_dir}"
   run_or_print_command scp -r "${SCRIPT_DIR}/." "${login_target}:${login_remote_dir}/"
-  if ((login_shell)); then
-    run_or_print_command ssh -t "$login_target" \
-      "cd ${quoted_remote_dir} && exec \"\${SHELL:-/bin/bash}\" -i"
-    return 0
-  fi
+  run_or_print_command ssh -t "$login_target" \
+    "cd ${quoted_remote_dir} && exec \"\${SHELL:-/bin/bash}\" -i"
+}
 
-  if [[ -n "$partition" ]]; then remote_args+=(--partition "$partition"); fi
-  if ((exclusive)); then remote_args+=(--exclusive); fi
-  if [[ -n "$qos" ]]; then remote_args+=(--qos "$qos"); fi
-  if [[ -n "$account" ]]; then remote_args+=(--account "$account"); fi
-  if ((requeue)); then remote_args+=(--requeue); fi
-  if ((watch_jobs)); then remote_args+=(--watch-jobs); fi
-  if ((watch_once)); then remote_args+=(--watch-once); fi
-  remote_args+=(--watch-interval "$watch_interval_seconds")
-  if [[ -n "$watch_duration_seconds" ]]; then
-    remote_args+=(--watch-duration "$watch_duration_seconds")
+mark_login_conflicting_option() {
+  local option="$1"
+
+  if [[ -z "$login_conflicting_option" ]]; then
+    login_conflicting_option="$option"
   fi
-  remote_args+=(--watch-job-name "$watch_job_name_pattern")
-  if [[ -n "$watch_job_ids" ]]; then remote_args+=(--watch-job-ids "$watch_job_ids"); fi
-  for arg in "${remote_args[@]}"; do
-    printf -v quoted_arg '%q' "$arg"
-    remote_command+=" ${quoted_arg}"
-  done
-  run_or_print_command ssh "$login_target" \
-    "cd ${quoted_remote_dir} && ./submit-job-test.sh${remote_command}"
 }
 
 parse_args() {
@@ -257,10 +267,6 @@ parse_args() {
         login_ip="$2"
         shift 2
         ;;
-      --login-shell)
-        login_shell=1
-        shift
-        ;;
       --login-remote-dir)
         require_value "$1" "${2:-}"
         login_remote_dir="$2"
@@ -268,102 +274,123 @@ parse_args() {
         ;;
       --part-type)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         part_type="$2"
         shift 2
         ;;
       --partition)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         partition="$2"
         shift 2
         ;;
       --count)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         count="$2"
         shift 2
         ;;
       --run-minutes)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         run_minutes="$2"
         shift 2
         ;;
       --heartbeat-seconds)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         heartbeat_seconds="$2"
         shift 2
         ;;
       --wall-minutes)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         wall_minutes="$2"
         shift 2
         ;;
       --submit-mode)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         submit_mode="$2"
         shift 2
         ;;
       --gpus-per-job)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         gpus_per_job="$2"
         shift 2
         ;;
       --nodes)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         nodes="$2"
         shift 2
         ;;
       --cpus-per-task)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         cpus_per_task="$2"
         shift 2
         ;;
       --exclusive)
+        mark_login_conflicting_option "$1"
         exclusive=1
         shift
         ;;
       --qos)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         qos="$2"
         shift 2
         ;;
       --account)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         account="$2"
         shift 2
         ;;
       --requeue)
+        mark_login_conflicting_option "$1"
         requeue=1
         shift
         ;;
       --output-dir)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         output_dir="$2"
         shift 2
         ;;
       --watch-jobs)
+        mark_login_conflicting_option "$1"
         watch_jobs=1
         shift
         ;;
       --watch-once)
+        mark_login_conflicting_option "$1"
         watch_once=1
         shift
         ;;
       --watch-interval)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         watch_interval_seconds="$2"
         shift 2
         ;;
       --watch-duration)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         watch_duration_seconds="$2"
         shift 2
         ;;
       --watch-job-name)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         watch_job_name_pattern="$2"
         shift 2
         ;;
       --watch-job-ids)
         require_value "$1" "${2:-}"
+        mark_login_conflicting_option "$1"
         watch_job_ids="$2"
         shift 2
         ;;
@@ -372,8 +399,8 @@ parse_args() {
         shift
         ;;
       -h | --help)
-        show_usage
-        exit 0
+        help_requested=1
+        shift
         ;;
       --)
         shift
@@ -390,6 +417,12 @@ parse_args() {
 
   if (($# > 0)); then
     die "Unexpected argument: $1"
+  fi
+}
+
+validate_login_option_conflicts() {
+  if [[ -n "$login_ip" && -n "$login_conflicting_option" ]]; then
+    die "--login cannot be combined with submission or watch option: ${login_conflicting_option}"
   fi
 }
 
@@ -428,9 +461,6 @@ validate_args() {
     done
   fi
 
-  if ((login_shell)) && [[ -z "$login_ip" ]]; then
-    die "--login-shell requires --login <login-external-ip>"
-  fi
   if [[ -n "$login_remote_dir" && -z "$login_ip" ]]; then
     die "--login-remote-dir requires --login <login-external-ip>"
   fi
@@ -856,8 +886,10 @@ print_watch_sacct_evidence() {
     if [[ -z "$job_id" ]]; then
       continue
     fi
-    printf 'job_id=%s state=%s exit_code=%s elapsed=%s submit=%s start=%s end=%s nodes=%s restarts=%s\n' \
-      "$job_id" "$state" "$exit_code" "$elapsed" "$submit_time" "$start_time" "$end_time" "$node_list" "$restarts"
+    printf 'job_id=%s state=' "$job_id"
+    print_job_state "$state"
+    printf ' exit_code=%s elapsed=%s submit=%s start=%s end=%s nodes=%s restarts=%s\n' \
+      "$exit_code" "$elapsed" "$submit_time" "$start_time" "$end_time" "$node_list" "$restarts"
     if state_is_interrupted "$state"; then
       watch_failures=$((watch_failures + 1))
     fi
@@ -945,8 +977,10 @@ watch_slurm_jobs() {
           visible_job_ids+=","
         fi
         visible_job_ids+="$job_id"
-        printf 'job_id=%s state=%s elapsed=%s remaining=%s partition=%s nodes=%s name=%s\n' \
-          "$job_id" "$state" "$elapsed" "$remaining" "$partition_name" "$nodes" "$job_name"
+        printf 'job_id=%s state=' "$job_id"
+        print_job_state "$state"
+        printf ' elapsed=%s remaining=%s partition=%s nodes=%s name=%s\n' \
+          "$elapsed" "$remaining" "$partition_name" "$nodes" "$job_name"
         if state_is_interrupted "$state"; then
           watch_failures=$((watch_failures + 1))
         fi
@@ -1029,10 +1063,15 @@ watch_slurm_jobs() {
 
 main() {
   parse_args "$@"
+  validate_login_option_conflicts
+  if ((help_requested)); then
+    show_usage
+    return 0
+  fi
   validate_args
 
   if [[ -n "$login_ip" ]]; then
-    stage_examples_and_run
+    stage_examples_and_login
     return $?
   fi
 

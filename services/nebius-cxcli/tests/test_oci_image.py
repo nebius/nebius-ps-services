@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import urllib.error
+import urllib.request
 from urllib.request import Request
 
 import pytest
 
-from nebius_cxcli.oci_image import _redirect_request, resolve_oci_image
+import nebius_cxcli.oci_image as oci_image
+from nebius_cxcli.oci_image import _default_requester, _redirect_request, resolve_oci_image
 
 
 def _json_bytes(value: object) -> bytes:
@@ -33,6 +37,114 @@ _AMD64_BODY = _json_bytes(
 )
 _AMD64_DIGEST = _digest(_AMD64_BODY)
 _ARM64_DIGEST = "sha256:" + "c" * 64
+
+
+class _TrackedBody(io.BytesIO):
+    def __init__(self, body: bytes) -> None:
+        super().__init__(body)
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
+class _RegistryResponse(_TrackedBody):
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(body)
+        self.status = status
+        self.headers = headers or {}
+
+    def __enter__(self) -> _RegistryResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
+class _ResponseOpener:
+    def __init__(self, response: _RegistryResponse) -> None:
+        self.response = response
+
+    def open(self, _request: Request, *, timeout: int) -> _RegistryResponse:
+        assert timeout == 30
+        return self.response
+
+
+class _ErrorOpener:
+    def __init__(self, error: urllib.error.HTTPError) -> None:
+        self.error = error
+
+    def open(self, _request: Request, *, timeout: int) -> _RegistryResponse:
+        assert timeout == 30
+        raise self.error
+
+
+def test_default_requester_bounds_success_response_without_content_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _RegistryResponse(b"12345")
+    monkeypatch.setattr(oci_image, "_MAX_CONTROL_RESPONSE_BYTES", 4)
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *_handlers: _ResponseOpener(response),
+    )
+
+    with pytest.raises(RuntimeError, match="4-byte safety limit"):
+        _default_requester(Request("https://registry.example/v2/image/manifests/tag"))
+
+    assert response.read_sizes == [5]
+    assert response.closed
+
+
+def test_default_requester_rejects_oversized_http_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_body = _TrackedBody(b"12345")
+    error = urllib.error.HTTPError(
+        "https://registry.example/v2/image/manifests/tag",
+        500,
+        "registry error",
+        {},
+        response_body,
+    )
+    monkeypatch.setattr(oci_image, "_MAX_CONTROL_RESPONSE_BYTES", 4)
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *_handlers: _ErrorOpener(error),
+    )
+
+    with pytest.raises(RuntimeError, match="4-byte safety limit"):
+        _default_requester(Request(error.url))
+
+    assert response_body.read_sizes == [5]
+    assert response_body.closed
+
+
+def test_default_requester_rejects_declared_oversized_body_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _RegistryResponse(b"ignored", headers={"Content-Length": "5"})
+    monkeypatch.setattr(oci_image, "_MAX_CONTROL_RESPONSE_BYTES", 4)
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *_handlers: _ResponseOpener(response),
+    )
+
+    with pytest.raises(RuntimeError, match="4-byte safety limit"):
+        _default_requester(Request("https://registry.example/v2/image/manifests/tag"))
+
+    assert response.read_sizes == []
+    assert response.closed
 
 
 def test_resolves_anonymous_bearer_index_to_exact_platform_digest() -> None:

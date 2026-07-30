@@ -1,6 +1,6 @@
 interface:
   display_name: "Code Review"
-  short_description: "Neutral findings-first code review"
-  default_prompt: "Use $code-review to review the current local branch for bugs, regressions, test gaps, reliability risks, security-adjacent issues, maintainability blockers, and missed structural simplifications."
+  short_description: "Review code; explicit runs fix safe findings"
+  default_prompt: "Use $code-review to review the current local branch, fix only safe in-scope findings, validate each fix with focused repository-native checks, and report the prioritized fixed and gated findings."
 policy:
   allow_implicit_invocation: true

@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import string
 import subprocess
 import sys
@@ -34,10 +35,15 @@ from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from functools import lru_cache
-from pathlib import Path
+from functools import lru_cache, wraps
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Annotated, Any, Protocol, cast
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX runtime fallback
+    _fcntl = None
 
 try:
     import termios as _termios
@@ -552,6 +558,7 @@ from .soperator_migration import (
     _wait_for_target_worker_nodesets_ready,
     execute_soperator_migration,
     external_soperator_upgrade_backup_compensation,
+    external_soperator_upgrade_backup_recovery_state,
     external_soperator_upgrade_protected_comparison_passed,
     external_soperator_upgrade_resume_backup_metadata,
     external_soperator_upgrade_top_level_stage,
@@ -564,7 +571,12 @@ from .soperator_migration import (
     record_live_satisfied_soperator_upgrade_campaign_segment,
     record_soperator_migration_backup_binding,
     record_soperator_migration_backup_compensation,
+    record_soperator_migration_backup_recovery_approval,
+    record_soperator_migration_backup_replacement_failure,
+    record_soperator_migration_backup_replacement_required,
     record_soperator_migration_slurmcluster_handoff_binding,
+    refresh_soperator_migration_upgrade_report,
+    replace_soperator_migration_campaign_backup_binding,
     run_external_soperator_upgrade_jobs,
     soperator_migration_checkpoint_path,
     soperator_migration_lock_path,
@@ -606,6 +618,7 @@ from .soperator_onboarding import (
     soperator_onboarding_target_refs,
     soperator_provider_driver_presets_for_jail_cuda,
     soperator_runtime_report_with_accepted_upgrade_plan,
+    soperator_upgrade_support_finding,
     soperator_upgrade_support_findings,
     soperator_upgrade_support_rejected,
     source_soperator_discovery_report_path,
@@ -875,6 +888,16 @@ _RENDER_DEPLOY_HINT_SUPPRESSED: ContextVar[bool] = ContextVar(
 )
 _SOPERATOR_UPGRADE_JOB_PROMPT_PAUSE: ContextVar[Callable[[], Any] | None] = ContextVar(
     "soperator_upgrade_job_prompt_pause",
+    default=None,
+)
+_EXTERNAL_SOPERATOR_UPGRADE_INVOCATION_STARTED_AT: ContextVar[str | None] = ContextVar(
+    "external_soperator_upgrade_invocation_started_at",
+    default=None,
+)
+_EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS: ContextVar[
+    dict[str, tuple[int, ...]] | None
+] = ContextVar(
+    "external_soperator_upgrade_verified_backups",
     default=None,
 )
 
@@ -2310,7 +2333,8 @@ ext_soperator_app = typer.Typer(
         "discover writes a support-safe read-only Soperator discovery bundle; "
         "onboard registers one cluster identity or reconciles its complete v6 campaign "
         "in config.yaml without Terraform-owning it; upgrade reconciles live state and "
-        "advances at most one campaign segment; jobs opens the durable v6 job-control "
+        "runs every remaining locked campaign segment in one approved command; jobs opens "
+        "the durable v6 job-control "
         "screen during that upgrade. backup/restore move restore-capable "
         "Soperator state to new empty target clusters only."
     ),
@@ -2322,7 +2346,8 @@ ext_soperator_app = typer.Typer(
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
         "--execute --approve; "
         "nebius-cxcli ext-soperator jobs <config.yaml> --target <target>; "
-        "repeat dry-run/execute for each remaining segment. Optional support bundle: "
+        "a pending gate, error, explicit stop, or interrupt remains checkpointed and the "
+        "same execute command resumes it. Optional support bundle: "
         "nebius-cxcli ext-soperator discover --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --output-dir ./support-bundles; "
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
@@ -2350,10 +2375,10 @@ ext_soperator_app = typer.Typer(
         "refreshes discovery and creates or reuses its checkpointed restore-capable "
         "backup before mutation. "
         "Onboarding locks the full discovery-guided external upgrade path in config.yaml. "
-        "External Kubernetes control-plane work advances one Kubernetes minor hop per "
-        "upgrade run; repeat the same ext-soperator upgrade --execute --approve command "
-        "until all locked path segments are complete instead of rerunning discovery or "
-        "onboarding between normal Kubernetes hops. No prepare-upgrade command exists."
+        "Each locked segment advances at most one Kubernetes minor hop, and one approved "
+        "ext-soperator upgrade invocation continues across successful segment checkpoints "
+        "until the campaign is complete or a pending/error/interrupt boundary requires the "
+        "same command to resume. No prepare-upgrade command exists."
     ),
 )
 soperator_app = typer.Typer(
@@ -3026,6 +3051,11 @@ _SOPERATOR_BACKUP_SERVER_OWNED_METADATA_ANNOTATIONS = frozenset(
         "volume.kubernetes.io/storage-provisioner",
     }
 )
+_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBERS = 10_000
+_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBER_BYTES = 64 * 1024 * 1024 * 1024
+_SOPERATOR_RESTORE_ARCHIVE_MAX_TOTAL_BYTES = 128 * 1024 * 1024 * 1024
+_SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO = 200
+_SOPERATOR_RESTORE_ARCHIVE_DISK_HEADROOM_BYTES = 1024 * 1024 * 1024
 _SOPERATOR_BACKUP_KUBERNETES_RESOURCES: tuple[tuple[str, str], ...] = (
     ("serviceaccounts", "serviceaccounts"),
     ("secrets", "secrets"),
@@ -7273,16 +7303,145 @@ def _soperator_restore_extract_archive(archive_path: Path, output_dir: Path) -> 
     if not archive_path.exists():
         raise RuntimeError(f"Soperator backup archive not found: {archive_path}")
     try:
-        with tarfile.open(archive_path, "r:gz") as archive:
-            root = output_dir.resolve()
-            for member in archive.getmembers():
+        archive_stat = archive_path.lstat()
+        if not stat.S_ISREG(archive_stat.st_mode) or archive_path.is_symlink():
+            raise RuntimeError(
+                "Soperator backup archive must be a regular non-symlink file."
+            )
+        archive_identity = (
+            archive_stat.st_dev,
+            archive_stat.st_ino,
+            archive_stat.st_size,
+            archive_stat.st_mtime_ns,
+            archive_stat.st_ctime_ns,
+        )
+        compressed_bytes = max(1, archive_stat.st_size)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        root = output_dir.resolve()
+        available_bytes = shutil.disk_usage(output_dir).free
+        extractable_bytes = max(
+            0,
+            available_bytes - _SOPERATOR_RESTORE_ARCHIVE_DISK_HEADROOM_BYTES,
+        )
+        member_names: set[str] = set()
+        member_identities: list[tuple[object, ...]] = []
+        total_uncompressed_bytes = 0
+        with tarfile.open(archive_path, "r|gz") as archive:
+            while True:
+                member = archive.next()
+                if member is None:
+                    break
+                archive.members.clear()
+                if len(member_identities) >= _SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBERS:
+                    raise RuntimeError(
+                        "Soperator backup archive contains too many members to extract safely."
+                    )
+                member_name = str(member.name or "")
+                member_path_token = PurePosixPath(member_name)
+                normalized_name = str(member_path_token)
+                if (
+                    not member_name
+                    or member_path_token.is_absolute()
+                    or ".." in member_path_token.parts
+                ):
+                    raise RuntimeError(
+                        f"Soperator backup archive contains unsafe path: {member_name}"
+                    )
+                if normalized_name in member_names:
+                    raise RuntimeError(
+                        "Soperator backup archive contains duplicate member paths."
+                    )
+                member_names.add(normalized_name)
+                if not member.isfile() and not member.isdir():
+                    raise RuntimeError(
+                        "Soperator backup archive contains a link or special member."
+                    )
+                if member.size < 0 or member.size > _SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBER_BYTES:
+                    raise RuntimeError(
+                        f"Soperator backup archive member is too large to extract safely: "
+                        f"{member_name}"
+                    )
+                total_uncompressed_bytes += member.size
+                if total_uncompressed_bytes > _SOPERATOR_RESTORE_ARCHIVE_MAX_TOTAL_BYTES:
+                    raise RuntimeError(
+                        "Soperator backup archive is too large to extract safely."
+                    )
+                if (
+                    total_uncompressed_bytes
+                    > compressed_bytes * _SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO
+                ):
+                    raise RuntimeError(
+                        "Soperator backup archive expansion ratio is too large to extract safely."
+                    )
+                if total_uncompressed_bytes > extractable_bytes:
+                    raise RuntimeError(
+                        "Soperator backup archive cannot be extracted safely with the available "
+                        "temporary-disk space."
+                    )
                 member_path = (root / member.name).resolve()
                 if not member_path.is_relative_to(root):
                     raise RuntimeError(
                         f"Soperator backup archive contains unsafe path: {member.name}"
                     )
-            archive.extractall(output_dir, filter="data")
-    except tarfile.TarError as exc:
+                member_identities.append(
+                    (
+                        member.name,
+                        member.size,
+                        member.type,
+                        member.mode,
+                        member.uid,
+                        member.gid,
+                        member.mtime,
+                    )
+                )
+        validated_stat = archive_path.lstat()
+        validated_identity = (
+            validated_stat.st_dev,
+            validated_stat.st_ino,
+            validated_stat.st_size,
+            validated_stat.st_mtime_ns,
+            validated_stat.st_ctime_ns,
+        )
+        if archive_identity != validated_identity:
+            raise RuntimeError(
+                "Soperator backup archive changed during pre-extraction validation."
+            )
+        with tarfile.open(archive_path, "r|gz") as archive:
+            for expected_identity in member_identities:
+                member = archive.next()
+                if member is None:
+                    raise RuntimeError(
+                        "Soperator backup archive changed after pre-extraction validation."
+                    )
+                archive.members.clear()
+                actual_identity = (
+                    member.name,
+                    member.size,
+                    member.type,
+                    member.mode,
+                    member.uid,
+                    member.gid,
+                    member.mtime,
+                )
+                if actual_identity != expected_identity:
+                    raise RuntimeError(
+                        "Soperator backup archive changed after pre-extraction validation."
+                    )
+                archive.extract(member, output_dir, filter="data")
+            if archive.next() is not None:
+                raise RuntimeError(
+                    "Soperator backup archive changed after pre-extraction validation."
+                )
+        final_stat = archive_path.lstat()
+        if archive_identity != (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+            final_stat.st_ctime_ns,
+        ):
+            raise RuntimeError("Soperator backup archive changed during extraction.")
+    except (OSError, tarfile.TarError) as exc:
         raise RuntimeError(f"Could not read Soperator backup archive {archive_path}.") from exc
 
 
@@ -13688,6 +13847,7 @@ def _external_soperator_upgrade_command_args(
     approve: bool,
     approve_remediation: bool,
     interactive: bool,
+    approve_backup_recovery: bool = False,
     stop_after_phase: str | None = None,
 ) -> tuple[str, ...]:
     args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
@@ -13713,6 +13873,11 @@ def _external_soperator_upgrade_command_args(
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    args.append(
+        "--approve-backup-recovery"
+        if approve_backup_recovery
+        else "--no-approve-backup-recovery"
+    )
     if _non_empty_text(stop_after_phase):
         args.extend(["--stop-after-phase", str(stop_after_phase)])
     return tuple(args)
@@ -13785,6 +13950,24 @@ def _external_soperator_upgrade_backup_transition(
         target_k8s_version=(
             _non_empty_text(segment.get("target_k8s_version")) or target_k8s_version
         ),
+    )
+
+
+def _external_soperator_terminal_backup_transition(
+    *,
+    source_report: Mapping[str, Any],
+    onboarding: Mapping[str, Any],
+    final_segment: Mapping[str, Any] | None,
+) -> _ExternalSoperatorUpgradeBackupTransition:
+    transition = _external_soperator_upgrade_backup_transition(
+        source_report=source_report,
+        onboarding=onboarding,
+        current_segment=final_segment,
+    )
+    return replace(
+        transition,
+        source_chart_version=transition.target_chart_version,
+        source_k8s_version=transition.target_k8s_version,
     )
 
 
@@ -13869,6 +14052,309 @@ def _create_external_soperator_upgrade_backup(
         "accounting_db_dump": backup.accounting_db_included,
         "report_redacted": True,
     }
+
+
+def _external_soperator_campaign_backup_archive_path(
+    config_path: Path,
+    backup: Mapping[str, Any],
+) -> Path:
+    raw_path = _non_empty_text(backup.get("path"))
+    if not raw_path:
+        raise RuntimeError(
+            "External Soperator campaign backup metadata has no archive path."
+        )
+    path = Path(raw_path).expanduser()
+    return path if path.is_absolute() else config_path.parent / path
+
+
+def _external_soperator_campaign_backup_file_identity(
+    archive_path: Path,
+) -> tuple[int, ...]:
+    try:
+        metadata = archive_path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "External Soperator campaign backup archive is missing."
+        ) from exc
+    if not stat.S_ISREG(metadata.st_mode) or archive_path.is_symlink():
+        raise RuntimeError(
+            "External Soperator campaign backup archive must be a regular non-symlink file."
+        )
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise RuntimeError(
+            "External Soperator campaign backup archive has unsafe file ownership or "
+            "permissions; it must be owned by the current user and inaccessible to group "
+            "and other users."
+        )
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        metadata.st_uid,
+        metadata.st_gid,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _verify_external_soperator_campaign_backup(
+    *,
+    config_path: Path,
+    target_ref: str,
+    backup: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+) -> None:
+    """Fully verify one campaign protection archive once per CLI invocation."""
+
+    archive_path = _external_soperator_campaign_backup_archive_path(
+        config_path,
+        backup,
+    )
+    file_identity = _external_soperator_campaign_backup_file_identity(archive_path)
+    cache_key = (
+        str(archive_path.resolve())
+        + ":"
+        + _non_empty_text(backup.get("sha256"))
+        + ":"
+        + _non_empty_text(backup.get("manifest_sha256"))
+    )
+    cache = _EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS.get()
+    if cache is not None and cache.get(cache_key) == file_identity:
+        return
+    expected_size = backup.get("size_bytes")
+    if isinstance(expected_size, bool):
+        expected_size = None
+    try:
+        normalized_expected_size = int(expected_size)
+    except (TypeError, ValueError):
+        normalized_expected_size = 0
+    if normalized_expected_size <= 0 or file_identity[2] != normalized_expected_size:
+        raise RuntimeError(
+            "External Soperator campaign backup archive size does not match checkpoint "
+            "metadata."
+        )
+    expected_archive_sha = _non_empty_text(backup.get("sha256"))
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_archive_sha):
+        raise RuntimeError(
+            "External Soperator campaign backup metadata has an invalid archive SHA256."
+        )
+    if _soperator_upgrade_file_sha256(archive_path) != expected_archive_sha:
+        raise RuntimeError(
+            "External Soperator campaign backup archive SHA256 does not match checkpoint "
+            "metadata."
+        )
+    with tempfile.TemporaryDirectory(
+        prefix="nebius-cxcli-ext-soperator-backup-verify-"
+    ) as temp_dir:
+        root = Path(temp_dir)
+        _soperator_restore_extract_archive(archive_path, root)
+        manifest, _restore_plan = _soperator_restore_verify_archive(root)
+        expected_manifest_sha = _non_empty_text(backup.get("manifest_sha256"))
+        actual_manifest_sha = _soperator_upgrade_file_sha256(
+            root / "backup-manifest.json"
+        )
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha)
+            or actual_manifest_sha != expected_manifest_sha
+        ):
+            raise RuntimeError(
+                "External Soperator campaign backup manifest SHA256 does not match "
+                "checkpoint metadata."
+            )
+        if normalize_component_token(manifest.get("target_ref")) != normalize_component_token(
+            target_ref
+        ):
+            raise RuntimeError(
+                "External Soperator campaign backup restore plan belongs to a different target."
+            )
+        if _non_empty_text(manifest.get("source_kind")) != "external-upgrade":
+            raise RuntimeError(
+                "External Soperator campaign protection requires an external-upgrade archive."
+            )
+        for field in ("cluster_key", "cluster_id", "cluster_name", "kube_context"):
+            expected = _non_empty_text(checkpoint.get(field))
+            if expected and _non_empty_text(manifest.get(field)) != expected:
+                raise RuntimeError(
+                    "External Soperator campaign backup cluster identity does not match "
+                    f"the checkpoint field {field}."
+                )
+        campaign_fingerprint = _non_empty_text(checkpoint.get("campaign_fingerprint"))
+        if _non_empty_text(backup.get("campaign_fingerprint")) != campaign_fingerprint:
+            raise RuntimeError(
+                "External Soperator campaign backup belongs to a different campaign."
+            )
+        origin_segment_id = _non_empty_text(backup.get("origin_segment_id"))
+        origin_segment = next(
+            (
+                item
+                for item in campaign.get("segments", []) or []
+                if isinstance(item, Mapping)
+                and _non_empty_text(item.get("id")) == origin_segment_id
+            ),
+            None,
+        )
+        if not isinstance(origin_segment, Mapping):
+            raise RuntimeError(
+                "External Soperator campaign backup origin segment is absent from the "
+                "locked campaign."
+            )
+        expected_chart = _state_mapping(origin_segment.get("soperator_chart"))
+        manifest_chart = _state_mapping(manifest.get("chart"))
+        manifest_kubernetes = _state_mapping(manifest.get("kubernetes"))
+        terminal_recovery_point = (
+            _non_empty_text(backup.get("recovery_point")) == "campaign-terminal"
+        )
+        if terminal_recovery_point:
+            final_segment = next(
+                (
+                    item
+                    for item in reversed(list(campaign.get("segments", []) or []))
+                    if isinstance(item, Mapping)
+                ),
+                None,
+            )
+            if (
+                not isinstance(final_segment, Mapping)
+                or _non_empty_text(final_segment.get("id")) != origin_segment_id
+            ):
+                raise RuntimeError(
+                    "External Soperator terminal recovery backup does not belong to "
+                    "the final locked campaign segment."
+                )
+            expected_transition = (
+                ("chart.from", expected_chart.get("target_version"), manifest_chart.get("from")),
+                ("chart.to", expected_chart.get("target_version"), manifest_chart.get("to")),
+                (
+                    "kubernetes.from",
+                    origin_segment.get("target_k8s_version"),
+                    manifest_kubernetes.get("from"),
+                ),
+                (
+                    "kubernetes.to",
+                    origin_segment.get("target_k8s_version"),
+                    manifest_kubernetes.get("to"),
+                ),
+            )
+        else:
+            expected_transition = (
+                ("chart.from", expected_chart.get("current_version"), manifest_chart.get("from")),
+                ("chart.to", expected_chart.get("target_version"), manifest_chart.get("to")),
+                (
+                    "kubernetes.from",
+                    origin_segment.get("current_k8s_version"),
+                    manifest_kubernetes.get("from"),
+                ),
+                (
+                    "kubernetes.to",
+                    origin_segment.get("target_k8s_version"),
+                    manifest_kubernetes.get("to"),
+                ),
+            )
+        for label, expected, actual in expected_transition:
+            if _non_empty_text(expected) and _non_empty_text(actual) != _non_empty_text(
+                expected
+            ):
+                raise RuntimeError(
+                    "External Soperator campaign backup transition does not match "
+                    f"its origin segment field {label}."
+                )
+    if _external_soperator_campaign_backup_file_identity(archive_path) != file_identity:
+        raise RuntimeError(
+            "External Soperator campaign backup archive changed during validation."
+        )
+    if cache is not None:
+        cache[cache_key] = file_identity
+
+
+def _external_soperator_backup_failure_class(exc: BaseException) -> str:
+    message = str(exc).lower()
+    if "missing" in message or "not found" in message:
+        return "archive-missing"
+    if "symlink" in message or "regular" in message or "unsafe" in message:
+        return "archive-unsafe"
+    if "size" in message:
+        return "archive-size-mismatch"
+    if "sha256" in message or "checksum" in message:
+        return "archive-checksum-mismatch"
+    if "recreation coverage" in message or "restore plan" in message:
+        return "restore-coverage-invalid"
+    if "could not be read" in message or "tar" in message:
+        return "archive-unreadable"
+    return "archive-validation-failed"
+
+
+def _external_soperator_campaign_backup_candidate(
+    backup: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any],
+    origin_segment_id: str,
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(to_plain_data(dict(backup)))
+    if not isinstance(candidate, dict):  # pragma: no cover - to_plain_data contract
+        raise RuntimeError("External Soperator backup metadata could not be normalized.")
+    candidate.setdefault("scope", "campaign")
+    candidate.setdefault(
+        "campaign_fingerprint",
+        checkpoint.get("campaign_fingerprint"),
+    )
+    candidate.setdefault("origin_segment_id", origin_segment_id)
+    candidate.setdefault(
+        "origin_source_report_fingerprint",
+        checkpoint.get("source_report_fingerprint"),
+    )
+    return candidate
+
+
+def _external_soperator_backup_recovery_rerun_command(
+    command: Sequence[str],
+) -> str:
+    args = [
+        "--approve-backup-recovery"
+        if item == "--no-approve-backup-recovery"
+        else str(item)
+        for item in command
+    ]
+    if "--approve-backup-recovery" not in args:
+        args.append("--approve-backup-recovery")
+    return shlex.join(args)
+
+
+def _require_external_soperator_backup_recovery_approval(
+    *,
+    command: Sequence[str],
+    failure_class: str,
+    approve_backup_recovery: bool,
+    interactive: bool,
+) -> str:
+    warning = (
+        "WARNING: the campaign-owned restore-capable backup is missing or corrupt "
+        f"({failure_class}). The original pre-upgrade restore point is unavailable. "
+        "A replacement will represent a later stable cluster state. Approval can finish "
+        "only the exact current segment, including its already-approved retirement work; "
+        "no later segment may start until a replacement archive is fully verified."
+    )
+    if approve_backup_recovery:
+        console.print(f"[yellow]{warning}[/yellow]", soft_wrap=True)
+        return "explicit-flag"
+    if interactive and sys.stdin.isatty():
+        with _soperator_upgrade_job_prompt_paused():
+            console.print(f"[yellow]{warning}[/yellow]", soft_wrap=True)
+            if typer.confirm(
+                "Approve this exact bounded backup-recovery operation?",
+                default=False,
+            ):
+                return "interactive"
+        raise RuntimeError(
+            "External Soperator backup recovery was declined; no checkpoint or cluster "
+            "mutation was performed."
+        )
+    raise RuntimeError(
+        warning
+        + " Noninteractive recovery requires the dedicated flag. Rerun exactly: "
+        + _external_soperator_backup_recovery_rerun_command(command)
+    )
 
 
 def _reconcile_external_soperator_backup_compensation(
@@ -53112,6 +53598,269 @@ def _init_mk8s_exec_auth_sdk(
     return _Mk8sExecAuthSdk(parent_id=parent_id, endpoint=endpoint, context=context)
 
 
+_MK8S_EXEC_CREDENTIAL_CACHE_SCHEMA = "nebius-cxcli/mk8s-exec-credential-cache-v1"
+_MK8S_EXEC_CREDENTIAL_REFRESH_SAFETY_SECONDS = 300.0
+_MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS = 30.0
+_MK8S_EXEC_CREDENTIAL_REFRESH_FAILURE_COOLDOWN_SECONDS = 60.0
+
+
+def _mk8s_exec_credential_binding_sha256(
+    *,
+    project_id: str,
+    client_name: str,
+    endpoint: str | None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "project_id": project_id,
+                "client_name": client_name,
+                "endpoint": endpoint or "",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _mk8s_exec_credential_expiration(status: Mapping[str, Any]) -> datetime | None:
+    return _mk8s_exec_credential_timestamp(status.get("expirationTimestamp"))
+
+
+def _mk8s_exec_credential_timestamp(value: Any) -> datetime | None:
+    raw_value = _non_empty_text(value)
+    if not raw_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _mk8s_exec_credential_cache_payload(
+    *,
+    binding_sha256: str,
+    status: Mapping[str, str],
+    refresh_failed_at: datetime | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "schema": _MK8S_EXEC_CREDENTIAL_CACHE_SCHEMA,
+        "binding_sha256": binding_sha256,
+        "status": dict(status),
+        "cached_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    if refresh_failed_at is not None:
+        payload["refresh_failed_at"] = (
+            refresh_failed_at.astimezone(UTC)
+            .isoformat()
+            .replace(
+                "+00:00",
+                "Z",
+            )
+        )
+    return payload
+
+
+def _read_mk8s_exec_credential_cache(
+    path: Path,
+    *,
+    binding_sha256: str,
+) -> tuple[dict[str, str], datetime, datetime | None] | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_mode & 0o077
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise RuntimeError("MK8s exec credential cache must be an owner-only regular file.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != _MK8S_EXEC_CREDENTIAL_CACHE_SCHEMA
+        or payload.get("binding_sha256") != binding_sha256
+        or not isinstance(payload.get("status"), dict)
+    ):
+        return None
+    status = {
+        str(key): str(value)
+        for key, value in payload["status"].items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    if not _non_empty_text(status.get("token")):
+        return None
+    expiration = _mk8s_exec_credential_expiration(status)
+    if expiration is None:
+        return None
+    refresh_failed_at = _mk8s_exec_credential_timestamp(payload.get("refresh_failed_at"))
+    return status, expiration, refresh_failed_at
+
+
+@contextmanager
+def _locked_mk8s_exec_credential_cache(path: Path) -> Iterator[None]:
+    if _fcntl is None:
+        raise RuntimeError("MK8s exec credential cache locking is unavailable on this platform.")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_metadata = path.parent.stat()
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_mode & 0o077
+        or (hasattr(os, "getuid") and parent_metadata.st_uid != os.getuid())
+    ):
+        raise RuntimeError("MK8s exec credential cache directory must be owner-controlled.")
+    lock_path = path.with_name(f".{path.name}.lock")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or (
+            hasattr(os, "getuid") and metadata.st_uid != os.getuid()
+        ):
+            raise RuntimeError(
+                "MK8s exec credential cache lock must be an owner-only regular file."
+            )
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+        yield
+    finally:
+        with suppress(OSError):
+            _fcntl.flock(fd, _fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _acquire_mk8s_exec_credential_status(
+    *,
+    project_id: str,
+    client_name: str,
+    endpoint: str | None,
+) -> dict[str, str]:
+    if not _runtime_auth_env_available() and project_id and client_name:
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    sdk = _init_mk8s_exec_auth_sdk(
+        parent_id=project_id or None,
+        endpoint=endpoint,
+        context="MK8s exec auth",
+    )
+    try:
+        token = sdk.get_token_sync(timeout=20.0)
+    finally:
+        with suppress(Exception):
+            sdk.sync_close()
+    token_value = _non_empty_text(getattr(token, "token", None))
+    if not token_value:
+        raise RuntimeError("Nebius SDK returned an empty IAM token for MK8s exec auth.")
+    status = {"token": token_value}
+    expiration = _iso8601_utc(getattr(token, "expiration", None))
+    if expiration:
+        status["expirationTimestamp"] = expiration
+    return status
+
+
+def _mk8s_exec_credential_status(
+    *,
+    project_id: str,
+    client_name: str,
+    endpoint: str | None,
+    cache_file: Path | None,
+) -> dict[str, str]:
+    if cache_file is None:
+        return _acquire_mk8s_exec_credential_status(
+            project_id=project_id,
+            client_name=client_name,
+            endpoint=endpoint,
+        )
+    binding_sha256 = _mk8s_exec_credential_binding_sha256(
+        project_id=project_id,
+        client_name=client_name,
+        endpoint=endpoint,
+    )
+    with _locked_mk8s_exec_credential_cache(cache_file):
+        cached = _read_mk8s_exec_credential_cache(
+            cache_file,
+            binding_sha256=binding_sha256,
+        )
+        now = datetime.now(UTC)
+        if (
+            cached is not None
+            and (cached[1] - now).total_seconds() > _MK8S_EXEC_CREDENTIAL_REFRESH_SAFETY_SECONDS
+        ):
+            return cached[0]
+        refresh_failure_age = (
+            (now - cached[2]).total_seconds()
+            if cached is not None and cached[2] is not None
+            else None
+        )
+        if (
+            cached is not None
+            and (cached[1] - now).total_seconds() > _MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS
+            and refresh_failure_age is not None
+            and 0 <= refresh_failure_age < _MK8S_EXEC_CREDENTIAL_REFRESH_FAILURE_COOLDOWN_SECONDS
+        ):
+            return cached[0]
+        try:
+            status = _acquire_mk8s_exec_credential_status(
+                project_id=project_id,
+                client_name=client_name,
+                endpoint=endpoint,
+            )
+        except Exception:
+            fallback_now = datetime.now(UTC)
+            if (
+                cached is not None
+                and (cached[1] - fallback_now).total_seconds()
+                > _MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS
+            ):
+                with suppress(OSError):
+                    _write_text_atomic(
+                        cache_file,
+                        json.dumps(
+                            _mk8s_exec_credential_cache_payload(
+                                binding_sha256=binding_sha256,
+                                status=cached[0],
+                                refresh_failed_at=fallback_now,
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        file_mode=0o600,
+                    )
+                return cached[0]
+            raise
+        expiration = _mk8s_exec_credential_expiration(status)
+        cache_now = datetime.now(UTC)
+        if (
+            expiration is not None
+            and (expiration - cache_now).total_seconds() > _MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS
+        ):
+            _write_text_atomic(
+                cache_file,
+                json.dumps(
+                    _mk8s_exec_credential_cache_payload(
+                        binding_sha256=binding_sha256,
+                        status=status,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                file_mode=0o600,
+            )
+        return status
+
+
 def _mk8s_kubeconfig_payload(spec: _Mk8sKubeconfigSpec) -> dict[str, Any]:
     ca_data = base64.b64encode(spec.ca_pem.encode("utf-8")).decode("ascii")
     return {
@@ -53155,10 +53904,20 @@ def _mk8s_kubeconfig_payload(spec: _Mk8sKubeconfigSpec) -> dict[str, Any]:
 
 
 def _write_kubeconfig_file(path: Path, spec: _Mk8sKubeconfigSpec) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(_mk8s_kubeconfig_payload(spec), sort_keys=False),
-        encoding="utf-8",
+    rendered_spec = spec
+    if "mk8s-token" in spec.exec_args and "--cache-file" not in spec.exec_args:
+        rendered_spec = replace(
+            spec,
+            exec_args=(
+                *spec.exec_args,
+                "--cache-file",
+                str(path.parent / "exec-credential-cache.json"),
+            ),
+        )
+    _write_text_atomic(
+        path,
+        yaml.safe_dump(_mk8s_kubeconfig_payload(rendered_spec), sort_keys=False),
+        file_mode=0o600,
     )
 
 
@@ -63849,6 +64608,34 @@ _SOPERATOR_MIGRATION_ACTIONS = frozenset(
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     }
 )
+
+
+class _ContinueExternalSoperatorUpgradeCampaign(Exception):
+    """Advance the same approved CLI invocation to its next checkpointed segment."""
+
+
+def _continue_external_soperator_upgrade_campaign(
+    command: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Drive successful locked segments to campaign completion in one CLI invocation."""
+
+    @wraps(command)
+    def _campaign_driver(*args: Any, **kwargs: Any) -> Any:
+        token = _EXTERNAL_SOPERATOR_UPGRADE_INVOCATION_STARTED_AT.set(datetime.now(UTC).isoformat())
+        backup_cache_token = _EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS.set({})
+        try:
+            while True:
+                try:
+                    return command(*args, **kwargs)
+                except _ContinueExternalSoperatorUpgradeCampaign:
+                    continue
+        finally:
+            _EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS.reset(backup_cache_token)
+            _EXTERNAL_SOPERATOR_UPGRADE_INVOCATION_STARTED_AT.reset(token)
+
+    return _campaign_driver
+
+
 _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
 _SOPERATOR_TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
@@ -63856,8 +64643,9 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "fingerprint, and external upgrade quota before running accepted "
     "checkpointed phases in order.",
     "External MK8s contract: direct Nebius updates advance only the control plane "
-    "one accepted Kubernetes minor hop per upgrade run; compute changes follow the "
-    "fingerprinted in-place or blue-green mode.",
+    "one accepted Kubernetes minor hop per locked segment; after a terminal segment "
+    "checkpoint the same approved command revalidates and continues the campaign. "
+    "Compute changes follow the fingerprinted in-place or blue-green mode.",
     "Compute quota contract: cxcli preflights temporary continuity nodes and the "
     "accepted mode-specific capacity or replacement-capacity reacquisition before mutation.",
     "Status contract: approved --execute reports phase-aware MK8s, storage, "
@@ -63870,6 +64658,10 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "or retirement.",
     "Resume contract: checkpoints skip completed data-copy/retirement work and "
     "recheck completed remediation, upgrade, and cutover actions for drift.",
+    "Backup recovery contract: one campaign-owned backup protects every locked "
+    "segment. A missing or corrupt archive requires dedicated approval, can finish "
+    "only the independently proven current segment, and blocks later segments until "
+    "a fully verified replacement is active.",
     "Completion contract: success requires final MK8s readiness, target Helm "
     "workload health, and stale source-family Flux/Helm cleanup while preserving "
     "shared/storage resources.",
@@ -63881,13 +64673,14 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Config": "cyan",
     "Source discovery bundle": "cyan",
     "Onboarding state": "bold blue",
+    "Discovery scope": "bold blue",
     "Versions": "bold cyan",
     "Source version": "blue",
     "Target version": "blue",
     "Soperator version": "blue",
     "Kubernetes version": "blue",
-    "Support policy": "bold cyan",
-    "Locked upgrade path": "bold cyan",
+    "Current-segment support policy": "bold cyan",
+    "Locked upgrade campaign": "bold cyan",
     "Accepted onboarding actions": "bold cyan",
     "Storage mode": "bold magenta",
     "Compute mode": "bold magenta",
@@ -63900,7 +64693,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "External control-plane upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
     "External MK8s and compute migration": "bold cyan",
-    "Upgrade phases": "bold magenta",
+    "Current segment phases": "bold magenta",
     "Execution controls": "bold cyan",
     "Live executor contract": "bold blue",
     "External MK8s contract": "bold blue",
@@ -63909,6 +64702,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Validation contract": "bold blue",
     "Failure handling contract": "bold blue",
     "Resume contract": "bold blue",
+    "Backup recovery contract": "bold blue",
     "Completion contract": "bold blue",
     "Execution mode": "bold green",
     "Slurm job policy": "bold green",
@@ -64009,6 +64803,13 @@ _SOPERATOR_MIGRATION_STATUS_READY_RE = re.compile(
 )
 _SOPERATOR_MIGRATION_STATUS_ROLLOUT_GROUP_RE = re.compile(
     r"\b(?P<name>[A-Za-z0-9_.-]+):(?=(?:[A-Z][A-Za-z0-9_-]*|status unavailable))"
+)
+_SOPERATOR_MIGRATION_STATUS_PROVIDER_HEADER_RE = re.compile(
+    r"^(?P<header>"
+    r"group[ \t]+state[ \t]+k8s[ \t]+total[ \t]+provider-current[ \t]+"
+    r"provider-updating[ \t]+provider-outdated[ \t]+ready/current[ \t]+event"
+    r")[ \t]*$",
+    re.MULTILINE,
 )
 
 
@@ -64118,7 +64919,10 @@ def _style_soperator_migration_status_message(message: str) -> str:
     )
     for old, new in replacements:
         styled = styled.replace(old, new)
-    return styled
+    return _SOPERATOR_MIGRATION_STATUS_PROVIDER_HEADER_RE.sub(
+        r"[bold black]\g<header>[/bold black]",
+        styled,
+    )
 
 
 class _SoperatorMigrationStatusInputGuard:
@@ -64633,6 +65437,24 @@ def _soperator_migration_output_phases(
             if str(phase.get("id", "") or "").strip() == "rolling-compute-migration"
         )
         output_phases.insert(rolling_index, populate_phase)
+    if output_phases and flags["migration_required"]:
+        phase_ids = {
+            _non_empty_text(phase.get("id"))
+            for phase in output_phases
+            if isinstance(phase, Mapping)
+        }
+        for phase_id, title in (
+            ("post-upgrade-mk8s-check", "Verify final MK8s readiness"),
+            ("post-upgrade-helm-check", "Verify final target Helm workload health"),
+        ):
+            if phase_id not in phase_ids:
+                output_phases.append(
+                    {
+                        "id": phase_id,
+                        "title": title,
+                        "status": "planned",
+                    }
+                )
     return output_phases
 
 
@@ -65222,6 +66044,36 @@ def _locked_upgrade_path_current_segment(
     return first_unmet
 
 
+def _require_locked_upgrade_path_advanced_exactly_one(
+    *,
+    prior_progress: Mapping[str, Any],
+    continued_progress: Mapping[str, Any],
+    expected_segment_id: str,
+) -> None:
+    """Refuse campaign continuation unless the journal advanced one ordered segment."""
+
+    prior_completed_segment_ids = tuple(
+        _non_empty_text(segment_id)
+        for segment_id in prior_progress.get("completed_segment_ids", []) or []
+        if _non_empty_text(segment_id)
+    )
+    continued_completed_segment_ids = tuple(
+        _non_empty_text(segment_id)
+        for segment_id in continued_progress.get("completed_segment_ids", []) or []
+        if _non_empty_text(segment_id)
+    )
+    if (
+        len(continued_completed_segment_ids) != len(prior_completed_segment_ids) + 1
+        or continued_completed_segment_ids[:-1] != prior_completed_segment_ids
+        or continued_completed_segment_ids[-1] != expected_segment_id
+    ):
+        raise RuntimeError(
+            "recovery-required: a successful segment completion did not advance "
+            "the operation journal by exactly the current locked segment. The "
+            "same approved command will not start another segment."
+        )
+
+
 def _locked_upgrade_path_segment_actions(segment: Mapping[str, Any]) -> tuple[str, ...]:
     actions = segment.get("actions")
     if not isinstance(actions, list):
@@ -65438,6 +66290,33 @@ def _soperator_effective_upgrade_payload_for_segment(
     return dict(effective_payload)
 
 
+def _locked_upgrade_path_segment_support_finding(
+    *,
+    upgrade_path: Mapping[str, Any],
+    segment: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    source_version = _locked_upgrade_path_record_value(
+        segment, "soperator_app", "current_version"
+    ) or _locked_upgrade_path_record_value(segment, "soperator_chart", "current_version")
+    target_version = _locked_upgrade_path_record_value(
+        segment, "soperator_chart", "target_version"
+    ) or _locked_upgrade_path_record_value(segment, "soperator_app", "target_version")
+    approved_target_chart_version = _locked_upgrade_path_record_value(
+        upgrade_path,
+        "soperator_chart",
+        "target_version",
+    )
+    current_k8s_version = _non_empty_text(segment.get("current_k8s_version"))
+    target_k8s_version = _non_empty_text(segment.get("target_k8s_version"))
+    return soperator_upgrade_support_finding(
+        source_version=source_version,
+        target_version=target_version,
+        approved_target_chart_version=approved_target_chart_version,
+        current_k8s_version=current_k8s_version,
+        target_k8s_version=target_k8s_version,
+    )
+
+
 def _source_report_for_locked_upgrade_segment(
     *,
     source_report: Mapping[str, Any],
@@ -65449,7 +66328,9 @@ def _source_report_for_locked_upgrade_segment(
         effective = {}
     report = effective.get("report")
     if not isinstance(report, dict):
-        return effective
+        raise RuntimeError(
+            "External Soperator source report is missing its structured onboarding report."
+        )
     report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     report["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
     migration_profile = upgrade_path.get("migration_profile")
@@ -65487,42 +66368,71 @@ def _source_report_for_locked_upgrade_segment(
         report["soperator_chart"] = copy.deepcopy(to_plain_data(dict(soperator_chart)))
     if isinstance(jail_rootfs, Mapping):
         report["jail_rootfs"] = copy.deepcopy(to_plain_data(dict(jail_rootfs)))
-    findings = report.get("findings")
-    if isinstance(findings, list):
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            layer = _non_empty_text(finding.get("layer"))
-            if layer not in {"mk8s-node-template", SOPERATOR_UPGRADE_SUPPORT_LAYER}:
-                continue
-            evidence = finding.setdefault("evidence", {})
-            if not isinstance(evidence, dict):
-                evidence = {}
-                finding["evidence"] = evidence
-            if layer == SOPERATOR_UPGRADE_SUPPORT_LAYER:
-                evidence["current_k8s_version"] = current_k8s
-                evidence["target_k8s_version"] = target_k8s
-                if source_app:
-                    evidence["source_version"] = source_app
-                if target_chart:
-                    evidence["target_version"] = target_chart
-                    evidence["target_chart_version"] = target_chart
-                current_chart = _locked_upgrade_path_record_value(
-                    segment,
-                    "soperator_chart",
-                    "current_version",
+    segment_support_finding = _locked_upgrade_path_segment_support_finding(
+        upgrade_path=upgrade_path,
+        segment=segment,
+    )
+    if segment_support_finding is None:
+        raise RuntimeError(
+            "External Soperator locked segment has no derivable support-policy finding."
+        )
+    raw_findings = report.get("findings")
+    if raw_findings is None:
+        findings: list[Any] = []
+    elif isinstance(raw_findings, list):
+        findings = raw_findings
+    else:
+        raise RuntimeError("External Soperator onboarding report findings must be a list.")
+    if any(not isinstance(finding, Mapping) for finding in findings):
+        raise RuntimeError(
+            "External Soperator onboarding report contains a malformed finding entry."
+        )
+    projected_findings: list[Any] = []
+    support_finding_inserted = False
+    for finding in findings:
+        if _non_empty_text(finding.get("layer")) == SOPERATOR_UPGRADE_SUPPORT_LAYER:
+            if not support_finding_inserted:
+                projected_findings.append(
+                    copy.deepcopy(to_plain_data(dict(segment_support_finding)))
                 )
-                if current_chart:
-                    evidence["live_chart"] = current_chart
-            control_plane = evidence.get("control_plane")
-            if isinstance(control_plane, dict):
-                control_plane["current_k8s_version"] = current_k8s
-                control_plane["target_k8s_version"] = target_k8s
-            else:
-                evidence["control_plane"] = {
-                    "current_k8s_version": current_k8s,
-                    "target_k8s_version": target_k8s,
-                }
+                support_finding_inserted = True
+            continue
+        projected_findings.append(finding)
+    if not support_finding_inserted:
+        projected_findings.append(copy.deepcopy(to_plain_data(dict(segment_support_finding))))
+    report["findings"] = projected_findings
+    for finding in projected_findings:
+        layer = _non_empty_text(finding.get("layer"))
+        if layer not in {"mk8s-node-template", SOPERATOR_UPGRADE_SUPPORT_LAYER}:
+            continue
+        evidence = finding.setdefault("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+            finding["evidence"] = evidence
+        if layer == SOPERATOR_UPGRADE_SUPPORT_LAYER:
+            evidence["current_k8s_version"] = current_k8s
+            evidence["target_k8s_version"] = target_k8s
+            if source_app:
+                evidence["source_version"] = source_app
+            if target_chart:
+                evidence["target_version"] = target_chart
+                evidence["target_chart_version"] = target_chart
+            current_chart = _locked_upgrade_path_record_value(
+                segment,
+                "soperator_chart",
+                "current_version",
+            )
+            if current_chart:
+                evidence["live_chart"] = current_chart
+        control_plane = evidence.get("control_plane")
+        if isinstance(control_plane, dict):
+            control_plane["current_k8s_version"] = current_k8s
+            control_plane["target_k8s_version"] = target_k8s
+        else:
+            evidence["control_plane"] = {
+                "current_k8s_version": current_k8s,
+                "target_k8s_version": target_k8s,
+            }
     return effective
 
 
@@ -65574,10 +66484,16 @@ def _locked_upgrade_path_plan_lines(
         f"Campaign ID: {_non_empty_text(upgrade_path.get('campaign_id')) or 'unknown'}",
         "Campaign locked: yes",
         f"Campaign fingerprint: {fingerprint}",
-        "Kubernetes path: "
+        "Campaign final target - Kubernetes path: "
         f"{_non_empty_text(upgrade_path.get('source_k8s_version')) or 'unknown'} -> "
         f"{_non_empty_text(upgrade_path.get('target_k8s_version')) or 'unknown'}",
     ]
+    migration_profile = upgrade_path.get("migration_profile")
+    if isinstance(migration_profile, Mapping):
+        lines.append(
+            "Locked source migration profile: "
+            f"{_non_empty_text(migration_profile.get('id')) or 'unknown'}"
+        )
     if app_current or app_target:
         if app_current and app_target and app_current != app_target:
             lines.append(f"Soperator app path: {app_current} -> {app_target}")
@@ -65598,9 +66514,33 @@ def _locked_upgrade_path_plan_lines(
     support_status = _non_empty_text(upgrade_path.get("support_status"))
     if support_rule or support_status:
         lines.append(
-            "Matched support rule: "
+            "Campaign final-target support rule: "
             f"{support_rule or 'unknown'}" + (f" ({support_status})" if support_status else "")
         )
+    if segments:
+        lines.append("Campaign segment support sequence:")
+        for segment in segments:
+            finding = _locked_upgrade_path_segment_support_finding(
+                upgrade_path=upgrade_path,
+                segment=segment,
+            )
+            evidence = (
+                finding.get("evidence")
+                if isinstance(finding, Mapping) and isinstance(finding.get("evidence"), Mapping)
+                else {}
+            )
+            segment_rule = _non_empty_text(evidence.get("rule_id"))
+            segment_status = (
+                _non_empty_text(finding.get("status")) if isinstance(finding, Mapping) else ""
+            )
+            lines.append(
+                "- "
+                + (_non_empty_text(segment.get("id")) or "unknown-segment")
+                + ": "
+                + f"Kubernetes {_non_empty_text(segment.get('current_k8s_version')) or 'unknown'}"
+                + f" -> {_non_empty_text(segment.get('target_k8s_version')) or 'unknown'}; "
+                + f"rule={segment_rule or 'unmatched'}; status={segment_status or 'unknown'}"
+            )
     recommended = upgrade_path.get("recommended_order")
     if isinstance(recommended, list) and recommended:
         lines.append("Recommended order: " + "; ".join(str(item) for item in recommended))
@@ -65642,6 +66582,11 @@ def _locked_upgrade_path_plan_lines(
                 or _non_empty_text(current_segment.get("id"))
             )
         )
+        lines.append(
+            "Current segment scope: Kubernetes "
+            f"{_non_empty_text(current_segment.get('current_k8s_version')) or 'unknown'} -> "
+            f"{_non_empty_text(current_segment.get('target_k8s_version')) or 'unknown'}."
+        )
     lines.append(
         "Remaining segments: " + (", ".join(remaining_titles) if remaining_titles else "none")
     )
@@ -65651,7 +66596,11 @@ def _locked_upgrade_path_plan_lines(
             f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
             "--execute --approve"
         )
-        lines.append(f"Next command: {next_command}")
+        lines.append(
+            "Campaign execution: one approved command continues across every remaining "
+            "locked segment after each successful terminal checkpoint."
+        )
+        lines.append("Resume command after a pending phase, error, or interrupt: " + next_command)
     else:
         lines.append(
             "Next action: rerun ext-soperator onboard to check for and explicitly accept "
@@ -65840,6 +66789,11 @@ def _format_soperator_migration_plan_lines(
         f"Source discovery bundle: {report_path}",
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
     ]
+    if upgrade_path:
+        lines.append(
+            "Discovery scope: current locked segment; config.yaml remains the "
+            "full-campaign authority."
+        )
     if not upgrade_path:
         lines.extend(["", "Versions:", f"Soperator version: {source_version} -> {target_version}"])
         if current_k8s_version or target_k8s_version:
@@ -65854,7 +66808,7 @@ def _format_soperator_migration_plan_lines(
         include_messages=not bool(upgrade_path),
     )
     if support_policy_lines:
-        lines.extend(["", "Support policy:"])
+        lines.extend(["", "Current-segment support policy:"])
         lines.extend(support_policy_lines)
     if upgrade_path:
         lines.extend(
@@ -65931,7 +66885,7 @@ def _format_soperator_migration_plan_lines(
             )
         )
     if phases:
-        lines.extend(["", "Upgrade phases:"])
+        lines.extend(["", "Current segment phases:"])
         phase_number = 0
         for raw_phase in phases:
             if not isinstance(raw_phase, Mapping):
@@ -65960,7 +66914,7 @@ def _format_soperator_migration_plan_lines(
                 detail += " (approval required)"
             lines.append(detail)
     else:
-        lines.extend(["", "Upgrade phases:"])
+        lines.extend(["", "Current segment phases:"])
         lines.append(
             "No upgrade phases in the source discovery bundle; use render/deploy for install "
             "or adopt-only reconciliation."
@@ -65984,8 +66938,9 @@ def _format_soperator_migration_plan_lines(
         "or fails before mutation if it cannot resolve or update exactly one allocation."
     )
     lines.append(
-        "Backup: restore-capable archive is required before approved mutation; "
-        "restore is supported only into a new/replacement cluster."
+        "Backup: one campaign-owned restore-capable archive is required before "
+        "approved mutation and reused across every locked segment; restore is "
+        "supported only into a new/replacement cluster."
     )
     lines.extend(["", "Execution contracts:"])
     lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
@@ -66443,15 +67398,22 @@ def ext_soperator_jobs_command(
         "Core external Soperator execution uses Nebius API and Kubernetes "
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "
-        "--execute --approve refreshes discovery, creates or reuses the checkpointed "
+        "--execute --approve refreshes discovery, creates or verifies one campaign-owned "
         "restore-capable backup, "
-        "then reconciles and runs at most one locked campaign segment: one external MK8s "
+        "then reconciles every remaining locked campaign segment in order: each segment "
+        "contains at most one external MK8s "
         "control-plane hop plus the accepted Soperator storage/compute/GPU-stack/"
         "Jail Upgrade work assigned to that segment using the accepted in-place or blue-green "
-        "mode, validation, "
-        "and reports. If the accepted "
-        "campaign still contains more segments, repeat the same ext-soperator "
-        "upgrade --execute --approve command until it is complete. The v6 operation "
+        "mode, validation, and reports. After each successful terminal segment checkpoint, "
+        "the same invocation refreshes discovery, reacquires the cluster lease, revalidates "
+        "the immutable campaign and journal, and continues. Pending phases, errors, explicit "
+        "stop points, and interrupts stop immediately; rerun the exact command to resume. "
+        "If the active campaign archive is missing or corrupt, interactive confirmation "
+        "or --approve-backup-recovery may finish only the exact independently proven "
+        "current segment; no later segment starts until a fully verified replacement is "
+        "active. A clean final degraded completion supports replacement-only repair with "
+        "the same flag and never reruns upgrade phases. "
+        "The v6 operation "
         "journal never supplies a missing desired path. Unsupported campaigns and "
         "non-v6 journals fail closed; external upgrade has no support-policy override. "
         "A completed --execute --approve replay repairs exact Slurm worker runtime "
@@ -66465,6 +67427,7 @@ def ext_soperator_jobs_command(
         "idempotent onboard command only to check for and accept a later campaign."
     ),
 )
+@_continue_external_soperator_upgrade_campaign
 def soperator_external_upgrade_command(
     config_path: Annotated[
         Path,
@@ -66589,13 +67552,15 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--execute",
             help=(
-                "Execute one accepted campaign segment after live reconciliation. "
+                "Execute every remaining accepted campaign segment in dependency order "
+                "after live reconciliation. "
                 "Mutually exclusive with --dry-run; use with --approve. It performs "
                 "journaled live preflight and "
                 "advances the accepted external MK8s control-plane hop, "
                 "target GPU stack, storage, copy, compute, cutover, Jail Upgrade, "
                 "validation, and retirement phases with guarded resume checkpoints. Kubernetes "
-                "Control-plane work is one minor hop per external upgrade run."
+                "control-plane work is one minor hop per locked segment; successful terminal "
+                "segments continue automatically in the same invocation."
             ),
         ),
     ] = False,
@@ -66621,6 +67586,19 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
+    approve_backup_recovery: Annotated[
+        bool,
+        typer.Option(
+            "--approve-backup-recovery/--no-approve-backup-recovery",
+            help=(
+                "Approve only recovery of a missing or corrupt campaign-owned backup. "
+                "The approval is bound to the exact active v6 campaign and current segment; "
+                "it may finish that segment without DR protection only when execution "
+                "identity and every provider/compensation boundary are independently proven. "
+                "It never authorizes another segment until a replacement is verified."
+            ),
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -66641,7 +67619,9 @@ def soperator_external_upgrade_command(
     ] = None,
 ) -> None:
     """Plan or execute an accepted external Soperator upgrade."""
-    command_started_at = datetime.now(UTC).isoformat()
+    command_started_at = (
+        _EXTERNAL_SOPERATOR_UPGRADE_INVOCATION_STARTED_AT.get() or datetime.now(UTC).isoformat()
+    )
     command_started_monotonic = time.monotonic()
     lease_stack = ExitStack()
     cluster_lease: SoperatorMigrationClusterLease | None = None
@@ -66651,6 +67631,10 @@ def soperator_external_upgrade_command(
                 "ext-soperator upgrade requires an explicit execution mode: pass "
                 "exactly one of --dry-run or --execute. Use --execute --approve for "
                 "approved mutation; the two mode flags are mutually exclusive."
+            )
+        if approve_backup_recovery and (not execute or not approve):
+            raise RuntimeError(
+                "--approve-backup-recovery is valid only with --execute --approve."
             )
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
@@ -66803,7 +67787,12 @@ def soperator_external_upgrade_command(
             resume_checkpoint,
             target_ref=target_ref,
         )
-        if current_segment is None and execute and approve:
+        if (
+            current_segment is None
+            and execute
+            and approve
+            and not approve_backup_recovery
+        ):
             if resume_checkpoint is None:
                 raise RuntimeError(
                     "recovery-required: completed campaign final verification requires "
@@ -66913,8 +67902,8 @@ def soperator_external_upgrade_command(
         if live_ahead_segment_count > 0:
             console.print(
                 "Live reconciliation: cluster state is already at campaign waypoint "
-                f"{live_waypoint_index}; this invocation will reconcile only the first "
-                "unmet segment and stop.",
+                f"{live_waypoint_index}; this approved invocation will record each "
+                "consecutive live-satisfied segment in dependency order.",
                 soft_wrap=True,
             )
             if not isinstance(current_segment, Mapping):
@@ -66992,6 +67981,11 @@ def soperator_external_upgrade_command(
                 upgrade_path=locked_upgrade_path,
                 payload_or_config=payload,
             )
+            _require_locked_upgrade_path_advanced_exactly_one(
+                prior_progress=upgrade_path_progress,
+                continued_progress=reconciled_progress,
+                expected_segment_id=segment_id,
+            )
             console.print(
                 "Campaign segment recorded from exact fresh live observations: "
                 f"{segment_id}. No backup was created and no cluster mutation was "
@@ -67011,13 +68005,34 @@ def soperator_external_upgrade_command(
                 path_source=locked_upgrade_path_source,
             ):
                 console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
-            return
+            if next_segment is None:
+                console.print(
+                    "Continuing the same approved command: all locked segments are "
+                    "checkpointed; running final campaign verification.",
+                    soft_wrap=True,
+                )
+            else:
+                console.print(
+                    "Continuing the same approved command with the next locked segment: "
+                    + (
+                        _non_empty_text(next_segment.get("title"))
+                        or _non_empty_text(next_segment.get("id"))
+                    )
+                    + ".",
+                    soft_wrap=True,
+                )
+            raise _ContinueExternalSoperatorUpgradeCampaign
         if current_segment is None:
             _journal_path, completion_journal = _external_soperator_campaign_journal(
                 config_path=config_path,
                 target_ref=target_ref,
                 payload=payload,
             )
+            if not isinstance(completion_journal, Mapping):
+                raise RuntimeError(
+                    "recovery-required: completed campaign state has no exact operation "
+                    "journal. No mutation was attempted."
+                )
             if not _external_soperator_campaign_is_complete(
                 locked_upgrade_path,
                 completion_journal,
@@ -67066,6 +68081,258 @@ def soperator_external_upgrade_command(
                     "recovery-required: operation journal reports the campaign complete, "
                     "but protected-state validation is absent or did not pass. No mutation "
                     "was attempted and the campaign was not rewritten."
+                )
+            completed_backup_recovery = (
+                external_soperator_upgrade_backup_recovery_state(
+                    config_path,
+                    target_ref,
+                    payload_or_config=payload,
+                )
+            )
+            completed_recovery_command = [
+                "nebius-cxcli",
+                "ext-soperator",
+                "upgrade",
+                str(config_path),
+                "--target",
+                target_ref,
+            ]
+            if backup_dir is not None:
+                completed_recovery_command.extend(("--backup-dir", str(backup_dir)))
+            completed_recovery_command.extend(("--execute", "--approve"))
+            completed_backup = external_soperator_upgrade_resume_backup_metadata(
+                config_path,
+                target_ref,
+                payload_or_config=payload,
+            )
+            completed_backup_failure_class = ""
+            if completed_backup is not None:
+                try:
+                    _verify_external_soperator_campaign_backup(
+                        config_path=config_path,
+                        target_ref=target_ref,
+                        backup=completed_backup,
+                        checkpoint=completion_journal,
+                        campaign=locked_upgrade_path,
+                    )
+                except Exception as exc:
+                    completed_backup_failure_class = (
+                        _external_soperator_backup_failure_class(exc)
+                    )
+            completed_recovery_status = str(
+                completed_backup_recovery.get("status", "") or ""
+            )
+            if (
+                completed_backup_failure_class
+                and execute
+                and approve
+                and completed_recovery_status
+                not in {
+                    "replacement-required",
+                    "complete-with-degraded-protection",
+                }
+            ):
+                completed_approval_mode = (
+                    _require_external_soperator_backup_recovery_approval(
+                        command=completed_recovery_command,
+                        failure_class=completed_backup_failure_class,
+                        approve_backup_recovery=approve_backup_recovery,
+                        interactive=interactive,
+                    )
+                )
+                with SoperatorMigrationExecutionLock(
+                    config_path.parent / ".nebius-cxcli" / "config.lock"
+                ):
+                    if cluster_lease is not None:
+                        cluster_lease.assert_held()
+                    completed_backup_recovery = (
+                        record_soperator_migration_backup_recovery_approval(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                            failure_class=completed_backup_failure_class,
+                            approval_mode=completed_approval_mode,
+                        )
+                    )
+                completed_recovery_status = str(
+                    completed_backup_recovery.get("status", "") or ""
+                )
+            elif (
+                completed_backup_failure_class
+                and not completed_recovery_status
+            ):
+                console.print(
+                    "[yellow]Completed campaign backup protection is invalid "
+                    f"({completed_backup_failure_class}). No upgrade phase was rerun. "
+                    "Use --execute --approve --approve-backup-recovery to create and "
+                    "activate a replacement-only restore point.[/yellow]",
+                    soft_wrap=True,
+                )
+            if completed_recovery_status in {
+                "replacement-required",
+                "complete-with-degraded-protection",
+            }:
+                console.print(
+                    "[yellow]Campaign upgrade is complete, but backup protection is "
+                    "degraded. No campaign phase will be rerun. Use the exact completed "
+                    "upgrade command with --approve-backup-recovery to create and activate "
+                    "a replacement-only restore point.[/yellow]",
+                    soft_wrap=True,
+                )
+                repair_requested = (
+                    completed_recovery_status == "replacement-required"
+                    or approve_backup_recovery
+                )
+                if execute and approve and repair_requested:
+                    last_segment = next(
+                        (
+                            item
+                            for item in reversed(
+                                list(locked_upgrade_path.get("segments", []) or [])
+                            )
+                            if isinstance(item, Mapping)
+                        ),
+                        None,
+                    )
+                    if not isinstance(last_segment, Mapping):
+                        raise RuntimeError(
+                            "recovery-required: completed campaign state has no final locked "
+                            "segment for replacement-only backup recovery. No mutation was "
+                            "attempted."
+                        )
+                    origin_segment_id = (
+                        _non_empty_text(completion_journal.get("current_segment_id"))
+                        or _non_empty_text(last_segment.get("id"))
+                    )
+                    with SoperatorMigrationExecutionLock(
+                        config_path.parent / ".nebius-cxcli" / "config.lock"
+                    ):
+                        if cluster_lease is not None:
+                            cluster_lease.assert_held()
+                        record_soperator_migration_backup_replacement_required(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                        )
+                    repair_transition = _external_soperator_terminal_backup_transition(
+                        source_report=source_report,
+                        onboarding=effective_onboarding,
+                        final_segment=last_segment,
+                    )
+                    repair_command = (
+                        *completed_recovery_command,
+                        "--approve-backup-recovery",
+                    )
+                    try:
+                        replacement_metadata = _create_external_soperator_upgrade_backup(
+                            config_path=config_path,
+                            source_payload=dict(payload),
+                            target_ref=target_ref,
+                            backup_dir=backup_dir,
+                            kube_context=lease_kube_context,
+                            command=repair_command,
+                            source_chart_version=repair_transition.source_chart_version,
+                            target_chart_version=repair_transition.target_chart_version,
+                            source_k8s_version=repair_transition.source_k8s_version,
+                            target_k8s_version=repair_transition.target_k8s_version,
+                            checkpoint_compensation=(
+                                lambda required, state: (
+                                    record_soperator_migration_backup_compensation(
+                                        config_path=config_path,
+                                        target_ref=target_ref,
+                                        payload=payload,
+                                        required=required,
+                                        state=state,
+                                    )
+                                )
+                            ),
+                            mutation_guard=(
+                                cluster_lease.assert_held
+                                if cluster_lease is not None
+                                else None
+                            ),
+                        )
+                        repair_checkpoint = _locked_upgrade_checkpoint_payload(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload_or_config=payload,
+                        )
+                        if not isinstance(repair_checkpoint, Mapping):
+                            raise RuntimeError(
+                                "External Soperator replacement-only repair lost its "
+                                "completed operation journal."
+                            )
+                        replacement_binding = (
+                            _external_soperator_campaign_backup_candidate(
+                                replacement_metadata,
+                                checkpoint=repair_checkpoint,
+                                origin_segment_id=origin_segment_id,
+                            )
+                        )
+                        replacement_binding["recovery_point"] = "campaign-terminal"
+                        _verify_external_soperator_campaign_backup(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            backup=replacement_binding,
+                            checkpoint=repair_checkpoint,
+                            campaign=locked_upgrade_path,
+                        )
+                    except Exception as exc:
+                        with SoperatorMigrationExecutionLock(
+                            config_path.parent / ".nebius-cxcli" / "config.lock"
+                        ):
+                            if cluster_lease is not None:
+                                cluster_lease.assert_held()
+                            record_soperator_migration_backup_replacement_failure(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=payload,
+                                final_campaign_segment=True,
+                                failure_class=_external_soperator_backup_failure_class(
+                                    exc
+                                ),
+                            )
+                        refresh_soperator_migration_upgrade_report(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                            campaign=locked_upgrade_path,
+                        )
+                        console.print(
+                            "[yellow]Replacement-only backup repair did not complete; "
+                            "the upgrade remains complete with degraded protection.[/yellow]",
+                            soft_wrap=True,
+                        )
+                        return
+                    with SoperatorMigrationExecutionLock(
+                        config_path.parent / ".nebius-cxcli" / "config.lock"
+                    ):
+                        if cluster_lease is not None:
+                            cluster_lease.assert_held()
+                        replace_soperator_migration_campaign_backup_binding(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                            backup_metadata=replacement_binding,
+                            origin_segment_id=origin_segment_id,
+                            expected_checkpoint=repair_checkpoint,
+                        )
+                    refresh_soperator_migration_upgrade_report(
+                        config_path=config_path,
+                        target_ref=target_ref,
+                        payload=payload,
+                        campaign=locked_upgrade_path,
+                    )
+                    console.print(
+                        "Completed campaign backup protection repaired: the replacement "
+                        "archive is fully verified and active; no upgrade phase was rerun.",
+                        soft_wrap=True,
+                    )
+                    return
+            elif approve_backup_recovery:
+                raise RuntimeError(
+                    "--approve-backup-recovery was supplied, but the completed campaign "
+                    "does not have degraded backup protection."
                 )
             if execute and approve:
                 helm_state_lines = reconcile_completed_soperator_migration_final_helm_state(
@@ -67242,9 +68509,69 @@ def soperator_external_upgrade_command(
                     approve=approve,
                     approve_remediation=approve_remediation,
                     interactive=interactive,
+                    approve_backup_recovery=approve_backup_recovery,
                     stop_after_phase=stop_after_phase,
                 )
                 backup_metadata: dict[str, Any] | None = None
+                recovery_failure_class = ""
+                recovery_approval_mode = ""
+                preexisting_backup = external_soperator_upgrade_resume_backup_metadata(
+                    config_path,
+                    target_ref,
+                    payload_or_config=execution_payload,
+                )
+                preexisting_checkpoint = _locked_upgrade_checkpoint_payload(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    payload_or_config=execution_payload,
+                )
+                if preexisting_backup is not None:
+                    if not isinstance(preexisting_checkpoint, Mapping):
+                        raise RuntimeError(
+                            "External Soperator campaign backup exists without its "
+                            "operation journal."
+                        )
+                    try:
+                        _verify_external_soperator_campaign_backup(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            backup=preexisting_backup,
+                            checkpoint=preexisting_checkpoint,
+                            campaign=locked_upgrade_path,
+                        )
+                    except Exception as exc:
+                        recovery_failure_class = _external_soperator_backup_failure_class(
+                            exc
+                        )
+                        existing_recovery = external_soperator_upgrade_backup_recovery_state(
+                            config_path,
+                            target_ref,
+                            payload_or_config=execution_payload,
+                        )
+                        if str(existing_recovery.get("status", "") or "") in {
+                            "approved",
+                            "temporarily-unprotected",
+                            "replacement-required",
+                            "complete-with-degraded-protection",
+                        }:
+                            recovery_approval_mode = _non_empty_text(
+                                existing_recovery.get("approval_mode")
+                            )
+                        else:
+                            recovery_approval_mode = (
+                                _require_external_soperator_backup_recovery_approval(
+                                    command=command_args,
+                                    failure_class=recovery_failure_class,
+                                    approve_backup_recovery=approve_backup_recovery,
+                                    interactive=interactive,
+                                )
+                            )
+                    else:
+                        if approve_backup_recovery:
+                            raise RuntimeError(
+                                "--approve-backup-recovery was supplied, but the active "
+                                "campaign backup is healthy and no recovery is required."
+                            )
                 if approve:
                     cluster_lease.assert_held()
                     if current_segment is None:
@@ -67252,6 +68579,8 @@ def soperator_external_upgrade_command(
                             "External Soperator execution requires one current campaign segment."
                         )
                     segment_id = _non_empty_text(current_segment.get("id"))
+                    recovery_state: dict[str, Any] = {}
+                    journal_initialized = False
                     with SoperatorMigrationExecutionLock(
                         config_path.parent / ".nebius-cxcli" / "config.lock"
                     ):
@@ -67300,14 +68629,31 @@ def soperator_external_upgrade_command(
                                         discovered_resume_identity.get("phase_id")
                                     ),
                                 )
-                        initialize_soperator_migration_operation_journal(
-                            config_path=config_path,
-                            target_ref=target_ref,
-                            payload=execution_payload,
-                            source_report=source_report,
-                            campaign=locked_upgrade_path,
-                            campaign_segment_id=segment_id,
-                        )
+                        if recovery_failure_class:
+                            recovery_state = (
+                                record_soperator_migration_backup_recovery_approval(
+                                    config_path=config_path,
+                                    target_ref=target_ref,
+                                    payload=execution_payload,
+                                    failure_class=recovery_failure_class,
+                                    approval_mode=(
+                                        recovery_approval_mode or "explicit-flag"
+                                    ),
+                                )
+                            )
+                        if (
+                            str(recovery_state.get("status", "") or "")
+                            != "replacement-required"
+                        ):
+                            initialize_soperator_migration_operation_journal(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=execution_payload,
+                                source_report=source_report,
+                                campaign=locked_upgrade_path,
+                                campaign_segment_id=segment_id,
+                            )
+                            journal_initialized = True
                     cluster_lease.assert_held()
                     effective_kube_context = _external_soperator_backup_kube_context(
                         execution_payload,
@@ -67321,15 +68667,125 @@ def soperator_external_upgrade_command(
                         kube_context=effective_kube_context,
                         mutation_guard=cluster_lease.assert_held,
                     )
+                    if (
+                        str(recovery_state.get("status", "") or "")
+                        == "replacement-required"
+                    ):
+                        backup_transition = _external_soperator_upgrade_backup_transition(
+                            source_report=source_report,
+                            onboarding=effective_onboarding,
+                            current_segment=current_segment,
+                        )
+                        emit_status(
+                            "External Soperator upgrade backup recovery: creating a "
+                            "replacement at the verified campaign boundary."
+                        )
+                        try:
+                            replacement_metadata = _create_external_soperator_upgrade_backup(
+                                config_path=config_path,
+                                source_payload=dict(execution_payload),
+                                target_ref=target_ref,
+                                backup_dir=backup_dir,
+                                kube_context=effective_kube_context,
+                                command=command_args,
+                                source_chart_version=backup_transition.source_chart_version,
+                                target_chart_version=backup_transition.target_chart_version,
+                                source_k8s_version=backup_transition.source_k8s_version,
+                                target_k8s_version=backup_transition.target_k8s_version,
+                                checkpoint_compensation=(
+                                    lambda required, state: (
+                                        record_soperator_migration_backup_compensation(
+                                            config_path=config_path,
+                                            target_ref=target_ref,
+                                            payload=execution_payload,
+                                            required=required,
+                                            state=state,
+                                        )
+                                    )
+                                ),
+                                mutation_guard=cluster_lease.assert_held,
+                            )
+                            replacement_checkpoint = _locked_upgrade_checkpoint_payload(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload_or_config=execution_payload,
+                            )
+                            if not isinstance(replacement_checkpoint, Mapping):
+                                raise RuntimeError(
+                                    "External Soperator replacement backup lost its "
+                                    "operation journal."
+                                )
+                            replacement_binding = (
+                                _external_soperator_campaign_backup_candidate(
+                                    replacement_metadata,
+                                    checkpoint=replacement_checkpoint,
+                                    origin_segment_id=segment_id,
+                                )
+                            )
+                            _verify_external_soperator_campaign_backup(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                backup=replacement_binding,
+                                checkpoint=replacement_checkpoint,
+                                campaign=locked_upgrade_path,
+                            )
+                        except Exception as exc:
+                            with SoperatorMigrationExecutionLock(
+                                config_path.parent / ".nebius-cxcli" / "config.lock"
+                            ):
+                                cluster_lease.assert_held()
+                                record_soperator_migration_backup_replacement_failure(
+                                    config_path=config_path,
+                                    target_ref=target_ref,
+                                    payload=execution_payload,
+                                    final_campaign_segment=False,
+                                    failure_class=(
+                                        _external_soperator_backup_failure_class(exc)
+                                    ),
+                                )
+                            refresh_soperator_migration_upgrade_report(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=execution_payload,
+                                campaign=locked_upgrade_path,
+                            )
+                            raise
+                        with SoperatorMigrationExecutionLock(
+                            config_path.parent / ".nebius-cxcli" / "config.lock"
+                        ):
+                            cluster_lease.assert_held()
+                            replace_soperator_migration_campaign_backup_binding(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=execution_payload,
+                                backup_metadata=replacement_binding,
+                                origin_segment_id=segment_id,
+                                expected_checkpoint=replacement_checkpoint,
+                            )
+                        backup_metadata = replacement_binding
+                        with SoperatorMigrationExecutionLock(
+                            config_path.parent / ".nebius-cxcli" / "config.lock"
+                        ):
+                            cluster_lease.assert_held()
+                            initialize_soperator_migration_operation_journal(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=execution_payload,
+                                source_report=source_report,
+                                campaign=locked_upgrade_path,
+                                campaign_segment_id=segment_id,
+                            )
+                            journal_initialized = True
                     emit_status(
                         "External Soperator upgrade backup guard: checking for reusable "
                         "restore-capable backup metadata."
                     )
-                    backup_metadata = external_soperator_upgrade_resume_backup_metadata(
-                        config_path,
-                        target_ref,
-                        payload_or_config=execution_payload,
-                    )
+                    if backup_metadata is None:
+                        backup_metadata = external_soperator_upgrade_resume_backup_metadata(
+                            config_path,
+                            target_ref,
+                            payload_or_config=execution_payload,
+                        )
                     if backup_metadata is not None:
                         emit_status(
                             "External Soperator upgrade backup guard: reusing existing "
@@ -67341,6 +68797,11 @@ def soperator_external_upgrade_command(
                             soft_wrap=True,
                         )
                     else:
+                        if not journal_initialized:
+                            raise RuntimeError(
+                                "External Soperator backup creation requires the initialized "
+                                "operation journal."
+                            )
                         backup_transition = _external_soperator_upgrade_backup_transition(
                             source_report=source_report,
                             onboarding=effective_onboarding,
@@ -67376,12 +68837,42 @@ def soperator_external_upgrade_command(
                         )
                     if backup_metadata is None:
                         raise RuntimeError("External Soperator backup guard returned no metadata.")
-                    record_soperator_migration_backup_binding(
+                    active_checkpoint = _locked_upgrade_checkpoint_payload(
                         config_path=config_path,
                         target_ref=target_ref,
-                        payload=execution_payload,
-                        backup_metadata=backup_metadata,
+                        payload_or_config=execution_payload,
                     )
+                    if not isinstance(active_checkpoint, Mapping):
+                        raise RuntimeError(
+                            "External Soperator backup guard lost its operation journal."
+                        )
+                    if not recovery_failure_class:
+                        backup_metadata = _external_soperator_campaign_backup_candidate(
+                            backup_metadata,
+                            checkpoint=active_checkpoint,
+                            origin_segment_id=_non_empty_text(
+                                backup_metadata.get("origin_segment_id")
+                            )
+                            or segment_id,
+                        )
+                        _verify_external_soperator_campaign_backup(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            backup=backup_metadata,
+                            checkpoint=active_checkpoint,
+                            campaign=locked_upgrade_path,
+                        )
+                    with SoperatorMigrationExecutionLock(
+                        config_path.parent / ".nebius-cxcli" / "config.lock"
+                    ):
+                        cluster_lease.assert_held()
+                        record_soperator_migration_backup_binding(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=execution_payload,
+                            backup_metadata=backup_metadata,
+                            expected_checkpoint=active_checkpoint,
+                        )
                 cluster_lease.assert_held()
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
@@ -67447,8 +68938,198 @@ def soperator_external_upgrade_command(
                 console.print(line, soft_wrap=True)
             if approve and execution_result.pending_phase != "none":
                 raise typer.Exit(code=1)
+            if approve:
+                continued_progress = _locked_upgrade_path_progress(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    upgrade_path=locked_upgrade_path,
+                    payload_or_config=payload,
+                )
+                _require_locked_upgrade_path_advanced_exactly_one(
+                    prior_progress=upgrade_path_progress,
+                    continued_progress=continued_progress,
+                    expected_segment_id=segment_id,
+                )
+                next_segment = _locked_upgrade_path_current_segment(
+                    upgrade_path=locked_upgrade_path,
+                    progress=continued_progress,
+                )
+                completed_recovery_state = (
+                    external_soperator_upgrade_backup_recovery_state(
+                        config_path,
+                        target_ref,
+                        payload_or_config=payload,
+                    )
+                )
+                if (
+                    str(completed_recovery_state.get("status", "") or "")
+                    == "temporarily-unprotected"
+                ):
+                    with SoperatorMigrationExecutionLock(
+                        config_path.parent / ".nebius-cxcli" / "config.lock"
+                    ):
+                        cluster_lease.assert_held()
+                        record_soperator_migration_backup_replacement_required(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                        )
+                    replacement_origin_segment_id = (
+                        _non_empty_text(next_segment.get("id"))
+                        if isinstance(next_segment, Mapping)
+                        else segment_id
+                    )
+                    replacement_transition = (
+                        _external_soperator_upgrade_backup_transition(
+                            source_report=source_report,
+                            onboarding=effective_onboarding,
+                            current_segment=next_segment,
+                        )
+                        if isinstance(next_segment, Mapping)
+                        else _external_soperator_terminal_backup_transition(
+                            source_report=source_report,
+                            onboarding=effective_onboarding,
+                            final_segment=current_segment,
+                        )
+                    )
+                    replacement_activated = False
+                    try:
+                        replacement_metadata = _create_external_soperator_upgrade_backup(
+                            config_path=config_path,
+                            source_payload=dict(effective_payload),
+                            target_ref=target_ref,
+                            backup_dir=backup_dir,
+                            kube_context=effective_kube_context,
+                            command=command_args,
+                            source_chart_version=replacement_transition.source_chart_version,
+                            target_chart_version=replacement_transition.target_chart_version,
+                            source_k8s_version=replacement_transition.source_k8s_version,
+                            target_k8s_version=replacement_transition.target_k8s_version,
+                            checkpoint_compensation=(
+                                lambda required, state: (
+                                    record_soperator_migration_backup_compensation(
+                                        config_path=config_path,
+                                        target_ref=target_ref,
+                                        payload=payload,
+                                        required=required,
+                                        state=state,
+                                    )
+                                )
+                            ),
+                            mutation_guard=cluster_lease.assert_held,
+                        )
+                        replacement_checkpoint = _locked_upgrade_checkpoint_payload(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload_or_config=payload,
+                        )
+                        if not isinstance(replacement_checkpoint, Mapping):
+                            raise RuntimeError(
+                                "External Soperator replacement backup lost its "
+                                "terminal segment checkpoint."
+                            )
+                        replacement_binding = (
+                            _external_soperator_campaign_backup_candidate(
+                                replacement_metadata,
+                                checkpoint=replacement_checkpoint,
+                                origin_segment_id=replacement_origin_segment_id,
+                            )
+                        )
+                        if next_segment is None:
+                            replacement_binding["recovery_point"] = (
+                                "campaign-terminal"
+                            )
+                        _verify_external_soperator_campaign_backup(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            backup=replacement_binding,
+                            checkpoint=replacement_checkpoint,
+                            campaign=locked_upgrade_path,
+                        )
+                    except Exception as exc:
+                        with SoperatorMigrationExecutionLock(
+                            config_path.parent / ".nebius-cxcli" / "config.lock"
+                        ):
+                            cluster_lease.assert_held()
+                            replacement_status = (
+                                record_soperator_migration_backup_replacement_failure(
+                                    config_path=config_path,
+                                    target_ref=target_ref,
+                                    payload=payload,
+                                    final_campaign_segment=next_segment is None,
+                                    failure_class=_external_soperator_backup_failure_class(
+                                        exc
+                                    ),
+                                )
+                            )
+                        refresh_soperator_migration_upgrade_report(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                            campaign=locked_upgrade_path,
+                        )
+                        if replacement_status != "complete-with-degraded-protection":
+                            console.print(
+                                "Backup replacement remains required; no later campaign "
+                                "segment will start.",
+                                soft_wrap=True,
+                            )
+                            raise typer.Exit(code=1) from exc
+                        console.print(
+                            "[yellow]Upgrade completed with degraded backup protection: "
+                            "replacement archive creation failed after every operational "
+                            "postcondition and compensation was clean. Rerun the same "
+                            "approved command with --approve-backup-recovery for "
+                            "replacement-only repair.[/yellow]",
+                            soft_wrap=True,
+                        )
+                    else:
+                        with SoperatorMigrationExecutionLock(
+                            config_path.parent / ".nebius-cxcli" / "config.lock"
+                        ):
+                            cluster_lease.assert_held()
+                            replace_soperator_migration_campaign_backup_binding(
+                                config_path=config_path,
+                                target_ref=target_ref,
+                                payload=payload,
+                                backup_metadata=replacement_binding,
+                                origin_segment_id=replacement_origin_segment_id,
+                                expected_checkpoint=replacement_checkpoint,
+                            )
+                        replacement_activated = True
+                    if replacement_activated:
+                        refresh_soperator_migration_upgrade_report(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=payload,
+                            campaign=locked_upgrade_path,
+                        )
+                        console.print(
+                            "Backup protection restored: a fully verified campaign backup "
+                            "replacement is active.",
+                            soft_wrap=True,
+                        )
+                if next_segment is None:
+                    console.print(
+                        "Continuing the same approved command: all locked segments are "
+                        "checkpointed; running final campaign verification.",
+                        soft_wrap=True,
+                    )
+                else:
+                    console.print(
+                        "Continuing the same approved command with the next locked segment: "
+                        + (
+                            _non_empty_text(next_segment.get("title"))
+                            or _non_empty_text(next_segment.get("id"))
+                        )
+                        + ".",
+                        soft_wrap=True,
+                    )
+                raise _ContinueExternalSoperatorUpgradeCampaign
     except _SoperatorDeployOwnedRoute as exc:
         _exit_with_soperator_deploy_owned_route(exc)
+    except _ContinueExternalSoperatorUpgradeCampaign:
+        raise
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -70211,28 +71892,23 @@ def mk8s_token_command(
         str | None,
         typer.Option("--endpoint", help="Optional Nebius API endpoint override."),
     ] = None,
+    cache_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-file",
+            hidden=True,
+            help="Owner-only command-lifetime ExecCredential cache.",
+        ),
+    ] = None,
 ) -> None:
     """Emit ExecCredential JSON for MK8s kubeconfig exec auth."""
     try:
-        if not _runtime_auth_env_available() and project_id and client_name:
-            _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
-        sdk = _init_mk8s_exec_auth_sdk(
-            parent_id=project_id or None,
+        status = _mk8s_exec_credential_status(
+            project_id=project_id or "",
+            client_name=client_name or "",
             endpoint=endpoint,
-            context="MK8s exec auth",
+            cache_file=cache_file,
         )
-        try:
-            token = sdk.get_token_sync(timeout=20.0)
-        finally:
-            with suppress(Exception):
-                sdk.sync_close()
-        token_value = _non_empty_text(getattr(token, "token", None))
-        if not token_value:
-            raise RuntimeError("Nebius SDK returned an empty IAM token for MK8s exec auth.")
-        status: dict[str, str] = {"token": token_value}
-        expiration = _iso8601_utc(getattr(token, "expiration", None))
-        if expiration:
-            status["expirationTimestamp"] = expiration
         print(
             json.dumps(
                 {
@@ -70242,8 +71918,12 @@ def mk8s_token_command(
                 }
             )
         )
-    except Exception:  # pragma: no cover - CLI surface
-        print("ERROR: Unable to create an MK8s exec credential.", file=sys.stderr)
+    except Exception as exc:  # pragma: no cover - CLI surface
+        reason = "timeout" if isinstance(exc, TimeoutError) else "credential-exchange-failed"
+        print(
+            f"ERROR: Unable to create an MK8s exec credential (reason: {reason}).",
+            file=sys.stderr,
+        )
         raise typer.Exit(code=1) from None
 
 

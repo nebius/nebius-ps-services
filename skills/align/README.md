@@ -13,7 +13,10 @@ changelog entries.
 - Separates requested or agent-touched changes from unrelated dirty files.
 - Finds mismatches between code, tests, workflows, docs, and examples.
 - Runs mandatory changed-scope code-review, lint/syntax, security, cross-code,
-  and focused test/build validation lanes before completion.
+  and focused test/build validation lanes before completion. Its child
+  `code-review` lane is report-only; `align` owns any safe remediation.
+- Uses no-write/no-cache validation settings where available and removes exact
+  task-created validation artifacts before reporting.
 - Applies small, evidence-backed fixes instead of broad rewrites.
 - Keeps behavior changes aligned with tests and user-facing documentation.
 - Reports remaining uncertainty instead of guessing.
@@ -39,7 +42,8 @@ Compare code, tests, docs, workflows, and config
 Patch confirmed inconsistencies
   |
   v
-Run code-review, lint/syntax, security, cross-code, and focused test/build gates
+Run report-only code-review, lint/syntax, security,
+cross-code, and focused test/build gates
   |
   v
 Run focused validation and report residual risk
@@ -58,8 +62,9 @@ Run focused validation and report residual risk
 7. Update tests, docs, examples, help text, and changelog entries when they are
    affected.
 8. Validate with mandatory changed-scope gates: cross-code wiring checks,
-   `code-review`, `linter`, `apply-security`, and focused repository-native
-   tests or builds.
+   report-only `code-review`, `linter`, `apply-security`, and
+   focused repository-native tests or builds. `align` owns safe remediation
+   from the child review.
 9. Broaden only when shared contracts, security-sensitive surfaces, or unclear
    dependency boundaries require it.
 
@@ -82,6 +87,11 @@ required-reference and safe-remediation rules.
   full-repo scan.
 - Use safe-only remediation: fix low-risk confirmed issues and report risky
   security, public-contract, or architecture changes for explicit approval.
+- Keep child `code-review` report-only; only `align` repairs its safe findings,
+  and the child never calls `align`.
+- Preserve caller-supplied finding IDs and classifications. Do not reclassify
+  or repair caller-gated, owner-review, decision-required, or deferred findings
+  without separate user authorization.
 - Keep edits easy to review.
 
 ## Files
@@ -90,3 +100,5 @@ required-reference and safe-remediation rules.
 - `agents/openai.yaml`: UI metadata and invocation prompt.
 - `references/quality-gate.md`: detailed changed-surface, wiring, review, and
   modularity checklist loaded only when mapping or validating a scope.
+- `scripts/test_align_contract.py`: deterministic checks for the report-only
+  child-review and parent-ledger boundaries.

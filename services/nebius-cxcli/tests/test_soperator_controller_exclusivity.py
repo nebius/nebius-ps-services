@@ -1268,7 +1268,7 @@ def test_in_place_login_bridge_config_repair_serially_recreates_session_free_pod
 
     phase: dict[str, Any] = {}
     lines = migration._repair_in_place_login_bridge_config_propagation(  # noqa: SLF001
-        checkpoint={"controller_bridge": {}},
+        checkpoint={"campaign_fingerprint": "a" * 64, "controller_bridge": {}},
         phase=phase,
         expected_contract=expected_contract,
         target_ref=target_ref,

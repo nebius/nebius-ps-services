@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import tarfile
@@ -8,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -1504,8 +1506,128 @@ def _write_restore_archive(
     archive_path = tmp_path / "soperator-backup.tar.gz"
     with tarfile.open(archive_path, "w:gz") as archive:
         for path in sorted(root.rglob("*")):
-            archive.add(path, arcname=path.relative_to(root))
+            archive.add(path, arcname=path.relative_to(root), recursive=False)
     return archive_path
+
+
+def _write_restore_archive_members(
+    archive_path: Path,
+    members: list[tuple[tarfile.TarInfo, bytes]],
+) -> None:
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for member, content in members:
+            archive.addfile(member, io.BytesIO(content) if member.isfile() else None)
+
+
+def test_soperator_restore_extract_rejects_duplicate_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "duplicate.tar.gz"
+    first = tarfile.TarInfo("duplicate")
+    first.size = 1
+    second = tarfile.TarInfo("duplicate")
+    second.size = 1
+    _write_restore_archive_members(
+        archive_path,
+        [(first, b"a"), (second, b"b")],
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate member"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_too_many_members(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "many.tar.gz"
+    members: list[tuple[tarfile.TarInfo, bytes]] = []
+    for index in range(2):
+        member = tarfile.TarInfo(f"file-{index}")
+        member.size = 1
+        members.append((member, b"x"))
+    _write_restore_archive_members(archive_path, members)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBERS", 1)
+
+    def _unexpected_getmembers(_archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+        raise AssertionError("restore validation must not materialize every tar member")
+
+    monkeypatch.setattr(
+        tarfile.TarFile,
+        "getmembers",
+        _unexpected_getmembers,
+    )
+
+    with pytest.raises(RuntimeError, match="too many members"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+@pytest.mark.parametrize(
+    ("member_limit", "total_limit", "message"),
+    (
+        (4, 100, "member is too large"),
+        (100, 4, "archive is too large"),
+    ),
+)
+def test_soperator_restore_extract_rejects_uncompressed_size_bounds(
+    tmp_path: Path,
+    monkeypatch,
+    member_limit: int,
+    total_limit: int,
+    message: str,
+) -> None:
+    archive_path = tmp_path / "large.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 5
+    _write_restore_archive_members(archive_path, [(member, b"12345")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBER_BYTES", member_limit)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_TOTAL_BYTES", total_limit)
+
+    with pytest.raises(RuntimeError, match=message):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_special_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "link.tar.gz"
+    member = tarfile.TarInfo("unsafe-link")
+    member.type = tarfile.SYMTYPE
+    member.linkname = "target"
+    _write_restore_archive_members(archive_path, [(member, b"")])
+
+    with pytest.raises(RuntimeError, match="link or special member"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_excessive_expansion_ratio(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "expansion.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 1
+    _write_restore_archive_members(archive_path, [(member, b"x")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO", 0)
+
+    with pytest.raises(RuntimeError, match="expansion ratio"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_requires_temporary_disk_headroom(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "disk.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 5
+    _write_restore_archive_members(archive_path, [(member, b"12345")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO", 10_000)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_DISK_HEADROOM_BYTES", 0)
+    monkeypatch.setattr(
+        cli.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=4),
+    )
+
+    with pytest.raises(RuntimeError, match="temporary-disk space"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
 
 
 def test_soperator_restore_dry_run_validates_archive_without_mutation(

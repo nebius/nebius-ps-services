@@ -251,6 +251,105 @@ def test_source_fence_inventory_uses_discovered_canonical_mariadb_resource() -> 
     assert not any("mariadb.k8s.mariadb.com" in command for command in calls)
 
 
+def test_source_fence_inventory_enumerates_served_networkpolicies() -> None:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if "api-resources" in command:
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "pods\nconfigmaps\nsecrets\nservices\nnetworkpolicies.networking.k8s.io\n",
+                "",
+            )
+        resource_type = command[command.index("get") + 1]
+        items: list[dict[str, Any]] = []
+        if resource_type == "networkpolicies.networking.k8s.io":
+            items = [
+                {
+                    "apiVersion": "networking.k8s.io/v1",
+                    "kind": "NetworkPolicy",
+                    "metadata": {
+                        "namespace": "soperator",
+                        "name": "source-policy",
+                        "uid": "network-policy-uid",
+                        "resourceVersion": "5",
+                    },
+                }
+            ]
+        return SoperatorMigrationCommandResult(
+            command,
+            0,
+            json.dumps({"apiVersion": "v1", "kind": "List", "items": items}),
+            "",
+        )
+
+    inventory = migration._source_reconciliation_fence_inventory(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="context",
+    )
+
+    assert [item["resource"]["kind"] for item in inventory] == ["NetworkPolicy"]
+    assert inventory[0]["api_path"].endswith("/networkpolicies/source-policy")
+
+
+def test_source_fence_inventory_classifies_failed_networkpolicy_enumeration_safely() -> None:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if "api-resources" in command:
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "pods\nconfigmaps\nsecrets\nservices\nnetworkpolicies.networking.k8s.io\n",
+                "",
+            )
+        resource_type = command[command.index("get") + 1]
+        if resource_type == "networkpolicies.networking.k8s.io":
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                (
+                    "Error from server (Forbidden): https://private.example.invalid "
+                    "contains-sensitive-detail"
+                ),
+            )
+        return SoperatorMigrationCommandResult(
+            command,
+            0,
+            json.dumps({"apiVersion": "v1", "kind": "List", "items": []}),
+            "",
+        )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match=(
+            "networkpolicies.networking.k8s.io surface "
+            r"\(classification=authorization-denied; exit=1\)"
+        ),
+    ) as error:
+        migration._source_reconciliation_fence_inventory(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="context",
+        )
+
+    assert "private.example.invalid" not in str(error.value)
+    assert "contains-sensitive-detail" not in str(error.value)
+
+
 def test_source_fence_install_is_checkpointed_and_resume_revalidates_without_reapply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,9 +524,7 @@ def test_source_fence_resume_reuses_captured_source_nodesets(
             checkpoint_writer=lambda: None,
         )
 
-    assert phase["source_reconciliation_fence"]["source_nodeset_uids"] == [
-        "source-nodeset-uid"
-    ]
+    assert phase["source_reconciliation_fence"]["source_nodeset_uids"] == ["source-nodeset-uid"]
     assert observed_nodeset_uids == [
         frozenset({"source-nodeset-uid"}),
         frozenset({"source-nodeset-uid"}),

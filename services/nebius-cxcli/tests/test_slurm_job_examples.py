@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shlex
@@ -30,7 +31,6 @@ PUBLIC_FLAGS = (
     "--requeue",
     "--output-dir <path>",
     "--login <login-external-ip>",
-    "--login-shell",
     "--login-remote-dir <path>",
     "--watch-jobs",
     "--watch-once",
@@ -93,7 +93,8 @@ def test_submitter_help_documents_public_flags() -> None:
     assert "submit-job-test.sh --login <login-external-ip>" in result.stdout
     assert "--login stages this directory" in result.stdout
     assert "unique private path" in result.stdout
-    assert "long-lived interactive SSH session" in result.stdout
+    assert "interactive SSH shell" in result.stdout
+    assert "--login-shell" not in result.stdout
     assert "Default: auto" in result.stdout
     assert "Default: until jobs finish" in result.stdout
     assert "default: --no-requeue" in result.stdout
@@ -109,7 +110,8 @@ def test_example_readme_documents_private_login_node_execution_flow() -> None:
     assert "/root/testjobs-<UTC timestamp>-<process ID>" in readme
     assert "mode `0700`" in readme
     assert "--login-remote-dir /root/my-private-testjobs" in readme
-    assert "--login-shell" in readme
+    assert "opens an interactive SSH shell" in readme
+    assert "--login-shell" not in readme
     assert "arbitrary SSH options are not accepted" in readme
     assert "--heartbeat-seconds 2" in readme
     assert "explicitly passes `sbatch --no-requeue` by default" in readme
@@ -129,16 +131,12 @@ def test_example_readme_starts_submit_examples_with_bare_command() -> None:
     assert first_example == "./submit-job-test.sh"
 
 
-def test_login_dry_run_stages_privately_and_runs_remote_command() -> None:
+def test_login_dry_run_stages_privately_and_opens_interactive_shell() -> None:
     result = run_submitter(
         "--login",
         "203.0.113.10",
         "--login-remote-dir",
         "/root/private-job-test",
-        "--count",
-        "2",
-        "--heartbeat-seconds",
-        "2",
         "--dry-run",
     )
 
@@ -157,28 +155,10 @@ def test_login_dry_run_stages_privately_and_runs_remote_command() -> None:
     assert lines[1].startswith("scp -r ")
     assert f"{EXAMPLE_DIR}/." in lines[1]
     assert "root@203.0.113.10:/root/private-job-test/" in lines[1]
-    remote_command = shlex.split(lines[2])
-    assert remote_command[:2] == ["ssh", "root@203.0.113.10"]
-    assert "cd /root/private-job-test && ./submit-job-test.sh" in remote_command[2]
-    assert "--count 2" in remote_command[2]
-    assert "--heartbeat-seconds 2" in remote_command[2]
-    assert "--requeue" not in remote_command[2]
-    assert "--dry-run" not in remote_command[2]
-
-
-def test_login_dry_run_forwards_explicit_requeue_opt_in() -> None:
-    result = run_submitter(
-        "--login",
-        "login.example.test",
-        "--login-remote-dir",
-        "/root/private-requeue-test",
-        "--requeue",
-        "--dry-run",
-    )
-
-    assert result.returncode == 0, result.stderr
-    remote_command = shlex.split(result.stdout.splitlines()[2])
-    assert "--requeue" in remote_command[2]
+    shell_command = shlex.split(lines[2])
+    assert shell_command[:3] == ["ssh", "-t", "root@203.0.113.10"]
+    assert shell_command[3] == ('cd /root/private-job-test && exec "${SHELL:-/bin/bash}" -i')
+    assert "./submit-job-test.sh" not in shell_command[3]
 
 
 def test_login_dry_run_uses_one_unique_default_staging_path() -> None:
@@ -191,26 +171,63 @@ def test_login_dry_run_uses_one_unique_default_staging_path() -> None:
     remote_dir = stage_command[2].rsplit(" ", 1)[-1]
     assert re.fullmatch(r"/root/testjobs-\d{8}T\d{6}Z-\d+", remote_dir)
     assert f"root@login.example.test:{remote_dir}/" in lines[1]
-    assert f"cd {remote_dir} && ./submit-job-test.sh" in shlex.split(lines[2])[2]
+    shell_command = shlex.split(lines[2])
+    assert shell_command[:3] == ["ssh", "-t", "root@login.example.test"]
+    assert shell_command[3] == (f'cd {remote_dir} && exec "${{SHELL:-/bin/bash}}" -i')
 
 
-def test_login_shell_stages_without_submitting_jobs() -> None:
-    result = run_submitter(
-        "--login",
-        "203.0.113.10",
-        "--login-remote-dir",
-        "/root/private-job-test",
-        "--login-shell",
-        "--dry-run",
+def test_login_rejects_submission_and_watch_options_before_remote_side_effects() -> None:
+    conflicting_options = (
+        ("--part-type", "cpu"),
+        ("--partition", "cpu"),
+        ("--count", "2"),
+        ("--run-minutes", "1"),
+        ("--heartbeat-seconds", "1"),
+        ("--wall-minutes", "1"),
+        ("--submit-mode", "array"),
+        ("--gpus-per-job", "2"),
+        ("--nodes", "2"),
+        ("--cpus-per-task", "2"),
+        ("--exclusive",),
+        ("--qos", "test"),
+        ("--account", "test"),
+        ("--requeue",),
+        ("--output-dir", "test-output"),
+        ("--watch-jobs",),
+        ("--watch-once",),
+        ("--watch-interval", "1"),
+        ("--watch-duration", "1"),
+        ("--watch-job-name", "test-*"),
+        ("--watch-job-ids", "1"),
     )
 
-    assert result.returncode == 0, result.stderr
-    lines = result.stdout.splitlines()
-    assert len(lines) == 3
-    shell_command = shlex.split(lines[2])
-    assert shell_command[:3] == ["ssh", "-t", "root@203.0.113.10"]
-    assert shell_command[3] == ('cd /root/private-job-test && exec "${SHELL:-/bin/bash}" -i')
-    assert "./submit-job-test.sh" not in shell_command[3]
+    for index, option in enumerate(conflicting_options):
+        if index % 2:
+            args = ("--login", "203.0.113.10", *option, "--dry-run")
+        else:
+            args = (*option, "--login", "203.0.113.10", "--dry-run")
+        result = run_submitter(*args)
+
+        assert result.returncode != 0
+        assert (
+            f"--login cannot be combined with submission or watch option: {option[0]}"
+            in result.stderr
+        )
+        assert result.stdout == ""
+
+
+def test_login_conflicts_fail_even_when_help_appears_before_or_after_them() -> None:
+    invocations = (
+        ("--help", "--login", "203.0.113.10", "--count", "2"),
+        ("--login", "203.0.113.10", "--watch-jobs", "--help"),
+    )
+
+    for args in invocations:
+        result = run_submitter(*args)
+
+        assert result.returncode != 0
+        assert "--login cannot be combined with submission or watch option" in result.stderr
+        assert result.stdout == ""
 
 
 def test_heartbeat_interval_is_exported_to_the_batch_job() -> None:
@@ -221,11 +238,8 @@ def test_heartbeat_interval_is_exported_to_the_batch_job() -> None:
 
 
 def test_login_only_options_require_login() -> None:
-    shell_result = run_submitter("--login-shell", "--dry-run")
     remote_dir_result = run_submitter("--login-remote-dir", "/root/private-job-test", "--dry-run")
 
-    assert shell_result.returncode != 0
-    assert "--login-shell requires --login" in shell_result.stderr
     assert remote_dir_result.returncode != 0
     assert "--login-remote-dir requires --login" in remote_dir_result.stderr
 
@@ -294,6 +308,13 @@ def test_submitter_rejects_old_login_subcommand() -> None:
 
     assert result.returncode != 0
     assert "Unexpected argument: login" in result.stderr
+
+
+def test_submitter_rejects_removed_login_shell_option() -> None:
+    result = run_submitter("--login", "203.0.113.10", "--login-shell", "--dry-run")
+
+    assert result.returncode != 0
+    assert "Unknown option: --login-shell" in result.stderr
 
 
 def test_login_requires_explicit_ip_before_other_flags() -> None:
@@ -754,7 +775,118 @@ def test_watch_jobs_rejects_completed_explicit_job_without_preupgrade_baseline(
     assert "Slurm job watch result: FAIL" in result.stderr
 
 
-def test_watch_sample_header_uses_color_when_color_is_forced(tmp_path: Path) -> None:
+def test_watch_output_uses_distinct_state_colors_when_color_is_forced(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    sacct = bin_dir / "sacct"
+    write_fake_scontrol(bin_dir)
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' "
+        "'60|RUNNING|00:10|20:00|main|worker-0|sop-gpu-job-test-01' "
+        "'61|PENDING|0:00|35:00|main||sop-gpu-job-test-02' "
+        "'62|RUNNING_FUTURE|0:00|35:00|main|worker-1|sop-gpu-job-test-03'\n",
+        encoding="utf-8",
+    )
+    sacct.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' "
+        "'60|RUNNING|0:0|00:10|2026-07-04T05:09:00|"
+        "2026-07-04T05:09:24|Unknown|worker-0|0' "
+        "'61|PENDING|0:0|00:00|2026-07-04T05:10:00|Unknown|Unknown|Unknown|0' "
+        "'62|RUNNING_FUTURE|0:0|00:00|2026-07-04T05:11:00|"
+        "2026-07-04T05:11:10|Unknown|worker-1|0'\n",
+        encoding="utf-8",
+    )
+    squeue.chmod(0o755)
+    sacct.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    env["CLICOLOR_FORCE"] = "1"
+    env["TERM"] = "xterm-256color"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SUBMITTER),
+            "--watch-jobs",
+            "--watch-once",
+            "--watch-job-ids",
+            "60,61,62",
+        ],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "\x1b[1;36m[" in result.stdout
+    assert "Slurm job watch sample 1\x1b[0m" in result.stdout
+    assert result.stdout.count("\x1b[1;32mRUNNING\x1b[0m") == 2
+    assert result.stdout.count("\x1b[1;33mPENDING\x1b[0m") == 2
+    assert "state=\x1b[1;32mRUNNING\x1b[0m elapsed=00:10" in result.stdout
+    assert "state=\x1b[1;33mPENDING\x1b[0m elapsed=0:00" in result.stdout
+    assert result.stdout.count("state=RUNNING_FUTURE") == 2
+    assert "\x1b[1;32mRUNNING_FUTURE" not in result.stdout
+
+
+def test_watch_state_colors_cover_slurm_lifecycle_categories(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    sacct = bin_dir / "sacct"
+    write_fake_scontrol(bin_dir)
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' "
+        "'62|COMPLETED|35:00|0:00|main|worker-0|sop-gpu-job-test-02' "
+        "'63|CONFIGURING|0:00|35:00|main|worker-1|sop-gpu-job-test-03' "
+        "'64|COMPLETING|34:59|0:01|main|worker-2|sop-gpu-job-test-04' "
+        "'65|SUSPENDED|10:00|25:00|main|worker-3|sop-gpu-job-test-05' "
+        "'66|FAILED|1:00|0:00|main|worker-4|sop-gpu-job-test-06' "
+        "'67|FUTURE_STATE|0:00|35:00|main|worker-5|sop-gpu-job-test-07'\n",
+        encoding="utf-8",
+    )
+    sacct.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    squeue.chmod(0o755)
+    sacct.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    env["CLICOLOR_FORCE"] = "1"
+    env["TERM"] = "xterm-256color"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SUBMITTER),
+            "--watch-jobs",
+            "--watch-once",
+            "--watch-job-ids",
+            "62,63,64,65,66,67",
+        ],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "state=\x1b[1;36mCOMPLETED\x1b[0m" in result.stdout
+    assert "state=\x1b[1;34mCONFIGURING\x1b[0m" in result.stdout
+    assert "state=\x1b[36mCOMPLETING\x1b[0m" in result.stdout
+    assert "state=\x1b[1;35mSUSPENDED\x1b[0m" in result.stdout
+    assert "state=\x1b[1;31mFAILED\x1b[0m" in result.stdout
+    assert "state=FUTURE_STATE" in result.stdout
+    assert "\x1b[1;37mFUTURE_STATE" not in result.stdout
+
+
+def test_watch_output_stays_plain_when_term_is_dumb(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     squeue = bin_dir / "squeue"
@@ -768,7 +900,7 @@ def test_watch_sample_header_uses_color_when_color_is_forced(tmp_path: Path) -> 
     env = os.environ.copy()
     env.pop("NO_COLOR", None)
     env["CLICOLOR_FORCE"] = "1"
-    env["TERM"] = "xterm-256color"
+    env["TERM"] = "dumb"
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
 
     result = subprocess.run(
@@ -788,8 +920,65 @@ def test_watch_sample_header_uses_color_when_color_is_forced(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr
-    assert "\x1b[1;36m[" in result.stdout
-    assert "Slurm job watch sample 1\x1b[0m" in result.stdout
+    assert "\x1b[" not in result.stdout
+    assert "job_id=60 state=RUNNING elapsed=00:10" in result.stdout
+
+
+def test_watch_state_is_colored_on_an_interactive_terminal(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    write_fake_scontrol(bin_dir)
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '60|RUNNING|00:10|20:00|main|worker-0|sop-gpu-job-test-01'\n",
+        encoding="utf-8",
+    )
+    squeue.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    env.pop("CLICOLOR_FORCE", None)
+    env["TERM"] = "xterm-256color"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    master_fd, slave_fd = os.openpty()
+    try:
+        process = subprocess.Popen(
+            [
+                "bash",
+                str(SUBMITTER),
+                "--watch-jobs",
+                "--watch-once",
+                "--watch-job-ids",
+                "60",
+            ],
+            cwd=EXAMPLE_DIR,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=slave_fd,
+            stderr=slave_fd,
+        )
+    finally:
+        os.close(slave_fd)
+
+    chunks: list[bytes] = []
+    try:
+        while True:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(master_fd)
+    returncode = process.wait(timeout=10)
+    output = b"".join(chunks).decode()
+
+    assert returncode == 0, output
+    assert "state=\x1b[1;32mRUNNING\x1b[0m elapsed=00:10" in output
 
 
 def test_exclusive_is_only_added_when_requested() -> None:

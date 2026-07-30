@@ -11,22 +11,21 @@ NCCL tests, storage tests, or application performance tests.
 
 ## Run On The Login Node
 
-From the local checkout root, `--login` stages this directory on the login node
-and runs the same submit or watch operation there. The default staging path is
-a unique `/root/testjobs-<UTC timestamp>-<process ID>` directory created with
-mode `0700`:
+From the local checkout root, `--login` stages this directory on the login
+node and opens an interactive SSH shell in the staged directory. The default
+staging path is a unique
+`/root/testjobs-<UTC timestamp>-<process ID>` directory created with mode `0700`:
 
 ```bash
 ./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
 ```
 
-Pass the same submission controls for a denser preservation proof:
+From the opened login-node shell, run the submit or watch command you need:
 
 ```bash
-./examples/slurm-jobs/submit-job-test.sh \
-  --login <login-external-ip> \
-  --count 2 \
-  --heartbeat-seconds 2
+./submit-job-test.sh
+./submit-job-test.sh --count 2 --heartbeat-seconds 2
+./submit-job-test.sh --watch-jobs
 ```
 
 Use an explicit, not-yet-existing staging path when you need a predictable
@@ -35,8 +34,7 @@ location:
 ```bash
 ./examples/slurm-jobs/submit-job-test.sh \
   --login <login-external-ip> \
-  --login-remote-dir /root/my-private-testjobs \
-  --count 2
+  --login-remote-dir /root/my-private-testjobs
 ```
 
 `--login-remote-dir` requires `--login`. The path must be a child of `/root`,
@@ -46,21 +44,12 @@ the helper from changing permissions or overwriting files in an existing
 directory. The helper does not delete staged files, so retain them for upgrade
 evidence or remove them explicitly after the campaign.
 
-To stage the examples and open a long-lived interactive session without
-submitting or watching jobs, add `--login-shell`:
-
-```bash
-./examples/slurm-jobs/submit-job-test.sh \
-  --login <login-external-ip> \
-  --login-shell
-```
-
 The login target is intentionally limited to a DNS name or IPv4 address and
 the remote account is fixed to `root`; arbitrary SSH options are not accepted.
-Both `--login-shell` and `--login-remote-dir` fail unless `--login` is present.
-With `--login`, `--dry-run` prints the SSH, SCP, and remote execution commands
-without connecting to the login node. The printed remote command represents a
-real submission and therefore does not include `--dry-run` itself.
+`--login-remote-dir` fails unless `--login` is present. Submission and watch
+options cannot be combined with `--login`; run them after the interactive
+shell opens. With `--login`, `--dry-run` prints the private-directory SSH,
+SCP, and interactive `ssh -t` commands without connecting to the login node.
 
 ## Submit GPU Jobs
 
@@ -208,6 +197,10 @@ a timestamped proof stream from Slurm's live queue:
 ```
 
 The watcher matches `sop-*-job-test*` job names by default and polls `squeue`.
+On color-capable terminals, only the state value is colorized: `RUNNING` is
+green, queued states are yellow, completed states are cyan, configuration
+states are blue, suspended states are magenta, and failed states are red.
+`NO_COLOR` and `TERM=dumb` keep the output plain.
 An unallocated pending job is tracked by exact JobID, submit time, and
 `Restarts` without requiring a start time or node allocation. As soon as the job
 starts, the watcher captures its start time and allocation through `scontrol`;

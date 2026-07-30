@@ -10,6 +10,7 @@ import subprocess
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -130,12 +131,24 @@ def test_locked_segment_projection_retains_accepted_migration_profile() -> None:
                     "required_before_target_compute_reconcile": True,
                 }
             },
-        }
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": _soperator_test_chart_version(),
+        },
     }
     segment = {
         "id": "segment-1",
-        "soperator_app": {"current_version": "1.22.3"},
-        "soperator_chart": {"target_version": "4.0.2-ps.4"},
+        "current_k8s_version": "1.31",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": _soperator_test_app_version(),
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": _soperator_test_chart_version(),
+        },
     }
 
     projected = cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
@@ -158,6 +171,150 @@ def test_locked_segment_projection_rejects_missing_migration_profile_contract() 
             source_report={"report": {"migration_profile_id": "v4-to-target"}},
             upgrade_path={"migration_profile": {"id": "legacy-v1-to-target"}},
             segment={"id": "segment-1"},
+        )
+
+
+def test_locked_segment_projection_recomputes_support_policy_for_segment_scope() -> None:
+    target_chart = _soperator_test_chart_version()
+    source_report = {
+        "report": {
+            "migration_profile_id": "legacy-v1-to-target",
+            "findings": [
+                {
+                    "layer": cli_module.SOPERATOR_UPGRADE_SUPPORT_LAYER,
+                    "status": "supported",
+                    "severity": "info",
+                    "message": "final-target rule",
+                    "evidence": {
+                        "rule_id": "k8s-1-33-soperator-4-supported",
+                        "source_version": "1.22.3",
+                        "target_version": target_chart,
+                        "current_k8s_version": "1.31",
+                        "target_k8s_version": "1.34",
+                    },
+                }
+            ],
+        }
+    }
+    upgrade_path = {
+        "migration_profile": {
+            "id": "legacy-v1-to-target",
+            "execution_contract": {
+                "source_controller_pause": {
+                    "required_before_target_compute_reconcile": True,
+                }
+            },
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": target_chart,
+        },
+    }
+    segment = {
+        "id": "segment-1",
+        "current_k8s_version": "1.31",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": _soperator_test_app_version(),
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": target_chart,
+        },
+    }
+
+    projected = cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
+        source_report=source_report,
+        upgrade_path=upgrade_path,
+        segment=segment,
+    )
+
+    findings = cli_module.soperator_upgrade_support_findings(projected["report"])
+    assert len(findings) == 1
+    assert findings[0]["status"] == "supported"
+    assert findings[0]["evidence"]["rule_id"] == ("k8s-before-1-33-soperator-1-22-plus-supported")
+    assert findings[0]["evidence"]["target_k8s_version"] == "1.32"
+    assert findings[0]["message"] != "final-target rule"
+
+
+@pytest.mark.parametrize("initial_findings", [None, pytest.param("missing", id="missing")])
+def test_locked_segment_projection_inserts_required_support_finding(
+    initial_findings: object,
+) -> None:
+    target_chart = _soperator_test_chart_version()
+    report: dict[str, object] = {"migration_profile_id": "legacy-v1-to-target"}
+    if initial_findings != "missing":
+        report["findings"] = initial_findings
+    upgrade_path = {
+        "migration_profile": {
+            "id": "legacy-v1-to-target",
+            "execution_contract": {"source_controller_pause": {}},
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": target_chart,
+        },
+    }
+    segment = {
+        "id": "segment-1",
+        "current_k8s_version": "1.31",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": _soperator_test_app_version(),
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": target_chart,
+        },
+    }
+
+    projected = cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
+        source_report={"report": report},
+        upgrade_path=upgrade_path,
+        segment=segment,
+    )
+
+    findings = cli_module.soperator_upgrade_support_findings(projected["report"])
+    assert len(findings) == 1
+    assert findings[0]["evidence"]["rule_id"] == ("k8s-before-1-33-soperator-1-22-plus-supported")
+
+
+def test_locked_segment_projection_rejects_malformed_findings_collection() -> None:
+    target_chart = _soperator_test_chart_version()
+
+    with pytest.raises(RuntimeError, match="findings must be a list"):
+        cli_module._source_report_for_locked_upgrade_segment(  # noqa: SLF001
+            source_report={
+                "report": {
+                    "migration_profile_id": "legacy-v1-to-target",
+                    "findings": {},
+                }
+            },
+            upgrade_path={
+                "migration_profile": {
+                    "id": "legacy-v1-to-target",
+                    "execution_contract": {"source_controller_pause": {}},
+                },
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": target_chart,
+                },
+            },
+            segment={
+                "id": "segment-1",
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+                "soperator_app": {
+                    "current_version": "1.22.3",
+                    "target_version": _soperator_test_app_version(),
+                },
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": target_chart,
+                },
+            },
         )
 
 
@@ -2013,6 +2170,312 @@ def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> 
         cli_module,
         "_create_external_soperator_upgrade_backup",
         _backup,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_verify_external_soperator_campaign_backup",
+        lambda **_kwargs: None,
+    )
+
+
+def test_external_soperator_backup_recovery_requires_dedicated_noninteractive_flag() -> (
+    None
+):
+    command = (
+        "nebius-cxcli",
+        "ext-soperator",
+        "upgrade",
+        "/tmp/config.yaml",
+        "--target",
+        "external-cluster",
+        "--execute",
+        "--approve",
+    )
+
+    with pytest.raises(RuntimeError, match="--approve-backup-recovery") as exc_info:
+        cli_module._require_external_soperator_backup_recovery_approval(
+            command=command,
+            failure_class="archive-missing",
+            approve_backup_recovery=False,
+            interactive=False,
+        )
+
+    message = str(exc_info.value)
+    assert "original pre-upgrade restore point is unavailable" in message
+    assert shlex.join((*command, "--approve-backup-recovery")) in message
+    assert (
+        cli_module._require_external_soperator_backup_recovery_approval(
+            command=command,
+            failure_class="archive-checksum-mismatch",
+            approve_backup_recovery=True,
+            interactive=False,
+        )
+        == "explicit-flag"
+    )
+
+
+def test_external_soperator_campaign_backup_verification_is_cached_by_file_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive = tmp_path / "backups" / "campaign.tar.gz"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"campaign backup")
+    archive.chmod(0o600)
+    manifest_bytes = b'{"schema":"test"}\n'
+    segment_id = "segment-1"
+    campaign_fingerprint = "f" * 64
+    backup = {
+        "path": str(archive),
+        "size_bytes": archive.stat().st_size,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "campaign_fingerprint": campaign_fingerprint,
+        "origin_segment_id": segment_id,
+    }
+    checkpoint = {
+        "campaign_fingerprint": campaign_fingerprint,
+    }
+    campaign = {
+        "segments": [
+            {
+                "id": segment_id,
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": _soperator_test_chart_version(),
+                },
+            }
+        ]
+    }
+    extract_calls = 0
+
+    def _extract(_archive: Path, root: Path) -> None:
+        nonlocal extract_calls
+        extract_calls += 1
+        (root / "backup-manifest.json").write_bytes(manifest_bytes)
+
+    monkeypatch.setattr(cli_module, "_soperator_restore_extract_archive", _extract)
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_restore_verify_archive",
+        lambda _root: (
+            {
+                "target_ref": "external-cluster",
+                "source_kind": "external-upgrade",
+                "chart": {
+                    "from": "1.22.3",
+                    "to": _soperator_test_chart_version(),
+                },
+                "kubernetes": {"from": "1.31", "to": "1.32"},
+            },
+            {},
+        ),
+    )
+    token = cli_module._EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS.set({})
+    try:
+        for _ in range(2):
+            cli_module._verify_external_soperator_campaign_backup(
+                config_path=config_path,
+                target_ref="external-cluster",
+                backup=backup,
+                checkpoint=checkpoint,
+                campaign=campaign,
+            )
+    finally:
+        cli_module._EXTERNAL_SOPERATOR_UPGRADE_VERIFIED_BACKUPS.reset(token)
+
+    assert extract_calls == 1
+
+
+def test_external_soperator_campaign_backup_verifier_rejects_archive_changed_during_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive = tmp_path / "backups" / "campaign.tar.gz"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"campaign backup")
+    archive.chmod(0o600)
+    manifest_bytes = b'{"schema":"test"}\n'
+    segment_id = "segment-1"
+    campaign_fingerprint = "f" * 64
+    backup = {
+        "path": str(archive),
+        "size_bytes": archive.stat().st_size,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "campaign_fingerprint": campaign_fingerprint,
+        "origin_segment_id": segment_id,
+    }
+
+    def _extract(_archive: Path, root: Path) -> None:
+        (root / "backup-manifest.json").write_bytes(manifest_bytes)
+        archive.write_bytes(b"changed campaign backup")
+
+    monkeypatch.setattr(cli_module, "_soperator_restore_extract_archive", _extract)
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_restore_verify_archive",
+        lambda _root: (
+            {
+                "target_ref": "external-cluster",
+                "source_kind": "external-upgrade",
+                "chart": {
+                    "from": "1.22.3",
+                    "to": _soperator_test_chart_version(),
+                },
+                "kubernetes": {"from": "1.31", "to": "1.32"},
+            },
+            {},
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="changed during validation") as exc_info:
+        cli_module._verify_external_soperator_campaign_backup(
+            config_path=config_path,
+            target_ref="external-cluster",
+            backup=backup,
+            checkpoint={"campaign_fingerprint": campaign_fingerprint},
+            campaign={
+                "segments": [
+                    {
+                        "id": segment_id,
+                        "current_k8s_version": "1.31",
+                        "target_k8s_version": "1.32",
+                        "soperator_chart": {
+                            "current_version": "1.22.3",
+                            "target_version": _soperator_test_chart_version(),
+                        },
+                    }
+                ]
+            },
+        )
+
+    assert cli_module._external_soperator_backup_failure_class(exc_info.value) == (
+        "archive-validation-failed"
+    )
+
+
+def test_external_soperator_campaign_backup_verifier_classifies_missing_archive(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="archive is missing") as exc_info:
+        cli_module._verify_external_soperator_campaign_backup(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            backup={"path": "backups/missing.tar.gz"},
+            checkpoint={},
+            campaign={},
+        )
+
+    assert cli_module._external_soperator_backup_failure_class(exc_info.value) == (
+        "archive-missing"
+    )
+
+
+def test_external_soperator_campaign_backup_verifier_rejects_unsafe_permissions(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "campaign.tar.gz"
+    archive.write_bytes(b"campaign backup")
+    archive.chmod(0o640)
+
+    with pytest.raises(RuntimeError, match="unsafe file ownership or permissions") as exc_info:
+        cli_module._external_soperator_campaign_backup_file_identity(archive)
+
+    assert cli_module._external_soperator_backup_failure_class(exc_info.value) == (
+        "archive-unsafe"
+    )
+
+
+def test_external_soperator_terminal_recovery_backup_uses_final_state_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive = tmp_path / "backups" / "terminal.tar.gz"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"terminal campaign backup")
+    archive.chmod(0o600)
+    manifest_bytes = b'{"schema":"test"}\n'
+    segment_id = "segment-final"
+    campaign_fingerprint = "e" * 64
+    target_chart = _soperator_test_chart_version()
+    backup = {
+        "path": str(archive),
+        "size_bytes": archive.stat().st_size,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "campaign_fingerprint": campaign_fingerprint,
+        "origin_segment_id": segment_id,
+        "recovery_point": "campaign-terminal",
+    }
+    campaign = {
+        "segments": [
+            {
+                "id": segment_id,
+                "current_k8s_version": "1.33",
+                "target_k8s_version": "1.34",
+                "soperator_chart": {
+                    "current_version": "3.0.5",
+                    "target_version": target_chart,
+                },
+            }
+        ]
+    }
+
+    def _extract(_archive: Path, root: Path) -> None:
+        (root / "backup-manifest.json").write_bytes(manifest_bytes)
+
+    monkeypatch.setattr(cli_module, "_soperator_restore_extract_archive", _extract)
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_restore_verify_archive",
+        lambda _root: (
+            {
+                "target_ref": "external-cluster",
+                "source_kind": "external-upgrade",
+                "chart": {"from": target_chart, "to": target_chart},
+                "kubernetes": {"from": "1.34", "to": "1.34"},
+            },
+            {},
+        ),
+    )
+
+    cli_module._verify_external_soperator_campaign_backup(
+        config_path=config_path,
+        target_ref="external-cluster",
+        backup=backup,
+        checkpoint={"campaign_fingerprint": campaign_fingerprint},
+        campaign=campaign,
+    )
+
+
+def _stub_external_soperator_campaign_final_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "reconcile_completed_soperator_migration_final_worker_runtime_identity",
+        lambda **_kwargs: {"reconciled": False},
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_external_soperator_live_campaign_postcondition_conflicts",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_external_soperator_completed_campaign_final_health_conflicts",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "reconcile_completed_soperator_migration_final_helm_state",
+        lambda **_kwargs: (),
     )
 
 
@@ -14812,13 +15275,16 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Source discovery bundle:" in result.output
     assert "soperator-clusters/mk8scluster-external/discovery/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
+    assert (
+        "Discovery scope: current locked segment; config.yaml remains the full-campaign authority."
+    ) in result.output
     assert "Versions:" not in result.output
     assert f"Soperator version: 3.0.5 -> {_soperator_test_chart_version()}" not in result.output
     assert "Kubernetes version: 1.31 -> 1.32" not in result.output
     assert "Accepted Kubernetes hop:" not in result.output
     assert "Source version: 3.0.5" not in result.output
     assert "Current Kubernetes version: 1.31" not in result.output
-    assert "Support policy:" in result.output
+    assert "Current-segment support policy:" in result.output
     assert "Soperator upgrade path: status=supported" in result.output
     assert "matches the committed cxcli upgrade-path policy" not in result.output
     assert "Locked upgrade campaign:" in result.output
@@ -14827,7 +15293,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Completed segments: none" in result.output
     assert "Current segment: Kubernetes 1.31 -> 1.32 plus Soperator" in result.output
     assert "Remaining segments: none" in result.output
-    assert "Next command: nebius-cxcli ext-soperator upgrade" in result.output
+    assert "Campaign execution: one approved command continues" in result.output
+    assert "Resume command after a pending phase, error, or interrupt:" in result.output
     assert "--target external-cluster --execute --approve" in result.output
     assert "--login-session-policy" not in result.output
     assert "--login-session-drain-timeout" not in result.output
@@ -14895,13 +15362,19 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Execution contracts:" in result.output
     assert "Live executor contract:" in result.output
     assert "External MK8s contract:" in result.output
-    assert "compute changes follow the fingerprinted in-place or blue-green mode" in result.output
+    assert "Compute changes follow the fingerprinted in-place or blue-green mode" in result.output
     assert "Compute quota contract:" in result.output
     assert "accepted mode-specific capacity or replacement-capacity reacquisition" in result.output
     assert "Control plane: upgraded first" in result.output
     assert "source service and worker node groups remain untouched" in result.output
     assert "rolling-compute-migration updates accepted fixed-size groups in place" in result.output
-    assert "one accepted Kubernetes minor hop per upgrade run" in result.output
+    assert "one accepted Kubernetes minor hop per locked segment" in result.output
+    assert "Current segment phases:" in result.output
+    assert "post-upgrade-mk8s-check: planned - Verify final MK8s readiness" in result.output
+    assert (
+        "post-upgrade-helm-check: planned - Verify final target Helm workload health"
+        in result.output
+    )
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
@@ -14915,11 +15388,11 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Existing TCP sessions are not migrated between Pods" in result.output
     assert "Slurm job policy: preserve" in result.output
     assert "Slurm job policy: interactive" not in result.output
-    assert "Backup: restore-capable archive" in result.output
+    assert "Backup: one campaign-owned restore-capable archive" in result.output
     assert "restore is supported only into a new/replacement cluster" in result.output
     assert "not back onto the original source cluster" not in result.output
     assert result.output.count("Slurm job policy:") == 1
-    assert result.output.count("Backup: restore-capable archive") == 1
+    assert result.output.count("Backup: one campaign-owned restore-capable archive") == 1
 
     manual = runner.invoke(
         app,
@@ -15155,7 +15628,12 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
 
     assert result.exit_code == 0, result.output
     assert "Kubernetes version: 1.31 -> 1.32" not in result.output
-    assert "Kubernetes path: 1.31 -> 1.34" in result.output
+    assert "Campaign final target - Kubernetes path: 1.31 -> 1.34" in result.output
+    assert "Locked source migration profile: legacy-v1-to-target" in result.output
+    assert "Current-segment support policy:" in result.output
+    assert "rule=k8s-before-1-33-soperator-1-22-plus-supported; status=supported" in result.output
+    assert "Campaign final-target support rule: k8s-1-33-soperator-4-supported" in (result.output)
+    assert "Campaign segment support sequence:" in result.output
     assert (
         "Recommended order: Kubernetes 1.31 -> 1.32; "
         f"Soperator chart 1.22.3 -> {_soperator_test_chart_version()} while Kubernetes stays 1.32; "
@@ -15179,7 +15657,11 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
         f"Soperator hop 1.22.3 -> {_soperator_test_chart_version()}: "
         "in-place node-group rollout"
     ) in result.output
+    assert "Current segment phases:" in result.output
+    assert "post-upgrade-mk8s-check" in result.output
+    assert "post-upgrade-helm-check" in result.output
     assert "Remaining segments: Kubernetes 1.32 -> 1.33, Kubernetes 1.33 -> 1.34" in (result.output)
+    assert "one approved command continues across every remaining locked segment" in (result.output)
     assert "ext-soperator onboard" not in result.output
 
 
@@ -15415,6 +15897,18 @@ def test_locked_upgrade_path_pending_journal_cannot_skip_first_unmet_segment(
         )
 
 
+def test_locked_upgrade_path_continuation_requires_exactly_one_completed_segment() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=r"did not advance.*exactly the current locked segment",
+    ):
+        cli_module._require_locked_upgrade_path_advanced_exactly_one(
+            prior_progress={"completed_segment_ids": ["segment-1"]},
+            continued_progress={"completed_segment_ids": ["segment-1"]},
+            expected_segment_id="segment-2",
+        )
+
+
 def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
     tmp_path: Path,
 ) -> None:
@@ -15475,12 +15969,15 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         )
     }
     observed: list[tuple[str, str, tuple[str, ...], str, str]] = []
+    command_started_at_values: list[str] = []
+    backup_create_calls = 0
 
     def _collect_snapshot(**_kwargs):
         return current_snapshot["value"]
 
     def _execute(**kwargs):
         kwargs["mutation_guard"]()
+        command_started_at_values.append(kwargs["command_started_at"])
         segment_id = kwargs["campaign_segment_id"]
         assert kwargs["campaign"] == upgrade_path
         onboarding = kwargs["payload"]["deploy"]["targets"][0]["soperator_onboarding"]
@@ -15501,9 +15998,11 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
                 current_k8s_version=target_k8s_version,
             )
         completed_segment_ids: list[str] = []
+        existing_backup: dict[str, object] = {}
         if checkpoint_path.exists():
             existing = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             completed_segment_ids = list(existing.get("completed_segment_ids", []))
+            existing_backup = dict(existing.get("backup", {}))
         completed_segment_ids.append(segment_id)
         _write_locked_ext_soperator_checkpoint(
             config_path=config_path,
@@ -15512,6 +16011,13 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
             current_segment_id=segment_id,
             completed_segment_ids=completed_segment_ids,
         )
+        if existing_backup:
+            written_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            written_checkpoint["backup"] = existing_backup
+            checkpoint_path.write_text(
+                json.dumps(written_checkpoint),
+                encoding="utf-8",
+            )
         return SoperatorMigrationExecutionResult(
             checkpoint_path=checkpoint_path,
             completed_phases=("discovery-and-plan",),
@@ -15524,6 +16030,19 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         )
 
     _stub_external_soperator_upgrade_backup(monkeypatch)
+    stubbed_backup_creator = cli_module._create_external_soperator_upgrade_backup
+
+    def _counted_backup_creator(**kwargs):
+        nonlocal backup_create_calls
+        backup_create_calls += 1
+        return stubbed_backup_creator(**kwargs)
+
+    monkeypatch.setattr(
+        cli_module,
+        "_create_external_soperator_upgrade_backup",
+        _counted_backup_creator,
+    )
+    _stub_external_soperator_campaign_final_verification(monkeypatch)
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _collect_snapshot)
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
     monkeypatch.setattr(
@@ -15532,7 +16051,7 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         lambda **_kwargs: True,
     )
 
-    first = runner.invoke(
+    result = runner.invoke(
         app,
         [
             "ext-soperator",
@@ -15545,34 +16064,15 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         ],
     )
 
-    assert first.exit_code == 0, first.output
-    assert len(observed) == 1
+    assert result.exit_code == 0, result.output
+    assert len(observed) == 3
+    assert backup_create_calls == 1
+    assert len(set(command_started_at_values)) == 1
     assert observed[0][0] == upgrade_path["segments"][0]["id"]
     assert observed[0][1] == "1.32"
     assert "upgrade-soperator" in observed[0][2]
     assert observed[0][3] == "1.22.3"
     assert observed[0][4] == _soperator_test_chart_version()
-    assert "Campaign segment reconciled successfully" in first.output
-
-    current_snapshot["value"] = _old_soperator_snapshot_with_provider(
-        soperator_version=_soperator_test_chart_version(),
-        current_k8s_version="1.32",
-    )
-    second = runner.invoke(
-        app,
-        [
-            "ext-soperator",
-            "upgrade",
-            str(config_path),
-            "--target",
-            "external-cluster",
-            "--execute",
-            "--approve",
-        ],
-    )
-
-    assert second.exit_code == 0, second.output
-    assert len(observed) == 2
     assert observed[1][0] == upgrade_path["segments"][1]["id"]
     assert observed[1][1] == "1.33"
     assert observed[1][2] == (
@@ -15581,9 +16081,73 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
     )
     assert observed[1][3] == _soperator_test_app_version()
     assert observed[1][4] == _soperator_test_chart_version()
-    assert "Campaign segment reconciled successfully" in second.output
+    assert observed[2][0] == upgrade_path["segments"][2]["id"]
+    assert observed[2][1] == "1.34"
+    assert observed[2][2] == (
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    )
+    assert result.output.count("Campaign segment reconciled successfully") == 3
+    assert result.output.count("Continuing the same approved command") == 3
+    assert "all locked segments are checkpointed; running final campaign verification" in (
+        result.output
+    )
+    assert "Current segment: none; locked upgrade campaign is complete" in result.output
+    assert "config.yaml remains the immutable desired-campaign authority" in result.output
 
-    third = runner.invoke(
+    completed_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    active_backup = completed_checkpoint["backup"]
+    active_archive = Path(active_backup["path"])
+    if not active_archive.is_absolute():
+        active_archive = config_path.parent / active_archive
+    active_archive.unlink()
+    verification_calls = 0
+    repair_calls = 0
+
+    def _verify_repair(**_kwargs: object) -> None:
+        nonlocal verification_calls
+        verification_calls += 1
+        if verification_calls == 1:
+            raise RuntimeError("External Soperator campaign backup archive is missing.")
+
+    def _repair_backup(**_kwargs: object) -> dict[str, object]:
+        nonlocal repair_calls
+        repair_calls += 1
+        replacement = config_path.parent / "backups" / "campaign-terminal-replacement.tar.gz"
+        replacement.write_bytes(b"replacement backup\n")
+        return {
+            "required": True,
+            "path": str(replacement),
+            "size_bytes": replacement.stat().st_size,
+            "sha256": hashlib.sha256(replacement.read_bytes()).hexdigest(),
+            "manifest_sha256": "replacement-manifest",
+            "included_categories": ["kubernetes", "recreation"],
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "_verify_external_soperator_campaign_backup",
+        _verify_repair,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_create_external_soperator_upgrade_backup",
+        _repair_backup,
+    )
+    real_replace_backup = cli_module.replace_soperator_migration_campaign_backup_binding
+
+    def _activation_conflict(**_kwargs: object) -> None:
+        raise RuntimeError(
+            "recovery-required: active campaign backup changed after recovery approval"
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "replace_soperator_migration_campaign_backup_binding",
+        _activation_conflict,
+    )
+
+    activation_conflict = runner.invoke(
         app,
         [
             "ext-soperator",
@@ -15593,21 +16157,46 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
             "external-cluster",
             "--execute",
             "--approve",
+            "--approve-backup-recovery",
+        ],
+    )
+    assert activation_conflict.exit_code == 1
+    assert "active campaign backup changed" in activation_conflict.output
+    conflict_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert conflict_checkpoint["backup_recovery"]["status"] == "replacement-required"
+    assert conflict_checkpoint["backup_protection"]["status"] == "degraded"
+
+    monkeypatch.setattr(
+        cli_module,
+        "replace_soperator_migration_campaign_backup_binding",
+        real_replace_backup,
+    )
+    repaired = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+            "--approve-backup-recovery",
         ],
     )
 
-    assert third.exit_code == 0, third.output
+    assert repaired.exit_code == 0, repaired.output
     assert len(observed) == 3
-    assert observed[2][0] == upgrade_path["segments"][2]["id"]
-    assert observed[2][1] == "1.34"
-    assert observed[2][2] == (
-        "approve-external-soperator-upgrade",
-        "upgrade-external-node-template",
-    )
-    assert "config.yaml remains the immutable desired-campaign authority" in third.output
+    assert repair_calls == 2
+    assert verification_calls == 4
+    assert "no upgrade phase was rerun" in repaired.output
+    repaired_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert repaired_checkpoint["backup"]["recovery_point"] == "campaign-terminal"
+    assert repaired_checkpoint["backup_protection"]["status"] == "protected"
+    assert "backup_recovery" not in repaired_checkpoint
 
 
-def test_ext_soperator_upgrade_records_only_one_live_satisfied_segment_per_invocation(
+def test_ext_soperator_upgrade_records_all_live_satisfied_segments_in_one_invocation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -15682,31 +16271,34 @@ def test_ext_soperator_upgrade_records_only_one_live_satisfied_segment_per_invoc
         "_create_external_soperator_upgrade_backup",
         _unexpected_mutation,
     )
+    _stub_external_soperator_campaign_final_verification(monkeypatch)
 
-    for expected_count in range(2, len(segments) + 1):
-        result = runner.invoke(
-            app,
-            [
-                "ext-soperator",
-                "upgrade",
-                str(config_path),
-                "--target",
-                "external-cluster",
-                "--execute",
-                "--approve",
-            ],
-        )
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
 
-        assert result.exit_code == 0, result.output
-        checkpoint = json.loads(_ext_soperator_checkpoint_path(config_path).read_text())
-        assert checkpoint["completed_segment_ids"] == [
-            segment["id"] for segment in segments[:expected_count]
-        ]
-        assert checkpoint["current_segment_id"] == segments[expected_count - 1]["id"]
-        assert checkpoint["pending_phase"] == "none"
-        assert checkpoint["compensation_obligations"] == []
-        assert "backup" not in checkpoint
-        assert "No backup was created and no cluster mutation was performed" in result.output
+    assert result.exit_code == 0, result.output
+    checkpoint = json.loads(_ext_soperator_checkpoint_path(config_path).read_text())
+    assert checkpoint["completed_segment_ids"] == [segment["id"] for segment in segments]
+    assert checkpoint["current_segment_id"] == segments[-1]["id"]
+    assert checkpoint["upgrade_timing"]["attempt_count"] == 1
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["compensation_obligations"] == []
+    assert "backup" not in checkpoint
+    assert result.output.count("No backup was created and no cluster mutation was performed") == 2
+    assert result.output.count("Continuing the same approved command") == 2
+    assert "all locked segments are checkpointed; running final campaign verification" in (
+        result.output
+    )
 
     completed = runner.invoke(
         app,
@@ -15723,6 +16315,66 @@ def test_ext_soperator_upgrade_records_only_one_live_satisfied_segment_per_invoc
     assert completed.exit_code == 0, completed.output
     assert "Current segment: none; locked upgrade campaign is complete" in completed.output
     assert "Remaining segments: none" in completed.output
+
+
+def test_ext_soperator_upgrade_stops_campaign_loop_at_pending_segment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    campaign = _locked_upgrade_path_from_config(config_path)
+    observed_segment_ids: list[str] = []
+
+    def _execute(**kwargs: object) -> SoperatorMigrationExecutionResult:
+        segment_id = str(kwargs["campaign_segment_id"])
+        observed_segment_ids.append(segment_id)
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=_ext_soperator_checkpoint_path(config_path),
+            completed_phases=("discovery-and-plan", "customer-approval"),
+            pending_phase=soperator_migration_module.POPULATE_JAIL_REFRESH_PHASE_ID,
+            pending_reason="checkpointed safety gate remains pending",
+            live_source_version="1.22.3",
+            target_version=_soperator_test_chart_version(),
+            mutation_performed=True,
+            lines=(
+                "Pending phase: populate-jail-refresh",
+                "Pending reason: checkpointed safety gate remains pending",
+            ),
+        )
+
+    _stub_external_soperator_upgrade_backup(monkeypatch)
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version="1.22.3",
+            current_k8s_version="1.31",
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert observed_segment_ids == [campaign["segments"][0]["id"]]
+    assert "Pending phase: populate-jail-refresh" in result.output
+    assert "Continuing the same approved command" not in result.output
 
 
 def test_ext_soperator_live_satisfied_record_revalidates_config_before_journal_write(
@@ -16038,6 +16690,20 @@ def test_ext_soperator_upgrade_resumes_later_hop_with_journal_bound_replacement(
             },
         },
     }
+    campaign_archive = tmp_path / "backups" / "campaign.tar.gz"
+    campaign_archive.parent.mkdir(parents=True)
+    campaign_archive.write_bytes(b"campaign backup\n")
+    checkpoint["backup"] = {
+        "required": True,
+        "scope": "campaign",
+        "campaign_fingerprint": campaign["fingerprint"],
+        "origin_segment_id": first_segment["id"],
+        "path": str(campaign_archive),
+        "size_bytes": campaign_archive.stat().st_size,
+        "sha256": hashlib.sha256(campaign_archive.read_bytes()).hexdigest(),
+        "manifest_sha256": "test-manifest",
+        "included_categories": ["kubernetes", "recreation"],
+    }
     checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
     live_snapshot = _old_soperator_snapshot_with_provider(
         soperator_version=_soperator_test_chart_version(),
@@ -16095,7 +16761,7 @@ def test_ext_soperator_upgrade_resumes_later_hop_with_journal_bound_replacement(
     )
 
     assert result.exit_code == 1, f"{result.output}\n{result.exception!r}"
-    assert len(observed_targets) == 1
+    assert len(observed_targets) == 1, result.output
     effective_ids = {group["id"] for group in observed_targets[0]}
     assert replacement_id in effective_ids
     assert original_group["id"] not in effective_ids
@@ -16596,7 +17262,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
         "provider-outdated  ready/current  event\n"
         "gpu-pool    PROVISIONING  1.32  4      3         1          1          3/4            "
         "WaitingForNodeRef\n"
-        "login       RUNNING       1.32  2      2         0          0          2/2            - | "
+        "login       RUNNING       1.32  2      2         0          0          2/2            -\n"
+        "| "
         "Slurm Workers draining: workers drained=1"
     )
 
@@ -16613,8 +17280,13 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold yellow]provider-updating[/bold yellow]=1" in styled
     assert "[bold cyan]provider-outdated[/bold cyan]=1" in styled
     assert "[bold cyan]ready/current[/bold cyan]=7/8" in styled
+    assert (
+        "[bold black]group       state         k8s   total  provider-current  "
+        "provider-updating  provider-outdated  ready/current  event[/bold black]"
+    ) in styled
     assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]  1.32" in styled
     assert "login       [green]RUNNING[/green]       1.32" in styled
+    assert "\n| [bold white]Slurm Workers[/bold white]" in styled
     assert "[bold white]Slurm Workers[/bold white]" in styled
 
     initial_messages: list[str] = []
@@ -16669,6 +17341,44 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold yellow]provider-updating[/bold yellow]=1" in updates[0]
     assert "[bold cyan]provider-outdated[/bold cyan]=1" in updates[0]
     assert "[bold yellow]PROVISIONING[/bold yellow]" in updates[0]
+
+
+def test_soperator_migration_status_table_header_renders_bold_black_only_with_color() -> None:
+    plain = (
+        "group  state    k8s   total  provider-current  provider-updating  "
+        "provider-outdated  ready/current  event\n"
+        "login RUNNING  1.31  2      2                 0                  "
+        "0                  2/2            -\n"
+        "| Slurm Workers serving: workers idle=2; jobs pending=6 | "
+        "Soperator serving: soperator=Available"
+    )
+    styled = cli_module._style_soperator_migration_status_message(plain)
+    color_output = StringIO()
+    cli_module.Console(
+        file=color_output,
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+        width=220,
+    ).print(styled, soft_wrap=True)
+    rendered_color = color_output.getvalue()
+
+    assert "\x1b[1;30mgroup" in rendered_color
+    assert "\x1b[0m\nlogin" in rendered_color
+    assert "\n| \x1b[1;37mSlurm Workers\x1b[0m \x1b[32mserving:\x1b[0m" in rendered_color
+
+    plain_output = StringIO()
+    cli_module.Console(
+        file=plain_output,
+        force_terminal=False,
+        color_system=None,
+        width=220,
+    ).print(styled, soft_wrap=True)
+    rendered_plain = plain_output.getvalue()
+
+    assert "\x1b[" not in rendered_plain
+    assert plain.splitlines()[0] == rendered_plain.splitlines()[0]
+    assert rendered_plain.splitlines()[-1].startswith("| Slurm Workers serving:")
 
 
 def test_soperator_migration_status_spinner_suppresses_stray_enter_echo(
@@ -17558,9 +18268,7 @@ def test_external_soperator_resume_scope_uses_campaign_transition_after_phase_re
     checkpoint["phase_state"] = {}
     checkpoint["completed_segment_ids"] = ["segment-1"]
     checkpoint["slurmcluster_identity_transition"] = {
-        "schema": (
-            soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA
-        ),
+        "schema": (soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA),
         "phase_id": "rolling-compute-migration",
         "target_ref": "target-cluster",
         "origin_segment_id": "segment-1",
@@ -17837,9 +18545,7 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         "uid": "target-slurmcluster-uid",
     }
     checkpoint["slurmcluster_identity_transition"] = {
-        "schema": (
-            soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA
-        ),
+        "schema": (soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA),
         "phase_id": "rolling-compute-migration",
         "target_ref": "external-cluster",
         "origin_segment_id": first_segment_id,
@@ -18010,6 +18716,7 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
     )
     backup_calls: list[dict[str, object]] = []
     observed: dict[str, object] = {}
+    current_snapshot = {"value": _old_soperator_snapshot_with_provider()}
 
     def _backup(**kwargs):
         backup_calls.append(dict(kwargs))
@@ -18020,6 +18727,17 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
 
     def _execute(**kwargs):
         observed["backup_metadata"] = kwargs["backup_metadata"]
+        _write_locked_ext_soperator_checkpoint(
+            config_path=config_path,
+            target_ref="external-cluster",
+            upgrade_path=campaign,
+            current_segment_id=segment_id,
+            completed_segment_ids=[segment_id],
+        )
+        current_snapshot["value"] = _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
+        )
         return SoperatorMigrationExecutionResult(
             checkpoint_path=checkpoint_path,
             completed_phases=(
@@ -18036,7 +18754,13 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
         )
 
     monkeypatch.setattr(cli_module, "_create_external_soperator_upgrade_backup", _backup)
+    monkeypatch.setattr(
+        cli_module,
+        "_verify_external_soperator_campaign_backup",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    _stub_external_soperator_campaign_final_verification(monkeypatch)
     monkeypatch.setattr(
         cli_module,
         "external_soperator_upgrade_protected_comparison_passed",
@@ -18045,7 +18769,7 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda *, kube_context, **_kwargs: _old_soperator_snapshot_with_provider(),
+        lambda *, kube_context, **_kwargs: current_snapshot["value"],
     )
 
     result = runner.invoke(
@@ -18063,7 +18787,12 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
 
     assert result.exit_code == 0, result.output
     assert backup_calls == []
-    assert observed["backup_metadata"] == original_backup
+    observed_backup = observed["backup_metadata"]
+    assert isinstance(observed_backup, Mapping)
+    assert {key: observed_backup[key] for key in original_backup} == original_backup
+    assert observed_backup["scope"] == "campaign"
+    assert observed_backup["campaign_fingerprint"] == campaign["fingerprint"]
+    assert observed_backup["origin_segment_id"] == segment_id
     assert "External Soperator upgrade backup guard: checking for reusable" in result.output
     assert "External Soperator upgrade backup guard: reusing existing" in result.output
     assert "External Soperator upgrade phase backup (top-level stage:" not in result.output
@@ -18322,6 +19051,8 @@ def test_ext_soperator_upgrade_execute_preserves_completed_campaign_in_config(
     upgrade_path = _locked_upgrade_path_from_config(config_path)
     checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     _stub_external_soperator_upgrade_backup(monkeypatch)
+    _stub_external_soperator_campaign_final_verification(monkeypatch)
+    current_snapshot = {"value": _old_soperator_snapshot_with_provider()}
 
     def _execute(**kwargs):
         segment_ids = [segment["id"] for segment in upgrade_path["segments"]]
@@ -18332,6 +19063,10 @@ def test_ext_soperator_upgrade_execute_preserves_completed_campaign_in_config(
             upgrade_path=upgrade_path,
             current_segment_id=kwargs["campaign_segment_id"],
             completed_segment_ids=segment_ids,
+        )
+        current_snapshot["value"] = _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
         )
         return SoperatorMigrationExecutionResult(
             checkpoint_path=checkpoint_path,
@@ -18361,7 +19096,7 @@ def test_ext_soperator_upgrade_execute_preserves_completed_campaign_in_config(
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda *, kube_context, **_kwargs: _old_soperator_snapshot_with_provider(),
+        lambda *, kube_context, **_kwargs: current_snapshot["value"],
     )
 
     result = runner.invoke(
