@@ -42,6 +42,16 @@ with dependencies, exact or directory-prefix write claims, keyed conflict
 domains, validation, and done criteria. It builds deterministic earliest-fit
 waves in stable task order.
 
+After the coordinator renders and validates Task Implementer-managed
+requirements and design records, it routes to the explicit-only
+`project-agent-instructions` skill. That shared owner creates a selected-project
+`AGENTS.md` only when durable project-specific rules add to inherited
+instructions. Human-owned files are preserved; only an unchanged
+provenance-marked generated file can be refreshed. The receipt remains private,
+while a created or refreshed file joins the coordinator contract commit before
+worker dispatch. `workspace init` never creates project documentation or
+instructions.
+
 Tasks may share a wave only when dependencies are already satisfied and their
 ownership is completely disjoint. Shared interfaces, schemas, migration
 chains, dependency files, abstractions, Kubernetes/Terraform identities,
@@ -120,7 +130,8 @@ branches into a temporary integration branch in stable task-ID order with
 changelog remain coordinator-owned.
 
 After combined validation, integration `code-review`, and steering
-reconciliation, the unchanged clean primary branch advances atomically with
+and project-agent-instructions reconciliation, the unchanged clean primary
+branch advances atomically with
 `git merge --ff-only <verified-integration-SHA>` after the integration branch
 is verified at that SHA. This fast-forward promotion is the only point where
 tasks become done.
@@ -170,6 +181,8 @@ secrets, or internal IDs.
 - `scripts/prompt_workspace_interop.py`: optional managed-outer lease bridge.
 - `scripts/prompt_workspace_intake.py`: two-command routing and steering.
 - `scripts/prompt_workspace_specs.py`: managed specification validation.
+- `project-agent-instructions`: shared conditional selected-project
+  `AGENTS.md` owner and deterministic provenance helper.
 - `scripts/test-task-execution.py`: scheduler and v1-boundary tests.
 - `scripts/test-task-waves.py`: disposable real-Git lifecycle tests.
 - `scripts/test-worktree-interoperability.py`: composed outer-worktree lease,

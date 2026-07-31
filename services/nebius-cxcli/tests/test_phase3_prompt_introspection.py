@@ -3104,10 +3104,10 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
 
 
 def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypatch) -> None:
-    prompts: list[tuple[str, bool]] = []
+    prompts: list[tuple[str, bool | None]] = []
 
     def _capture_continue_phase(
-        label: str, *, default: bool = True, allow_back: bool = False
+        label: str, *, default: bool | None = True, allow_back: bool = False
     ) -> bool:
         _ = allow_back
         prompts.append((label, default))
@@ -3208,5 +3208,5 @@ def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypat
 
     assert prompts == [
         ("Configure 'mk8s' component fields now?", True),
-        ("Configure 'gateway-helm' component fields now?", False),
+        ("Configure 'gateway-helm' component fields now?", None),
     ]

@@ -35,6 +35,9 @@ duplicate specialist workflows inside this skill.
   decision to the active design workflow instead of routing back to `design`.
 - Do not take over isolated framework work when the user has already fixed the
   stack and no stack decision remains.
+- Do not create repository or component scaffolding directly. When the user
+  explicitly requests a new repository or multi-component skeleton, emit a
+  bounded scaffold handoff for `scaffold-project`.
 - Do not add distributed systems, caches, queues, schedulers, workflow engines,
   event streams, or orchestration platforms without a concrete requirement.
 - Do not mutate source, infrastructure, databases, credentials, or external
@@ -142,7 +145,20 @@ Return:
 - rejected alternatives and why;
 - reliability, security, observability, recovery, and ownership requirements;
 - validation needed before adoption;
+- when repository scaffolding is required, a scaffold handoff containing the
+  logical components, closed component classes, canonical technology names,
+  technology profiles and versions, runtime requirements, capability
+  selections, constraints, validation expectations, and
+  `Required`/`Conditional`/`Deferred`/`Rejected` statuses;
 - an implementation sequence when requested.
+
+Use the closed structure in
+`references/scaffold-handoff.schema.json` (schema version 2). Classify every
+component as `application`, `frontend`, `infrastructure`, or
+`external-service`, and give every technology a canonical `name`. Do not place
+repository paths, materialization units, runtime units, file owners, candidate
+sets, commands, or apply authorization in this handoff. `scaffold-project`
+owns that topology and execution planning.
 
 Avoid a flat shopping list. Make dependencies and optionality visible.
 
@@ -150,7 +166,15 @@ Avoid a flat shopping list. Make dependencies and optionality visible.
 
 Read `references/implementation-routing.md`. Discover matching installed skills
 from their current metadata and use the narrowest applicable set. Keep one
-owner for each file, layer, migration, deployment action, and validation gate.
+logical owner for each layer, migration, deployment action, and validation
+expectation. When `scaffold-project` owns the foundation step, it assigns the
+authoritative per-path content owners.
+
+When the user has explicitly requested repository scaffolding, pass the
+approved handoff to `scaffold-project` as a bounded foundation step.
+`scaffold-project` owns topology and initial component candidates, returns its
+validation result, and does not route back into `app-stack`. Resume the active
+implementation coordination only after that bounded step returns.
 
 Implement in vertical slices when the application layers form a serial user
 flow. Use foundation-first work only for prerequisites such as repository

@@ -87,13 +87,13 @@
     <rect class="pill" x="981" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="1111" y="596" text-anchor="middle" fill="#166534">≥ 1 exact target backend</text>
 
     <rect class="card" x="1274" y="412" width="296" height="210" rx="14"/><circle cx="1301" cy="440" r="18" fill="#ea580c"/><text class="card-num" x="1301" y="446" text-anchor="middle">5</text><text class="card-title" x="1328" y="445">Resolve, then release</text>
-    <text class="card-body" x="1292" y="476"><tspan x="1292">Keep live or reappeared sockets protected.</tspan><tspan x="1292" dy="19">For disappearance, require voluntary-exit ack</tspan><tspan x="1292" dy="19">or explicit timeout continuation; then release</tspan><tspan x="1292" dy="19">the exact source hold.</tspan></text>
+    <text class="card-body" x="1292" y="476"><tspan x="1292">Prove a distinct Ready target peer.</tspan><tspan x="1292" dy="19">Require preserved host key and stable Service</tspan><tspan x="1292" dy="19">EndpointSlice routing; then release the exact</tspan><tspan x="1292" dy="19">source availability hold.</tspan></text>
     <rect class="pill-warn" x="1292" y="579" width="260" height="25" rx="12.5"/><text class="pill-text" x="1422" y="596" text-anchor="middle" fill="#c2410c">no automatic timeout</text>
   </g>
 
   <rect class="banner" x="30" y="646" width="1540" height="82" rx="14"/>
   <path d="M58 665 L76 657 L94 665 V680 C94 693 85 701 76 705 C67 701 58 693 58 680 Z" fill="none" stroke="#dc2626" stroke-width="3"/><path d="M67 681 L73 687 L86 672" fill="none" stroke="#dc2626" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
   <text class="banner-text" x="815" y="674" text-anchor="middle">Established TCP/SSH sessions never migrate between Pods and are never force-closed by cxcli.</text>
-  <text class="banner-text" x="815" y="697" text-anchor="middle">Socket disappearance is Indeterminate until voluntary exit is acknowledged or timeout continuation is explicitly authorized.</text>
-  <text class="banner-text" x="815" y="720" text-anchor="middle">Releasing the exact source-session hold unblocks final partition restoration; the stable Service and target backend remain.</text>
+  <text class="banner-text" x="815" y="697" text-anchor="middle">Active SSH sockets do not gate serial login replacement after the exact target peer is Ready.</text>
+  <text class="banner-text" x="815" y="720" text-anchor="middle">Releasing the exact source availability hold may drop old connections; the stable Service and target backend remain.</text>
 </svg>

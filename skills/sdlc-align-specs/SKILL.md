@@ -25,14 +25,16 @@ evidence tell one consistent story.
 
 ## Inputs
 
-- Requirements, design, current feature plan, changed files, tests,
-  documentation, steering, and evidence.
+- Requirements, design, current project-instruction decision, current feature
+  plan, changed files, tests, documentation, steering, and evidence.
 - Current feature ID or full-run scope.
 
 ## Required Reads
 
 - `docs/requirements.md`.
 - `docs/design.md`.
+- The verified private `project-agent-instructions` state and active
+  selected-project instruction file when present.
 - Locked plans.
 - Validation, test, evaluation, documentation, UAT, and commit evidence.
 - Changed implementation and tests.
@@ -57,6 +59,10 @@ evidence tell one consistent story.
   applies.
 - Check stable IDs and status fields.
 - Check that no manual spec edits bypassed owner skills.
+- Check that the conditional project-instruction decision matches current
+  requirements, design, inherited instructions, and target bytes. Validate a
+  generated file's provenance; preserve a human-owned file and report any
+  material gap or conflict.
 - Check that evidence supports claimed state transitions.
 - Check that project-facing docs do not describe behavior that implementation
   and evaluation evidence have not proven.
@@ -80,10 +86,14 @@ evidence tell one consistent story.
   unsupported wording.
 - Documentation mismatch maps to `DOCUMENTATION_DRIFT` and routes to
   `sdlc-update-documents`.
+- Stale, missing, or invalid project-instruction decision evidence routes to
+  `project-agent-instructions`; a human-owned conflict remains blocked there.
 
 ## Must Not
 
 - Free-edit requirements or design.
+- Edit any project instruction file; route it to
+  `project-agent-instructions`.
 - Modify locked plans.
 - Pretend unchecked evidence passed.
 - Replace the general `align` workflow.
@@ -94,12 +104,18 @@ evidence tell one consistent story.
 - Each drift item has an owner skill or blocker.
 - Vertical flow, layer map, locked slice, and evidence agree when applicable.
 - No unresolved inconsistency remains before commit or PR readiness is claimed.
+- The project-instruction decision and any active file agree with current
+  committed specs and inherited policy.
 
 ## SDLC Invariants
 
-- Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
+- Treat `docs/requirements.md`, `docs/design.md`, and any
+  provenance-owned generated project-root `AGENTS.md` as committed project
+  truth.
 - Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+  writes `docs/design.md`; only `project-agent-instructions` creates or
+  refreshes its generated project-root `AGENTS.md`. Other skills route changes
+  to those owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

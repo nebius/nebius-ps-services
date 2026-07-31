@@ -1,0 +1,159 @@
+{
+  "$id": "https://example.invalid/scaffold-project/candidate-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_set_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/relativePath"
+              },
+              {
+                "pattern": "^files/"
+              }
+            ]
+          },
+          "mode": {
+            "enum": [
+              "0644",
+              "0755"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "required": [
+          "path",
+          "candidate",
+          "mode",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "input_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "materialization_unit_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "owner": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "profile": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "validations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_set_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "command": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "materialization_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "network_required": {
+            "type": "boolean"
+          },
+          "owner": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "phase": {
+            "enum": [
+              "candidate",
+              "post-apply"
+            ]
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "pending",
+              "not-run",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "materialization_unit_id",
+          "candidate_set_id",
+          "phase",
+          "command",
+          "network_required",
+          "status"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_set_id",
+    "owner",
+    "materialization_unit_id",
+    "profile",
+    "input_sha256",
+    "inputs",
+    "files",
+    "validations"
+  ],
+  "title": "Scaffold Candidate Manifest",
+  "type": "object",
+  "$defs": {
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "type": "string"
+    },
+    "nonEmptyString": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "relativePath": {
+      "$comment": "NFC is enforced by the Python validators.",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\\\)(?!.*[\\u0000-\\u001F\\u007F])(?!.*(?:^|/)\\.\\.?(?:/|$))[^/]+(?:/[^/]+)*$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  }
+}

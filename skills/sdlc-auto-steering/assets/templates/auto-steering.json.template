@@ -25,8 +25,8 @@
       "source_phase": "<phase>",
       "current_feature": "<FEAT-ID or null>",
       "prompt_summary": "<compact redacted summary only; never raw prompt text>",
-      "disposition": "runtime-only|requirements-change|design-change|docs-update|resolved|superseded|rejected|needs-human",
-      "owner_skill": "sdlc-start|sdlc-create-requirements|sdlc-create-design|sdlc-update-documents|null",
+      "disposition": "runtime-only|requirements-change|design-change|project-agent-instructions-change|docs-update|resolved|superseded|rejected|needs-human",
+      "owner_skill": "sdlc-start|sdlc-create-requirements|sdlc-create-design|project-agent-instructions|sdlc-update-documents|null",
       "status": "pending|active|resolved|blocked",
       "notes": "<short reason or blocker>"
     }

@@ -217,16 +217,16 @@ empty or stale managed blocks must be updated in place.
 
 The managed section must include the global remediation default: after one
 failed repair against the same blocker, use `troubleshoot`, cap the blocker
-tranche at three remediation attempts or 60 active minutes, and allow a current
+tranche at five remediation attempts or 120 active minutes, and allow a current
 instruction to lower but never raise or disable the attempt maximum. Require
 newly acquired evidence and a genuinely new evidence-derived hypothesis before
-every retry. Report failures 1 and 2 as progress; at exhaustion make only the
-exact private state update before stopping all other tools and returning the
+every retry. Report failures 1 through 4 as progress; at exhaustion make only
+the exact private state update before stopping all other tools and returning the
 complete report. If the evidence or hypothesis gate cannot be satisfied
 earlier, stop and return the structured investigation report. Another bounded
 tranche requires a new explicit user instruction for the same blocker. A
 causally independent blocker starts its own fresh budget at attempt 1. Use the
-three-attempt maximum and default 60-minute limit unless the current instruction
+five-attempt maximum and default 120-minute limit unless the current instruction
 sets a lower attempt limit or another time limit for the new blocker. Do not
 carry attempts, active time, tranche, exhaustion status, or stop trigger from
 the earlier blocker. Permission denials and marker validation or repair consume
@@ -238,6 +238,14 @@ created during the current task. Require the exact task-specific path to be
 resolved and validated under the system temporary directory first, use scoped
 non-forced deletion such as `find "$task_temp_dir" -depth -delete`, and never
 target the temporary root or an unresolved variable.
+
+The managed section must include the nested-project instruction contract from
+`assets/AGENTS.md.template`: resolve the selected project, read every
+applicable instruction file from repository root through that project, retain
+root and ancestor rules, never weaken higher-level security or destructive
+operation safeguards, stop on irreconcilable conflicts, explicitly read a
+newly generated `AGENTS.md` in the current session, and treat
+`AGENTS.override.md` as active without creating one automatically.
 
 Recommended managed block markers:
 

@@ -115,7 +115,9 @@ default contract:
 For `AGENTS.md`, exact template parity is a no-op. Otherwise, add or update
 only the compact managed context section. Empty or stale managed markers do not
 satisfy validation; the content between the markers must carry the current
-durable guidance. For `config.toml`, parse the file first and patch the
+durable guidance, including nested-project precedence, higher-level safeguard,
+conflict-stop, explicit-read-after-generation, and override rules. For
+`config.toml`, parse the file first and patch the
 minimum settings needed for hooks, multi-agent support, and the three read-only
 custom agent config layers.
 

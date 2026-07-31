@@ -3895,8 +3895,14 @@ def _install_controller_bridge_lifecycle_fixture(
     def _login_hold_satisfied(**kwargs: Any) -> list[str]:
         gate = kwargs["gate"]
         assert isinstance(gate, Mapping)
-        assert isinstance(gate.get("active_session_hold"), Mapping)
-        return ["Login session hold fixture remains journal-bound."]
+        active_hold = gate.get("active_session_hold")
+        if isinstance(active_hold, Mapping):
+            return ["Login session hold fixture remains journal-bound."]
+        assert gate.get("policy") == migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
+        session_drain = gate.get("session_drain")
+        assert isinstance(session_drain, Mapping)
+        assert session_drain.get("status") == "skipped"
+        return ["Login target-ready fixture remains journal-bound."]
 
     def _source_manager_fenced(**kwargs: Any) -> tuple[bool, list[str]]:
         phase = kwargs["phase"]
@@ -3954,11 +3960,7 @@ def _install_controller_bridge_lifecycle_fixture(
         return ["No active source SSH session required a Pod hold in this fixture."]
 
     def _release_login_hold_before_full_rollout(**kwargs: Any) -> list[str]:
-        rolling = (
-            kwargs["checkpoint"]
-            .get("phase_state", {})
-            .get("rolling-compute-migration", {})
-        )
+        rolling = kwargs["checkpoint"].get("phase_state", {}).get("rolling-compute-migration", {})
         if not rolling.get("in_place_login_surge"):
             return release_login_hold_before_full_rollout(**kwargs)
         runner = kwargs["command_runner"]
@@ -12127,6 +12129,7 @@ def _checkpoint_with_compute_source_binding(
     result = checkpoint if checkpoint is not None else {}
     for key, value in _journal_contract_fields().items():
         result.setdefault(key, copy.deepcopy(value))
+    result["target_ref"] = "external-cluster"
     result["source_slurmcluster_ref"] = {
         "namespace": "soperator",
         "name": "soperator",
@@ -15851,8 +15854,20 @@ def test_target_singleton_handoff_reasserts_command_gate_before_client_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     retire_phase: dict[str, Any] = {}
+    rolling_phase: dict[str, Any] = {
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "original_replicas": 1,
+            "spec_fingerprint": "manager-spec",
+            "verified_at": "verified",
+        }
+    }
     checkpoint: dict[str, Any] = {
-        "phase_state": {"retire-old-resources": retire_phase},
+        "phase_state": {
+            "retire-old-resources": retire_phase,
+            "rolling-compute-migration": rolling_phase,
+        },
         "controller_bridge": {
             "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
         },
@@ -15875,7 +15890,7 @@ def test_target_singleton_handoff_reasserts_command_gate_before_client_mutation(
     def _reassert_gate(**kwargs: Any) -> list[str]:
         order.append("command-gate")
         calls.append(kwargs)
-        assert kwargs["phase"] is retire_phase
+        assert kwargs["phase"] is rolling_phase
         raise migration.SoperatorMigrationPhasePending("reasserted canonical command gate")
 
     monkeypatch.setattr(
@@ -19959,6 +19974,718 @@ def test_accounting_handoff_wait_existing_pod_goes_directly_to_ready_wait(
 
     assert [command[5] for command in calls] == ["get", "wait"]
     assert sleeps == []
+
+
+def test_accounting_target_database_deferral_requires_exact_paused_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-uid",
+    }
+    manager_spec = {"replicas": 0, "template": {"spec": {"containers": []}}}
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_optional_mariadb_pod_identity",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_exact_slurmcluster",
+        lambda **_kwargs: (
+            {
+                "spec": {
+                    "slurmNodes": {
+                        "accounting": {
+                            "enabled": True,
+                            "slurmdbd": {
+                                "command": list(
+                                    migration._ACCOUNTING_HANDOFF_WRITER_FENCE_COMMAND  # noqa: SLF001
+                                ),
+                                "args": list(
+                                    migration._ACCOUNTING_HANDOFF_WRITER_FENCE_ARGS  # noqa: SLF001
+                                ),
+                            },
+                        }
+                    }
+                }
+            },
+            "target-rv",
+            True,
+        ),
+    )
+    manager = {
+        "metadata": {"uid": "manager-uid", "generation": 2},
+        "spec": manager_spec,
+        "status": {
+            "observedGeneration": 2,
+            "replicas": 0,
+            "readyReplicas": 0,
+            "availableReplicas": 0,
+            "updatedReplicas": 0,
+        },
+    }
+    canonical_manager_fingerprint = (
+        migration._in_place_manager_restore_spec_fingerprint(manager)  # noqa: SLF001
+    )
+    assert canonical_manager_fingerprint != migration._fingerprint(manager_spec)  # noqa: SLF001
+    phase = {
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "pause_generation": 2,
+            "spec_fingerprint": canonical_manager_fingerprint,
+        }
+    }
+    monkeypatch.setattr(migration, "_json_from_command", lambda *_args, **_kwargs: manager)
+
+    proof = migration._accounting_handoff_target_database_deferred_proof(  # noqa: SLF001
+        phase=phase,
+        target_binding=target,
+        target_pod="target-cluster-acct-db-0",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+    )
+
+    assert proof is not None
+    assert proof["status"] == "absent-before-source-retirement"
+    assert proof["target"] == target
+    assert proof["manager_uid"] == "manager-uid"
+
+    manager["spec"]["replicas"] = 1
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="exact live paused manager",
+    ):
+        migration._accounting_handoff_target_database_deferred_proof(  # noqa: SLF001
+            phase=phase,
+            target_binding=target,
+            target_pod="target-cluster-acct-db-0",
+            command_runner=cast(Any, object()),
+            kube_context="external-context",
+        )
+
+
+def test_accounting_final_dump_defers_absent_target_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {"namespace": "soperator", "name": "source", "uid": "source-uid"}
+    target = {"namespace": "soperator", "name": "target", "uid": "target-uid"}
+    source_identity = {
+        "pod": "source-acct-db-0",
+        "pod_uid": "source-pod-uid",
+        "statefulset": "source-acct-db",
+        "statefulset_uid": "source-sts-uid",
+        "mariadb": "source-acct-db",
+        "mariadb_uid": "source-mariadb-uid",
+        "slurmcluster": "source",
+        "slurmcluster_uid": "source-uid",
+        "pvc": "storage-source-acct-db-0",
+        "pvc_uid": "source-pvc-uid",
+    }
+    preliminary_path = tmp_path / "source-slurm-acct-db.sql"
+    migration._write_sensitive_text_atomic(  # noqa: SLF001
+        preliminary_path,
+        "CREATE DATABASE `slurm_acct_db`;\nUSE `slurm_acct_db`;\n",
+    )
+    state: dict[str, Any] = {
+        "status": "source-snapshot",
+        "source_resource_name": "source",
+        "target_resource_name": "target",
+        "source_cluster_name": "source",
+        "source": source_identity,
+        "dump": migration._accounting_handoff_dump_metadata(preliminary_path),  # noqa: SLF001
+        "source_writer_command_fence": {
+            "applied_resource_version": "source-rv",
+        },
+        "target_writer_command_fence": {
+            "applied_resource_version": "target-rv",
+        },
+    }
+    deferred = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "target_resource_version": "target-rv",
+        "pod": "target-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+        "verified_at": "2026-07-30T00:00:00Z",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_optional_mariadb_pod_identity",
+        lambda **kwargs: None if kwargs["pod_name"] == "target-acct-db-0" else source_identity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_target_database_deferred_proof",
+        lambda **_kwargs: deferred,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_apply_writer_command_fence",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_reconcile_writer_deployment_command_fence",
+        lambda **_kwargs: None,
+    )
+    waited_pods: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_wait_for_mariadb_pod",
+        lambda **kwargs: waited_pods.append(kwargs["pod_name"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_mariadb_pod_identity",
+        lambda **_kwargs: source_identity,
+    )
+    fence_deferrals: list[Mapping[str, Any] | None] = []
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_wait_writer_command_fences",
+        lambda **kwargs: fence_deferrals.append(kwargs["target_database_deferred"]) or {},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_source_cluster_policy_projection",
+        lambda **_kwargs: {"proof_sha256": "policy-sha"},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_dump_source_database",
+        lambda **_kwargs: "CREATE DATABASE `slurm_acct_db`;\nUSE `slurm_acct_db`;\n",
+    )
+    source_history = {
+        "jobs": 1,
+        "steps": 1,
+        "completed_jobs": 1,
+        "max_job_id": 1,
+        "max_time_submit": 1,
+    }
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_history_evidence",
+        lambda **_kwargs: source_history,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_database_tables",
+        lambda **_kwargs: ("source_job_table",),
+    )
+
+    line = migration._accounting_handoff_finalize_command_fenced_source_dump(  # noqa: SLF001
+        phase={},
+        state=state,
+        source_binding=source,
+        target_binding=target,
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: None,
+    )
+
+    assert "sealed a final source DB dump" in line
+    assert waited_pods == ["source-acct-db-0"]
+    assert fence_deferrals == [deferred, deferred]
+    assert state["status"] == "source-dumped"
+    assert state["source_dump_seal"]["target_database_deferred"] == deferred
+    assert not state.get("target")
+
+
+def test_accounting_import_routes_absent_target_database_to_source_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {"namespace": "soperator", "name": "source", "uid": "source-uid"}
+    target = {"namespace": "soperator", "name": "target", "uid": "target-uid"}
+    phase: dict[str, Any] = {
+        "slurmcluster_handoff_binding": {"source": source, "target": target},
+        "accounting_handoff": {
+            "status": "source-snapshot",
+            "source_resource_name": "source",
+            "source_cluster_name": "source",
+            "target_resource_name": "target",
+            "target_cluster_name": "target",
+        },
+    }
+    state = phase["accounting_handoff"]
+    deferred = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "pod": "target-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+    }
+    dump_path = tmp_path / "fenced.sql"
+    migration._write_sensitive_text_atomic(  # noqa: SLF001
+        dump_path,
+        "CREATE DATABASE `slurm_acct_db`;\nUSE `slurm_acct_db`;\n",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_exact_slurmcluster",
+        lambda **_kwargs: ({}, "target-rv", True),
+    )
+
+    def finalize(**_kwargs: Any) -> str:
+        state.update(
+            {
+                "status": "source-dumped",
+                "dump": migration._accounting_handoff_dump_metadata(dump_path),  # noqa: SLF001
+                "source_dump_generation": 1,
+                "source_database_tables": [],
+                "source_dump_seal": {"target_database_deferred": deferred},
+            }
+        )
+        return "sealed"
+
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_finalize_command_fenced_source_dump",
+        finalize,
+    )
+    deferred_calls: list[Mapping[str, Any]] = []
+
+    def defer(**kwargs: Any) -> str:
+        deferred_calls.append(kwargs["target_identity"])
+        return "deferred"
+
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_defer_import_until_source_retirement",
+        defer,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_wait_for_mariadb_pod",
+        lambda **_kwargs: pytest.fail("target MariaDB wait must be deferred"),
+    )
+
+    lines = migration._complete_accounting_handoff_import(  # noqa: SLF001
+        phase=phase,
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: None,
+    )
+
+    assert lines == ["sealed", "deferred"]
+    assert deferred_calls == [deferred]
+
+
+def test_accounting_deferred_target_database_identity_preserves_absence_proof() -> None:
+    target = {"namespace": "soperator", "name": "target", "uid": "target-uid"}
+    absence = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "pod": "target-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+    }
+
+    canonical = migration._accounting_handoff_deferred_target_database_identity(  # noqa: SLF001
+        absence
+    )
+
+    assert canonical == absence
+    assert canonical is not absence
+
+
+def test_accounting_cleanup_reconciles_exact_deferred_absence_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "namespace": "soperator",
+        "name": "soperator",
+        "uid": "source-slurmcluster-uid",
+    }
+    target = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-slurmcluster-uid",
+    }
+    absence = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "pod": "external-cluster-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+    }
+    replay = {"schema": "test-replay", "sha256": "test"}
+    deferred = {
+        "schema": migration._ACCOUNTING_HANDOFF_DEFERRED_IMPORT_SCHEMA,  # noqa: SLF001
+        "status": "ready",
+        "source": source,
+        "target": target,
+        "target_database_identity": {
+            key: absence.get(key)
+            for key in migration._ACCOUNTING_HANDOFF_DATABASE_IDENTITY_KEYS  # noqa: SLF001
+        },
+        "import_replay": replay,
+        "deployment_uid": "source-accounting-deployment-uid",
+        "deployment_owner_uid": source["uid"],
+    }
+    phase: dict[str, Any] = {
+        "slurmcluster_handoff_binding": {"source": source, "target": target},
+        "accounting_handoff": {
+            "status": "source-dumped",
+            "source_resource_name": source["name"],
+            "target_resource_name": target["name"],
+            "source_accounting_deployment": {
+                "uid": deferred["deployment_uid"],
+            },
+            "source_dump_seal": {"target_database_deferred": absence},
+            "dump": {"path": "/sensitive/test-dump.sql"},
+            "import_deferred_until_source_retirement": deferred,
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_source_retirement_checkpoint_is_exact",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_import_replay_binding",
+        lambda **_kwargs: replay,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_deployment_state",
+        lambda **_kwargs: {
+            "uid": deferred["deployment_uid"],
+            "owner_uid": source["uid"],
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_deployment_writer_is_fenced",
+        lambda _deployment: True,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_reuse_sealed_source_dump",
+        lambda **_kwargs: "sealed source dump reused",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_exact_slurmcluster",
+        lambda **_kwargs: ({}, "source-rv", True),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_writer_command_is_fenced",
+        lambda _resource: True,
+    )
+    checkpoint_writes: list[bool] = []
+
+    resource_version, lines = migration._accounting_handoff_revalidate_source_cleanup_boundary(  # noqa: SLF001
+        phase=phase,
+        source_report=_source_report(_snapshot_with_compute_source()),
+        target_ref=target["name"],
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: checkpoint_writes.append(True),
+    )
+
+    reconciliation = deferred["target_database_identity_reconciliation"]
+    assert deferred["target_database_identity"] == absence
+    assert (
+        reconciliation["schema"]
+        == migration._ACCOUNTING_HANDOFF_DEFERRED_IDENTITY_RECONCILIATION_SCHEMA  # noqa: SLF001
+    )
+    assert reconciliation["status"] == "canonicalized-before-source-retirement"
+    assert resource_version == "source-rv"
+    assert checkpoint_writes
+    assert any("UID/resourceVersion-preconditioned retirement" in line for line in lines)
+
+
+def test_accounting_deferred_absence_projection_repair_fails_after_source_retirement() -> None:
+    target = {"namespace": "soperator", "name": "target", "uid": "target-uid"}
+    absence = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "pod": "target-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+    }
+    deferred = {
+        "target_database_identity": {
+            key: absence.get(key)
+            for key in migration._ACCOUNTING_HANDOFF_DATABASE_IDENTITY_KEYS  # noqa: SLF001
+        }
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="target database identity changed",
+    ):
+        migration._accounting_handoff_reconcile_deferred_target_database_identity(  # noqa: SLF001
+            deferred=deferred,
+            expected_identity=absence,
+            target_binding=target,
+            source_retired=True,
+            checkpoint_writer=lambda: pytest.fail("retired-source repair must not checkpoint"),
+        )
+
+
+def test_accounting_retired_source_wait_prefers_manager_gap_then_binds_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "namespace": "soperator",
+        "name": "source",
+        "uid": "source-slurmcluster-uid",
+    }
+    target = {
+        "namespace": "soperator",
+        "name": "target",
+        "uid": "target-slurmcluster-uid",
+    }
+    absence = {
+        "schema": migration._ACCOUNTING_HANDOFF_TARGET_DATABASE_DEFERRED_SCHEMA,  # noqa: SLF001
+        "status": "absent-before-source-retirement",
+        "target": target,
+        "pod": "target-acct-db-0",
+        "manager_uid": "manager-uid",
+        "manager_generation": 2,
+        "manager_spec_fingerprint": "manager-fingerprint",
+    }
+    source_identity = {
+        "pod": "source-acct-db-0",
+        "pod_uid": "source-pod-uid",
+        "statefulset": "source-acct-db",
+        "statefulset_uid": "source-statefulset-uid",
+        "mariadb": "source-acct-db",
+        "mariadb_uid": "source-mariadb-uid",
+        "slurmcluster": "source",
+        "slurmcluster_uid": source["uid"],
+        "pvc": "storage-source-acct-db-0",
+        "pvc_uid": "source-pvc-uid",
+    }
+    target_identity = {
+        "pod": "target-acct-db-0",
+        "pod_uid": "target-pod-uid",
+        "statefulset": "target-acct-db",
+        "statefulset_uid": "target-statefulset-uid",
+        "mariadb": "target-acct-db",
+        "mariadb_uid": "target-mariadb-uid",
+        "slurmcluster": "target",
+        "slurmcluster_uid": target["uid"],
+        "pvc": "storage-target-acct-db-0",
+        "pvc_uid": "target-pvc-uid",
+    }
+    dump_path = tmp_path / "source.sql"
+    migration._write_sensitive_text_atomic(  # noqa: SLF001
+        dump_path,
+        "CREATE DATABASE `slurm_acct_db`;\n",
+    )
+    dump = migration._accounting_handoff_dump_metadata(dump_path)  # noqa: SLF001
+    phase: dict[str, Any] = {
+        "source_cleanup_started_at": "2026-07-30T00:00:00Z",
+        "source_accounting_owner_retired_at": "2026-07-30T00:01:00Z",
+        "slurmcluster_handoff_binding": {"source": source, "target": target},
+    }
+    state: dict[str, Any] = {
+        "source_resource_name": source["name"],
+        "target_resource_name": target["name"],
+        "source": source_identity,
+        "dump": dump,
+        "source_writer_command_fence": {
+            "schema": migration._ACCOUNTING_HANDOFF_WRITER_COMMAND_FENCE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+        },
+        "target_writer_command_fence": {
+            "schema": migration._ACCOUNTING_HANDOFF_WRITER_COMMAND_FENCE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+        },
+        "source_dump_seal": {
+            "schema": migration._ACCOUNTING_HANDOFF_SOURCE_DUMP_SEAL_SCHEMA,  # noqa: SLF001
+            "mode": "dual-slurmdbd-command-fence",
+            "status": "sealed",
+            "dump_sha256": dump["sha256"],
+            "source_pvc": source_identity["pvc"],
+            "source_pvc_uid": source_identity["pvc_uid"],
+            "target_pvc": "",
+            "target_pvc_uid": "",
+            "target_database_deferred": absence,
+        },
+        "import_deferred_until_source_retirement": {
+            "schema": migration._ACCOUNTING_HANDOFF_DEFERRED_IMPORT_SCHEMA,  # noqa: SLF001
+            "status": "ready",
+            "source": source,
+            "target": target,
+            "target_database_identity": absence,
+        },
+        "source_orphan_finalizer_recovery": {
+            "status": "verified",
+            "verified_at": "2026-07-30T00:01:00Z",
+            "source": source,
+        },
+    }
+    events: list[str] = []
+    writes: list[dict[str, Any]] = []
+    manager_gap = {"schema": "test-gap", "status": "verified"}
+    gap_active = {"value": True}
+
+    def wait_for_database(**_kwargs: Any) -> None:
+        if gap_active["value"]:
+            pytest.fail("the exact manager-paused gap must not wait for target MariaDB")
+        events.append("wait")
+
+    def materialized_identity(**_kwargs: Any) -> dict[str, Any]:
+        events.append("identity")
+        return target_identity
+
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_wait_for_mariadb_pod",
+        wait_for_database,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_mariadb_pod_identity",
+        materialized_identity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_assert_source_pvc_identity",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_manager_paused_selector_gap",
+        lambda **_kwargs: manager_gap if gap_active["value"] else None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_optional_exact_slurmcluster",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_exact_slurmcluster",
+        lambda **_kwargs: ({}, "target-rv", True),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_writer_command_is_fenced",
+        lambda _resource: True,
+    )
+    deployment = {
+        "exists": True,
+        "uid": "target-accounting-deployment-uid",
+        "owner_uid": target["uid"],
+        "strategy_type": "Recreate",
+        "replicas": 1,
+        "generation": 1,
+        "observed_generation": 1,
+        "status_replicas": 1,
+        "updated_replicas": 1,
+    }
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_deployment_state",
+        lambda **_kwargs: deployment,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_deployment_writer_is_fenced",
+        lambda _deployment: True,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_deployment_selector",
+        lambda _deployment: {"app": "target-accounting"},
+    )
+    fenced_pod = {
+        "name": "target-accounting-pod",
+        "owned": True,
+        "deleting": False,
+        "phase": "Running",
+        "writer_command": list(migration._ACCOUNTING_HANDOFF_WRITER_FENCE_COMMAND),  # noqa: SLF001
+        "writer_args": list(migration._ACCOUNTING_HANDOFF_WRITER_FENCE_ARGS),  # noqa: SLF001
+    }
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_selector_pods",
+        lambda **_kwargs: (fenced_pod,),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_source_writer_pods",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_writer_pod_has_no_listener",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_database_connection_count",
+        lambda **_kwargs: 0,
+    )
+
+    paused_state = copy.deepcopy(state)
+    paused_writes: list[dict[str, Any]] = []
+    paused_proof = migration._accounting_handoff_wait_target_command_fence_after_source_retirement(  # noqa: SLF001
+        phase=phase,
+        state=paused_state,
+        source_binding=source,
+        target_binding=target,
+        target_pod="target-acct-db-0",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: paused_writes.append(copy.deepcopy(paused_state)),
+    )
+
+    assert paused_proof == manager_gap
+    assert events == []
+    assert "target" not in paused_state
+    assert paused_state["target_command_fence_manager_paused_gap"] == manager_gap
+    assert len(paused_writes) == 1
+
+    gap_active["value"] = False
+    proof = migration._accounting_handoff_wait_target_command_fence_after_source_retirement(  # noqa: SLF001
+        phase=phase,
+        state=state,
+        source_binding=source,
+        target_binding=target,
+        target_pod="target-acct-db-0",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(state)),
+    )
+
+    assert proof["status"] == "verified"
+    assert events == ["wait", "identity", "identity"]
+    assert state["target"] == target_identity
+    assert state["source_dump_seal"]["target_pvc"] == target_identity["pvc"]
+    assert state["source_dump_seal"]["target_pvc_uid"] == target_identity["pvc_uid"]
+    assert (
+        state["source_dump_seal"]["target_database_materialized"]["status"]
+        == "bound-after-source-retirement"
+    )
+    assert (
+        state["import_deferred_until_source_retirement"]["target_database_identity"]
+        == target_identity
+    )
+    assert len(writes) == 2
 
 
 def _install_target_writer_restore_proof(
@@ -25910,9 +26637,7 @@ def test_temporary_login_helm_replay_live_boundary_rejects_target_writer_drift(
     )
 
     def reject_writer(**_kwargs: Any) -> dict[str, Any]:
-        raise migration.SoperatorMigrationPhasePending(
-            f"accounting handoff verified {message}."
-        )
+        raise migration.SoperatorMigrationPhasePending(f"accounting handoff verified {message}.")
 
     monkeypatch.setattr(
         migration,
@@ -25963,9 +26688,7 @@ def test_in_place_login_helm_webhook_bridge_manifest_isolates_admission_controll
                                     "protocol": "TCP",
                                 }
                             ],
-                            "readinessProbe": {
-                                "httpGet": {"path": "/readyz", "port": 8081}
-                            },
+                            "readinessProbe": {"httpGet": {"path": "/readyz", "port": 8081}},
                         },
                         {
                             "name": "kube-rbac-proxy",
@@ -25999,8 +26722,7 @@ def test_in_place_login_helm_webhook_bridge_manifest_isolates_admission_controll
     assert manifest["spec"]["strategy"] == {"type": "Recreate"}
     pod_template = manifest["spec"]["template"]
     assert all(
-        pod_template["metadata"]["labels"][key] == value
-        for key, value in service_selector.items()
+        pod_template["metadata"]["labels"][key] == value for key, value in service_selector.items()
     )
     manager_container = next(
         container
@@ -26008,9 +26730,7 @@ def test_in_place_login_helm_webhook_bridge_manifest_isolates_admission_controll
         if container["name"] == "manager"
     )
     controllers = next(
-        item
-        for item in manager_container["env"]
-        if item["name"] == "SLURM_OPERATOR_CONTROLLERS"
+        item for item in manager_container["env"] if item["name"] == "SLURM_OPERATOR_CONTROLLERS"
     )
     assert controllers["value"] == "cluster,-nodeconfigurator,nodeset,-topology"
     watch_namespaces = next(
@@ -26195,11 +26915,982 @@ def test_in_place_login_helm_webhook_bridge_endpoint_requires_exact_tcp_port() -
                 }
             ]
         },
+        {
+            "items": [
+                {
+                    "ports": [{"port": 9443, "protocol": "TCP"}],
+                    "endpoints": [
+                        {
+                            "conditions": {"ready": True},
+                            "targetRef": {"uid": "pod-uid"},
+                        },
+                        {
+                            "conditions": {"ready": True},
+                            "targetRef": {"uid": "foreign-pod"},
+                        },
+                    ],
+                }
+            ]
+        },
     ):
         assert not migration._in_place_login_helm_webhook_endpoint_ready(  # noqa: SLF001
             endpoint_slices=drifted,
             pod_uid="pod-uid",
             target_port=9443,
+        )
+
+
+def test_target_helm_admission_bootstrap_requires_exact_fenced_chart_substrate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    documents = []
+    for kind, name in sorted(
+        migration._TARGET_HELM_ADMISSION_BOOTSTRAP_PREREQUISITES  # noqa: SLF001
+        | migration._TARGET_HELM_ADMISSION_BOOTSTRAP_WEBHOOKS  # noqa: SLF001
+    ):
+        document: dict[str, Any] = {
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": {"name": name},
+        }
+        if kind == "Deployment":
+            document["spec"] = {"replicas": 0}
+        if kind.endswith("WebhookConfiguration"):
+            document["apiVersion"] = "admissionregistration.k8s.io/v1"
+            document["webhooks"] = [
+                {
+                    "name": f"{kind.lower()}.kb.io",
+                    "failurePolicy": "Fail",
+                    "clientConfig": {
+                        "service": {
+                            "name": "soperator-webhook-service",
+                            "namespace": "soperator",
+                            "path": "/admit",
+                        }
+                    },
+                    "rules": [],
+                    "sideEffects": "None",
+                    "admissionReviewVersions": ["v1"],
+                }
+            ]
+        documents.append(document)
+
+    monkeypatch.setattr(migration, "_target_soperator_chart_path", lambda: Path("/chart"))
+    monkeypatch.setattr(migration, "_ensure_soperator_chart_dependencies", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_effective_target_soperator_helm_values",
+        lambda values, **_kwargs: dict(values),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_render_target_soperator_manifest",
+        lambda **_kwargs: "rendered",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_soperator_helm_documents",
+        lambda *_args, **_kwargs: tuple(copy.deepcopy(documents)),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_soperator_chart_content_fingerprint",
+        lambda _path: "c" * 64,
+    )
+
+    prerequisites, webhooks, fingerprints = migration._target_helm_admission_bootstrap_render(  # noqa: SLF001
+        command_runner=cast(Any, object()),
+        values={"controllerManager": {"replicas": 0}},
+        disable_open_metrics_for_legacy_clients=None,
+    )
+
+    assert {
+        migration._target_helm_admission_bootstrap_resource_identity(item)  # noqa: SLF001
+        for item in prerequisites
+    } == migration._TARGET_HELM_ADMISSION_BOOTSTRAP_PREREQUISITES  # noqa: SLF001
+    assert {
+        migration._target_helm_admission_bootstrap_resource_identity(item)  # noqa: SLF001
+        for item in webhooks
+    } == migration._TARGET_HELM_ADMISSION_BOOTSTRAP_WEBHOOKS  # noqa: SLF001
+    assert fingerprints["chart_content_fingerprint"] == "c" * 64
+    assert all(fingerprints[key] for key in fingerprints)
+
+    manager = next(item for item in documents if item["kind"] == "Deployment")
+    manager["spec"]["replicas"] = 1
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="reconciliation-fenced at zero replicas",
+    ):
+        migration._target_helm_admission_bootstrap_render(  # noqa: SLF001
+            command_runner=cast(Any, object()),
+            values={},
+            disable_open_metrics_for_legacy_clients=None,
+        )
+
+
+def test_target_helm_admission_bootstrap_orders_ready_endpoint_before_initial_helm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    checkpoint = {
+        "campaign_fingerprint": "a" * 64,
+        "target_ref": "target-cluster",
+    }
+    phase: dict[str, Any] = {}
+    bridge_phase: dict[str, Any] = {}
+    prerequisite = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "soperator-manager"},
+        "spec": {"replicas": 0},
+    }
+    webhook = {
+        "apiVersion": "admissionregistration.k8s.io/v1",
+        "kind": "MutatingWebhookConfiguration",
+        "metadata": {"name": "soperator-mutating-webhook-configuration"},
+        "webhooks": [],
+    }
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_render",
+        lambda **_kwargs: (
+            (prerequisite,),
+            (webhook,),
+            {
+                "chart_content_fingerprint": "c" * 64,
+                "values_fingerprint": "v" * 64,
+                "prerequisites_fingerprint": "p" * 64,
+                "webhooks_fingerprint": "w" * 64,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_apply_prerequisites",
+        lambda **_kwargs: order.append("prerequisites"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_publish_webhooks",
+        lambda **_kwargs: order.append("webhooks"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_in_place_login_helm_webhook_bridge_ready",
+        lambda **kwargs: (
+            order.append("endpoint-ready")
+            if kwargs["phase"] is bridge_phase
+            else pytest.fail("bridge readiness must use the canonical bridge owner")
+        ),
+    )
+
+    def run_bridge(**kwargs: Any) -> list[str]:
+        assert kwargs["allow_unbound_target"] is True
+        assert kwargs["phase"] is bridge_phase
+        order.append("bridge-ready")
+        kwargs["pre_helm_live_boundary"]()
+        lines = kwargs["helm_operation"]()
+        order.append("bridge-deleted")
+        return lines
+
+    monkeypatch.setattr(
+        migration,
+        "_run_in_place_login_helm_with_webhook_bridge",
+        run_bridge,
+    )
+
+    lines = migration._run_target_helm_with_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        boundary="passive-slot-preparation",
+        target_ref="target-cluster",
+        values={},
+        disable_open_metrics_for_legacy_clients=None,
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: order.append("checkpoint"),
+        mutation_guard=None,
+        helm_operation=lambda: order.append("helm") or ["helm"],
+        bridge_phase=bridge_phase,
+    )
+
+    assert lines[-1].startswith("Target Soperator initial Helm apply kept")
+    assert order.index("prerequisites") < order.index("bridge-ready")
+    assert order.index("bridge-ready") < order.index("webhooks")
+    assert order.index("webhooks") < order.index("endpoint-ready")
+    assert order.index("endpoint-ready") < order.index("helm")
+    assert order.index("helm") < order.index("bridge-deleted")
+    assert (
+        phase["target_helm_admission_bootstraps"]["passive-slot-preparation"]["status"]
+        == "complete"
+    )
+
+
+@pytest.mark.parametrize("live_values_match", [True, False])
+def test_target_helm_admission_bootstrap_revalidates_completed_live_values(
+    monkeypatch: pytest.MonkeyPatch,
+    live_values_match: bool,
+) -> None:
+    desired_values = {
+        "controllerManager": {"replicas": 0},
+        "slurmNodes": {"controller": {"openMetrics": {"enabled": False}}},
+    }
+    fingerprints = {
+        "chart_content_fingerprint": "c" * 64,
+        "values_fingerprint": migration._fingerprint(desired_values),  # noqa: SLF001
+        "prerequisites_fingerprint": "p" * 64,
+        "webhooks_fingerprint": "w" * 64,
+    }
+    completed = {
+        "schema": migration._TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA,  # noqa: SLF001
+        "boundary": "post-switch-resume",
+        "target_ref": "target-cluster",
+        **fingerprints,
+        "status": "complete",
+        "intent_at": "2026-07-30T00:00:00Z",
+        "apply_intent_at": "2026-07-30T00:00:01Z",
+        "prerequisite_uids": {"Deployment/soperator-manager": "manager-uid"},
+        "prerequisites_ready_at": "2026-07-30T00:00:02Z",
+        "webhooks_apply_intent_at": "2026-07-30T00:00:03Z",
+        "webhook_uids": {
+            "MutatingWebhookConfiguration/soperator-mutating": "mutating-uid",
+        },
+        "admission_ready_at": "2026-07-30T00:00:04Z",
+        "helm_applied_at": "2026-07-30T00:00:05Z",
+        "completed_at": "2026-07-30T00:00:06Z",
+    }
+    phase = {
+        "target_helm_admission_bootstraps": {
+            "post-switch-resume": copy.deepcopy(completed),
+        }
+    }
+    checkpoints: list[dict[str, Any]] = []
+    operation_states: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_render",
+        lambda **_kwargs: (
+            ({"kind": "Deployment", "metadata": {"name": "soperator-manager"}},),
+            (
+                {
+                    "kind": "MutatingWebhookConfiguration",
+                    "metadata": {"name": "soperator-mutating"},
+                },
+            ),
+            fingerprints,
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_soperator_helm_stored_values",
+        lambda **_kwargs: (
+            copy.deepcopy(desired_values)
+            if live_values_match
+            else {"controllerManager": {"replicas": 0}}
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_soperator_latest_release_is_deployed",
+        lambda **_kwargs: True,
+    )
+
+    def _operation(**kwargs: Any) -> list[str]:
+        operation_states.append(copy.deepcopy(kwargs["state"]))
+        return ["operation"]
+
+    monkeypatch.setattr(
+        migration,
+        "_run_target_operation_with_admission_bootstrap",
+        _operation,
+    )
+
+    lines = migration._run_target_helm_with_admission_bootstrap(  # noqa: SLF001
+        checkpoint={"target_ref": "target-cluster"},
+        phase=phase,
+        boundary="post-switch-resume",
+        target_ref="target-cluster",
+        values=desired_values,
+        disable_open_metrics_for_legacy_clients=None,
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: checkpoints.append(copy.deepcopy(phase)),
+        mutation_guard=None,
+        helm_operation=lambda: ["helm"],
+    )
+
+    assert lines == ["operation"]
+    if live_values_match:
+        assert operation_states == [completed]
+        assert checkpoints == []
+        assert "target_helm_admission_bootstrap_history" not in phase
+    else:
+        assert operation_states == [{}]
+        assert len(checkpoints) == 1
+        history = phase["target_helm_admission_bootstrap_history"]["post-switch-resume"]
+        assert len(history) == 1
+        assert history[0]["status"] == "complete"
+        assert history[0]["values_fingerprint"] == fingerprints["values_fingerprint"]
+        assert history[0]["superseded_live_release_deployed"] is True
+        assert history[0]["superseded_live_values_fingerprint"] == migration._fingerprint(  # noqa: SLF001
+            {"controllerManager": {"replicas": 0}}
+        )
+
+
+def test_accounting_command_fence_admission_bootstrap_orders_ready_endpoint_before_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    checkpoint = {
+        "campaign_fingerprint": "a" * 64,
+        "target_ref": "target-cluster",
+    }
+    phase: dict[str, Any] = {
+        "accounting_handoff": {
+            "status": "source-snapshot",
+            "source_resource_name": "source-cluster",
+            "target_resource_name": "target-cluster",
+        },
+        "slurmcluster_handoff_binding": {
+            "source": {
+                "namespace": "soperator",
+                "name": "source-cluster",
+                "uid": "source-uid",
+            },
+            "target": {
+                "namespace": "soperator",
+                "name": "target-cluster",
+                "uid": "target-uid",
+            },
+        },
+    }
+    prerequisite = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "soperator-manager"},
+        "spec": {"replicas": 0},
+    }
+    webhook = {
+        "apiVersion": "admissionregistration.k8s.io/v1",
+        "kind": "MutatingWebhookConfiguration",
+        "metadata": {"name": "soperator-mutating-webhook-configuration"},
+        "webhooks": [],
+    }
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_render",
+        lambda **_kwargs: (
+            (prerequisite,),
+            (webhook,),
+            {
+                "chart_content_fingerprint": "c" * 64,
+                "values_fingerprint": "v" * 64,
+                "prerequisites_fingerprint": "p" * 64,
+                "webhooks_fingerprint": "w" * 64,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_apply_prerequisites",
+        lambda **_kwargs: order.append("prerequisites"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_publish_webhooks",
+        lambda **_kwargs: order.append("webhooks"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_in_place_login_helm_webhook_bridge_ready",
+        lambda **_kwargs: order.append("endpoint-ready"),
+    )
+
+    def run_bridge(**kwargs: Any) -> list[str]:
+        assert kwargs["allow_unbound_target"] is False
+        order.append("bridge-ready")
+        kwargs["pre_helm_live_boundary"]()
+        try:
+            return kwargs["helm_operation"]()
+        finally:
+            order.append("bridge-deleted")
+
+    def complete_accounting(**_kwargs: Any) -> list[str]:
+        order.append("accounting-command-fences")
+        phase["accounting_handoff"]["status"] = "source-dumped"
+        return ["accounting"]
+
+    monkeypatch.setattr(
+        migration,
+        "_run_in_place_login_helm_with_webhook_bridge",
+        run_bridge,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_complete_accounting_handoff_import",
+        complete_accounting,
+    )
+
+    lines = migration._complete_accounting_handoff_import_with_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        values={},
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: order.append("checkpoint"),
+        mutation_guard=None,
+    )
+
+    assert lines[-1].startswith("Accounting command-fence finalization kept")
+    assert order.index("prerequisites") < order.index("bridge-ready")
+    assert order.index("bridge-ready") < order.index("webhooks")
+    assert order.index("webhooks") < order.index("endpoint-ready")
+    assert order.index("endpoint-ready") < order.index("accounting-command-fences")
+    assert order.index("accounting-command-fences") < order.index("bridge-deleted")
+    bootstrap = phase["accounting_handoff"]["command_fence_admission_bootstrap"]
+    assert bootstrap["status"] == "complete"
+    assert bootstrap["source_binding"]["uid"] == "source-uid"
+    assert bootstrap["target_binding"]["uid"] == "target-uid"
+
+
+def test_accounting_command_fence_admission_bootstrap_cleans_bridge_and_resumes_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    fingerprints = {
+        "chart_content_fingerprint": "c" * 64,
+        "values_fingerprint": "v" * 64,
+        "prerequisites_fingerprint": "p" * 64,
+        "webhooks_fingerprint": "w" * 64,
+    }
+    source_binding = {
+        "namespace": "soperator",
+        "name": "source-cluster",
+        "uid": "source-uid",
+    }
+    target_binding = {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-uid",
+    }
+    bootstrap = {
+        "schema": migration._ACCOUNTING_HANDOFF_ADMISSION_BOOTSTRAP_SCHEMA,  # noqa: SLF001
+        "boundary": "accounting-command-fence",
+        "target_ref": "target-cluster",
+        **fingerprints,
+        "source_binding": source_binding,
+        "target_binding": target_binding,
+        "status": "admission-ready",
+        "intent_at": "2026-07-30T00:00:00Z",
+        "apply_intent_at": "2026-07-30T00:00:01Z",
+        "prerequisite_uids": {"Deployment/soperator-manager": "manager-uid"},
+        "prerequisites_ready_at": "2026-07-30T00:00:02Z",
+        "webhooks_apply_intent_at": "2026-07-30T00:00:03Z",
+        "webhook_uids": {"MutatingWebhookConfiguration/soperator": "webhook-uid"},
+        "admission_ready_at": "2026-07-30T00:00:04Z",
+    }
+    phase: dict[str, Any] = {
+        "accounting_handoff": {
+            "status": "source-snapshot",
+            "source_resource_name": "source-cluster",
+            "target_resource_name": "target-cluster",
+            "command_fence_admission_bootstrap": bootstrap,
+        },
+        "slurmcluster_handoff_binding": {
+            "source": source_binding,
+            "target": target_binding,
+        },
+    }
+    checkpoint = {
+        "campaign_fingerprint": "a" * 64,
+        "target_ref": "target-cluster",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_render",
+        lambda **_kwargs: (
+            ({"kind": "Deployment", "metadata": {"name": "soperator-manager"}},),
+            (
+                {
+                    "kind": "MutatingWebhookConfiguration",
+                    "metadata": {"name": "soperator-mutating-webhook-configuration"},
+                },
+            ),
+            fingerprints,
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_apply_prerequisites",
+        lambda **_kwargs: events.append("prerequisites"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_publish_webhooks",
+        lambda **_kwargs: events.append("webhooks"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_in_place_login_helm_webhook_bridge_ready",
+        lambda **_kwargs: events.append("endpoint-ready"),
+    )
+
+    def run_bridge(**kwargs: Any) -> list[str]:
+        events.append("bridge-ready")
+        kwargs["pre_helm_live_boundary"]()
+        try:
+            return kwargs["helm_operation"]()
+        finally:
+            events.append("bridge-deleted")
+
+    attempts = 0
+
+    def complete_accounting(**_kwargs: Any) -> list[str]:
+        nonlocal attempts
+        attempts += 1
+        events.append(f"operation-{attempts}")
+        if attempts == 1:
+            raise RuntimeError("simulated accounting interruption")
+        phase["accounting_handoff"]["status"] = "source-dumped"
+        return ["accounting"]
+
+    monkeypatch.setattr(
+        migration,
+        "_run_in_place_login_helm_with_webhook_bridge",
+        run_bridge,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_complete_accounting_handoff_import",
+        complete_accounting,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated accounting interruption"):
+        migration._complete_accounting_handoff_import_with_admission_bootstrap(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target-cluster",
+            values={},
+            kube_context="external-context",
+            command_runner=cast(Any, object()),
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+        )
+
+    assert events[-1] == "bridge-deleted"
+    assert bootstrap["status"] == "admission-ready"
+    assert migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+    migration._complete_accounting_handoff_import_with_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        values={},
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: None,
+        mutation_guard=None,
+    )
+
+    assert attempts == 2
+    assert bootstrap["status"] == "complete"
+    assert not migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+
+@pytest.mark.parametrize("bootstrap_status", ["operation-applied", "complete"])
+def test_accounting_command_fence_admission_bootstrap_rejects_impossible_completion(
+    bootstrap_status: str,
+) -> None:
+    source_binding = {
+        "namespace": "soperator",
+        "name": "source-cluster",
+        "uid": "source-uid",
+    }
+    target_binding = {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-uid",
+    }
+    phase: dict[str, Any] = {
+        "accounting_handoff": {
+            "status": "source-snapshot",
+            "source_resource_name": "source-cluster",
+            "target_resource_name": "target-cluster",
+            "command_fence_admission_bootstrap": {
+                "status": bootstrap_status,
+            },
+        },
+        "slurmcluster_handoff_binding": {
+            "source": source_binding,
+            "target": target_binding,
+        },
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="claims a completed operation before the accounting handoff advanced",
+    ):
+        migration._complete_accounting_handoff_import_with_admission_bootstrap(  # noqa: SLF001
+            checkpoint={
+                "campaign_fingerprint": "a" * 64,
+                "target_ref": "target-cluster",
+            },
+            phase=phase,
+            target_ref="target-cluster",
+            values={},
+            kube_context="external-context",
+            command_runner=cast(Any, object()),
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+        )
+
+
+def test_accounting_command_fence_admission_bootstrap_routing_follows_bridge_and_resume_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint: dict[str, Any] = {}
+    phase: dict[str, Any] = {
+        "accounting_handoff": {
+            "status": "source-snapshot",
+        }
+    }
+    bridge_requires_admission = True
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_requires_target_admission_bootstrap",
+        lambda **_kwargs: bridge_requires_admission,
+    )
+
+    assert migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+    bridge_requires_admission = False
+    assert not migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+    phase["accounting_handoff"]["command_fence_admission_bootstrap"] = {"status": "admission-ready"}
+    phase["accounting_handoff"]["status"] = "source-dumped"
+    assert migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+    phase["accounting_handoff"]["command_fence_admission_bootstrap"]["status"] = "complete"
+    assert not migration._accounting_handoff_requires_command_fence_admission_bootstrap(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+    )
+
+
+def test_target_helm_admission_bootstrap_requires_injected_ca_and_fail_closed_policy() -> None:
+    desired = {
+        "apiVersion": "admissionregistration.k8s.io/v1",
+        "kind": "MutatingWebhookConfiguration",
+        "metadata": {"name": "soperator-mutating-webhook-configuration"},
+        "webhooks": [
+            {
+                "name": "mnodeset-v1alpha1.kb.io",
+                "failurePolicy": "Fail",
+                "clientConfig": {
+                    "service": {
+                        "name": "soperator-webhook-service",
+                        "namespace": "soperator",
+                        "path": "/mutate",
+                    }
+                },
+                "rules": [],
+                "sideEffects": "None",
+                "admissionReviewVersions": ["v1"],
+            }
+        ],
+    }
+    live = copy.deepcopy(desired)
+    live["metadata"]["uid"] = "webhook-uid"
+    live["webhooks"][0]["clientConfig"]["caBundle"] = "Y2E="
+    assert migration._target_helm_admission_bootstrap_webhook_ready(  # noqa: SLF001
+        desired=desired,
+        live=live,
+    )
+
+    defaulted_live = copy.deepcopy(live)
+    defaulted_webhook = defaulted_live["webhooks"][0]
+    defaulted_webhook.update(
+        {
+            "matchPolicy": "Equivalent",
+            "namespaceSelector": {},
+            "objectSelector": {},
+            "reinvocationPolicy": "Never",
+            "timeoutSeconds": 10,
+        }
+    )
+    defaulted_webhook["clientConfig"]["service"]["port"] = 443
+    defaulted_webhook["rules"] = [
+        {
+            "apiGroups": ["slurm.nebius.ai"],
+            "apiVersions": ["v1alpha1"],
+            "operations": ["CREATE", "UPDATE"],
+            "resources": ["nodesets"],
+            "scope": "*",
+        }
+    ]
+    desired["webhooks"][0]["rules"] = [
+        {
+            "apiGroups": ["slurm.nebius.ai"],
+            "apiVersions": ["v1alpha1"],
+            "operations": ["CREATE", "UPDATE"],
+            "resources": ["nodesets"],
+        }
+    ]
+    assert migration._target_helm_admission_bootstrap_webhook_ready(  # noqa: SLF001
+        desired=desired,
+        live=defaulted_live,
+    )
+
+    for drift in (
+        "missing-ca",
+        "ignore",
+        "foreign-service",
+        "narrowed-scope",
+        "changed-timeout",
+    ):
+        changed = copy.deepcopy(defaulted_live)
+        if drift == "missing-ca":
+            changed["webhooks"][0]["clientConfig"].pop("caBundle")
+        elif drift == "ignore":
+            changed["webhooks"][0]["failurePolicy"] = "Ignore"
+        elif drift == "foreign-service":
+            changed["webhooks"][0]["clientConfig"]["service"]["name"] = "foreign"
+        elif drift == "narrowed-scope":
+            changed["webhooks"][0]["rules"][0]["scope"] = "Namespaced"
+        else:
+            changed["webhooks"][0]["timeoutSeconds"] = 20
+        assert not migration._target_helm_admission_bootstrap_webhook_ready(  # noqa: SLF001
+            desired=desired,
+            live=changed,
+        )
+
+
+def test_target_helm_admission_bootstrap_rejects_malformed_terminal_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprints = {
+        "chart_content_fingerprint": "c" * 64,
+        "values_fingerprint": "v" * 64,
+        "prerequisites_fingerprint": "p" * 64,
+        "webhooks_fingerprint": "w" * 64,
+    }
+    monkeypatch.setattr(
+        migration,
+        "_target_helm_admission_bootstrap_render",
+        lambda **_kwargs: (
+            ({"kind": "Deployment", "metadata": {"name": "soperator-manager"}},),
+            (
+                {
+                    "kind": "MutatingWebhookConfiguration",
+                    "metadata": {"name": "soperator-mutating-webhook-configuration"},
+                },
+            ),
+            fingerprints,
+        ),
+    )
+    phase = {
+        "target_helm_admission_bootstraps": {
+            "passive-slot-preparation": {
+                "schema": migration._TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA,  # noqa: SLF001
+                "boundary": "passive-slot-preparation",
+                "target_ref": "target-cluster",
+                **fingerprints,
+                "status": "complete",
+            }
+        }
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="lifecycle checkpoint is malformed",
+    ):
+        migration._run_target_helm_with_admission_bootstrap(  # noqa: SLF001
+            checkpoint={
+                "campaign_fingerprint": "a" * 64,
+                "target_ref": "target-cluster",
+            },
+            phase=phase,
+            boundary="passive-slot-preparation",
+            target_ref="target-cluster",
+            values={},
+            disable_open_metrics_for_legacy_clients=None,
+            command_runner=cast(Any, object()),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+            helm_operation=lambda: pytest.fail("malformed completion must not skip Helm"),
+        )
+
+
+def test_target_helm_admission_bootstrap_rejects_prerequisite_uid_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_fingerprint = "a" * 64
+    prerequisite = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+            "name": "soperator-manager",
+            "labels": {
+                "app.kubernetes.io/instance": "soperator",
+                "app.kubernetes.io/managed-by": "Helm",
+            },
+        },
+    }
+    live = copy.deepcopy(prerequisite)
+    live["metadata"].update(
+        {
+            "uid": "replacement-uid",
+            "annotations": {
+                migration._TARGET_HELM_ADMISSION_BOOTSTRAP_ANNOTATION: campaign_fingerprint,  # noqa: SLF001
+            },
+        }
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (True, copy.deepcopy(live)),
+    )
+    monkeypatch.setattr(migration, "_kubectl_wait", lambda **_kwargs: None)
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="changed UID after it was checkpointed",
+    ):
+        migration._target_helm_admission_bootstrap_apply_prerequisites(  # noqa: SLF001
+            checkpoint={"campaign_fingerprint": campaign_fingerprint},
+            state={
+                "status": "prerequisites-ready",
+                "prerequisite_uids": {
+                    "ServiceAccount/soperator-manager": "original-uid",
+                },
+            },
+            prerequisites=(prerequisite,),
+            command_runner=lambda args, **_kwargs: SoperatorMigrationCommandResult(
+                tuple(str(item) for item in args),
+                0,
+                "",
+                "",
+            ),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+        )
+
+
+def test_target_helm_admission_bootstrap_rejects_webhook_uid_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign_fingerprint = "a" * 64
+    webhook = {
+        "apiVersion": "admissionregistration.k8s.io/v1",
+        "kind": "MutatingWebhookConfiguration",
+        "metadata": {
+            "name": "soperator-mutating-webhook-configuration",
+            "labels": {
+                "app.kubernetes.io/instance": "soperator",
+                "app.kubernetes.io/managed-by": "Helm",
+            },
+        },
+        "webhooks": [],
+    }
+    live = copy.deepcopy(webhook)
+    live["metadata"].update(
+        {
+            "uid": "replacement-uid",
+            "annotations": {
+                migration._TARGET_HELM_ADMISSION_BOOTSTRAP_ANNOTATION: campaign_fingerprint,  # noqa: SLF001
+            },
+        }
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (True, copy.deepcopy(live)),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="changed UID after it was checkpointed",
+    ):
+        migration._target_helm_admission_bootstrap_publish_webhooks(  # noqa: SLF001
+            checkpoint={"campaign_fingerprint": campaign_fingerprint},
+            state={
+                "status": "admission-ready",
+                "webhooks_apply_intent_at": "2026-07-30T00:00:00Z",
+                "webhook_uids": {
+                    "MutatingWebhookConfiguration/"
+                    "soperator-mutating-webhook-configuration": "original-uid",
+                },
+            },
+            webhooks=(webhook,),
+            command_runner=lambda _args, **_kwargs: pytest.fail(
+                "UID replacement must be rejected before apply"
+            ),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+        )
+
+
+def test_target_helm_admission_bootstrap_rejects_foreign_helm_release_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prerequisite = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {"name": "soperator-manager"},
+    }
+    live = copy.deepcopy(prerequisite)
+    live["metadata"].update(
+        {
+            "uid": "foreign-uid",
+            "labels": {
+                "app.kubernetes.io/instance": "soperator",
+                "app.kubernetes.io/managed-by": "Helm",
+            },
+            "annotations": {
+                "meta.helm.sh/release-name": "soperator",
+                "meta.helm.sh/release-namespace": "legacy-soperator",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (True, copy.deepcopy(live)),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="refuses to adopt foreign resource",
+    ):
+        migration._target_helm_admission_bootstrap_apply_prerequisites(  # noqa: SLF001
+            checkpoint={"campaign_fingerprint": "a" * 64},
+            state={"status": "intent", "intent_at": "2026-07-30T00:00:00Z"},
+            prerequisites=(prerequisite,),
+            command_runner=lambda _args, **_kwargs: pytest.fail(
+                "foreign Helm ownership must be rejected before apply"
+            ),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
         )
 
 
@@ -26338,9 +28029,7 @@ def test_in_place_login_helm_webhook_bridge_requires_ownerless_target_nodeset_bi
     target_ref = "target-cluster"
     target = {
         "spec": {
-            "partitionConfiguration": {
-                "partitions": [{"name": "main", "nodeSetRefs": ["worker"]}]
-            }
+            "partitionConfiguration": {"partitions": [{"name": "main", "nodeSetRefs": ["worker"]}]}
         }
     }
     nodeset = {
@@ -26392,9 +28081,9 @@ def test_in_place_login_helm_webhook_bridge_requires_ownerless_target_nodeset_bi
         )
 
     wrong_parent = copy.deepcopy(nodeset)
-    wrong_parent["metadata"]["annotations"][
-        "slurm.nebius.ai/parental-cluster-ref"
-    ] = "foreign-cluster"
+    wrong_parent["metadata"]["annotations"]["slurm.nebius.ai/parental-cluster-ref"] = (
+        "foreign-cluster"
+    )
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
         match="outside the exact target SlurmCluster and Helm binding",
@@ -26440,9 +28129,7 @@ def test_in_place_login_helm_webhook_bridge_requires_ownerless_target_nodeset_bi
         )
 
     malformed_target = copy.deepcopy(target)
-    malformed_target["spec"]["partitionConfiguration"]["partitions"][0][
-        "nodeSetRefs"
-    ] = "worker"
+    malformed_target["spec"]["partitionConfiguration"]["partitions"][0]["nodeSetRefs"] = "worker"
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
         match="ambiguous target NodeSet references",
@@ -26454,9 +28141,9 @@ def test_in_place_login_helm_webhook_bridge_requires_ownerless_target_nodeset_bi
         )
 
     oversized_target = copy.deepcopy(target)
-    oversized_target["spec"]["partitionConfiguration"]["partitions"][0][
-        "nodeSetRefs"
-    ] = [f"worker-{index}" for index in range(65)]
+    oversized_target["spec"]["partitionConfiguration"]["partitions"][0]["nodeSetRefs"] = [
+        f"worker-{index}" for index in range(65)
+    ]
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
         match="requires a bounded exact target NodeSet set",
@@ -26517,8 +28204,7 @@ def test_in_place_login_helm_webhook_bridge_retires_after_helm_failure(
             mutation_guard=lambda: order.append("guard"),
             pre_helm_live_boundary=lambda: order.append("live-accounting"),
             helm_operation=lambda: (
-                order.append("helm")
-                or (_ for _ in ()).throw(RuntimeError("injected Helm failure"))
+                order.append("helm") or (_ for _ in ()).throw(RuntimeError("injected Helm failure"))
             ),
         )
 
@@ -26574,9 +28260,7 @@ def test_in_place_login_helm_webhook_bridge_serves_dry_runs_and_deletes_exact_de
                                     "protocol": "TCP",
                                 }
                             ],
-                            "readinessProbe": {
-                                "httpGet": {"path": "/readyz", "port": 8081}
-                            },
+                            "readinessProbe": {"httpGet": {"path": "/readyz", "port": 8081}},
                         }
                     ],
                 },
@@ -26664,10 +28348,7 @@ def test_in_place_login_helm_webhook_bridge_serves_dry_runs_and_deletes_exact_de
                     ],
                 },
             }
-        if (
-            "slurmclusters.slurm.nebius.ai,nodesets.slurm.nebius.ai"
-            in command
-        ):
+        if "slurmclusters.slurm.nebius.ai,nodesets.slurm.nebius.ai" in command:
             assert "kube-system" in command
             return {"apiVersion": "v1", "kind": "List", "items": []}
         if f"slurmcluster/{target_ref}" in command:
@@ -26684,7 +28365,7 @@ def test_in_place_login_helm_webhook_bridge_serves_dry_runs_and_deletes_exact_de
                                 "conditions": {"ready": True},
                                 "targetRef": {"uid": "webhook-pod-uid"},
                             }
-                        ]
+                        ],
                     }
                 ]
             }
@@ -26895,17 +28576,9 @@ def test_in_place_login_helm_webhook_bridge_rejects_foreign_replicaset_owner(
                     ],
                 },
                 "spec": {
-                    "selector": {
-                        "matchLabels": {
-                            "nebius.ai/cxcli-webhook-bridge": "bridge-token"
-                        }
-                    },
+                    "selector": {"matchLabels": {"nebius.ai/cxcli-webhook-bridge": "bridge-token"}},
                     "template": {
-                        "metadata": {
-                            "labels": {
-                                "nebius.ai/cxcli-webhook-bridge": "bridge-token"
-                            }
-                        }
+                        "metadata": {"labels": {"nebius.ai/cxcli-webhook-bridge": "bridge-token"}}
                     },
                 },
             },
@@ -26927,6 +28600,69 @@ def test_in_place_login_helm_webhook_bridge_rejects_foreign_replicaset_owner(
             command_runner=cast(Any, object()),
             kube_context="external-context",
         )
+
+
+def test_in_place_login_helm_webhook_bridge_reports_bounded_deployment_drift() -> None:
+    token = "bbbbbbbbbbbb"
+    name = f"cxcli-soperator-webhook-{token}"
+    requested_template = {
+        "metadata": {"labels": {"nebius.ai/cxcli-webhook-bridge": token}},
+        "spec": {
+            "containers": [{"name": "manager", "image": "example.invalid/manager:v1"}],
+            "serviceAccountName": "soperator-controller-manager",
+        },
+    }
+    requested_fingerprint = migration._fingerprint(  # noqa: SLF001
+        migration._in_place_login_helm_webhook_bridge_pod_material(  # noqa: SLF001
+            requested_template
+        )
+    )
+    requested_component_fingerprints = (
+        migration._in_place_login_helm_webhook_bridge_pod_material_fingerprints(  # noqa: SLF001
+            requested_template
+        )
+    )
+    live_template = copy.deepcopy(requested_template)
+    live_template["spec"]["tolerations"] = [
+        {
+            "effect": "NoSchedule",
+            "key": "example.invalid/injected",
+            "operator": "Exists",
+        }
+    ]
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "generation": 1,
+            "labels": {"nebius.ai/cxcli-webhook-bridge": token},
+            "name": name,
+            "namespace": "soperator",
+            "uid": "webhook-deployment-uid",
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"nebius.ai/cxcli-webhook-bridge": token}},
+            "strategy": {"type": "Recreate"},
+            "template": live_template,
+        },
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match=r"drift: pod-template-material\[tolerations\]",
+    ) as exc_info:
+        migration._in_place_login_helm_webhook_bridge_deployment_identity(  # noqa: SLF001
+            deployment=deployment,
+            name=name,
+            token=token,
+            requested_pod_material_fingerprint=requested_fingerprint,
+            requested_pod_material_fingerprints=requested_component_fingerprints,
+            expected_uid="webhook-deployment-uid",
+        )
+
+    assert "example.invalid/injected" not in str(exc_info.value)
+    assert "webhook-deployment-uid" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("status", ("delete-intent", "deleted"))
@@ -27071,9 +28807,7 @@ def test_in_place_login_helm_webhook_bridge_uid_deletes_created_v1_cleanup(
         },
         "spec": {
             "replicas": 1,
-            "selector": {
-                "matchLabels": {"nebius.ai/cxcli-webhook-bridge": token}
-            },
+            "selector": {"matchLabels": {"nebius.ai/cxcli-webhook-bridge": token}},
             "strategy": {"type": "Recreate"},
             "template": template,
         },
@@ -27092,9 +28826,7 @@ def test_in_place_login_helm_webhook_bridge_uid_deletes_created_v1_cleanup(
     monkeypatch.setattr(
         migration,
         "_in_place_login_helm_webhook_bridge_live_deployment",
-        lambda **_kwargs: (
-            (True, copy.deepcopy(deployment)) if live["present"] else (False, {})
-        ),
+        lambda **_kwargs: (True, copy.deepcopy(deployment)) if live["present"] else (False, {}),
     )
     monkeypatch.setattr(
         migration,
@@ -27129,9 +28861,7 @@ def test_in_place_login_helm_webhook_bridge_uid_deletes_created_v1_cleanup(
 
     assert deleted == ["webhook-deployment-uid"]
     assert "in_place_login_helm_webhook_bridge" not in phase
-    assert phase["in_place_login_helm_webhook_bridge_history"][0]["schema"].endswith(
-        "/v1"
-    )
+    assert phase["in_place_login_helm_webhook_bridge_history"][0]["schema"].endswith("/v1")
     assert migration._IN_PLACE_LOGIN_HELM_WEBHOOK_BRIDGE_SCHEMA.endswith("/v2")  # noqa: SLF001
 
 
@@ -27275,6 +29005,7 @@ def test_in_place_handoff_recovers_exact_target_children_before_login_gate(
     checkpoint = {"phase_state": {"rolling-compute-migration": rolling}}
     writes: list[dict[str, Any]] = []
     semantic_checks: list[str] = []
+    gap_checks: list[dict[str, Any]] = []
     monkeypatch.setattr(
         migration,
         "_compute_migration_contract",
@@ -27288,7 +29019,9 @@ def test_in_place_handoff_recovers_exact_target_children_before_login_gate(
     monkeypatch.setattr(
         migration,
         "_in_place_child_handoff_partition_pause_gap_records",
-        lambda _checkpoint: (_slurm_partition_pause_record_fixture("main"),),
+        lambda _checkpoint, **kwargs: (
+            gap_checks.append(kwargs) or (_slurm_partition_pause_record_fixture("main"),)
+        ),
     )
     monkeypatch.setattr(
         migration,
@@ -27329,6 +29062,7 @@ def test_in_place_handoff_recovers_exact_target_children_before_login_gate(
 
     recovered = rolling["in_place_ownership_handoff"]
     assert changed is False
+    assert gap_checks == [{"allow_source_owned_zero_deferral": True}]
     assert semantic_checks == [str(migration._ROLLING_COMPUTE_VALUES_REVISION)]  # noqa: SLF001
     assert recovered["status"] == "target-children-created"
     assert recovered["target_values_fingerprint"] == migration._fingerprint(  # noqa: SLF001
@@ -27363,7 +29097,7 @@ def test_in_place_handoff_recovery_rolls_back_failed_checkpoint_write(
     monkeypatch.setattr(
         migration,
         "_in_place_child_handoff_partition_pause_gap_records",
-        lambda _checkpoint: (_slurm_partition_pause_record_fixture("main"),),
+        lambda _checkpoint, **_kwargs: (_slurm_partition_pause_record_fixture("main"),),
     )
     monkeypatch.setattr(
         migration,
@@ -27626,6 +29360,7 @@ def _target_helm_apply_proof_fixture(
         "events": [],
     }
     calls: list[tuple[str, ...]] = []
+    failed_webhook_recovery = mismatch.startswith("failed-webhook")
 
     def manifest(spec: Mapping[str, Any]) -> str:
         return yaml.safe_dump_all(
@@ -27689,10 +29424,18 @@ def _target_helm_apply_proof_fixture(
                 "namespace": "soperator",
                 "chart": ("soperator-wrong" if mismatch == "chart" else "soperator-4.0.2-ps.4"),
                 "app_version": "4.0.2",
-                "status": "pending-upgrade" if mismatch == "status" else "deployed",
+                "status": (
+                    "failed"
+                    if failed_webhook_recovery
+                    else "pending-upgrade"
+                    if mismatch == "status"
+                    else "deployed"
+                ),
                 "revision": (
                     "1"
                     if mismatch in {"pending-interrupted", "pending-interrupted-values-drift"}
+                    else "3"
+                    if failed_webhook_recovery
                     else "2"
                 ),
             }
@@ -27701,6 +29444,48 @@ def _target_helm_apply_proof_fixture(
             first_updated = (
                 "2026-07-12T02:00:00Z" if mismatch == "history-time" else "2026-07-12T00:01:00Z"
             )
+            if failed_webhook_recovery:
+                failed_history = [
+                    {
+                        "revision": 1,
+                        "updated": "2026-07-11T23:59:00Z",
+                        "status": "deployed",
+                        "chart": "soperator-4.0.2-ps.4",
+                        "app_version": "4.0.2",
+                    },
+                    {
+                        "revision": 2,
+                        "updated": "2026-07-12T00:01:00Z",
+                        "status": "failed",
+                        "chart": "soperator-4.0.2-ps.4",
+                        "app_version": "4.0.2",
+                        "description": (
+                            "render failed without admission"
+                            if mismatch == "failed-webhook-description"
+                            else "failed calling webhook: connection refused"
+                        ),
+                    },
+                    {
+                        "revision": 3,
+                        "updated": (
+                            "2026-07-12T00:00:30Z"
+                            if mismatch == "failed-webhook-time"
+                            else "2026-07-12T00:02:00Z"
+                        ),
+                        "status": "failed",
+                        "chart": "soperator-4.0.2-ps.4",
+                        "app_version": "4.0.2",
+                        "description": "failed calling webhook: no endpoints available",
+                    },
+                ]
+                if mismatch == "failed-webhook-gap":
+                    del failed_history[1]
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps(failed_history),
+                    "",
+                )
             return SoperatorMigrationCommandResult(
                 command,
                 0,
@@ -27724,6 +29509,7 @@ def _target_helm_apply_proof_fixture(
                             ),
                             "chart": "soperator-4.0.2-ps.4",
                             "app_version": "4.0.2",
+                            "description": "",
                         },
                     ]
                 ),
@@ -27737,6 +29523,10 @@ def _target_helm_apply_proof_fixture(
                 revision = command[command.index("--revision") + 1]
                 if revision == "1":
                     stored_values["historyDrift"] = True
+            if mismatch == "failed-webhook-values" and "--revision" in command:
+                revision = command[command.index("--revision") + 1]
+                if revision == "2":
+                    stored_values["failedRevisionDrift"] = True
             return SoperatorMigrationCommandResult(command, 0, json.dumps(stored_values), "")
         if command and command[0] == "helm" and "get" in command and "manifest" in command:
             return SoperatorMigrationCommandResult(command, 0, manifest(stored_spec), "")
@@ -29168,6 +30958,238 @@ def test_target_helm_pending_intent_is_cleared_for_guarded_replay(
         for command in calls
     )
     assert not any("upgrade" in command for command in calls if command[0] == "helm")
+
+
+def test_target_helm_failed_webhook_intent_is_authorized_for_guarded_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, values, runner, calls, writes = _target_helm_apply_proof_fixture(
+        tmp_path,
+        monkeypatch,
+        include_intent=True,
+        command_fenced=False,
+        mismatch="failed-webhook",
+    )
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase.pop("accounting_handoff")
+
+    lines = migration._recover_target_handoff_values_revision_from_live_proof(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        command_runner=runner,
+        kube_context="external-context",
+        target_ref="external-cluster",
+        values=values,
+        expected_version="4.0.2-ps.4",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    proof = phase["target_handoff_failed_helm_replay"]
+    assert proof["schema"] == migration._TARGET_HELM_FAILED_REPLAY_SCHEMA  # noqa: SLF001
+    assert proof["status"] == "authorized"
+    assert proof["revision_before"] == 1
+    assert proof["failed_revision_head"] == 3
+    assert proof["expected_revision_after"] == 4
+    assert [entry["revision"] for entry in proof["entries"]] == [2, 3]
+    assert len(writes) == 1
+    assert "login-guarded replay" in lines[0]
+    assert "target_handoff_values_apply_intent" in phase
+    assert any("history" in command for command in calls if command[0] == "helm")
+    assert not any("upgrade" in command for command in calls if command[0] == "helm")
+
+    writes_before_resume = len(writes)
+    resume_lines = migration._recover_target_handoff_values_revision_from_live_proof(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        command_runner=runner,
+        kube_context="external-context",
+        target_ref="external-cluster",
+        values=values,
+        expected_version="4.0.2-ps.4",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+    assert "reused the exact failed-revision authorization" in resume_lines[0]
+    assert len(writes) == writes_before_resume
+
+    migration._consume_target_handoff_failed_helm_replay(  # noqa: SLF001
+        phase=phase,
+        target_ref="external-cluster",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    assert phase["target_handoff_failed_helm_replay"]["status"] == "dispatched"
+    assert len(writes) == writes_before_resume + 1
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="checkpoint drifted",
+    ):
+        migration._prepare_interrupted_target_soperator_helm_replay(  # noqa: SLF001
+            phase=phase,
+            command_runner=runner,
+            kube_context="external-context",
+            target_ref="external-cluster",
+            values=values,
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+        )
+
+
+def test_target_helm_failed_webhook_replay_rejects_failed_predecessor() -> None:
+    intent = {
+        "release": {
+            "chart": "soperator-4.0.2-ps.4",
+            "app_version": "4.0.2",
+        },
+        "values_fingerprint": "b" * 64,
+        "prepared_at": "2026-07-12T00:00:00Z",
+    }
+    history = [
+        {
+            "revision": 2,
+            "updated": "2026-07-12T00:01:00Z",
+            "status": "failed",
+        },
+        {
+            "revision": 3,
+            "updated": "2026-07-12T00:02:00Z",
+            "status": "failed",
+            "chart": "soperator-4.0.2-ps.4",
+            "app_version": "4.0.2",
+            "description": "failed calling webhook: connection refused",
+        },
+    ]
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="deployed predecessor",
+    ):
+        migration._target_soperator_failed_helm_replay_material(  # noqa: SLF001
+            history=history,
+            command_runner=cast(Any, object()),
+            kube_context="external-context",
+            intent=intent,
+            revision_before=2,
+            failed_revision_head=3,
+        )
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "failed-webhook-gap",
+        "failed-webhook-values",
+        "failed-webhook-description",
+        "failed-webhook-time",
+    ],
+)
+def test_target_helm_failed_webhook_replay_requires_exact_bounded_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+) -> None:
+    checkpoint, values, runner, calls, writes = _target_helm_apply_proof_fixture(
+        tmp_path,
+        monkeypatch,
+        include_intent=True,
+        command_fenced=False,
+        mismatch=mismatch,
+    )
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase.pop("accounting_handoff")
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending):
+        migration._recover_target_handoff_values_revision_from_live_proof(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            command_runner=runner,
+            kube_context="external-context",
+            target_ref="external-cluster",
+            values=values,
+            expected_version="4.0.2-ps.4",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+        )
+
+    assert "target_handoff_failed_helm_replay" not in phase
+    assert writes == []
+    assert not any("upgrade" in command for command in calls if command[0] == "helm")
+
+
+def test_target_helm_failed_webhook_replay_requires_exact_deployed_successor() -> None:
+    intent = {
+        "schema": migration._TARGET_HELM_APPLY_INTENT_SCHEMA,  # noqa: SLF001
+        "status": "prepared",
+        "release": {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.4",
+            "app_version": "4.0.2",
+        },
+        "target": {"namespace": "soperator", "name": "external-cluster"},
+        "requested_target_version": "4.0.2-ps.4",
+        "chart_content_fingerprint": "a" * 64,
+        "values_fingerprint": "b" * 64,
+        "rendered_manifest_scope": "target-slurmcluster",
+        "rendered_manifest_fingerprint": "c" * 64,
+        "rendered_target_spec_fingerprint": "d" * 64,
+        "prepared_at": "2026-07-12T00:00:00Z",
+    }
+    target = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-uid",
+    }
+    phase = {
+        "slurmcluster_handoff_binding": {
+            "source": {
+                "namespace": "soperator",
+                "name": "source-cluster",
+                "uid": "source-uid",
+            },
+            "target": target,
+        },
+        "target_handoff_values_apply_intent": intent,
+        "target_handoff_failed_helm_replay": {
+            "schema": migration._TARGET_HELM_FAILED_REPLAY_SCHEMA,  # noqa: SLF001
+            "status": "dispatched",
+            "target": target,
+            "revision_before": 1,
+            "failed_revision_head": 3,
+            "expected_revision_after": 4,
+            "chart": "soperator-4.0.2-ps.4",
+            "app_version": "4.0.2",
+            "values_fingerprint": "b" * 64,
+            "apply_intent_fingerprint": (
+                migration._target_soperator_helm_replay_intent_fingerprint(intent)  # noqa: SLF001
+            ),
+        },
+    }
+    proof = {
+        "release_revision": "4",
+        "chart": "soperator-4.0.2-ps.4",
+        "app_version": "4.0.2",
+        "values_fingerprint": "b" * 64,
+    }
+
+    migration._verify_target_handoff_failed_helm_replay_successor(  # noqa: SLF001
+        phase=phase,
+        target_ref="external-cluster",
+        proof=proof,
+    )
+
+    state = phase["target_handoff_failed_helm_replay"]
+    assert state["status"] == "verified"
+    assert state["deployed_revision"] == 4
+
+    phase["target_handoff_failed_helm_replay"]["status"] = "dispatched"
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="exact deployed successor",
+    ):
+        migration._verify_target_handoff_failed_helm_replay_successor(  # noqa: SLF001
+            phase=phase,
+            target_ref="external-cluster",
+            proof={**proof, "release_revision": "5"},
+        )
 
 
 def test_target_helm_pending_intent_rotates_after_derived_values_drift(
@@ -31974,17 +33996,10 @@ def test_execute_preserves_original_backup_metadata_after_mutating_resume(
 
     checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert {
-        key: checkpoint["backup"][key]
-        for key in original_backup
-    } == original_backup
+    assert {key: checkpoint["backup"][key] for key in original_backup} == original_backup
     assert checkpoint["backup"]["scope"] == "campaign"
-    assert checkpoint["backup"]["campaign_fingerprint"] == checkpoint[
-        "campaign_fingerprint"
-    ]
-    assert checkpoint["backup"]["origin_segment_id"] == checkpoint[
-        "current_segment_id"
-    ]
+    assert checkpoint["backup"]["campaign_fingerprint"] == checkpoint["campaign_fingerprint"]
+    assert checkpoint["backup"]["origin_segment_id"] == checkpoint["current_segment_id"]
     assert [event["event"] for event in checkpoint["events"]].count(
         "backup-metadata-checkpointed"
     ) == 1
@@ -32147,13 +34162,10 @@ def test_execute_uses_fresh_backup_for_new_campaign_after_completed_prior_campai
         fresh_backup,
     )
     assert {
-        key: checkpoint["backup"][key]
-        for key in expected_fresh_backup
+        key: checkpoint["backup"][key] for key in expected_fresh_backup
     } == expected_fresh_backup
     assert checkpoint["backup"]["scope"] == "campaign"
-    assert checkpoint["backup"]["campaign_fingerprint"] == current_campaign[
-        "fingerprint"
-    ]
+    assert checkpoint["backup"]["campaign_fingerprint"] == current_campaign["fingerprint"]
     assert checkpoint["source_report_fingerprint"] != "previous-hop"
     previous_checkpoint = json.loads(previous_checkpoint_path.read_text(encoding="utf-8"))
     assert previous_checkpoint["backup"] == _backup_metadata("previous-hop")
@@ -38650,7 +40662,7 @@ def test_login_session_hold_shrinks_to_only_pods_with_active_ssh_sessions() -> N
     assert "shrink_intent" not in checkpoint_states[-1]
 
 
-def test_login_bridge_config_restart_releases_drained_exact_hold(
+def test_login_bridge_config_restart_releases_hold_after_target_peer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkpoint: dict[str, Any] = {
@@ -38666,9 +40678,15 @@ def test_login_bridge_config_restart_releases_drained_exact_hold(
 
     def release_hold(**_kwargs: Any) -> list[str]:
         checkpoint["active_login_session_hold"]["status"] = "released"
-        return ["Login continuity: exact hold released."]
+        return ["Login availability: exact hold released."]
 
-    monkeypatch.setattr(migration, "_ensure_active_login_session_hold", release_hold)
+    monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        migration,
+        "_target_ready_login_hold_release_authority",
+        lambda _checkpoint: {"status": "verified"},
+    )
+    monkeypatch.setattr(migration, "_login_session_hold_release_if_drained", release_hold)
 
     lines = migration._release_in_place_login_bridge_config_restart_hold(  # noqa: SLF001
         checkpoint=checkpoint,
@@ -38682,14 +40700,14 @@ def test_login_bridge_config_restart_releases_drained_exact_hold(
     )
 
     gate = handoff["login_config_restart_session_gate"]
-    assert lines == ["Login continuity: exact hold released."]
+    assert lines == ["Login availability: exact hold released."]
     assert gate["status"] == "verified"
     assert gate["hold_status"] == "released"
     assert gate["held_pods"] == ["login-0"]
     assert writes == ["write"]
 
 
-def test_login_bridge_config_restart_never_deletes_selected_held_pod(
+def test_login_bridge_config_restart_requires_target_peer_before_held_pod(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkpoint: dict[str, Any] = {
@@ -38702,13 +40720,15 @@ def test_login_bridge_config_restart_never_deletes_selected_held_pod(
     handoff: dict[str, Any] = {}
     monkeypatch.setattr(
         migration,
-        "_ensure_active_login_session_hold",
-        lambda **_kwargs: ["Login continuity: exact active hold retained."],
+        "_complete_upgrade_login_handoff",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            migration.SoperatorMigrationPhasePending("target peer is not Ready")
+        ),
     )
 
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
-        match="login Pod login-0 remains protected",
+        match="target peer is not Ready",
     ):
         migration._release_in_place_login_bridge_config_restart_hold(  # noqa: SLF001
             checkpoint=checkpoint,
@@ -38722,8 +40742,7 @@ def test_login_bridge_config_restart_never_deletes_selected_held_pod(
         )
 
     gate = handoff["login_config_restart_session_gate"]
-    assert gate["status"] == "pending-active-session"
-    assert gate["held_pods"] == ["login-0"]
+    assert gate == {}
 
 
 def test_login_bridge_config_restart_allows_unheld_pod_while_peer_remains_held(
@@ -38737,12 +40756,6 @@ def test_login_bridge_config_restart_allows_unheld_pod_while_peer_remains_held(
         },
     }
     handoff: dict[str, Any] = {}
-    monkeypatch.setattr(
-        migration,
-        "_ensure_active_login_session_hold",
-        lambda **_kwargs: ["Login continuity: active peer remains protected."],
-    )
-
     lines = migration._release_in_place_login_bridge_config_restart_hold(  # noqa: SLF001
         checkpoint=checkpoint,
         phase={},
@@ -38755,7 +40768,7 @@ def test_login_bridge_config_restart_allows_unheld_pod_while_peer_remains_held(
     )
 
     gate = handoff["login_config_restart_session_gate"]
-    assert lines == ["Login continuity: active peer remains protected."]
+    assert lines == []
     assert gate["status"] == "verified"
     assert gate["hold_status"] == "verified"
     assert gate["held_pods"] == ["login-1"]
@@ -38771,6 +40784,601 @@ def test_login_bridge_config_restart_reconciles_hold_before_pod_identity_refresh
     delete_index = source.index("_command_runner_uid_preconditioned_delete(")
 
     assert hold_index < live_pod_index < delete_index
+
+
+def test_login_bridge_config_restart_ignores_active_sessions_after_ready_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_slurm_conf = (
+        "ClusterName=external-cluster\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-0\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
+    )
+    stale_slurm_conf = "ClusterName=external-cluster\nSlurmctldHost=external-cluster-controller-0\n"
+    expected = migration._controller_bridge_client_config_contract(  # noqa: SLF001
+        expected_slurm_conf
+    )
+    consumers = [
+        {
+            "role": "target-login",
+            "name": "login-0",
+            "uid": "login-0-uid",
+            "node_name": "login-node-0",
+            "container_name": "slurmd",
+            "container_id": "containerd://login-0",
+            "restart_count": 0,
+        },
+        {
+            "role": "target-login",
+            "name": "login-1",
+            "uid": "login-1-uid",
+            "node_name": "login-node-1",
+            "container_name": "slurmd",
+            "container_id": "containerd://login-1",
+            "restart_count": 0,
+        },
+    ]
+    shared_jail_refreshed = False
+    released: list[str] = []
+    deleted: list[str] = []
+
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_client_consumers",
+        lambda **_kwargs: copy.deepcopy(consumers),
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "_active_login_ssh_session_probe",
+        lambda **_kwargs: pytest.fail("active SSH sessions must not select a restart Pod"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_release_in_place_login_bridge_config_restart_hold",
+        lambda **kwargs: released.append(str(kwargs["pod_name"])) or [],
+    )
+
+    def delete(*_args: Any, **kwargs: Any) -> None:
+        nonlocal shared_jail_refreshed
+        deleted.append(str(kwargs["uid"]))
+        assert kwargs["uid"] == "login-0-uid"
+        shared_jail_refreshed = True
+        consumers[0]["uid"] = "login-0-replacement-uid"
+        consumers[0]["container_id"] = "containerd://login-0-replacement"
+
+    monkeypatch.setattr(migration, "_command_runner_uid_preconditioned_delete", delete)
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[5] == "exec":
+            config = expected_slurm_conf if shared_jail_refreshed else stale_slurm_conf
+            return SoperatorMigrationCommandResult(command, 0, config, "")
+        if command[5:7] == ("get", "pod"):
+            pod_name = command[7]
+            consumer = next(item for item in consumers if item["name"] == pod_name)
+            pod = {
+                "metadata": {
+                    "name": pod_name,
+                    "uid": consumer["uid"],
+                    "resourceVersion": "101",
+                },
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            }
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(pod), "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    checkpoint: dict[str, Any] = {"controller_bridge": {}}
+    phase: dict[str, Any] = {}
+    writes: list[str] = []
+    lines = migration._repair_in_place_login_bridge_config_propagation(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        expected_contract=expected,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=lambda: writes.append("write"),
+    )
+
+    rollout = phase["in_place_bridge_client_handoff"]["login_config_rollout"]
+    assert released == ["login-0"]
+    assert deleted == ["login-0-uid"]
+    assert rollout["status"] == "verified"
+    assert rollout["session_selection"]["status"] == "peer-ready-selected"
+    assert rollout["session_selection"]["selected_pod"] == "login-0"
+    assert rollout["session_selection"]["observations"] == []
+    assert rollout["session_selection"]["selection_basis"] == "serial-ready-peer"
+    assert set(rollout["pods"]) == {"login-0", "login-1"}
+    assert lines == [
+        "In-place controller safety: recreated login Pods serially behind a Ready peer so "
+        "their jailed Slurm configuration is pinned to the bridge."
+    ]
+    assert writes
+
+
+def test_login_bridge_config_restart_requires_ready_peer_not_session_probe() -> None:
+    source = inspect.getsource(
+        migration._repair_in_place_login_bridge_config_propagation  # noqa: SLF001
+    )
+
+    assert "_active_login_ssh_session_probe" not in source
+    ready_index = source.index("wait_for_login_service_ready_endpoints(")
+    hold_index = source.index("_release_in_place_login_bridge_config_restart_hold(")
+    delete_index = source.index("_command_runner_uid_preconditioned_delete(")
+    assert ready_index < hold_index < delete_index
+
+
+def test_login_bridge_writer_accepts_exact_verified_post_accounting_successor() -> None:
+    target = {
+        "metadata": {
+            "namespace": "soperator",
+            "name": "external-cluster",
+            "uid": "target-uid",
+        },
+        "spec": {
+            "sConfigController": {"node": {"size": 1}},
+            "slurmNodes": {"login": {"size": 3}},
+        },
+    }
+    receipt = {
+        "schema": migration._IN_PLACE_LOGIN_SURGE_SLURMCLUSTER_REGRESSION_SCHEMA,  # noqa: SLF001
+        "status": "verified",
+        "target": {
+            "namespace": "soperator",
+            "name": "external-cluster",
+            "uid": "target-uid",
+        },
+        "configured_replicas": 2,
+        "surge_replicas": 3,
+        "stable_spec_fingerprint": (
+            migration._in_place_login_surge_slurmcluster_stable_spec_fingerprint(  # noqa: SLF001
+                target
+            )
+        ),
+        "manager_uid": "manager-uid",
+        "manager_pause_generation": 7,
+        "controller_gate_contract_fingerprint": "controller-gate-fingerprint",
+        "client_config_sha256": "a" * 64,
+    }
+    phase = {
+        "slurmcluster_handoff_binding": {
+            "target": {
+                "namespace": "soperator",
+                "name": "external-cluster",
+                "uid": "target-uid",
+            }
+        },
+        "in_place_login_surge": {
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+        },
+        "in_place_login_surge_reconciliation": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA,  # noqa: SLF001
+            "status": "peer-ready",
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-uid",
+            "slurmcluster_regression_repair_sha256": migration._fingerprint(receipt),  # noqa: SLF001
+        },
+        "in_place_login_surge_slurmcluster_regression": receipt,
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "pause_generation": 7,
+        },
+        "in_place_target_controller_command_gate": {
+            "status": "verified",
+            "contract_fingerprint": "controller-gate-fingerprint",
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "verified",
+            "config_sha256": "a" * 64,
+            "propagation": {"status": "verified", "config_sha256": "a" * 64},
+        },
+        "accounting_handoff": {
+            "status": "target-enabled",
+            "target_writer_gate": {
+                "schema": migration._ACCOUNTING_HANDOFF_WRITER_COMMAND_FENCE_SCHEMA,  # noqa: SLF001
+                "status": "enabled",
+                "binding": {"uid": "target-uid"},
+                "enabled_resource_version": "42",
+            },
+            "target_writer_command_fence": {
+                "schema": migration._ACCOUNTING_HANDOFF_WRITER_COMMAND_FENCE_SCHEMA,  # noqa: SLF001
+                "status": "restored",
+                "binding": {"uid": "target-uid"},
+                "restored_resource_version": "42",
+            },
+        },
+    }
+    state = {
+        "writer_fence": {
+            "schema": migration._LEGACY_ROOTFS_SCONFIG_WRITER_FENCE_SCHEMA,  # noqa: SLF001
+            "status": "prepared",
+            "target_uid": "target-uid",
+            "original_size": 1,
+            "post_accounting_writer_restore_rebind": {
+                "schema": migration._LEGACY_ROOTFS_SCONFIG_ACCOUNTING_REBIND_SCHEMA,  # noqa: SLF001
+                "status": "verified",
+                "target_uid": "target-uid",
+                "command_fence_restored_at": "2026-07-31T01:00:00Z",
+                "writer_enabled_at": "2026-07-31T01:01:00Z",
+                "verified_at": "2026-07-31T01:02:00Z",
+            },
+        }
+    }
+    identity = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-uid",
+    }
+
+    assert migration._in_place_login_bridge_writer_advanced_target_fence_is_exact(  # noqa: SLF001
+        phase=phase,
+        state=state,
+        target_resource=target,
+        target_identity=identity,
+        target_ref="external-cluster",
+    )
+
+    drifted = copy.deepcopy(target)
+    drifted["spec"]["sConfigController"]["node"]["size"] = 2
+    assert not migration._in_place_login_bridge_writer_advanced_target_fence_is_exact(  # noqa: SLF001
+        phase=phase,
+        state=state,
+        target_resource=drifted,
+        target_identity=identity,
+        target_ref="external-cluster",
+    )
+
+
+@pytest.mark.parametrize("crash_status", ("writer-ready", "scale-down-intent"))
+def test_login_bridge_config_writer_refresh_pulses_fenced_target_writer_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+    crash_status: str,
+) -> None:
+    slurm_conf = (
+        "ClusterName=external-cluster\n"
+        "PluginDir=/usr/lib/slurm\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-0\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
+    )
+    expected = migration._controller_bridge_client_config_contract(  # noqa: SLF001
+        slurm_conf
+    )
+    config_map = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "target-slurm-config",
+            "namespace": "soperator",
+            "uid": "target-config-uid",
+            "resourceVersion": "31",
+        },
+        "data": {"slurm.conf": slurm_conf},
+    }
+    jailed_config = {
+        "apiVersion": "slurm.nebius.ai/v1alpha1",
+        "kind": "JailedConfig",
+        "metadata": {
+            "name": "target-slurm-config",
+            "namespace": "soperator",
+            "uid": "target-jailed-config-uid",
+            "resourceVersion": "32",
+        },
+        "spec": {
+            "configMap": {"name": "target-slurm-config"},
+            "items": [{"key": "slurm.conf", "path": "/etc/slurm/slurm.conf"}],
+        },
+    }
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "sconfigcontroller",
+            "namespace": "soperator",
+            "uid": "target-sconfig-uid",
+            "resourceVersion": "41",
+            "generation": 3,
+        },
+        "spec": {"replicas": 0},
+        "status": {},
+    }
+    phase: dict[str, Any] = {
+        "legacy_rootfs_slurm_config_bridge": {
+            "status": "target-compatibility-intent",
+            "configmap": {"name": "target-slurm-config", "uid": "target-config-uid"},
+            "jailed_config": {
+                "name": "target-slurm-config",
+                "uid": "target-jailed-config-uid",
+            },
+            "writer_fence": {
+                "schema": migration._LEGACY_ROOTFS_SCONFIG_WRITER_FENCE_SCHEMA,  # noqa: SLF001
+                "status": "prepared",
+                "target_uid": "target-uid",
+            },
+            "target_compatibility_stage": {
+                "deployment_uid": "target-sconfig-uid",
+                "deployment_spec_fingerprint": "deployment-fingerprint",
+                "deployment_jail_boundary_fingerprint": "jail-fingerprint",
+                "deployment_jail_volume_name": "jail",
+                "jailed_config_uid": "target-jailed-config-uid",
+                "jailed_config_spec_fingerprint": "jailed-spec-fingerprint",
+                "jailed_config_items_fingerprint": "jailed-items-fingerprint",
+                "jailed_config_item_count": 1,
+            },
+        },
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "spec_fingerprint": "manager-fingerprint",
+            "pause_generation": 8,
+        },
+    }
+    handoff = {
+        "target": {
+            "namespace": "soperator",
+            "name": "external-cluster",
+            "uid": "target-uid",
+        }
+    }
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_target_manager_paused",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_handoff_state",
+        lambda _phase: handoff,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_target_slurmcluster",
+        lambda **_kwargs: (
+            {"spec": {"sConfigController": {"node": {"size": 0}}}},
+            {
+                "name": "external-cluster",
+                "namespace": "soperator",
+                "uid": "target-uid",
+                "resourceVersion": "22",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_bridge_optional_resource",
+        lambda **kwargs: config_map if kwargs["resource_type"] == "configmap" else jailed_config,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_require_live_uid",
+        lambda resource, **_kwargs: {
+            key: str(resource["metadata"][key])
+            for key in ("name", "namespace", "uid", "resourceVersion")
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_bridge_controller_owner",
+        lambda *_args, **_kwargs: "target",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_jailed_config_file_contract",
+        lambda **_kwargs: (
+            "jailed-spec-fingerprint",
+            "jailed-items-fingerprint",
+            (
+                (
+                    "slurm.conf",
+                    migration._SOPERATOR_LEGACY_SLURM_CONF,  # noqa: SLF001
+                    expected["config_sha256"],
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_target_sconfig_binding",
+        lambda **_kwargs: (
+            copy.deepcopy(deployment),
+            {
+                "name": "sconfigcontroller",
+                "namespace": "soperator",
+                "uid": "target-sconfig-uid",
+                "resourceVersion": deployment["metadata"]["resourceVersion"],
+            },
+            "target-sconfig-sa",
+            {
+                "name": "target-sconfig-sa",
+                "namespace": "soperator",
+                "uid": "target-sconfig-sa-uid",
+                "resourceVersion": "51",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_scalable_spec_fingerprint",
+        lambda *_args, **_kwargs: "deployment-fingerprint",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_sconfig_jail_boundary_contract",
+        lambda _deployment: ("jail-fingerprint", "jail", "target-rootfs-pvc"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_positive_generation",
+        lambda resource, **_kwargs: int(resource["metadata"]["generation"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_get_namespaced_resource",
+        lambda **_kwargs: copy.deepcopy(deployment),
+    )
+    zero_checks: list[int] = []
+
+    def wait_zero(**_kwargs: Any) -> dict[str, str]:
+        zero_checks.append(int(deployment["metadata"]["generation"]))
+        assert deployment["spec"]["replicas"] == 0
+        return {
+            "name": "sconfigcontroller",
+            "namespace": "soperator",
+            "uid": "target-sconfig-uid",
+            "resourceVersion": str(deployment["metadata"]["resourceVersion"]),
+        }
+
+    monkeypatch.setattr(migration, "_legacy_rootfs_wait_target_sconfig_zero", wait_zero)
+    scale_calls: list[int] = []
+
+    def scale(**kwargs: Any) -> None:
+        replicas = int(kwargs["replicas"])
+        assert deployment["spec"]["replicas"] == kwargs["current_replicas"]
+        scale_calls.append(replicas)
+        deployment["spec"]["replicas"] = replicas
+        deployment["metadata"]["generation"] += 1
+        deployment["metadata"]["resourceVersion"] = str(
+            int(deployment["metadata"]["resourceVersion"]) + 1
+        )
+
+    monkeypatch.setattr(migration, "_kubectl_scale_namespace_resource", scale)
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_bridge_wait_jail_digest",
+        lambda **_kwargs: (
+            copy.deepcopy(deployment),
+            {"name": "sconfigcontroller-pod", "uid": "writer-pod-uid"},
+        ),
+    )
+    verified_files: list[tuple[tuple[str, str, str], ...]] = []
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_verify_jailed_config_files",
+        lambda **kwargs: verified_files.append(tuple(kwargs["files"])),
+    )
+    crash_once = True
+
+    def checkpoint_writer() -> None:
+        nonlocal crash_once
+        refresh = phase.get("in_place_bridge_client_handoff", {}).get(
+            "login_config_writer_refresh",
+            {},
+        )
+        if crash_once and refresh.get("status") == crash_status:
+            crash_once = False
+            raise migration.SoperatorMigrationPhasePending("simulated writer pulse crash")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="simulated writer pulse crash",
+    ):
+        migration._refresh_in_place_login_bridge_config_via_target_writer(  # noqa: SLF001
+            checkpoint={"controller_bridge": {}},
+            phase=phase,
+            expected_contract=expected,
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=cast(Any, object()),
+            checkpoint_writer=checkpoint_writer,
+        )
+
+    refresh = phase["in_place_bridge_client_handoff"]["login_config_writer_refresh"]
+    assert refresh["status"] == crash_status
+    assert deployment["spec"]["replicas"] == 1
+    assert scale_calls == [1]
+
+    lines = migration._refresh_in_place_login_bridge_config_via_target_writer(  # noqa: SLF001
+        checkpoint={"controller_bridge": {}},
+        phase=phase,
+        expected_contract=expected,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=checkpoint_writer,
+    )
+
+    assert refresh["status"] == "verified"
+    assert deployment["spec"]["replicas"] == 0
+    assert scale_calls == [1, 0]
+    assert zero_checks == [3, 5]
+    assert len(verified_files) == (2 if crash_status == "writer-ready" else 1)
+    assert lines and "returned the writer to zero" in lines[0]
+
+    compatible_slurm_conf = slurm_conf.replace(
+        "PluginDir=/usr/lib/slurm",
+        f"PluginDir={migration._TARGET_SLURM_PLUGIN_DIR}",  # noqa: SLF001
+    )
+    compatible_expected = migration._controller_bridge_client_config_contract(  # noqa: SLF001
+        compatible_slurm_conf
+    )
+    config_map["data"]["slurm.conf"] = compatible_slurm_conf
+    handoff_state = phase["in_place_bridge_client_handoff"]
+    handoff_state["compatibility_config_successor"] = {
+        "schema": migration._IN_PLACE_BRIDGE_CLIENT_CONFIG_SUCCESSOR_SCHEMA,  # noqa: SLF001
+        "status": "accepted",
+        "target_ref": "external-cluster",
+        "config_map_name": "target-slurm-config",
+        "predecessor_config_sha256": expected["config_sha256"],
+        "target_config_sha256": compatible_expected["config_sha256"],
+        "transform_counts": {"metrics_type": 0, "plugin_dir": 1},
+        "reason": "target-client-plugin-dir-compatibility",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_jailed_config_file_contract",
+        lambda **_kwargs: (
+            "jailed-spec-fingerprint",
+            "jailed-items-fingerprint",
+            (
+                (
+                    "slurm.conf",
+                    migration._SOPERATOR_LEGACY_SLURM_CONF,  # noqa: SLF001
+                    compatible_expected["config_sha256"],
+                ),
+            ),
+        ),
+    )
+
+    successor_lines = migration._refresh_in_place_login_bridge_config_via_target_writer(  # noqa: SLF001
+        checkpoint={"controller_bridge": {}},
+        phase=phase,
+        expected_contract=compatible_expected,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=checkpoint_writer,
+    )
+
+    history = handoff_state["login_config_writer_refresh_history"]
+    assert len(history) == 1
+    assert history[0]["status"] == "verified"
+    assert history[0]["config_sha256"] == expected["config_sha256"]
+    assert handoff_state["login_config_writer_refresh"]["status"] == "verified"
+    assert (
+        handoff_state["login_config_writer_refresh"]["config_sha256"]
+        == compatible_expected["config_sha256"]
+    )
+    assert scale_calls == [1, 0, 1, 0]
+    assert zero_checks == [3, 5, 5, 5, 7]
+    assert successor_lines and "returned the writer to zero" in successor_lines[0]
 
 
 def test_login_session_hold_does_not_release_last_pod_before_target_peer(
@@ -40286,6 +42894,282 @@ def test_controller_bridge_client_proof_uses_config_only_during_checkpointed_gap
     assert live_proof["controller_gap_binding_sha256"] == "a" * 64
 
 
+def test_controller_bridge_client_proof_adopts_exact_login_surge_addition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slurm_conf = (
+        "ClusterName=external-cluster\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-0\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
+    )
+    expected = migration._controller_bridge_client_config_contract(slurm_conf)  # noqa: SLF001
+    previous_consumer = {
+        "role": "target-login",
+        "name": "login-0",
+        "uid": "login-0-uid",
+        "node_name": "login-node-0",
+        "container_name": "sshd",
+        "container_id": "containerd://login-0",
+        "restart_count": 0,
+        "config_sha256": expected["config_sha256"],
+    }
+    added_consumer = {
+        "role": "target-login",
+        "name": "login-1",
+        "uid": "login-1-uid",
+        "node_name": "login-node-1",
+        "container_name": "sshd",
+        "container_id": "containerd://login-1",
+        "restart_count": 0,
+    }
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_client_consumers",
+        lambda **_kwargs: [previous_consumer, added_consumer],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_bridge_target_login_surge_additions",
+        lambda **_kwargs: [
+            {
+                "name": "login-1",
+                "uid": "login-1-uid",
+                "node_name": "login-node-1",
+                "container_id": "containerd://login-1",
+                "workload_uid": "login-workload-uid",
+                "slurmcluster_uid": "target-slurmcluster-uid",
+            }
+        ],
+    )
+
+    def runner(argv: list[str], **_kwargs: object) -> SoperatorMigrationCommandResult:
+        assert "scontrol" not in argv
+        return SoperatorMigrationCommandResult(tuple(argv), 0, slurm_conf, "")
+
+    proof_owner = {
+        "propagation": {
+            "schema": "nebius-cxcli-controller-client-propagation/v1",
+            "status": "verified",
+            "proof_stage": "before-in-place-controller-roll",
+            "cluster_name": "external-cluster",
+            "controller_hosts": expected["controller_hosts"],
+            "timeouts": expected["timeouts"],
+            "config_sha256": expected["config_sha256"],
+            "consumers": [previous_consumer],
+            "consumer_successors": [],
+            "live_rpc_verified": False,
+            "controller_gap_binding_schema": (
+                migration._IN_PLACE_CONTROLLER_GAP_BINDING_SCHEMA  # noqa: SLF001
+            ),
+            "controller_gap_binding_status": "sealed",
+            "controller_gap_binding_sha256": "a" * 64,
+            "verified_at": "2026-07-30T00:01:00Z",
+        }
+    }
+
+    migration._prove_controller_bridge_client_configuration(  # noqa: SLF001
+        journal={},
+        proof_owner=proof_owner,
+        proof_key="propagation",
+        proof_stage="before-in-place-controller-roll",
+        expected_contract=expected,
+        expected_cluster_name="external-cluster",
+        required_hosts=expected["controller_hosts"],
+        target_ref="external-cluster",
+        source_clients=False,
+        require_raised_timeouts=False,
+        require_live_rpc=False,
+        kube_context="external-context",
+        command_runner=runner,
+        checkpoint_writer=None,
+        allowed_target_login_surge_addition={"status": "verified"},
+        controller_gap_binding_sha256="a" * 64,
+    )
+
+    proof = proof_owner["propagation"]
+    assert len(proof["consumers"]) == 2
+    assert proof["consumer_successors"][-1]["kind"] == (
+        "checkpointed-in-place-login-surge-addition"
+    )
+    assert proof["live_rpc_verified"] is False
+    assert "ping_sha256" not in proof["consumers"][1]
+    assert "show_config_sha256" not in proof["consumers"][1]
+
+
+def test_controller_bridge_target_login_surge_addition_requires_exact_owner_lineage() -> None:
+    config_sha256 = "a" * 64
+    previous = [
+        {
+            "role": "target-login",
+            "name": "login-0",
+            "uid": "login-0-uid",
+            "node_name": "login-node-0",
+            "container_name": "sshd",
+            "container_id": "containerd://login-0",
+            "restart_count": 0,
+            "config_sha256": config_sha256,
+        }
+    ]
+    current = [
+        *copy.deepcopy(previous),
+        {
+            "role": "target-login",
+            "name": "login-1",
+            "uid": "login-1-uid",
+            "node_name": "login-node-1",
+            "container_name": "sshd",
+            "container_id": "containerd://login-1",
+            "restart_count": 0,
+            "config_sha256": config_sha256,
+        },
+    ]
+    contract = {
+        "schema": migration._IN_PLACE_LOGIN_WORKLOAD_RECONCILIATION_SCHEMA,  # noqa: SLF001
+        "status": "verified",
+        "boundary": "in-place-login-surge",
+        "from_replicas": 1,
+        "to_replicas": 2,
+        "expected_generation": 4,
+        "workload_uid": "login-workload-uid",
+        "target_slurmcluster_uid": "target-slurmcluster-uid",
+    }
+
+    def runner(argv: list[str], **_kwargs: object) -> SoperatorMigrationCommandResult:
+        command = tuple(argv)
+        if "slurmcluster" in command:
+            payload = {"metadata": {"uid": "target-slurmcluster-uid"}}
+        elif "statefulsets.apps.kruise.io" in command:
+            payload = {
+                "metadata": {
+                    "uid": "login-workload-uid",
+                    "generation": 4,
+                    "ownerReferences": [
+                        {
+                            "controller": True,
+                            "kind": "SlurmCluster",
+                            "name": "external-cluster",
+                            "uid": "target-slurmcluster-uid",
+                        }
+                    ],
+                },
+                "spec": {"replicas": 2},
+            }
+        else:
+            payload = {
+                "metadata": {
+                    "name": "login-1",
+                    "uid": "login-1-uid",
+                    "labels": {
+                        "app.kubernetes.io/instance": "external-cluster",
+                        "app.kubernetes.io/component": "login",
+                    },
+                    "ownerReferences": [
+                        {
+                            "controller": True,
+                            "kind": "StatefulSet",
+                            "name": "login",
+                            "uid": "login-workload-uid",
+                        }
+                    ],
+                },
+                "spec": {
+                    "nodeName": "login-node-1",
+                    "containers": [{"name": "sshd"}],
+                },
+                "status": {
+                    "phase": "Running",
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                    "containerStatuses": [
+                        {
+                            "name": "sshd",
+                            "containerID": "containerd://login-1",
+                            "restartCount": 0,
+                            "ready": True,
+                            "state": {"running": {"startedAt": "2026-07-30T00:00:00Z"}},
+                        }
+                    ],
+                },
+            }
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    additions = migration._prove_controller_bridge_target_login_surge_additions(  # noqa: SLF001
+        previous=previous,
+        current=current,
+        config_sha256=config_sha256,
+        target_ref="external-cluster",
+        command_runner=runner,
+        kube_context="external-context",
+        contract=contract,
+    )
+
+    assert additions == [
+        {
+            "name": "login-1",
+            "uid": "login-1-uid",
+            "node_name": "login-node-1",
+            "container_id": "containerd://login-1",
+            "workload_uid": "login-workload-uid",
+            "slurmcluster_uid": "target-slurmcluster-uid",
+        }
+    ]
+    drifted = copy.deepcopy(contract)
+    drifted["expected_generation"] = 5
+    assert (
+        migration._prove_controller_bridge_target_login_surge_additions(  # noqa: SLF001
+            previous=previous,
+            current=current,
+            config_sha256=config_sha256,
+            target_ref="external-cluster",
+            command_runner=runner,
+            kube_context="external-context",
+            contract=drifted,
+        )
+        is None
+    )
+
+
+def test_in_place_login_surge_client_addition_contract_is_exact() -> None:
+    phase = {
+        "in_place_login_surge": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_SCHEMA,  # noqa: SLF001
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-slurmcluster-uid",
+        },
+        "in_place_login_surge_reconciliation": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA,  # noqa: SLF001
+            "status": "peer-ready",
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-slurmcluster-uid",
+            "observation": {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 3,
+            },
+        },
+        "in_place_login_workload_reconciliations": {
+            "in-place-login-surge": {
+                "schema": (
+                    migration._IN_PLACE_LOGIN_WORKLOAD_RECONCILIATION_SCHEMA  # noqa: SLF001
+                ),
+                "status": "verified",
+                "boundary": "in-place-login-surge",
+                "from_replicas": 2,
+                "to_replicas": 3,
+                "target_slurmcluster_uid": "target-slurmcluster-uid",
+                "workload_uid": "login-workload-uid",
+                "expected_generation": 4,
+                "verified_generation": 4,
+                "verified_at": "2026-07-30T00:02:00Z",
+            }
+        },
+    }
+
+    assert migration._in_place_login_surge_client_addition_contract(phase)  # noqa: SLF001
+    phase["in_place_login_surge_reconciliation"]["observation"]["workload_replicas"] = 2
+    assert not migration._in_place_login_surge_client_addition_contract(phase)  # noqa: SLF001
+
+
 def test_controller_bridge_config_only_proof_retains_rpc_for_validated_login_successor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40515,6 +43399,40 @@ def test_controller_gap_semantic_binding_ignores_replay_observation_fields(
     )
 
 
+def test_controller_gap_semantic_binding_is_sealed_on_verified_gap_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _controller_gap_semantic_checkpoint_fixture()
+    checkpoint["phase_state"]["rolling-compute-migration"]["in_place_bridge_client_handoff"].pop(
+        "propagation"
+    )
+    records = (_slurm_partition_pause_record_fixture("main"),)
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_controller_gate_partition_pause_gap_records",
+        lambda _checkpoint: records,
+    )
+    writes: list[str] = []
+
+    sealed = migration._ensure_in_place_controller_gap_binding_sha256(  # noqa: SLF001
+        checkpoint=checkpoint,
+        checkpoint_writer=lambda: writes.append("write"),
+    )
+
+    binding = checkpoint["controller_bridge"]["in_place_controller_gap_binding"]
+    assert binding["status"] == "sealed"
+    assert binding["semantic_sha256"] == sealed
+    assert binding["contract"]["partition_pause"] == [records[0].as_payload()]
+    assert writes == ["write"]
+
+    replayed = migration._ensure_in_place_controller_gap_binding_sha256(  # noqa: SLF001
+        checkpoint=checkpoint,
+        checkpoint_writer=lambda: pytest.fail("sealed replay must not rewrite checkpoint"),
+    )
+
+    assert replayed == sealed
+
+
 def test_controller_gap_semantic_binding_rejects_stable_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40534,6 +43452,100 @@ def test_controller_gap_semantic_binding_rejects_stable_identity_drift(
 
     with pytest.raises(RuntimeError, match="semantic identity changed"):
         migration._validated_in_place_controller_gap_binding_sha256(checkpoint)  # noqa: SLF001
+
+
+def test_controller_gap_semantic_binding_reseals_exact_partition_rebase_before_consumption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _controller_gap_semantic_checkpoint_fixture()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]
+    rolling["in_place_bridge_client_handoff"].pop("propagation")
+    predecessor = _slurm_partition_pause_record_fixture(
+        "main",
+        previous_fields={"Default": "YES"},
+    )
+    records = [predecessor]
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_controller_gate_partition_pause_gap_records",
+        lambda _checkpoint: tuple(records),
+    )
+    predecessor_sha256 = migration._seal_in_place_controller_gap_binding(  # noqa: SLF001
+        checkpoint=checkpoint,
+        checkpoint_writer=None,
+    )
+    live = _slurm_partition_state_fixture(
+        "main",
+        "DOWN",
+        fields={
+            "Default": "NO",
+            "ResumeTimeout": "GLOBAL",
+        },
+    )
+    successor = migration._rebase_in_place_target_partition_pause_record(  # noqa: SLF001
+        predecessor,
+        live,
+    )
+    assert successor is not None
+    records[0] = successor
+    rollout = rolling["in_place_bridge_client_handoff"]["worker_config_rollout"] = {
+        "schema": migration._IN_PLACE_WORKER_BRIDGE_CONFIG_ROLLOUT_SCHEMA,  # noqa: SLF001
+        "authority_epoch": "bridge-target-epoch",
+        "target_config_sha256": "a" * 64,
+        "affected_partition_pause_rebases": {
+            "schema": migration._IN_PLACE_WORKER_BRIDGE_PARTITION_REBASE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "authority_epoch": "bridge-target-epoch",
+            "config_sha256": "a" * 64,
+            "cycles": [
+                {
+                    "predecessor_partition_pause_fingerprint": migration._fingerprint(  # noqa: SLF001
+                        [predecessor.as_payload()]
+                    ),
+                    "successor_partition_pause_fingerprint": migration._fingerprint(  # noqa: SLF001
+                        [successor.as_payload()]
+                    ),
+                    "rebased_partitions": ["main"],
+                    "successors": [
+                        {
+                            "partition": "main",
+                            "predecessor_applied_record_fingerprint": (
+                                predecessor.applied_record_fingerprint
+                            ),
+                            "successor_previous_record_fingerprint": (
+                                successor.previous_record_fingerprint
+                            ),
+                            "successor_applied_record_fingerprint": (
+                                successor.applied_record_fingerprint
+                            ),
+                        }
+                    ],
+                    "verified_at": "2026-07-30T05:30:00Z",
+                }
+            ],
+            "latest_successor_partition_pause_fingerprint": migration._fingerprint(  # noqa: SLF001
+                [successor.as_payload()]
+            ),
+            "verified_at": "2026-07-30T05:30:00Z",
+        },
+    }
+    assert rollout["affected_partition_pause_rebases"]["status"] == "verified"
+    writes: list[dict[str, Any]] = []
+
+    successor_sha256 = migration._seal_in_place_controller_gap_binding(  # noqa: SLF001
+        checkpoint=checkpoint,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    assert successor_sha256 != predecessor_sha256
+    binding = checkpoint["controller_bridge"]["in_place_controller_gap_binding"]
+    assert binding["semantic_sha256"] == successor_sha256
+    assert binding["contract"]["partition_pause"] == [successor.as_payload()]
+    history = binding["partition_rebase_history"]
+    assert history[-1]["predecessor_semantic_sha256"] == predecessor_sha256
+    assert history[-1]["successor_semantic_sha256"] == successor_sha256
+    assert history[-1]["rebased_partitions"] == ["main"]
+    assert writes
 
 
 def test_controller_gap_binding_waits_for_verified_target_gate(
@@ -42164,6 +45176,195 @@ def test_exact_login_revalidation_recognizes_checkpointed_target_successor_but_r
     assert handoff["sessions"][0]["exit_observation"]["status"] == ("pending-explicit-confirmation")
 
 
+def test_exact_login_revalidation_adopts_archived_session_free_shrink_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _exact_login_handoff_checkpoint(with_session=False)
+    handoff = checkpoint["controller_bridge"]["login_session_handoff"]
+    handoff.update(
+        {
+            "state": "indeterminate",
+            "indeterminate_reason": "protected login Pod login-0 changed uid",
+            "indeterminate_at": "2026-07-30T00:04:00Z",
+        }
+    )
+    protected = handoff["protected_pods"][0]
+    protected["workload"] = {
+        "api_version": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "name": "login",
+        "uid": "source-login-workload-uid",
+    }
+    checkpoint["phase_state"] = {
+        "rolling-compute-migration": {
+            "immutable_child_handoff": {
+                "status": "target-children-created",
+                "workloads": {
+                    "login": {
+                        "component": "login",
+                        "kind": "StatefulSet",
+                        "name": "login",
+                        "uid": "source-login-workload-uid",
+                        "status": "target-bound",
+                        "target_uid": "target-login-workload-uid",
+                        "pods": [{"name": protected["name"], "uid": protected["uid"]}],
+                    }
+                },
+            }
+        }
+    }
+    observed = {
+        **copy.deepcopy(protected),
+        "uid": "target-login-pod-uid",
+        "workload": {
+            "api_version": "apps.kruise.io/v1beta1",
+            "kind": "StatefulSet",
+            "name": "login",
+            "uid": "target-login-workload-uid",
+        },
+    }
+    checkpoint["active_login_session_hold"] = {
+        "status": "verified",
+        "pods": [copy.deepcopy(observed)],
+        "server_dry_run_deletions": [{"pod": protected["name"], "status": "denied"}],
+        "release_history": [
+            {
+                "status": "released",
+                "pods": [{"name": "login-1", "uid": "retained-login-pod-uid"}],
+                "release_intent_at": "2026-07-30T00:02:00Z",
+                "released_at": "2026-07-30T00:03:00Z",
+                "release_probe": {"status": "checked", "active_sessions": 0},
+                "session_drain": {"status": "drained"},
+                "released_pods": [{"pod": "login-1", "status": "metadata-released"}],
+                "shrink_history": [
+                    {
+                        "retained_pods": ["login-1"],
+                        "released_pods": [protected["name"]],
+                        "released_identities": [
+                            {
+                                "pod": protected["name"],
+                                "uid": protected["uid"],
+                                "status": "metadata-released",
+                            }
+                        ],
+                        "completed_at": "2026-07-30T00:01:00Z",
+                    }
+                ],
+            }
+        ],
+    }
+    writes: list[str] = []
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_exact_login_pod_session_probe",
+        lambda **_kwargs: (observed, []),
+    )
+
+    migration._revalidate_protected_login_sessions(  # noqa: SLF001
+        checkpoint=checkpoint,
+        command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append("write"),
+    )
+
+    successor = handoff["protected_pod_successors"][0]
+    assert successor["source_pod_uid"] == protected["uid"]
+    assert successor["target_pod_uid"] == observed["uid"]
+    assert successor["hold_released_at"] == "2026-07-30T00:01:00Z"
+    assert successor["boundary"] == "archived-session-free-hold-shrink"
+    assert handoff["sessions"] == []
+    assert handoff["state"] == "protected"
+    assert handoff["indeterminate_recovered_at"]
+    assert writes
+
+
+@pytest.mark.parametrize(
+    "hold_mutation",
+    ("missing-completion", "missing-current-hold", "missing-deletion-denial"),
+)
+def test_exact_login_revalidation_rejects_unproven_archived_shrink_successor(
+    monkeypatch: pytest.MonkeyPatch,
+    hold_mutation: str,
+) -> None:
+    checkpoint = _exact_login_handoff_checkpoint(with_session=False)
+    handoff = checkpoint["controller_bridge"]["login_session_handoff"]
+    protected = handoff["protected_pods"][0]
+    protected["workload"] = {
+        "api_version": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "name": "login",
+        "uid": "source-login-workload-uid",
+    }
+    observed = {
+        **copy.deepcopy(protected),
+        "uid": "target-login-pod-uid",
+        "workload": {
+            "api_version": "apps.kruise.io/v1beta1",
+            "kind": "StatefulSet",
+            "name": "login",
+            "uid": "target-login-workload-uid",
+        },
+    }
+    checkpoint["phase_state"] = {
+        "rolling-compute-migration": {
+            "immutable_child_handoff": {
+                "status": "target-children-created",
+                "workloads": {
+                    "login": {
+                        "component": "login",
+                        "kind": "StatefulSet",
+                        "name": "login",
+                        "uid": "source-login-workload-uid",
+                        "status": "target-bound",
+                        "target_uid": "target-login-workload-uid",
+                        "pods": [{"name": protected["name"], "uid": protected["uid"]}],
+                    }
+                },
+            }
+        }
+    }
+    shrink = {
+        "released_identities": [
+            {
+                "pod": protected["name"],
+                "uid": protected["uid"],
+                "status": "metadata-released",
+            }
+        ],
+        "completed_at": "2026-07-30T00:01:00Z",
+    }
+    hold = {
+        "status": "verified",
+        "pods": [copy.deepcopy(observed)],
+        "server_dry_run_deletions": [{"pod": protected["name"], "status": "denied"}],
+        "release_history": [{"shrink_history": [shrink]}],
+    }
+    checkpoint["active_login_session_hold"] = hold
+    if hold_mutation == "missing-completion":
+        shrink.pop("completed_at")
+    elif hold_mutation == "missing-current-hold":
+        hold["pods"] = []
+    else:
+        hold["server_dry_run_deletions"] = []
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_exact_login_pod_session_probe",
+        lambda **_kwargs: (observed, []),
+    )
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="changed uid"):
+        migration._revalidate_protected_login_sessions(  # noqa: SLF001
+            checkpoint=checkpoint,
+            command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
+            kube_context="external-context",
+            checkpoint_writer=None,
+        )
+
+    assert handoff.get("protected_pod_successors") in (None, [])
+
+
 def _terminal_in_place_login_successor_checkpoint() -> tuple[dict[str, Any], dict[str, Any]]:
     checkpoint = _exact_login_handoff_checkpoint(with_session=True)
     handoff = checkpoint["controller_bridge"]["login_session_handoff"]
@@ -42734,7 +45935,7 @@ def test_exact_login_revalidation_never_applies_old_confirmation_to_new_socket(
 
 
 @pytest.mark.parametrize("with_session", (False, True))
-def test_exact_login_handoff_accepts_one_source_pod_and_waits_for_voluntary_exit(
+def test_exact_login_handoff_accepts_one_source_pod_without_waiting_for_sessions(
     monkeypatch: pytest.MonkeyPatch,
     with_session: bool,
 ) -> None:
@@ -42826,25 +46027,6 @@ def test_exact_login_handoff_accepts_one_source_pod_and_waits_for_voluntary_exit
         },
     )
 
-    if with_session:
-        with pytest.raises(
-            migration.SoperatorMigrationPhasePending,
-            match="wait indefinitely",
-        ):
-            migration._complete_upgrade_login_handoff(  # noqa: SLF001
-                checkpoint=checkpoint,
-                command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult(
-                    (), 0, "", ""
-                ),
-                kube_context="external-context",
-                checkpoint_writer=None,
-            )
-        assert handoff["state"] == "pending-voluntary-exit"
-        assert handoff["target_ready"] is True
-        assert handoff["target_pod"]["uid"] == target["uid"]
-        assert checkpoint["slurm"]["action_journal"]["login"]["active_session_count"] == 1
-        return
-
     lines = migration._complete_upgrade_login_handoff(  # noqa: SLF001
         checkpoint=checkpoint,
         command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
@@ -42854,6 +46036,9 @@ def test_exact_login_handoff_accepts_one_source_pod_and_waits_for_voluntary_exit
 
     assert lines
     assert handoff["state"] == "complete"
+    assert handoff["session_policy"] == "target-ready"
+    assert handoff["sessions"] == []
+    assert handoff["no_sessions_at_lock"] is True
     assert handoff["target_pod"]["uid"] == target["uid"]
     assert checkpoint["slurm"]["action_journal"]["login"]["state"] == "complete"
 
@@ -43114,7 +46299,7 @@ def _jail_login_hold_release_fixture(
     return checkpoint, phase
 
 
-def test_jail_login_hold_does_not_release_before_explicit_handoff_acknowledgement(
+def test_jail_login_hold_does_not_release_before_target_peer_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkpoint, phase = _jail_login_hold_release_fixture(monkeypatch)
@@ -43122,21 +46307,21 @@ def test_jail_login_hold_does_not_release_before_explicit_handoff_acknowledgemen
 
     def handoff_pending(**_kwargs: object) -> list[str]:
         handoff = checkpoint["controller_bridge"]["login_session_handoff"]
-        handoff["state"] = "indeterminate"
+        handoff["state"] = "protected"
         raise migration.SoperatorMigrationPhasePending(
-            "explicit acknowledgement is pending for the disappeared SSH socket"
+            "target login peer is not Ready behind the stable Service"
         )
 
     monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", handoff_pending)
     monkeypatch.setattr(
         migration,
-        "_ensure_active_login_session_hold",
+        "_login_session_hold_release_if_drained",
         lambda **_kwargs: release_calls.append("release") or [],
     )
 
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
-        match="explicit acknowledgement is pending",
+        match="target login peer is not Ready",
     ):
         migration._release_jail_login_hold_before_full_rollout(  # noqa: SLF001
             checkpoint=checkpoint,
@@ -43149,53 +46334,58 @@ def test_jail_login_hold_does_not_release_before_explicit_handoff_acknowledgemen
         )
 
     gate = phase["login_hold_release_before_full_rollout"]
-    assert gate["status"] == "pending-voluntary-handoff"
+    assert gate["status"] == "pending-target-peer-handoff"
     assert gate["target_slot_peer"]["status"] == "verified"
     assert checkpoint["active_login_session_hold"]["status"] == "verified"
     assert release_calls == []
 
 
-def test_jail_login_hold_defers_exact_active_sessions_after_target_slot_peer(
+def test_jail_login_hold_releases_despite_active_sessions_after_target_slot_peer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkpoint, phase = _jail_login_hold_release_fixture(monkeypatch)
     release_calls: list[str] = []
 
-    def handoff_pending(**_kwargs: object) -> list[str]:
+    def handoff_complete(**_kwargs: object) -> list[str]:
         handoff = checkpoint["controller_bridge"]["login_session_handoff"]
-        handoff.update({"state": "pending-voluntary-exit", "target_ready": True})
-        raise migration.SoperatorMigrationPhasePending(
-            "login continuity is pending voluntary exit from 1 original SSH session"
+        handoff.update(
+            {
+                "state": "complete",
+                "session_policy": "target-ready",
+                "target_ready": True,
+            }
         )
+        return ["target peer complete"]
 
-    monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", handoff_pending)
+    def release_hold(**_kwargs: object) -> list[str]:
+        release_calls.append("release")
+        checkpoint["active_login_session_hold"]["status"] = "released"
+        return ["availability hold released"]
+
+    monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", handoff_complete)
     monkeypatch.setattr(
         migration,
-        "_ensure_active_login_session_hold",
-        lambda **_kwargs: release_calls.append("release") or [],
+        "_target_ready_login_hold_release_authority",
+        lambda _checkpoint: {"status": "verified"},
+    )
+    monkeypatch.setattr(migration, "_login_session_hold_release_if_drained", release_hold)
+
+    lines = migration._release_jail_login_hold_before_full_rollout(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
+        kube_context="external-context",
+        target_ref="external-cluster",
+        rootfs_pvc="jail-rootfs-slot-b-pvc",
+        checkpoint_writer=None,
     )
 
-    with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
-        match="pending indefinitely",
-    ):
-        migration._release_jail_login_hold_before_full_rollout(  # noqa: SLF001
-            checkpoint=checkpoint,
-            phase=phase,
-            command_runner=lambda *_args, **_kwargs: SoperatorMigrationCommandResult(
-                (), 0, "", ""
-            ),
-            kube_context="external-context",
-            target_ref="external-cluster",
-            rootfs_pvc="jail-rootfs-slot-b-pvc",
-            checkpoint_writer=None,
-        )
-
     gate = phase["login_hold_release_before_full_rollout"]
-    assert gate["status"] == "protected-session-deferred"
+    assert gate["status"] == "released"
     assert gate["target_slot_peer"]["pod_uids"] == ["target-login-pod-uid"]
-    assert checkpoint["active_login_session_hold"]["status"] == "verified"
-    assert release_calls == []
+    assert checkpoint["active_login_session_hold"]["status"] == "released"
+    assert release_calls == ["release"]
+    assert "availability hold released" in lines
 
 
 @pytest.mark.parametrize("completion_path", ("fresh", "post-switch-resume"))
@@ -43793,6 +46983,11 @@ def test_in_place_login_surge_reconciles_true_extra_replica(
     )
     monkeypatch.setattr(
         migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
         "_reconcile_in_place_login_surge_failed_helm_recovery",
         lambda **_kwargs: failed_recovery_calls.append("recovery") or False,
     )
@@ -43819,22 +47014,26 @@ def test_in_place_login_surge_reconciles_true_extra_replica(
     monkeypatch.setattr(
         migration,
         "_run_in_place_login_helm_with_webhook_bridge",
-        lambda **kwargs: (
-            mutation_order.append("webhook-ready")
-            or kwargs["pre_helm_live_boundary"]()
-            or kwargs["mutation_guard"]()
-            or kwargs["helm_operation"]()
-            + [mutation_order.append("webhook-retired") or "webhook-retired"]
+        lambda **_kwargs: pytest.fail(
+            "login surge must not wrap the canonical target admission bootstrap"
         ),
     )
+
+    def helm_with_canonical_admission(**kwargs: Any) -> list[str]:
+        assert kwargs["force_target_admission_bootstrap"] is True
+        assert kwargs["target_admission_bridge_phase"] is rolling
+        mutation_order.append("webhook-ready")
+        kwargs["pre_helm_live_boundary"]()
+        kwargs["mutation_guard"]()
+        mutation_order.append("helm")
+        applied_values.append(kwargs["values"])
+        mutation_order.append("webhook-retired")
+        return ["helm", "webhook-retired"]
+
     monkeypatch.setattr(
         migration,
         "_helm_upgrade_target_soperator_with_jail_login_session_policy",
-        lambda **kwargs: (
-            mutation_order.append("helm")
-            or applied_values.append(kwargs["values"])
-            or ["helm"]
-        ),
+        helm_with_canonical_admission,
     )
     monkeypatch.setattr(
         migration,
@@ -44042,7 +47241,7 @@ def test_in_place_login_surge_rejects_incomplete_released_hold_journal() -> None
 
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
-        match="released hold without its exact zero-session journal",
+        match="released hold without its exact release journal",
     ):
         migration._reconcile_in_place_jail_login_surge(  # noqa: SLF001
             checkpoint=checkpoint,
@@ -44131,6 +47330,11 @@ def test_in_place_login_surge_rejects_released_hold_without_resume_authority(
         migration,
         "_ensure_in_place_pre_service_controller_fence",
         lambda **_kwargs: ["controller-fence"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: ["bridge-clients"],
     )
     monkeypatch.setattr(
         migration,
@@ -44228,6 +47432,11 @@ def test_in_place_login_surge_live_apply_is_idempotently_proven(
     )
     monkeypatch.setattr(
         migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
         "_checkpoint_proven_target_soperator_helm_apply",
         lambda **kwargs: (
             proof_calls.append(kwargs) or ["recovered-proof"]
@@ -44263,6 +47472,780 @@ def test_in_place_login_surge_live_apply_is_idempotently_proven(
     assert changed is False
     assert [call["require_command_fence_override"] for call in proof_calls] == [False]
     assert rolling["in_place_login_surge_reconciliation"]["status"] == "applied"
+
+
+@pytest.mark.parametrize(
+    ("boundary", "from_replicas", "to_replicas"),
+    (
+        ("in-place-login-surge", 2, 3),
+        ("in-place-login-surge-restore", 3, 2),
+    ),
+)
+def test_in_place_login_workload_reconciliation_scales_only_exact_owned_workload(
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    from_replicas: int,
+    to_replicas: int,
+) -> None:
+    target_binding = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-uid",
+    }
+    client_config_sha256 = "b" * 64
+    rolling = {
+        "slurmcluster_handoff_binding": {"target": target_binding},
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "original_replicas": 1,
+            "pause_generation": 8,
+            "spec_fingerprint": "manager-fingerprint",
+            "verified_at": "2026-07-30T00:00:00Z",
+        },
+        "in_place_target_controller_command_gate": {
+            "status": "verified",
+            "workload_uid": "controller-uid",
+            "contract_fingerprint": "a" * 64,
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "verified",
+            "config_sha256": client_config_sha256,
+            "propagation": {
+                "status": "verified",
+                "config_sha256": client_config_sha256,
+            },
+        },
+    }
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-source",
+                "source_restart_prohibited": True,
+                "epoch": "bridge-epoch",
+            },
+        }
+    }
+    live = {
+        "replicas": from_replicas,
+        "generation": 12,
+        "resource_version": "rv-before",
+    }
+
+    def workload() -> dict[str, Any]:
+        return {
+            "apiVersion": "apps.kruise.io/v1beta1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "login",
+                "uid": "login-workload-uid",
+                "resourceVersion": live["resource_version"],
+                "generation": live["generation"],
+                "ownerReferences": [
+                    {
+                        "apiVersion": "slurm.nebius.ai/v1",
+                        "kind": "SlurmCluster",
+                        "name": "external-cluster",
+                        "uid": "target-uid",
+                        "controller": True,
+                    }
+                ],
+            },
+            "spec": {
+                "replicas": live["replicas"],
+                "selector": {"matchLabels": {"component": "login"}},
+                "template": {
+                    "metadata": {"labels": {"component": "login"}},
+                    "spec": {"containers": [{"name": "slurmd", "image": "image@sha256:abc"}]},
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {
+            "metadata": target_binding,
+            "spec": {"slurmNodes": {"login": {"size": to_replicas}}},
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_get_namespaced_resource",
+        lambda **_kwargs: workload(),
+    )
+    scale_calls: list[Mapping[str, Any]] = []
+
+    def scale(**kwargs: Any) -> None:
+        scale_calls.append(kwargs)
+        live.update(
+            {
+                "replicas": to_replicas,
+                "generation": 13,
+                "resource_version": "rv-after",
+            }
+        )
+
+    monkeypatch.setattr(migration, "_kubectl_scale_namespace_resource", scale)
+    checkpoints: list[str] = []
+    guards: list[str] = []
+    command_runner = cast(Any, object())
+
+    lines = migration._reconcile_in_place_login_workload_replicas(  # noqa: SLF001
+        checkpoint=checkpoint,
+        rolling=rolling,
+        boundary=boundary,
+        from_replicas=from_replicas,
+        to_replicas=to_replicas,
+        target_ref="external-cluster",
+        command_runner=command_runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: checkpoints.append("checkpoint"),
+        mutation_guard=lambda: guards.append("guard"),
+    )
+
+    assert scale_calls == [
+        {
+            "command_runner": command_runner,
+            "kube_context": "external-context",
+            "resource": "statefulsets.apps.kruise.io/login",
+            "replicas": to_replicas,
+            "current_replicas": from_replicas,
+            "resource_version": "rv-before",
+        }
+    ]
+    assert guards == ["guard"]
+    assert len(checkpoints) == 2
+    state = rolling["in_place_login_workload_reconciliations"][boundary]
+    assert state["status"] == "verified"
+    assert state["from_generation"] == 12
+    assert state["verified_generation"] == 13
+    assert state["manager_pause_generation"] == 8
+    assert lines[-1].startswith("Reconciled the exact target-owned login workload")
+
+
+def test_in_place_login_workload_reconciliation_requires_bridge_client_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rolling = {
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "original_replicas": 1,
+            "pause_generation": 8,
+            "spec_fingerprint": "manager-fingerprint",
+            "verified_at": "2026-07-30T00:00:00Z",
+        },
+        "in_place_target_controller_command_gate": {
+            "status": "verified",
+            "workload_uid": "controller-uid",
+            "contract_fingerprint": "a" * 64,
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "verified",
+            "config_sha256": "b" * 64,
+            "propagation": {"status": "accepted", "config_sha256": "b" * 64},
+        },
+    }
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-source",
+                "source_restart_prohibited": True,
+                "epoch": "bridge-epoch",
+            },
+        }
+    }
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_scale_namespace_resource",
+        lambda **_kwargs: pytest.fail("unproven bridge clients must block workload scaling"),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="live bridge-client proof",
+    ):
+        migration._reconcile_in_place_login_workload_replicas(  # noqa: SLF001
+            checkpoint=checkpoint,
+            rolling=rolling,
+            boundary="in-place-login-surge",
+            from_replicas=2,
+            to_replicas=3,
+            target_ref="external-cluster",
+            command_runner=cast(Any, object()),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            mutation_guard=None,
+        )
+
+
+def test_in_place_login_surge_repairs_proven_workload_mismatch_without_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rolling = {
+        "in_place_ownership_handoff": {"status": "target-children-created"},
+        "in_place_login_surge": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_SCHEMA,  # noqa: SLF001
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-uid",
+        },
+    }
+    checkpoint = {
+        "active_login_session_hold": {"status": "verified"},
+        "phase_state": {"rolling-compute-migration": rolling},
+    }
+    observations = iter(
+        (
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 2,
+                "observed_at": "before",
+            },
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 2,
+                "observed_at": "before-direct-scale",
+            },
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 3,
+                "observed_at": "after-direct-scale",
+            },
+        )
+    )
+    order: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_in_place_jail_login_surge_values",
+        lambda **kwargs: {
+            **dict(kwargs["values"]),
+            "slurmNodes": {"login": {"size": 3}},
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_values_gated_by_controller_bridge",
+        lambda **kwargs: kwargs["values"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_pre_service_controller_fence",
+        lambda **_kwargs: order.append("controller-fence") or ["controller-fence"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: order.append("bridge-clients") or ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_in_place_jail_login_replica_observation",
+        lambda **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_checkpoint_proven_target_soperator_helm_apply",
+        lambda **kwargs: (
+            order.append("helm-proof") or ["helm-proof"]
+            if kwargs["recovered_from_live_state"] is True
+            else pytest.fail("proven live surge must not be reapplied")
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_exact_temporary_login_helm_proof",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator_with_jail_login_session_policy",
+        lambda **_kwargs: pytest.fail("proven live surge must not run Helm"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_reconcile_in_place_login_workload_replicas",
+        lambda **_kwargs: order.append("direct-workload-scale") or ["direct-workload-scale"],
+    )
+
+    changed, _lines = migration._reconcile_in_place_jail_login_surge(  # noqa: SLF001
+        checkpoint=checkpoint,
+        populate_phase={},
+        values={"slurmNodes": {"login": {"size": 2}}},
+        target_ref="external-cluster",
+        expected_version="1.31",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        login_session_policy="wait-active",
+        login_session_drain_timeout_seconds=0,
+        checkpoint_writer=lambda: None,
+        mutation_guard=None,
+    )
+
+    assert changed is True
+    assert order == [
+        "controller-fence",
+        "bridge-clients",
+        "helm-proof",
+        "direct-workload-scale",
+    ]
+    assert rolling["in_place_login_surge_reconciliation"]["status"] == "applied"
+
+
+def test_in_place_login_surge_repairs_exact_slurmcluster_owner_regression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_ref = "external-cluster"
+    target_binding = {
+        "namespace": "soperator",
+        "name": target_ref,
+        "uid": "target-uid",
+    }
+    values = {"slurmNodes": {"login": {"size": 3}}}
+    intent = _target_helm_apply_intent_fixture(
+        target_ref=target_ref,
+        values=values,
+    )
+    intent.update(
+        {
+            "status": "verified",
+            "verified_release_revision": "21",
+            "verified_at": "2026-07-31T00:27:24Z",
+        }
+    )
+    proof = {
+        "schema": migration._TARGET_HELM_APPLY_PROOF_SCHEMA,  # noqa: SLF001
+        "status": "verified",
+        "mode": "intent-bound",
+        "target": target_binding,
+        "release_revision": "21",
+        "chart": intent["release"]["chart"],
+        "app_version": intent["release"]["app_version"],
+        "requested_target_version": intent["requested_target_version"],
+        "apply_intent_schema": migration._TARGET_HELM_APPLY_INTENT_SCHEMA,  # noqa: SLF001
+        "values_fingerprint": intent["values_fingerprint"],
+        "semantic_drift": {"status": "compatible"},
+    }
+    client_config_sha256 = "c" * 64
+    rolling: dict[str, Any] = {
+        "slurmcluster_handoff_binding": {"target": target_binding},
+        "in_place_login_surge_apply_intent": intent,
+        "in_place_login_surge_apply_proof": proof,
+        "in_place_login_surge_apply_semantic_drift": {
+            "schema": migration._TARGET_HELM_SEMANTIC_DRIFT_SCHEMA,  # noqa: SLF001
+            "status": "compatible",
+            "unclassified_target_spec_drift": False,
+        },
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "pause_generation": 8,
+        },
+        "in_place_target_controller_command_gate": {
+            "status": "verified",
+            "workload_uid": "controller-workload-uid",
+            "contract_fingerprint": "d" * 64,
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "verified",
+            "config_sha256": client_config_sha256,
+            "propagation": {
+                "status": "verified",
+                "config_sha256": client_config_sha256,
+            },
+        },
+    }
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-target",
+                "source_restart_prohibited": True,
+                "epoch": "bridge-epoch",
+            },
+        }
+    }
+    reconciliation = {
+        "schema": migration._IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA,  # noqa: SLF001
+        "status": "converging",
+        "configured_replicas": 2,
+        "surge_replicas": 3,
+        "target_slurmcluster_uid": "target-uid",
+        "values_fingerprint": intent["values_fingerprint"],
+        "observation": {
+            "slurmcluster_replicas": 3,
+            "workload_replicas": 2,
+            "observed_at": "2026-07-31T00:27:27Z",
+        },
+    }
+    live_target = {
+        "metadata": {
+            **target_binding,
+            "resourceVersion": "61",
+        },
+        "spec": {
+            "slurmNodes": {
+                "login": {"size": 2, "feature": "stable"},
+                "controller": {"size": 2},
+            },
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: copy.deepcopy(live_target),
+    )
+    patch_calls: list[dict[str, Any]] = []
+
+    def patch_slurmcluster(**kwargs: Any) -> None:
+        patch_calls.append(kwargs)
+        live_target["spec"]["slurmNodes"]["login"]["size"] = 3
+        live_target["metadata"]["resourceVersion"] = "62"
+
+    monkeypatch.setattr(
+        migration,
+        "_patch_slurmcluster_during_manager_pause",
+        patch_slurmcluster,
+    )
+    writes: list[dict[str, Any]] = []
+
+    used, changed, lines = (
+        migration._repair_in_place_login_surge_slurmcluster_regression(  # noqa: SLF001
+            checkpoint=checkpoint,
+            rolling=rolling,
+            reconciliation=reconciliation,
+            live_pair=(2, 2),
+            configured=2,
+            surge=3,
+            target_ref=target_ref,
+            command_runner=_FakeCommandRunner(),
+            kube_context="external-context",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(rolling)),
+            mutation_guard=lambda: None,
+        )
+    )
+
+    assert used is True
+    assert changed is True
+    assert patch_calls[0]["spec_patch"] == {
+        "slurmNodes": {"login": {"size": 3}},
+    }
+    repair = rolling["in_place_login_surge_slurmcluster_regression"]
+    assert repair["status"] == "verified"
+    assert repair["configured_replicas"] == 2
+    assert repair["surge_replicas"] == 3
+    assert "restored only the exact target SlurmCluster" in lines[0]
+    assert writes
+
+    advanced_reconciliation = {
+        **reconciliation,
+        "status": "peer-ready",
+        "observation": {
+            "slurmcluster_replicas": 3,
+            "workload_replicas": 3,
+            "observed_at": "2026-07-31T00:30:00Z",
+        },
+        "slurmcluster_regression_repair_sha256": migration._fingerprint(repair),  # noqa: SLF001
+    }
+    repair_before_replay = copy.deepcopy(repair)
+    patch_calls.clear()
+    writes.clear()
+
+    replayed, replay_changed, replay_lines = (
+        migration._repair_in_place_login_surge_slurmcluster_regression(  # noqa: SLF001
+            checkpoint=checkpoint,
+            rolling=rolling,
+            reconciliation=advanced_reconciliation,
+            live_pair=(3, 3),
+            configured=2,
+            surge=3,
+            target_ref=target_ref,
+            command_runner=_FakeCommandRunner(),
+            kube_context="external-context",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(rolling)),
+            mutation_guard=lambda: None,
+        )
+    )
+
+    assert replayed is True
+    assert replay_changed is False
+    assert "reused the exact verified" in replay_lines[0]
+    assert repair == repair_before_replay
+    assert patch_calls == []
+    assert writes == []
+
+    advanced_reconciliation["slurmcluster_regression_repair_sha256"] = "f" * 64
+    with pytest.raises(RuntimeError, match="lost its exact prior surge/workload observation"):
+        migration._repair_in_place_login_surge_slurmcluster_regression(  # noqa: SLF001
+            checkpoint=checkpoint,
+            rolling=rolling,
+            reconciliation=advanced_reconciliation,
+            live_pair=(3, 3),
+            configured=2,
+            surge=3,
+            target_ref=target_ref,
+            command_runner=_FakeCommandRunner(),
+            kube_context="external-context",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(rolling)),
+            mutation_guard=lambda: None,
+        )
+
+
+def test_in_place_login_surge_uses_regression_receipt_before_ownerless_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_values_fingerprint = "e" * 64
+    rolling = {
+        "in_place_ownership_handoff": {"status": "target-children-created"},
+        "in_place_login_surge": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_SCHEMA,  # noqa: SLF001
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-uid",
+        },
+        "in_place_login_surge_reconciliation": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA,  # noqa: SLF001
+            "status": "converging",
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-uid",
+            "values_fingerprint": old_values_fingerprint,
+            "observation": {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 2,
+                "observed_at": "before-regression",
+            },
+        },
+        "in_place_login_surge_slurmcluster_regression": {
+            "status": "verified",
+        },
+    }
+    checkpoint = {
+        "active_login_session_hold": {"status": "verified"},
+        "phase_state": {"rolling-compute-migration": rolling},
+    }
+    observations = iter(
+        (
+            {
+                "slurmcluster_replicas": 2,
+                "workload_replicas": 2,
+                "observed_at": "regressed",
+            },
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 2,
+                "observed_at": "owner-restored",
+            },
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 2,
+                "observed_at": "before-workload-scale",
+            },
+            {
+                "slurmcluster_replicas": 3,
+                "workload_replicas": 3,
+                "observed_at": "after-workload-scale",
+            },
+        )
+    )
+    order: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_in_place_jail_login_surge_values",
+        lambda **_kwargs: {"slurmNodes": {"login": {"size": 3}}},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_target_values_gated_by_controller_bridge",
+        lambda **kwargs: kwargs["values"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_pre_service_controller_fence",
+        lambda **_kwargs: ["controller-fence"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_in_place_jail_login_replica_observation",
+        lambda **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_repair_in_place_login_surge_slurmcluster_regression",
+        lambda **_kwargs: (True, True, ["slurmcluster-owner-restored"]),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_checkpoint_target_soperator_helm_apply_intent",
+        lambda **_kwargs: pytest.fail("the superseded surge intent must not be reused"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_checkpoint_proven_target_soperator_helm_apply",
+        lambda **_kwargs: pytest.fail("current values must not rewrite historical proof"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_exact_temporary_login_helm_proof",
+        lambda **_kwargs: pytest.fail("the regression receipt owns this successor"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator_with_jail_login_session_policy",
+        lambda **_kwargs: pytest.fail("the exact scalar repair must not replay Helm"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_reconcile_in_place_login_workload_replicas",
+        lambda **_kwargs: order.append("ownerless-workload-scale") or ["scaled"],
+    )
+
+    changed, lines = migration._reconcile_in_place_jail_login_surge(  # noqa: SLF001
+        checkpoint=checkpoint,
+        populate_phase={},
+        values={"slurmNodes": {"login": {"size": 2}}, "changed": True},
+        target_ref="external-cluster",
+        expected_version="1.31",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        login_session_policy="wait-active",
+        login_session_drain_timeout_seconds=0,
+        checkpoint_writer=lambda: None,
+        mutation_guard=None,
+    )
+
+    assert changed is True
+    assert order == ["ownerless-workload-scale"]
+    assert any("historical intent-bound Helm proof" in line for line in lines)
+    reconciliation = rolling["in_place_login_surge_reconciliation"]
+    assert reconciliation["status"] == "applied"
+    assert reconciliation["values_fingerprint"] == old_values_fingerprint
+
+
+def test_in_place_login_restore_repairs_proven_workload_mismatch_without_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rolling = {
+        "in_place_login_surge": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_SCHEMA,  # noqa: SLF001
+            "configured_replicas": 2,
+            "surge_replicas": 3,
+            "target_slurmcluster_uid": "target-uid",
+        },
+        "in_place_login_surge_reconciliation": {
+            "schema": migration._IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA,  # noqa: SLF001
+            "status": "released",
+        },
+    }
+    populate = {"login_hold_release_before_full_rollout": {"status": "released"}}
+    checkpoint = {
+        "active_login_session_hold": {
+            "status": "released",
+            "pods": [{"name": "login-1", "uid": "login-1-uid"}],
+            "released_pods": [{"pod": "login-1", "status": "metadata-released"}],
+            "release_intent_at": "2026-07-29T00:01:00Z",
+            "released_at": "2026-07-29T00:02:00Z",
+            "release_probe": {"status": "checked", "active_sessions": 0},
+            "session_drain": {"status": "drained"},
+        },
+        "phase_state": {"rolling-compute-migration": rolling},
+    }
+    observations = iter(
+        (
+            {
+                "slurmcluster_replicas": 2,
+                "workload_replicas": 3,
+                "observed_at": "before",
+            },
+            {
+                "slurmcluster_replicas": 2,
+                "workload_replicas": 3,
+                "observed_at": "before-direct-scale",
+            },
+            {
+                "slurmcluster_replicas": 2,
+                "workload_replicas": 2,
+                "observed_at": "after-direct-scale",
+            },
+        )
+    )
+    order: list[str] = []
+    monkeypatch.setattr(
+        migration,
+        "_target_values_gated_by_controller_bridge",
+        lambda **kwargs: kwargs["values"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_pre_service_controller_fence",
+        lambda **_kwargs: order.append("controller-fence") or ["controller-fence"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: order.append("bridge-clients") or ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_in_place_jail_login_replica_observation",
+        lambda **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_checkpoint_proven_target_soperator_helm_apply",
+        lambda **kwargs: (
+            order.append("helm-proof") or ["helm-proof"]
+            if kwargs["recovered_from_live_state"] is True
+            else pytest.fail("proven live restore must not be reapplied")
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_require_exact_temporary_login_helm_proof",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator_with_jail_login_session_policy",
+        lambda **_kwargs: pytest.fail("proven live restore must not run Helm"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_reconcile_in_place_login_workload_replicas",
+        lambda **_kwargs: order.append("direct-workload-scale") or ["direct-workload-scale"],
+    )
+
+    changed, _lines = migration._restore_in_place_jail_login_surge(  # noqa: SLF001
+        checkpoint=checkpoint,
+        populate_phase=populate,
+        values={"slurmNodes": {"login": {"size": 3}}},
+        target_ref="external-cluster",
+        expected_version="1.31",
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        login_session_policy="wait-active",
+        login_session_drain_timeout_seconds=0,
+        checkpoint_writer=lambda: None,
+        mutation_guard=None,
+    )
+
+    assert changed is True
+    assert order == [
+        "controller-fence",
+        "bridge-clients",
+        "helm-proof",
+        "direct-workload-scale",
+    ]
+    assert rolling["in_place_login_surge_reconciliation"]["status"] == "restored"
 
 
 @pytest.mark.parametrize("operation", ("surge", "restore"))
@@ -44360,7 +48343,15 @@ def test_in_place_login_surge_restores_configured_replicas_after_release(
     }
     phase = {"login_hold_release_before_full_rollout": {"status": "released"}}
     checkpoint = {
-        "active_login_session_hold": {"status": "released"},
+        "active_login_session_hold": {
+            "status": "released",
+            "pods": [{"name": "login-1", "uid": "login-1-uid"}],
+            "released_pods": [{"pod": "login-1", "status": "metadata-released"}],
+            "release_intent_at": "2026-07-29T00:01:00Z",
+            "released_at": "2026-07-29T00:02:00Z",
+            "release_probe": {"status": "checked", "active_sessions": 0},
+            "session_drain": {"status": "drained"},
+        },
         "phase_state": {"rolling-compute-migration": rolling},
     }
     observations = iter(
@@ -44396,6 +48387,11 @@ def test_in_place_login_surge_restores_configured_replicas_after_release(
     )
     monkeypatch.setattr(
         migration,
+        "_ensure_in_place_bridge_client_configuration",
+        lambda **_kwargs: ["bridge-clients"],
+    )
+    monkeypatch.setattr(
+        migration,
         "_accounting_handoff_target_helm_replay_is_safe",
         lambda _phase: True,
     )
@@ -44412,14 +48408,22 @@ def test_in_place_login_surge_restores_configured_replicas_after_release(
     monkeypatch.setattr(
         migration,
         "_run_in_place_login_helm_with_webhook_bridge",
-        lambda **kwargs: (
-            kwargs["pre_helm_live_boundary"]() or kwargs["helm_operation"]()
+        lambda **_kwargs: pytest.fail(
+            "login restore must not wrap the canonical target admission bootstrap"
         ),
     )
+
+    def helm_with_canonical_admission(**kwargs: Any) -> list[str]:
+        assert kwargs["force_target_admission_bootstrap"] is True
+        assert kwargs["target_admission_bridge_phase"] is rolling
+        kwargs["pre_helm_live_boundary"]()
+        applied_values.append(kwargs["values"])
+        return ["helm"]
+
     monkeypatch.setattr(
         migration,
         "_helm_upgrade_target_soperator_with_jail_login_session_policy",
-        lambda **kwargs: applied_values.append(kwargs["values"]) or ["helm"],
+        helm_with_canonical_admission,
     )
     monkeypatch.setattr(
         migration,
@@ -44942,6 +48946,66 @@ def test_jail_resume_admits_exact_in_place_pre_ownership_transition() -> None:
         pre_switch_checks=pre_switch_checks,
         command_runner=runner,
     )
+    manager_fingerprint = "a" * 64
+    immutable["manager"].update(
+        {
+            "namespace": "soperator",
+            "name": "soperator-manager",
+            "resourceVersion": "manager-paused-rv",
+            "spec_fingerprint": manager_fingerprint,
+            "capture_generation": 2,
+        }
+    )
+    immutable["manager_paused_generation"] = 2
+    immutable["checkpointed_manager_pause_adoption"] = {
+        "schema": migration._IMMUTABLE_CHILD_CHECKPOINTED_MANAGER_PAUSE_ADOPTION_SCHEMA,  # noqa: SLF001
+        "status": "verified",
+        "authority_sha256": "b" * 64,
+        "original_replicas": 1,
+        "manager": {
+            "namespace": "soperator",
+            "name": "soperator-manager",
+            "uid": "manager-uid",
+            "resourceVersion": "manager-paused-rv",
+            "generation": 2,
+            "spec_fingerprint": manager_fingerprint,
+        },
+        "owned_manager_replica_sets": [],
+        "owned_manager_pod_count": 0,
+        "observed_at": "2026-07-15T10:31:00Z",
+    }
+    immutable.pop("manager_pause_intent_at")
+    assert migration._checkpoint_proves_in_place_jail_pre_ownership_transition(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=payload,
+        phase=phase,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        switched_values=switched_values,
+        switched_checks=switched_checks,
+        pre_switch_checks=pre_switch_checks,
+        command_runner=runner,
+    )
+    immutable["checkpointed_manager_pause_adoption"]["manager"][  # type: ignore[index]
+        "spec_fingerprint"
+    ] = "c" * 64
+    assert not migration._checkpoint_proves_in_place_jail_pre_ownership_transition(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=payload,
+        phase=phase,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        switched_values=switched_values,
+        switched_checks=switched_checks,
+        pre_switch_checks=pre_switch_checks,
+        command_runner=runner,
+    )
+    assert phase["post_switch_resume_rejection"]["reason"] == (
+        "immutable-child-manager-pause-invalid"
+    )
+    immutable["checkpointed_manager_pause_adoption"]["manager"][  # type: ignore[index]
+        "spec_fingerprint"
+    ] = manager_fingerprint
 
     accounting_handoff = checkpoint["phase_state"]["rolling-compute-migration"].setdefault(  # type: ignore[index]
         "accounting_handoff", {}
@@ -45508,17 +49572,24 @@ def test_jail_login_hold_releases_then_retirement_stays_idempotent_after_complet
 
     def complete_handoff(**_kwargs: object) -> list[str]:
         call_order.append("handoff-complete")
-        checkpoint["controller_bridge"]["login_session_handoff"]["state"] = "complete"
-        return ["Login continuity: explicit socket acknowledgement accepted."]
+        checkpoint["controller_bridge"]["login_session_handoff"].update(
+            {"state": "complete", "session_policy": "target-ready", "target_ready": True}
+        )
+        return ["Login availability: target peer accepted."]
 
     def release_hold(**_kwargs: object) -> list[str]:
         assert checkpoint["controller_bridge"]["login_session_handoff"]["state"] == "complete"
         call_order.append("hold-release")
         checkpoint["active_login_session_hold"]["status"] = "released"
-        return ["Login continuity: exact hold released."]
+        return ["Login availability: exact hold released."]
 
     monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", complete_handoff)
-    monkeypatch.setattr(migration, "_ensure_active_login_session_hold", release_hold)
+    monkeypatch.setattr(
+        migration,
+        "_target_ready_login_hold_release_authority",
+        lambda _checkpoint: {"status": "verified"},
+    )
+    monkeypatch.setattr(migration, "_login_session_hold_release_if_drained", release_hold)
 
     lines = migration._release_jail_login_hold_before_full_rollout(  # noqa: SLF001
         checkpoint=checkpoint,
@@ -45536,11 +49607,11 @@ def test_jail_login_hold_releases_then_retirement_stays_idempotent_after_complet
         checkpoint_writer=None,
     )
 
-    assert call_order == ["handoff-complete", "hold-release", "hold-release"]
+    assert call_order == ["handoff-complete", "hold-release"]
     assert phase["login_hold_release_before_full_rollout"]["status"] == "released"
     assert checkpoint["active_login_session_hold"]["status"] == "released"
-    assert any("voluntary handoff" in line for line in lines)
-    assert any("voluntary session exit" in line for line in retirement_lines)
+    assert any("stable Service route" in line for line in lines)
+    assert any("already released" in line for line in retirement_lines)
 
 
 def test_jail_login_hold_reconciles_peer_gate_after_hold_was_already_released(
@@ -45551,9 +49622,7 @@ def test_jail_login_hold_reconciles_peer_gate_after_hold_was_already_released(
     hold.update(
         {
             "status": "released",
-            "released_pods": [
-                {"pod": "source-login-0", "status": "metadata-released"}
-            ],
+            "released_pods": [{"pod": "source-login-0", "status": "metadata-released"}],
             "release_intent_at": "2026-07-29T00:01:00Z",
             "released_at": "2026-07-29T00:02:00Z",
             "release_probe": {"status": "checked", "active_sessions": 0},
@@ -45580,11 +49649,6 @@ def test_jail_login_hold_reconciles_peer_gate_after_hold_was_already_released(
         return ["handoff complete"]
 
     monkeypatch.setattr(migration, "_complete_upgrade_login_handoff", complete_handoff)
-    monkeypatch.setattr(
-        migration,
-        "_ensure_active_login_session_hold",
-        lambda **_kwargs: call_order.append("hold-rechecked") or [],
-    )
 
     lines = migration._release_jail_login_hold_before_full_rollout(  # noqa: SLF001
         checkpoint=checkpoint,
@@ -45596,10 +49660,10 @@ def test_jail_login_hold_reconciles_peer_gate_after_hold_was_already_released(
         checkpoint_writer=None,
     )
 
-    assert call_order == ["handoff-complete", "hold-rechecked"]
+    assert call_order == ["handoff-complete"]
     assert phase["login_hold_release_before_full_rollout"]["status"] == "released"
     assert rolling["in_place_login_surge_reconciliation"]["status"] == "released"
-    assert any("voluntary handoff" in line for line in lines)
+    assert any("stable Service route" in line for line in lines)
 
 
 def _login_session_hold_pub(campaign_id: str) -> dict[str, Any]:
@@ -47403,6 +51467,68 @@ def test_partition_pause_full_record_cas_restores_once_and_resume_is_noop(
     assert updates == ["DOWN", "UP"]
 
 
+def test_partition_pause_exact_observed_route_keeps_target_bridge_cas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    partition_state = "UP"
+    mutations: list[tuple[str, ...]] = []
+    persisted: list[migration.SlurmPartitionPauseRecord] = []
+
+    def partition_observation(**_kwargs: Any) -> migration.SlurmPartitionState:
+        return _slurm_partition_state_fixture("gpu", partition_state)
+
+    def mutate_observed_route(**kwargs: Any) -> SoperatorMigrationCommandResult:
+        nonlocal partition_state
+        args = tuple(str(item) for item in kwargs["args"])
+        assert args == ("scontrol", "update", "PartitionName=gpu", "State=DOWN")
+        mutations.append(args)
+        partition_state = "DOWN"
+        return SoperatorMigrationCommandResult(args, 0, "", "")
+
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state",
+        partition_observation,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_observed_slurm_route",
+        mutate_observed_route,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: pytest.fail("exact bridge CAS must not use a discovered login route"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_invalidate_read_only_slurm_route",
+        lambda **_kwargs: pytest.fail("exact bridge CAS must retain its observed route"),
+    )
+    session = migration._SoperatorMigrationExecutionCommandRunner(  # noqa: SLF001
+        _FakeCommandRunner()
+    )
+    session.read_only_slurm_routes[("external-context", "soperator")] = ("bridge", "0")
+
+    records = migration._external_upgrade_pause_slurm_partitions(  # noqa: SLF001
+        command_runner=session,
+        kube_context="external-context",
+        node_names=(),
+        all_partitions=True,
+        snapshot=(_slurm_partition_state_fixture("gpu", "UP"),),
+        intent_recorder=persisted.append,
+        require_exact_observed_route=True,
+    )
+
+    assert partition_state == "DOWN"
+    assert mutations == [("scontrol", "update", "PartitionName=gpu", "State=DOWN")]
+    assert records[0].applied_record_fingerprint
+    assert [bool(record.applied_record_fingerprint) for record in persisted] == [False, True]
+    assert session.read_only_slurm_routes == {
+        ("external-context", "soperator"): ("bridge", "0")
+    }
+
+
 def test_partition_restore_allows_cross_version_derived_topology_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -48490,8 +52616,8 @@ def test_populate_jail_refresh_first_adoption_in_place_gate_completes_without_wr
         requeue_job_ids=(),
         job_wait_timeout_seconds=0,
         job_refresh_interval_seconds=1,
-        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-        login_session_drain_timeout_seconds=37,
+        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+        login_session_drain_timeout_seconds=0,
     )
 
     phase = checkpoint["phase_state"]["populate-jail-refresh"]
@@ -48519,21 +52645,21 @@ def test_populate_jail_refresh_first_adoption_in_place_gate_completes_without_wr
         for boundary, gate in phase["helm_login_session_gates"].items()
     } == {
         "passive-slot-preparation": (
-            "deferred",
-            migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-            37,
+            "passed",
+            migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+            0,
             1,
         ),
         "active-slot-switch": (
-            "deferred",
-            migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-            37,
+            "passed",
+            migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+            0,
             1,
         ),
         "open-metrics-restore": (
-            "deferred",
-            migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-            37,
+            "passed",
+            migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+            0,
             1,
         ),
     }
@@ -48970,7 +53096,7 @@ def test_populate_jail_refresh_phase_blocks_when_live_consumers_miss_rootfs_hand
             requeue_job_ids=(),
             job_wait_timeout_seconds=0,
             job_refresh_interval_seconds=1,
-            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout_seconds=0,
         )
 
@@ -49159,7 +53285,7 @@ def test_populate_jail_refresh_fresh_switch_keeps_partitions_down_for_stale_alia
             requeue_job_ids=(),
             job_wait_timeout_seconds=0,
             job_refresh_interval_seconds=1,
-            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout_seconds=0,
         )
 
@@ -51432,7 +55558,7 @@ def test_populate_jail_refresh_adopts_live_switch_crash_window_without_repopulat
         requeue_job_ids=(),
         job_wait_timeout_seconds=0,
         job_refresh_interval_seconds=1,
-        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
         login_session_drain_timeout_seconds=0,
     )
 
@@ -51576,8 +55702,8 @@ def test_populate_jail_refresh_post_switch_resume_reapplies_drifted_jail_alias(
         requeue_job_ids=(),
         job_wait_timeout_seconds=0,
         job_refresh_interval_seconds=1,
-        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-        login_session_drain_timeout_seconds=41,
+        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+        login_session_drain_timeout_seconds=0,
     )
 
     assert mutated is True
@@ -51587,15 +55713,15 @@ def test_populate_jail_refresh_post_switch_resume_reapplies_drifted_jail_alias(
         for boundary, gate in phase["helm_login_session_gates"].items()
     } == {
         "post-switch-resume": (
-            "deferred",
-            migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-            41,
+            "passed",
+            migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+            0,
             1,
         ),
         "open-metrics-restore": (
-            "deferred",
-            migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
-            41,
+            "passed",
+            migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+            0,
             1,
         ),
     }
@@ -51958,7 +56084,7 @@ def test_post_jail_gpu_gate_incomplete_keeps_partitions_paused(
             requeue_job_ids=(),
             job_wait_timeout_seconds=0,
             job_refresh_interval_seconds=1,
-            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout_seconds=0,
             checkpoint_writer=lambda: None,
         )
@@ -52081,7 +56207,7 @@ def test_external_pre_release_bare_login_failure_ignores_fallback_and_keeps_paus
             requeue_job_ids=(),
             job_wait_timeout_seconds=0,
             job_refresh_interval_seconds=1,
-            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout_seconds=0,
         )
 
@@ -52498,7 +56624,7 @@ def test_populate_jail_refresh_smoke_pending_retry_preserves_state_and_is_nondes
         requeue_job_ids=(),
         job_wait_timeout_seconds=0,
         job_refresh_interval_seconds=1,
-        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
         login_session_drain_timeout_seconds=0,
     )
 
@@ -54159,6 +58285,36 @@ def test_continuous_worker_pause_reuses_checkpoint_during_child_handoff_config_g
             )
             == ()
         )
+        workloads[api_path]["uid"] = "source-login-uid"
+        bridge["stage"] = migration.BridgeStage.SOURCE_HA_ACTIVE.value
+        bridge["authority"]["owner"] = "bridge-source"
+        monkeypatch.setattr(
+            migration,
+            "_in_place_source_controller_zero_deferral_is_exact",
+            lambda **_kwargs: True,
+        )
+        assert (
+            migration._in_place_child_handoff_partition_pause_gap_records(  # noqa: SLF001
+                checkpoint
+            )
+            == ()
+        )
+        assert migration._in_place_child_handoff_partition_pause_gap_records(  # noqa: SLF001
+            checkpoint,
+            allow_source_owned_zero_deferral=True,
+        ) == (main,)
+        monkeypatch.setattr(
+            migration,
+            "_in_place_source_controller_zero_deferral_is_exact",
+            lambda **_kwargs: False,
+        )
+        assert (
+            migration._in_place_child_handoff_partition_pause_gap_records(  # noqa: SLF001
+                checkpoint,
+                allow_source_owned_zero_deferral=True,
+            )
+            == ()
+        )
 
 
 def test_continuous_worker_pause_reuses_exact_all_partition_job_free_boundary(
@@ -54560,6 +58716,56 @@ def test_continuous_worker_pause_adopts_new_canonical_target_partition(
     assert rolling_names == {"gpu"}
     assert "gpu" in str(external_phase["slurm_partition_restore_manual_command"])
     assert "gpu" in str(rolling_phase["slurm_partition_restore_manual_command"])
+
+
+def test_target_partition_pause_resumes_exact_intent_before_worker_recreation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intent = _slurm_partition_pause_record_fixture("gpu", applied=False)
+    applied = _slurm_partition_pause_record_fixture("gpu")
+    external_phase: dict[str, Any] = {
+        "slurm_paused_partitions": [intent.as_payload()],
+    }
+    rolling_phase: dict[str, Any] = {
+        "slurm_paused_partitions": [intent.as_payload()],
+    }
+    checkpoint = {
+        "controller_bridge": _bridge_target_authority_journal_fixture(
+            inventory=(_slurm_partition_state_fixture("main", "UP"),),
+            pause_records=(_slurm_partition_pause_record_fixture("main"),),
+        )
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+
+    def pause(**kwargs: Any) -> tuple[migration.SlurmPartitionPauseRecord, ...]:
+        assert kwargs["require_exact_observed_route"] is True
+        assert [state.name for state in kwargs["snapshot"]] == ["gpu"]
+        kwargs["intent_recorder"](intent)
+        kwargs["intent_recorder"](applied)
+        return (applied,)
+
+    monkeypatch.setattr(migration, "_external_upgrade_pause_slurm_partitions", pause)
+
+    records = migration._resume_in_place_target_partition_pause_intents(  # noqa: SLF001
+        checkpoint=checkpoint,
+        external_phase=external_phase,
+        rolling_phase=rolling_phase,
+        records=(intent,),
+        live_partitions={"gpu": _slurm_partition_state_fixture("gpu", "UP")},
+        command_runner=cast(Any, object()),
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(rolling_phase)),
+    )
+
+    assert records == (applied,)
+    assert migration._rolling_compute_checkpoint_pause_records(  # noqa: SLF001
+        external_phase
+    ) == (applied,)
+    assert migration._rolling_compute_checkpoint_pause_records(  # noqa: SLF001
+        rolling_phase
+    ) == (applied,)
+    assert writes
 
 
 @pytest.mark.parametrize(
@@ -58047,6 +62253,514 @@ def test_post_switch_resume_finishes_started_manager_pause_before_controller_gat
     assert order == ["manager-pause", "controller-gate"]
 
 
+def _source_owned_controller_zero_deferral_fixture() -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+]:
+    source_binding = {
+        "namespace": "soperator",
+        "name": "source-cluster",
+        "uid": "source-uid",
+    }
+    target_binding = {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-uid",
+    }
+    expected_gate = copy.deepcopy(
+        migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+    )
+    canonical_gate_contract = {
+        "schema": "nebius-cxcli/target-controller-command-gate-v2",
+        "slurmctld": copy.deepcopy(expected_gate),
+    }
+    rolling: dict[str, Any] = {
+        "slurmcluster_handoff_binding": {
+            "source": copy.deepcopy(source_binding),
+            "target": copy.deepcopy(target_binding),
+        },
+        "in_place_target_manager_pause": {
+            "status": "verified",
+            "deployment_uid": "manager-uid",
+            "original_replicas": 1,
+            "spec_fingerprint": "manager-spec",
+            "pause_generation": 2,
+            "verified_at": "verified",
+        },
+    }
+    checkpoint: dict[str, Any] = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-source",
+                "source_restart_prohibited": True,
+                "epoch": "bridge-epoch",
+            },
+            "target_singleton_takeover": {
+                "command_gate_applied": True,
+                "command_gate_contract_schema": canonical_gate_contract["schema"],
+                "command_gate_contract_fingerprint": migration._fingerprint(  # noqa: SLF001
+                    canonical_gate_contract
+                ),
+            },
+        },
+        "phase_state": {"rolling-compute-migration": rolling},
+    }
+    target = {
+        "apiVersion": "slurm.nebius.ai/v1alpha1",
+        "kind": "SlurmCluster",
+        "metadata": {
+            **copy.deepcopy(target_binding),
+            "resourceVersion": "target-rv",
+        },
+        "spec": {
+            "slurmNodes": {
+                "controller": {
+                    "slurmctld": copy.deepcopy(expected_gate),
+                }
+            }
+        },
+    }
+    workload = {
+        "apiVersion": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "namespace": "soperator",
+            "name": "controller",
+            "uid": "source-controller-workload-uid",
+            "resourceVersion": "workload-rv",
+            "ownerReferences": [
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "SlurmCluster",
+                    "name": source_binding["name"],
+                    "uid": source_binding["uid"],
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "replicas": 0,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "slurmctld",
+                            "image": "example.invalid/slurmctld:source",
+                        }
+                    ]
+                }
+            },
+        },
+        "status": {"replicas": 0, "readyReplicas": 0},
+    }
+    return checkpoint, target, workload
+
+
+def test_source_owned_zero_controller_defers_target_gate_until_immutable_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, target, workload = _source_owned_controller_zero_deferral_fixture()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]
+    commands: list[tuple[str, ...]] = []
+    writes: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        commands.append(command)
+        if "slurmcluster" in command:
+            payload = target
+        elif "statefulsets.apps.kruise.io" in command:
+            payload = workload
+        elif "pods" in command:
+            payload = {"items": []}
+        else:
+            raise AssertionError(command)
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    for _attempt in range(2):
+        lines = migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=rolling,
+            target_ref="target-cluster",
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+        )
+        assert "source-owned controller child remains Pod-free" in lines[0]
+
+    state = rolling["in_place_target_controller_command_gate"]
+    deferral = state["source_owned_zero_deferral"]
+    assert deferral["schema"] == migration._IN_PLACE_SOURCE_CONTROLLER_ZERO_DEFERRAL_SCHEMA  # noqa: SLF001
+    assert deferral["status"] == "verified"
+    assert deferral["contract"]["source"]["uid"] == "source-uid"
+    assert deferral["contract"]["target"]["uid"] == "target-uid"
+    assert deferral["contract"]["workload"]["uid"] == "source-controller-workload-uid"
+    assert len(writes) == 1
+    assert not any("patch" in command for command in commands)
+
+
+def _source_owned_zero_controller_materialization_gap_fixture() -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+]:
+    checkpoint, _target, workload = _source_owned_controller_zero_deferral_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    source = copy.deepcopy(phase["slurmcluster_handoff_binding"]["source"])
+    target = copy.deepcopy(phase["slurmcluster_handoff_binding"]["target"])
+    expected_gate = copy.deepcopy(
+        migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+    )
+    gate_contract = {
+        "schema": "nebius-cxcli/target-controller-command-gate-v2",
+        "slurmctld": expected_gate,
+    }
+    workload_contract = {
+        "api_version": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "namespace": "soperator",
+        "name": "controller",
+        "uid": workload["metadata"]["uid"],
+        "spec_fingerprint": migration._fingerprint(workload["spec"]),  # noqa: SLF001
+    }
+    deferral_contract = {
+        "schema": migration._IN_PLACE_SOURCE_CONTROLLER_ZERO_DEFERRAL_SCHEMA,  # noqa: SLF001
+        "source": source,
+        "target": target,
+        "workload": workload_contract,
+        "manager_deployment_uid": "manager-uid",
+        "bridge_authority_epoch": "bridge-epoch",
+        "target_gate_contract_fingerprint": migration._fingerprint(  # noqa: SLF001
+            gate_contract
+        ),
+    }
+    phase["in_place_target_controller_command_gate"] = {
+        "source_owned_zero_deferral": {
+            "schema": migration._IN_PLACE_SOURCE_CONTROLLER_ZERO_DEFERRAL_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "contract": deferral_contract,
+            "contract_fingerprint": migration._fingerprint(deferral_contract),  # noqa: SLF001
+            "verified_at": "verified",
+        }
+    }
+    manager = _immutable_unit_manager(
+        replicas=0,
+        resource_version="40",
+        generation=4,
+    )
+    manager_fingerprint = migration._immutable_child_manager_spec_fingerprint(  # noqa: SLF001
+        manager
+    )
+    phase["immutable_child_handoff"] = {
+        "schema": migration._IMMUTABLE_CHILD_HANDOFF_SCHEMA,  # noqa: SLF001
+        "status": "manager-restored",
+        "source": source,
+        "target": target,
+        "manager": {
+            "name": "soperator-manager",
+            "namespace": "soperator",
+            "uid": "manager-uid",
+            "replicas": 1,
+            "capture_generation": 2,
+            "spec_fingerprint": manager_fingerprint,
+        },
+        "manager_paused_generation": 2,
+        "manager_paused_at": "paused",
+        "manager_restore_intent_at": "restore-intent",
+        "manager_restore_from_generation": 2,
+        "manager_restore_expected_generation": 3,
+        "manager_restored_generation": 3,
+        "manager_restored_resource_version": "30",
+        "manager_restored_at": "restored",
+        "workloads": {
+            "/apis/apps.kruise.io/v1beta1/namespaces/soperator/statefulsets/controller": {
+                "api_version": workload_contract["api_version"],
+                "kind": workload_contract["kind"],
+                "name": workload_contract["name"],
+                "uid": workload_contract["uid"],
+                "component": "controller",
+                "status": "orphaned",
+            }
+        },
+    }
+    phase["in_place_target_manager_pause"] = {
+        "status": "verified",
+        "deployment_uid": "manager-uid",
+        "original_replicas": 1,
+        "spec_fingerprint": manager_fingerprint,
+        "pause_from_generation": 3,
+        "pause_expected_generation": 4,
+        "pause_generation": 4,
+        "accepted_at": "accepted",
+        "verified_at": "verified",
+    }
+    return checkpoint, manager
+
+
+def test_post_switch_resume_reopens_exact_immutable_child_materialization_gap() -> None:
+    checkpoint, manager = _source_owned_zero_controller_materialization_gap_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    runner = _ImmutableChildUnitRunner({("deployment", "soperator-manager"): manager})
+    writes: list[dict[str, Any]] = []
+
+    lines = migration._resume_started_in_place_target_controller_gate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    live_manager = runner.resources[("deployment", "soperator-manager")]
+    assert live_manager["spec"]["replicas"] == 1
+    assert live_manager["metadata"]["generation"] == 5
+    assert "in_place_target_manager_pause" not in phase
+    reopen = phase["immutable_child_handoff"]["manager_materialization_reopen"]
+    assert reopen["status"] == "verified"
+    assert reopen["verified_generation"] == 5
+    assert "materialization window" in lines[0]
+    assert len(writes) == 3
+
+
+def test_post_switch_resume_does_not_gate_before_immutable_manager_restore() -> None:
+    checkpoint, _manager = _source_owned_zero_controller_materialization_gap_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase["immutable_child_handoff"]["status"] = "children-prepared"
+
+    lines = migration._resume_started_in_place_target_controller_gate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        command_runner=lambda *_args, **_kwargs: pytest.fail(
+            "no live gate or manager mutation is allowed before immutable manager restore"
+        ),
+        kube_context="external-context",
+        checkpoint_writer=lambda: pytest.fail("no checkpoint write expected"),
+    )
+
+    assert lines == []
+    assert phase["in_place_target_manager_pause"]["status"] == "verified"
+
+
+def test_post_switch_resume_ignores_exact_source_deferral_after_target_children() -> None:
+    checkpoint, _manager = _source_owned_zero_controller_materialization_gap_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase["immutable_child_handoff"]["status"] = "target-children-created"
+    phase.pop("in_place_target_manager_pause")
+
+    lines = migration._resume_started_in_place_target_controller_gate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        command_runner=lambda *_args, **_kwargs: pytest.fail(
+            "a deferral-only receipt is not a started target gate"
+        ),
+        kube_context="external-context",
+        checkpoint_writer=lambda: pytest.fail("no checkpoint write expected"),
+    )
+
+    assert lines == []
+    assert set(phase["in_place_target_controller_command_gate"]) == {"source_owned_zero_deferral"}
+
+
+def test_post_switch_resume_ignores_exact_source_deferral_after_ownership_checkpoint() -> None:
+    checkpoint, _manager = _source_owned_zero_controller_materialization_gap_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase["immutable_child_handoff"]["status"] = "target-children-created"
+    phase["in_place_ownership_handoff"] = {
+        "status": "target-children-created",
+        "target_values_fingerprint": "a" * 64,
+        "completed_at": "completed",
+    }
+    phase.pop("in_place_target_manager_pause")
+
+    lines = migration._resume_started_in_place_target_controller_gate(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="target-cluster",
+        command_runner=lambda *_args, **_kwargs: pytest.fail(
+            "a terminal ownership receipt does not turn a deferral into a target gate"
+        ),
+        kube_context="external-context",
+        checkpoint_writer=lambda: pytest.fail("no checkpoint write expected"),
+    )
+
+    assert lines == []
+    assert set(phase["in_place_target_controller_command_gate"]) == {"source_owned_zero_deferral"}
+
+
+def test_post_switch_resume_rejects_source_deferral_with_incomplete_ownership_checkpoint() -> None:
+    checkpoint, _manager = _source_owned_zero_controller_materialization_gap_fixture()
+    phase = checkpoint["phase_state"]["rolling-compute-migration"]
+    phase["immutable_child_handoff"]["status"] = "target-children-created"
+    phase["in_place_ownership_handoff"] = {
+        "status": "target-children-created",
+        "target_values_fingerprint": "a" * 64,
+    }
+    phase.pop("in_place_target_manager_pause")
+
+    with pytest.raises(
+        RuntimeError,
+        match="has no checkpointed Soperator manager pause",
+    ):
+        migration._resume_started_in_place_target_controller_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="target-cluster",
+            command_runner=_FakeCommandRunner(),
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+        )
+
+
+def test_source_owned_zero_controller_deferral_rejects_a_live_owned_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, target, workload = _source_owned_controller_zero_deferral_fixture()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]
+    pod = {
+        "metadata": {
+            "ownerReferences": [
+                {
+                    "apiVersion": "apps.kruise.io/v1beta1",
+                    "kind": "StatefulSet",
+                    "name": "controller",
+                    "uid": "source-controller-workload-uid",
+                    "controller": True,
+                }
+            ]
+        },
+        "status": {"phase": "Running"},
+    }
+
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if "slurmcluster" in command:
+            payload = target
+        elif "statefulsets.apps.kruise.io" in command:
+            payload = workload
+        elif "pods" in command:
+            payload = {"items": [pod]}
+        else:
+            raise AssertionError(command)
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="still has a live owned Pod",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=rolling,
+            target_ref="target-cluster",
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+        )
+
+
+def test_target_owned_exact_controller_gate_records_real_admission_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, target, workload = _source_owned_controller_zero_deferral_fixture()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]
+    bridge = checkpoint["controller_bridge"]
+    bridge["stage"] = migration.BridgeStage.TARGET_HA_ACTIVE.value
+    bridge["authority"]["owner"] = "bridge-target"
+    workload["metadata"]["ownerReferences"][0].update(
+        {
+            "name": "target-cluster",
+            "uid": "target-uid",
+        }
+    )
+    workload["spec"]["template"]["spec"]["containers"][0].update(
+        copy.deepcopy(
+            migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+        )
+    )
+    admission_calls: list[dict[str, Any]] = []
+    writes: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+
+    def patch_during_pause(**kwargs: Any) -> None:
+        admission_calls.append(kwargs)
+        kwargs["state"]["slurmcluster_admission_window"] = {
+            "schema": "nebius-cxcli/in-place-slurmcluster-admission-window-v1",
+            "status": "restored",
+            "purpose": "target-controller-gate-rearm",
+            "original_failure_policy": "Fail",
+            "target_ref": "target-cluster",
+            "target_uid": "target-uid",
+            "uid": "webhook-uid",
+            "target_patched_at": "patched",
+            "restored_at": "restored",
+        }
+
+    monkeypatch.setattr(
+        migration,
+        "_patch_slurmcluster_during_manager_pause",
+        patch_during_pause,
+    )
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if "slurmcluster" in command:
+            payload = target
+        elif "statefulsets.apps.kruise.io" in command:
+            payload = workload
+        else:
+            raise AssertionError(command)
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="reasserted the exact inert target controller command gate",
+    ):
+        migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=rolling,
+            target_ref="target-cluster",
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+        )
+
+    assert len(admission_calls) == 1
+    state = rolling["in_place_target_controller_command_gate"]
+    assert state["status"] == "slurmcluster-accepted"
+    assert state["slurmcluster_uid"] == "target-uid"
+    assert state["slurmcluster_admission_window"]["status"] == "restored"
+    assert writes
+
+
 def test_post_switch_resume_rejects_controller_gate_without_manager_pause() -> None:
     phase = {"in_place_target_controller_command_gate": {"status": "slurmcluster-accepted"}}
 
@@ -58221,9 +62935,13 @@ def test_in_place_resume_repauses_helm_resumed_manager_before_gate(
         **_kwargs: Any,
     ) -> SoperatorMigrationCommandResult:
         command = tuple(str(item) for item in args)
-        if command[-4:] == ("deployment", "soperator-manager", "-o", "json") or command[
-            -5:
-        ] == ("deployment", "soperator-manager", "-o", "json", "--show-managed-fields"):
+        if command[-4:] == ("deployment", "soperator-manager", "-o", "json") or command[-5:] == (
+            "deployment",
+            "soperator-manager",
+            "-o",
+            "json",
+            "--show-managed-fields",
+        ):
             return SoperatorMigrationCommandResult(command, 0, json.dumps(manager), "")
         if "patch" in command and command[-2] == "-p":
             patches.append(json.loads(command[-1]))
@@ -58453,6 +63171,98 @@ def test_in_place_resume_rearms_manager_pause_from_exact_completed_child_handoff
     assert order == ["target-binding", "manager", "controller-gate"]
     assert writes[0]["in_place_target_manager_pause"]["status"] == "rearm-authorized"
     assert writes[0]["in_place_target_manager_pause"]["contract_fingerprint"]
+
+
+def test_manager_pause_rearm_uses_exact_post_retirement_compatibility_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = "a" * 64
+    source = {"namespace": "soperator", "name": "source", "uid": "source-uid"}
+    target = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-uid",
+    }
+    phase: dict[str, Any] = {
+        "slurmcluster_handoff_binding": {
+            "source": copy.deepcopy(source),
+            "target": copy.deepcopy(target),
+        },
+        "immutable_child_handoff": {
+            "schema": "nebius-cxcli/immutable-child-handoff-v1",
+            "status": "target-children-created",
+            "source": copy.deepcopy(source),
+            "target": copy.deepcopy(target),
+            "manager": {
+                "name": "soperator-manager",
+                "namespace": "soperator",
+                "uid": "manager-uid",
+                "resourceVersion": "manager-rv-2",
+                "replicas": 1,
+                "capture_generation": 2,
+                "spec_fingerprint": fingerprint,
+            },
+            "manager_paused_generation": 2,
+            "manager_paused_at": "2026-07-30T00:01:00Z",
+            "manager_restore_from_generation": 2,
+            "manager_restore_expected_generation": 3,
+            "manager_restored_generation": 3,
+            "manager_restored_resource_version": "manager-rv-3",
+            "manager_restored_at": "2026-07-30T00:02:00Z",
+        },
+        "accounting_handoff": {"status": "verified"},
+        "legacy_rootfs_slurm_config_bridge": {
+            "status": "target-compatibility-intent",
+            "manager": {"uid": "manager-uid"},
+            "target_compatibility_stage": {
+                "manager_pause_from_generation": 5,
+                "manager_pause_expected_generation": 6,
+                "manager_pause_generation": 6,
+                "manager_pause_spec_fingerprint": fingerprint,
+                "manager_restore_from_generation": 6,
+                "manager_restore_expected_generation": 7,
+                "manager_restore_generation": 7,
+                "manager_restore_spec_fingerprint": fingerprint,
+                "manager_restore_resource_version": "manager-rv-7",
+                "manager_restored_at": "2026-07-30T00:03:00Z",
+                "target_writer_refresh": {"status": "zero"},
+            },
+        },
+    }
+    receipt = {"exact": True}
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_adopted_manager_pause_origin_is_exact",
+        lambda _handoff: True,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_post_retirement_config_bindings_are_exact",
+        lambda _state: receipt["exact"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_source_retirement_checkpoint_is_exact",
+        lambda **_kwargs: receipt["exact"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_slurm_config_bridge_supports_child_handoff_gap",
+        lambda _phase: receipt["exact"],
+    )
+
+    contract = migration._immutable_child_manager_restore_pause_rearm_contract(  # noqa: SLF001
+        phase
+    )
+
+    assert contract["restore_authority"] == "target-compatibility"
+    assert contract["prior_restore_generation"] == 7
+
+    receipt["exact"] = False
+    assert (
+        migration._immutable_child_manager_restore_pause_rearm_contract(phase)  # noqa: SLF001
+        == {}
+    )
 
 
 def _manager_pause_rearm_fixture(
@@ -58886,9 +63696,9 @@ def test_manager_pause_rearm_rejects_target_recreation_between_fence_reads(
                 "spec": {
                     "slurmNodes": {
                         "controller": {
-                            "slurmctld": migration.target_controller_gate_values({})[
-                                "slurmNodes"
-                            ]["controller"]["slurmctld"]
+                            "slurmctld": migration.target_controller_gate_values({})["slurmNodes"][
+                                "controller"
+                            ]["slurmctld"]
                         }
                     }
                 },
@@ -59623,6 +64433,1070 @@ def test_in_place_compute_tail_hands_off_bridge_before_runtime_and_source_cleanu
     ]
     assert lines[:2] == ["bridge upgraded", "handoff complete"]
     assert "source complete" in lines
+
+
+def test_in_place_ownership_handoff_defers_bridge_version_until_post_provider_tail() -> None:
+    phase: dict[str, Any] = {}
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+        }
+    }
+    writes: list[dict[str, Any]] = []
+
+    lines = migration._defer_in_place_controller_bridge_version_transition(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    deferral = phase["in_place_controller_bridge_version_transition_deferral"]
+    assert deferral == {
+        "schema": "nebius-cxcli/in-place-controller-bridge-version-transition-deferral/v1",
+        "status": "deferred-until-post-provider-tail",
+        "bridge_stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+        "reason": "target-slurm-config-materializes-after-source-owner-retirement",
+        "deferred_at": deferral["deferred_at"],
+    }
+    assert len(writes) == 1
+    assert "target Slurm ConfigMap" in lines[0]
+    assert "first bridge-client reconciliation" in lines[0]
+
+    replay_lines = migration._defer_in_place_controller_bridge_version_transition(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    assert replay_lines == lines
+    assert len(writes) == 1
+
+
+def test_in_place_client_reconciliation_releases_deferred_controller_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_sha256 = "a" * 64
+    phase: dict[str, Any] = {
+        "in_place_controller_bridge_version_transition_deferral": {
+            "schema": "nebius-cxcli/in-place-controller-bridge-version-transition-deferral/v1",
+            "status": "deferred-until-post-provider-tail",
+            "bridge_stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "reason": "target-slurm-config-materializes-after-source-owner-retirement",
+            "deferred_at": "deferred",
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "accepted",
+            "config_sha256": config_sha256,
+        },
+    }
+    checkpoint: dict[str, Any] = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {"owner": "bridge-source"},
+            "version_transition": {
+                "source_image": "source-image",
+                "target_image": "target-image",
+                "source_version": "24.11.6",
+                "target_version": "25.11.3",
+            },
+        }
+    }
+    calls: list[dict[str, Any]] = []
+    writes: list[dict[str, Any]] = []
+
+    def upgrade(**kwargs: Any) -> list[str]:
+        calls.append(kwargs)
+        bridge = checkpoint["controller_bridge"]
+        bridge["stage"] = migration.BridgeStage.TARGET_HA_ACTIVE.value
+        bridge["authority"] = {"owner": "bridge-target"}
+        bridge["version_transition"].update(
+            {
+                "target_config_sha256": config_sha256,
+                "target_write_at": "accepted",
+                "downgrade_prohibited": True,
+            }
+        )
+        return ["bridge upgraded"]
+
+    monkeypatch.setattr(
+        migration,
+        "_upgrade_controller_bridge_to_target_version",
+        upgrade,
+    )
+
+    lines = migration._release_in_place_controller_bridge_version_transition_for_clients(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="external-cluster",
+        expected_config_sha256=config_sha256,
+        kube_context="external-context",
+        command_runner=_FakeCommandRunner(),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    deferral = phase["in_place_controller_bridge_version_transition_deferral"]
+    assert len(calls) == 1
+    assert calls[0]["values"] == {"clusterName": "external-cluster"}
+    assert deferral["status"] == "released-before-client-rpc"
+    assert deferral["bridge_stage"] == migration.BridgeStage.TARGET_HA_ACTIVE.value
+    assert deferral["release"]["state"] == "verified"
+    assert deferral["release"]["target_config_sha256"] == config_sha256
+    assert (
+        writes[0]["in_place_controller_bridge_version_transition_deferral"]["status"]
+        == "release-intent"
+    )
+    assert lines == [
+        "bridge upgraded",
+        "Controller-first Slurm transition completed before target-version client RPC.",
+    ]
+
+    replay_lines = migration._release_in_place_controller_bridge_version_transition_for_clients(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="external-cluster",
+        expected_config_sha256=config_sha256,
+        kube_context="external-context",
+        command_runner=_FakeCommandRunner(),
+        checkpoint_writer=lambda: pytest.fail(
+            "verified controller-first transition must not rewrite its checkpoint"
+        ),
+    )
+
+    assert len(calls) == 1
+    assert replay_lines == [
+        "Controller-first Slurm transition reused: target-version bridge HA is "
+        "verified before target client RPC."
+    ]
+
+
+def test_in_place_client_reconciliation_preserves_release_for_exact_config_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor_sha256 = "a" * 64
+    successor_text = "ClusterName=external-cluster\nPluginDir=/target/slurm\n"
+    successor_sha256 = hashlib.sha256(successor_text.encode()).hexdigest()
+    phase: dict[str, Any] = {
+        "in_place_controller_bridge_version_transition_deferral": {
+            "schema": "nebius-cxcli/in-place-controller-bridge-version-transition-deferral/v1",
+            "status": "released-before-client-rpc",
+            "reason": "target-slurm-config-materializes-after-source-owner-retirement",
+            "release": {
+                "schema": "nebius-cxcli/in-place-controller-first-version-transition/v1",
+                "state": "verified",
+                "target_ref": "external-cluster",
+                "source_image": "source-image",
+                "target_image": "target-image",
+                "source_version": "24.11.6",
+                "target_version": "25.11.3",
+                "target_config_sha256": predecessor_sha256,
+                "boundary": "before-in-place-controller-client-rpc",
+            },
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "accepted",
+            "config_sha256": successor_sha256,
+            "compatibility_config_successor": {
+                "schema": migration._IN_PLACE_BRIDGE_CLIENT_CONFIG_SUCCESSOR_SCHEMA,  # noqa: SLF001
+                "status": "accepted",
+                "target_ref": "external-cluster",
+                "config_map_name": "target-slurm-config",
+                "predecessor_config_sha256": predecessor_sha256,
+                "target_config_sha256": successor_sha256,
+                "transform_counts": {"metrics_type": 0, "plugin_dir": 1},
+                "reason": "target-client-plugin-dir-compatibility",
+            },
+        },
+    }
+    checkpoint = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {"owner": "bridge-target"},
+            "version_transition": {
+                "source_image": "source-image",
+                "target_image": "target-image",
+                "source_version": "24.11.6",
+                "target_version": "25.11.3",
+                "target_config_sha256": predecessor_sha256,
+                "downgrade_prohibited": True,
+            },
+        }
+    }
+    monkeypatch.setattr(
+        migration,
+        "_upgrade_controller_bridge_to_target_version",
+        lambda **_kwargs: pytest.fail("verified release must not replay"),
+    )
+
+    lines = migration._release_in_place_controller_bridge_version_transition_for_clients(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        target_ref="external-cluster",
+        expected_config_sha256=successor_sha256,
+        expected_config_text=successor_text,
+        kube_context="external-context",
+        command_runner=_FakeCommandRunner(),
+        checkpoint_writer=lambda: pytest.fail("verified release must remain immutable"),
+    )
+
+    assert (
+        phase["in_place_controller_bridge_version_transition_deferral"]["release"][
+            "target_config_sha256"
+        ]
+        == predecessor_sha256
+    )
+    assert lines and "compatibility successor is restaged" in lines[0]
+
+
+def test_in_place_worker_bridge_config_rollout_recreates_exact_job_free_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor_sha256 = "a" * 64
+    target_sha256 = "b" * 64
+    source_pause = _slurm_partition_pause_record_fixture("main")
+    phase: dict[str, Any] = {
+        "slurm_paused_partitions": [source_pause.as_payload()],
+        "in_place_bridge_client_handoff": {
+            "compatibility_config_successor": {
+                "schema": migration._IN_PLACE_BRIDGE_CLIENT_CONFIG_SUCCESSOR_SCHEMA,  # noqa: SLF001
+                "status": "accepted",
+                "target_ref": "external-cluster",
+                "config_map_name": "target-config",
+                "predecessor_config_sha256": predecessor_sha256,
+                "target_config_sha256": target_sha256,
+                "transform_counts": {"metrics_type": 0, "plugin_dir": 1},
+                "reason": "target-client-plugin-dir-compatibility",
+            },
+            "login_config_writer_refresh": {
+                "status": "verified",
+                "config_sha256": target_sha256,
+            },
+        }
+    }
+    checkpoint: dict[str, Any] = {
+        "slurm": {"scheduling_pause": True},
+        "compute_migration": {"slurm_scheduling_pause": True},
+        "phase_state": {
+            migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID: {  # noqa: SLF001
+                "slurm_paused_partitions": [source_pause.as_payload()],
+            },
+            "rolling-compute-migration": phase,
+        },
+        "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-target",
+                "epoch": "bridge-target-epoch",
+                "first_bridge_write_at": "2026-07-30T01:00:00Z",
+                "source_restart_prohibited": True,
+            },
+            "partition_inventory": [
+                migration._bridge_partition_inventory_payload(  # noqa: SLF001
+                    _slurm_partition_state_fixture("main", "UP")
+                )
+            ],
+            "partition_inventory_captured_at": "2026-07-30T00:59:00Z",
+            "partition_pause": [source_pause.as_payload()],
+        },
+    }
+    source = {
+        "pod_uid": "worker-source-uid",
+        "resource_version": "10",
+        "node_name": "worker-node",
+        "container_name": "slurmd",
+        "container_id": "containerd://source",
+        "owner_api_version": "apps.kruise.io/v1beta1",
+        "owner_kind": "StatefulSet",
+        "owner_name": "worker",
+        "owner_uid": "worker-statefulset-uid",
+        "ready": "false",
+        "target_uid": "target-uid",
+        "statefulset_uid": "worker-statefulset-uid",
+    }
+    successor = {
+        **source,
+        "pod_uid": "worker-successor-uid",
+        "resource_version": "11",
+        "container_id": "containerd://successor",
+        "ready": "true",
+    }
+    deleted = False
+    events: list[str] = []
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_worker_config_pod_names",
+        lambda **_kwargs: ("worker-0",),
+    )
+
+    def binding(**kwargs: Any) -> dict[str, str]:
+        assert kwargs["pod_name"] == "worker-0"
+        if deleted:
+            return copy.deepcopy(successor)
+        return copy.deepcopy(source)
+
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_worker_config_binding",
+        binding,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_worker_config_sha256",
+        lambda **kwargs: (
+            target_sha256
+            if kwargs["binding"]["pod_uid"] == "worker-successor-uid"
+            else predecessor_sha256
+        ),
+    )
+    live_partitions = {
+        "main": _slurm_partition_state_fixture("main", "DOWN"),
+        "gpu": _slurm_partition_state_fixture("gpu", "UP"),
+    }
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_affected_partitions",
+        lambda **_kwargs: ("main", "gpu"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state_snapshot",
+        lambda **_kwargs: tuple(live_partitions.values()),
+    )
+
+    def pause_partitions(**kwargs: Any) -> tuple[migration.SlurmPartitionPauseRecord, ...]:
+        assert kwargs["all_partitions"] is True
+        assert kwargs["checkpoint"] is None
+        assert [item.name for item in kwargs["snapshot"]] == ["gpu"]
+        intent = migration.slurm_partition_pause_records(
+            partitions=("gpu",),
+            states=kwargs["snapshot"],
+        )[0]
+        kwargs["intent_recorder"](intent)
+        live_partitions["gpu"] = _slurm_partition_state_fixture("gpu", "DOWN")
+        applied = intent.with_applied_observation(live_partitions["gpu"])
+        kwargs["intent_recorder"](applied)
+        events.append("pause-capture")
+        return (applied,)
+
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_pause_slurm_partitions",
+        pause_partitions,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_reassert_controller_bridge_partition_pause_after_reconfigure",
+        lambda **_kwargs: ["affected partition pause verified"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_in_place_worker_bridge_munge_continuity",
+        lambda **_kwargs: events.append("munge") or ["Munge continuity verified"],
+    )
+
+    def job_free(**kwargs: Any) -> None:
+        pause_records = migration._checkpoint_owned_slurm_partition_pause_records(  # noqa: SLF001
+            kwargs["checkpoint"]
+        )
+        assert {
+            record.partition: record.applied_state for record in pause_records
+        } == {"main": "DOWN", "gpu": "DOWN"}
+        events.append("job-free")
+        kwargs["state"]["job_free_proof"] = {
+            "schema": migration._TARGET_WORKER_RECREATION_JOB_FREE_SCHEMA,  # noqa: SLF001
+            "active_job_ids": [],
+            "semantic_sha256": "proof",
+        }
+        assert kwargs["required_stage"] is migration.BridgeStage.TARGET_HA_ACTIVE
+        assert kwargs["required_owner"] == "bridge-target"
+
+    monkeypatch.setattr(
+        migration,
+        "_prove_target_worker_recreation_job_free",
+        job_free,
+    )
+
+    def delete(*_args: Any, **kwargs: Any) -> None:
+        nonlocal deleted
+        assert kwargs["uid"] == "worker-source-uid"
+        assert kwargs["resource_version"] == "10"
+        events.append("delete")
+        deleted = True
+
+    monkeypatch.setattr(migration, "_command_runner_uid_preconditioned_delete", delete)
+    monkeypatch.setattr(
+        migration,
+        "_ensure_target_worker_recreation_partition_pause",
+        lambda **_kwargs: events.append("pause") or ["pause reasserted"],
+    )
+
+    lines = migration._repair_in_place_worker_bridge_config_propagation(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        expected_contract={"config_sha256": target_sha256},
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    rollout = phase["in_place_bridge_client_handoff"]["worker_config_rollout"]
+    worker = rollout["workers"]["worker-0"]
+    assert events == ["pause-capture", "munge", "job-free", "delete", "pause"]
+    assert rollout["affected_partition_pause"]["status"] == "verified"
+    assert rollout["affected_partition_pause"]["partitions"] == ["gpu", "main"]
+    assert rollout["affected_partition_pause"]["adopted_partitions"] == ["gpu"]
+    assert rollout["status"] == "verified"
+    assert worker["status"] == "verified"
+    assert worker["source"]["pod_uid"] == "worker-source-uid"
+    assert worker["successor"]["pod_uid"] == "worker-successor-uid"
+    assert worker["config_sha256"] == target_sha256
+    assert migration._in_place_worker_bridge_config_pod_successors(phase) == {  # noqa: SLF001
+        "worker-0": {
+            "previous_uid": "worker-source-uid",
+            "replacement_uid": "worker-successor-uid",
+            "node_name": "worker-node",
+            "boundary": "bridge-config-successor-worker-reload",
+        }
+    }
+    assert lines == [
+        "In-place worker bridge config rollout adopted newly created target partition(s) "
+        "gpu into the exact continuous scheduling-pause journal before worker recreation.",
+        "affected partition pause verified",
+        "Munge continuity verified",
+        "pause reasserted",
+        "In-place controller safety: serially recreated exact job-free target worker Pods "
+        "so their runtime loaded the checkpointed bridge-config successor.",
+    ]
+    assert writes
+
+    events.clear()
+    resumed_lines = migration._repair_in_place_worker_bridge_config_propagation(  # noqa: SLF001
+        checkpoint=checkpoint,
+        phase=phase,
+        expected_contract={"config_sha256": target_sha256},
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    assert events == ["munge", "pause"]
+    assert rollout["affected_partition_pause"]["adopted_partitions"] == ["gpu"]
+    assert resumed_lines == [
+        "affected partition pause verified",
+        "Munge continuity verified",
+        "pause reasserted",
+    ]
+
+
+def test_in_place_worker_bridge_pause_rebases_allowlisted_target_chart_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main = _slurm_partition_pause_record_fixture(
+        "main",
+        previous_fields={"Default": "YES", "PriorityTier": "10"},
+        applied_fields={"Default": "YES", "PriorityTier": "10"},
+    )
+    gpu = _slurm_partition_pause_record_fixture("gpu")
+    live_main = _slurm_partition_state_fixture(
+        "main",
+        "DOWN",
+        fields={
+            "Default": "NO",
+            "PriorityTier": "10",
+            "ResumeTimeout": "GLOBAL",
+        },
+    )
+    checkpoint: dict[str, Any] = {
+        "controller_bridge": {"partition_pause": [main.as_payload()]},
+        "phase_state": {
+            migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID: {  # noqa: SLF001
+                "slurm_paused_partitions": [gpu.as_payload()],
+            },
+            "rolling-compute-migration": {
+                "slurm_paused_partitions": [main.as_payload(), gpu.as_payload()],
+            },
+        },
+    }
+    proof_payloads = [gpu.as_payload(), main.as_payload()]
+    rollout: dict[str, Any] = {
+        "affected_partition_pause": {
+            "schema": migration._IN_PLACE_WORKER_BRIDGE_PARTITION_PAUSE_SCHEMA,  # noqa: SLF001
+            "status": "revalidating",
+            "pod_names": ["worker-0"],
+            "partitions": ["gpu", "main"],
+            "partition_pause": proof_payloads,
+            "partition_pause_fingerprint": migration._fingerprint(proof_payloads),  # noqa: SLF001
+            "revalidation_started_at": "2026-07-30T04:00:00Z",
+        }
+    }
+    writes: list[dict[str, Any]] = []
+
+    records, lines = migration._rebase_in_place_worker_bridge_partition_pause_records(  # noqa: SLF001
+        checkpoint=checkpoint,
+        rollout=rollout,
+        records=(main, gpu),
+        live_partitions={
+            "main": live_main,
+            "gpu": _slurm_partition_state_fixture("gpu", "DOWN"),
+        },
+        authority_epoch="bridge-target-epoch",
+        expected_config_sha256="a" * 64,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    successor = next(record for record in records if record.partition == "main")
+    assert successor.applied_record == live_main.record
+    assert "State=UP" in successor.previous_record
+    assert checkpoint["controller_bridge"]["partition_pause"] == [successor.as_payload()]
+    assert checkpoint["phase_state"][migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID][  # noqa: SLF001
+        "slurm_paused_partitions"
+    ] == [gpu.as_payload()]
+    assert checkpoint["phase_state"]["rolling-compute-migration"][
+        "slurm_paused_partitions"
+    ] == [successor.as_payload(), gpu.as_payload()]
+    assert "affected_partition_pause" not in rollout
+    history = rollout["affected_partition_pause_history"]
+    assert len(history) == 1
+    assert history[0]["status"] == "revalidating"
+    assert history[0]["superseded_reason"] == "allowlisted-target-chart-partition-rebase"
+    rebase = rollout["affected_partition_pause_rebases"]
+    assert rebase["status"] == "verified"
+    assert rebase["cycles"][-1]["rebased_partitions"] == ["main"]
+    assert "allowlisted target-chart fields" in lines[0]
+    assert writes
+
+
+def test_in_place_worker_bridge_munge_continuity_cas_precedes_worker_recreation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge_secret = {
+        "metadata": {
+            "name": "source-munge",
+            "uid": "bridge-secret-uid",
+            "resourceVersion": "40",
+            "annotations": {
+                migration._CONTROLLER_BRIDGE_SOURCE_UID_ANNOTATION: "source-secret-uid"  # noqa: SLF001
+            },
+        },
+        "data": {"munge.key": "bridge-opaque-data"},
+        "type": "Opaque",
+    }
+    target_secret = {
+        "metadata": {
+            "name": "target-munge",
+            "uid": "target-secret-uid",
+            "resourceVersion": "41",
+        },
+        "data": {"munge.key": "different-opaque-data"},
+        "type": "Opaque",
+    }
+    journal = {
+        "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+        "namespace": "cxcli-soperator-upgrade-bridge",
+        "authority": {
+            "owner": "bridge-target",
+            "epoch": "bridge-target-epoch",
+            "source_restart_prohibited": True,
+        },
+        "mirrored_material": [
+            {
+                "kind": "Secret",
+                "name": "source-munge",
+                "uid": "bridge-secret-uid",
+                "source_uid": "source-secret-uid",
+                "material_sha256": migration._controller_bridge_material_fingerprint(  # noqa: SLF001
+                    bridge_secret
+                ),
+            }
+        ],
+    }
+    phase = {
+        "immutable_child_handoff": {
+            "status": "target-children-created",
+            "target": {"name": "external-cluster", "uid": "target-uid"},
+            "workloads": {
+                "worker": {
+                    "component": "nodeset",
+                    "kind": "StatefulSet",
+                    "name": "worker",
+                    "status": "target-bound",
+                    "target_uid": "worker-statefulset-uid",
+                    "target_selector": {"app": "worker"},
+                }
+            },
+        }
+    }
+    workload = {
+        "metadata": {
+            "name": "worker",
+            "uid": "worker-statefulset-uid",
+            "ownerReferences": [
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "NodeSet",
+                    "name": "worker",
+                    "uid": "worker-nodeset-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "template": {
+                "metadata": {"labels": {"app": "worker"}},
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "munge-key",
+                            "secret": {"secretName": "target-munge"},
+                        }
+                    ]
+                },
+            }
+        },
+    }
+    target = {
+        "metadata": {"name": "external-cluster", "uid": "target-uid"},
+    }
+    nodeset = {
+        "metadata": {"name": "worker", "uid": "worker-nodeset-uid"},
+    }
+
+    def json_command(
+        _runner: Any,
+        args: Sequence[str],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        joined = " ".join(args)
+        if "secret source-munge" in joined:
+            return copy.deepcopy(bridge_secret)
+        if "secret target-munge" in joined:
+            return copy.deepcopy(target_secret)
+        if "statefulsets.apps.kruise.io worker" in joined:
+            return copy.deepcopy(workload)
+        if "slurmcluster external-cluster" in joined:
+            return copy.deepcopy(target)
+        if "nodeset worker" in joined:
+            return copy.deepcopy(nodeset)
+        raise AssertionError(f"unexpected command: {joined}")
+
+    monkeypatch.setattr(migration, "_json_from_command", json_command)
+    patches: list[dict[str, Any]] = []
+
+    def patch_resource(**kwargs: Any) -> None:
+        patches.append(copy.deepcopy(kwargs))
+        target_secret["data"] = copy.deepcopy(bridge_secret["data"])
+        target_secret["metadata"]["resourceVersion"] = "42"
+
+    monkeypatch.setattr(migration, "_kubectl_patch_namespace_resource", patch_resource)
+    writes: list[dict[str, Any]] = []
+    rollout: dict[str, Any] = {"workers": {}}
+
+    lines = migration._ensure_in_place_worker_bridge_munge_continuity(  # noqa: SLF001
+        journal=journal,
+        phase=phase,
+        rollout=rollout,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(rollout)),
+    )
+
+    assert len(patches) == 1
+    assert patches[0]["resource"] == "secret/target-munge"
+    assert patches[0]["patch_via_stdin"] is True
+    assert patches[0]["patch"]["metadata"]["resourceVersion"] == "41"
+    assert patches[0]["patch"]["data"] == bridge_secret["data"]
+    handoff = rollout["munge_secret_handoff"]
+    assert handoff["status"] == "verified"
+    assert handoff["bridge_secret_uid"] == "bridge-secret-uid"
+    assert handoff["target_secret_uid"] == "target-secret-uid"
+    assert handoff["bridge_effective_material_sha256"] == (
+        handoff["accepted_target_effective_material_sha256"]
+    )
+    assert "bridge-opaque-data" not in json.dumps(rollout, sort_keys=True)
+    assert "different-opaque-data" not in json.dumps(rollout, sort_keys=True)
+    assert "Munge" in lines[0]
+    assert writes
+
+
+def test_in_place_worker_bridge_munge_continuity_retires_exact_pre_cas_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rollout = {
+        "workers": {
+            "worker-0": {
+                "status": "delete-accepted",
+                "source": {
+                    "pod_uid": "source-pod-uid",
+                    "node_name": "worker-node",
+                },
+            }
+        }
+    }
+    target_binding = {
+        "workload_name": "worker",
+        "workload_uid": "worker-statefulset-uid",
+        "target_secret_name": "target-munge",
+        "target_selector": {"app": "worker"},
+    }
+    handoff = {
+        "patched": True,
+        "accepted_at": "2026-07-30T05:00:00Z",
+        "target_secret_uid": "target-secret-uid",
+        "accepted_target_effective_material_sha256": "a" * 64,
+    }
+    pod = {
+        "metadata": {
+            "name": "worker-0",
+            "uid": "pre-cas-successor-uid",
+            "resourceVersion": "51",
+            "creationTimestamp": "2026-07-30T04:59:00Z",
+            "labels": {"app": "worker"},
+            "ownerReferences": [
+                {
+                    "apiVersion": "apps.kruise.io/v1beta1",
+                    "kind": "StatefulSet",
+                    "name": "worker",
+                    "uid": "worker-statefulset-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "nodeName": "worker-node",
+            "volumes": [
+                {
+                    "name": "munge-key",
+                    "secret": {"secretName": "target-munge"},
+                }
+            ],
+        },
+        "status": {
+            "phase": "Pending",
+            "conditions": [{"type": "Ready", "status": "False"}],
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: copy.deepcopy(pod),
+    )
+    deletes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_command_runner_uid_preconditioned_delete",
+        lambda *_args, **kwargs: deletes.append(copy.deepcopy(kwargs)),
+    )
+    writes: list[dict[str, Any]] = []
+
+    lines = migration._restart_unverified_in_place_worker_munge_successor(  # noqa: SLF001
+        rollout=rollout,
+        target_binding=target_binding,
+        handoff=handoff,
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(rollout)),
+    )
+
+    assert len(deletes) == 1
+    assert deletes[0]["uid"] == "pre-cas-successor-uid"
+    assert deletes[0]["resource_version"] == "51"
+    restart = rollout["workers"]["worker-0"]["munge_successor_restart"]
+    assert restart["status"] == "delete-accepted"
+    assert restart["target_secret_uid"] == "target-secret-uid"
+    assert "pre-CAS successor" in lines[0]
+    assert len(writes) == 2
+
+
+def test_in_place_ownerless_worker_retirement_enqueues_exact_target_workload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rollout = {
+        "authority_epoch": "bridge-target-epoch",
+        "munge_secret_handoff": {
+            "status": "verified",
+            "target_workload_name": "worker",
+            "target_workload_uid": "worker-statefulset-uid",
+        },
+    }
+    source = {
+        "pod_uid": "ownerless-source-uid",
+        "node_name": "worker-node",
+        "statefulset_uid": "worker-statefulset-uid",
+        "lineage": "checkpointed-ownerless-predecessor",
+    }
+    state: dict[str, Any] = {
+        "status": "delete-accepted",
+        "source": copy.deepcopy(source),
+    }
+    workload = {
+        "metadata": {
+            "name": "worker",
+            "uid": "worker-statefulset-uid",
+            "resourceVersion": "61",
+            "annotations": {},
+        },
+        "spec": {"replicas": 2},
+        "status": {"replicas": 1, "readyReplicas": 1},
+    }
+    monkeypatch.setattr(
+        migration,
+        "_immutable_child_optional_namespaced_resource",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: copy.deepcopy(workload),
+    )
+    patches: list[dict[str, Any]] = []
+
+    def patch_resource(**kwargs: Any) -> None:
+        patches.append(copy.deepcopy(kwargs))
+        marker = kwargs["patch"]["metadata"]["annotations"][
+            migration._IN_PLACE_OWNERLESS_WORKER_RECONCILIATION_ANNOTATION  # noqa: SLF001
+        ]
+        workload["metadata"]["annotations"][
+            migration._IN_PLACE_OWNERLESS_WORKER_RECONCILIATION_ANNOTATION  # noqa: SLF001
+        ] = marker
+        workload["metadata"]["resourceVersion"] = "62"
+
+    monkeypatch.setattr(migration, "_kubectl_patch_namespace_resource", patch_resource)
+    writes: list[dict[str, Any]] = []
+
+    lines = migration._ensure_in_place_ownerless_worker_workload_reconciliation(  # noqa: SLF001
+        rollout=rollout,
+        state=state,
+        pod_name="worker-1",
+        source=source,
+        kube_context="external-context",
+        command_runner=cast(Any, object()),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(state)),
+    )
+
+    assert len(patches) == 1
+    assert patches[0]["resource"] == "statefulsets.apps.kruise.io/worker"
+    assert patches[0]["patch"]["metadata"]["resourceVersion"] == "61"
+    reconciliation = state["ownerless_predecessor_reconciliation"]
+    assert reconciliation["status"] == "verified"
+    assert reconciliation["source_pod_uid"] == "ownerless-source-uid"
+    assert reconciliation["workload_uid"] == "worker-statefulset-uid"
+    assert "enqueued" in lines[0]
+    assert len(writes) == 2
+
+
+def test_in_place_worker_rollout_retains_exact_missing_delete_accepted_ordinal() -> None:
+    rollout = {
+        "pod_names": ["worker-0", "worker-1"],
+        "workers": {
+            "worker-0": {"status": "verified"},
+            "worker-1": {
+                "status": "delete-accepted",
+                "source": {"pod_uid": "ownerless-source-uid"},
+            },
+        },
+    }
+
+    assert migration._in_place_worker_bridge_rollout_pod_names(  # noqa: SLF001
+        live_pod_names=("worker-0",),
+        rollout=rollout,
+    ) == ("worker-0", "worker-1")
+
+
+@pytest.mark.parametrize("ownerless", (True, False))
+def test_in_place_worker_bridge_config_binding_accepts_only_exact_handoff_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+    ownerless: bool,
+) -> None:
+    source_uid = "source-worker-pod-uid"
+    target_pod_uid = "target-worker-pod-uid"
+    pod_uid = source_uid if ownerless else target_pod_uid
+    target_statefulset_uid = "target-worker-statefulset-uid"
+    nodeset_uid = "target-worker-nodeset-uid"
+    target_uid = "target-slurmcluster-uid"
+    base_binding = {
+        "pod_uid": pod_uid,
+        "resource_version": "10",
+        "node_name": "worker-node",
+        "node_addr": "192.0.2.10",
+        "container_name": "slurmd",
+        "container_id": "containerd://worker",
+        "owner_api_version": "" if ownerless else "apps.kruise.io/v1beta1",
+        "owner_kind": "" if ownerless else "StatefulSet",
+        "owner_name": "" if ownerless else "worker",
+        "owner_uid": "" if ownerless else target_statefulset_uid,
+        "owner_mode": "ownerless" if ownerless else "controller",
+        "ready": "false" if ownerless else "true",
+    }
+    monkeypatch.setattr(
+        migration,
+        "_target_worker_controlled_reload_pod_binding",
+        lambda **_kwargs: copy.deepcopy(base_binding),
+    )
+    pod_owner_references = (
+        []
+        if ownerless
+        else [
+            {
+                "apiVersion": "apps.kruise.io/v1beta1",
+                "kind": "StatefulSet",
+                "name": "worker",
+                "uid": target_statefulset_uid,
+                "controller": True,
+            }
+        ]
+    )
+    responses = {
+        ("pod", "worker-0"): {
+            "metadata": {
+                "name": "worker-0",
+                "uid": pod_uid,
+                "labels": {
+                    "app.kubernetes.io/component": "nodeset",
+                    "app.kubernetes.io/instance": "external-cluster",
+                    "app.kubernetes.io/name": "slurmcluster",
+                },
+                "ownerReferences": pod_owner_references,
+            }
+        },
+        ("slurmcluster", "external-cluster"): {
+            "metadata": {"name": "external-cluster", "uid": target_uid}
+        },
+        ("statefulsets.apps.kruise.io", "worker"): {
+            "metadata": {
+                "name": "worker",
+                "uid": target_statefulset_uid,
+                "ownerReferences": [
+                    {
+                        "apiVersion": "slurm.nebius.ai/v1alpha1",
+                        "kind": "NodeSet",
+                        "name": "worker",
+                        "uid": nodeset_uid,
+                        "controller": True,
+                    }
+                ],
+            }
+        },
+        ("nodeset", "worker"): {"metadata": {"name": "worker", "uid": nodeset_uid}},
+    }
+
+    def runner(
+        args: Sequence[str],
+        **_kwargs: Any,
+    ) -> SoperatorMigrationCommandResult:
+        resource = str(args[6])
+        name = str(args[7])
+        payload = responses[(resource, name)]
+        return SoperatorMigrationCommandResult(tuple(args), 0, json.dumps(payload), "")
+
+    phase = {
+        "immutable_child_handoff": {
+            "status": "target-children-created",
+            "target": {"name": "external-cluster", "uid": target_uid},
+            "workloads": {
+                "worker-path": {
+                    "status": "target-bound",
+                    "component": "nodeset",
+                    "kind": "StatefulSet",
+                    "name": "worker",
+                    "uid": "source-worker-statefulset-uid",
+                    "target_uid": target_statefulset_uid,
+                    "target_selector": {
+                        "app.kubernetes.io/component": "nodeset",
+                        "app.kubernetes.io/instance": "external-cluster",
+                        "app.kubernetes.io/name": "slurmcluster",
+                    },
+                    "pods": [
+                        {
+                            "name": "worker-0",
+                            "uid": source_uid,
+                            "owner_uid": "source-worker-statefulset-uid",
+                        }
+                    ],
+                }
+            },
+        }
+    }
+
+    binding = migration._in_place_target_worker_config_binding(  # noqa: SLF001
+        phase=phase,
+        target_ref="external-cluster",
+        pod_name="worker-0",
+        kube_context="external-context",
+        command_runner=runner,
+        require_ready=not ownerless,
+    )
+
+    assert binding["pod_uid"] == pod_uid
+    assert binding["statefulset_uid"] == target_statefulset_uid
+    assert binding["nodeset_uid"] == nodeset_uid
+    assert binding["target_uid"] == target_uid
+    assert binding["lineage"] == (
+        "checkpointed-ownerless-predecessor" if ownerless else "target-owned"
+    )
+
+
+def test_in_place_client_controller_transition_recovers_source_before_target_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_sha256 = "b" * 64
+    phase: dict[str, Any] = {
+        "in_place_controller_bridge_version_transition_deferral": {
+            "schema": "nebius-cxcli/in-place-controller-bridge-version-transition-deferral/v1",
+            "status": "deferred-until-post-provider-tail",
+            "bridge_stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "reason": "target-slurm-config-materializes-after-source-owner-retirement",
+            "deferred_at": "deferred",
+        },
+        "in_place_bridge_client_handoff": {
+            "status": "accepted",
+            "config_sha256": config_sha256,
+        },
+    }
+    checkpoint: dict[str, Any] = {
+        "controller_bridge": {
+            "stage": migration.BridgeStage.SOURCE_HA_ACTIVE.value,
+            "authority": {"owner": "bridge-source"},
+            "version_transition": {
+                "source_image": "source-image",
+                "target_image": "target-image",
+                "source_version": "24.11.6",
+                "target_version": "25.11.3",
+            },
+        }
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_upgrade_controller_bridge_to_target_version",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("transition failed")),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_restore_source_bridge_after_failed_target_transition",
+        lambda **_kwargs: ["source bridge restored"],
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="restored the exact source bridge 2/2 before client RPC",
+    ):
+        migration._release_in_place_controller_bridge_version_transition_for_clients(  # noqa: SLF001
+            checkpoint=checkpoint,
+            phase=phase,
+            target_ref="external-cluster",
+            expected_config_sha256=config_sha256,
+            kube_context="external-context",
+            command_runner=_FakeCommandRunner(),
+            checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+        )
+
+    release = phase["in_place_controller_bridge_version_transition_deferral"]["release"]
+    assert release["state"] == "source-recovered"
+    assert len(writes) == 2
 
 
 def test_in_place_compute_tail_restores_source_bridge_after_target_transition_failure(
@@ -65081,6 +70955,46 @@ def _legacy_bridge_handoff(runner: _LegacyRootfsBridgeRunner) -> dict[str, Any]:
     }
 
 
+def _legacy_bridge_ownerless_login_gap(
+    runner: _LegacyRootfsBridgeRunner,
+) -> dict[str, Any]:
+    handoff = _legacy_bridge_handoff(runner)
+    target_selector = migration._immutable_child_target_selector(  # noqa: SLF001
+        target_binding=runner.target,
+        component="login",
+    )
+    handoff["status"] = "manager-restored"
+    handoff["target_login_selector"] = copy.deepcopy(target_selector)
+    handoff["login_bridge"].update(
+        {
+            "status": "target-selector-ready",
+            "target_selector_ready_at": "2026-07-12T00:30:00Z",
+        }
+    )
+    login_item = next(iter(handoff["workloads"].values()))
+    login_item.update(
+        {
+            "status": "pods-relabeled",
+            "orphaned_at": "2026-07-12T00:15:00Z",
+            "pods_relabeled_at": "2026-07-12T00:20:00Z",
+            "target_selector": copy.deepcopy(target_selector),
+        }
+    )
+    runner.source_absent = True
+    runner.login_workload = None  # type: ignore[assignment]
+    for pod in (runner.login_pod, runner.login_pod_not_ready):
+        pod["metadata"]["ownerReferences"] = []
+        pod["metadata"]["labels"].update(
+            {
+                **target_selector,
+                migration._IMMUTABLE_CHILD_HANDOFF_LABEL: runner.handoff_token,  # noqa: SLF001
+            }
+        )
+    runner.login_service["metadata"]["ownerReferences"] = []
+    runner.login_service["spec"]["selector"] = copy.deepcopy(target_selector)
+    return handoff
+
+
 def test_legacy_rootfs_login_backend_skips_exact_ready_session_free_peer() -> None:
     runner = _LegacyRootfsBridgeRunner()
     runner.login_pod["metadata"]["labels"].pop(  # type: ignore[index]
@@ -65112,6 +71026,61 @@ def test_legacy_rootfs_login_backend_skips_exact_ready_session_free_peer() -> No
         if "get" in command and any("," in part for part in command)
     ]
     assert len(snapshot_calls) == 1
+
+
+def test_legacy_rootfs_login_backend_uses_exact_ownerless_preserved_pod_gap() -> None:
+    runner = _LegacyRootfsBridgeRunner()
+    handoff = _legacy_bridge_ownerless_login_gap(runner)
+
+    backend = migration._legacy_rootfs_exact_login_backend(  # noqa: SLF001
+        handoff=handoff,
+        command_runner=runner,
+        kube_context="external-context",
+    )
+    result = migration._legacy_rootfs_direct_login_exec(  # noqa: SLF001
+        backend=backend,
+        command_runner=runner,
+        kube_context="external-context",
+        args=("scontrol", "ping"),
+        timeout_seconds=60,
+    )
+
+    assert backend["name"] == "login-0"
+    assert backend["uid"] == "login-pod-uid"
+    assert backend["owner_mode"] == "orphan"
+    assert result.returncode == 0
+
+
+def test_legacy_rootfs_login_backend_rejects_owner_in_preserved_pod_gap() -> None:
+    runner = _LegacyRootfsBridgeRunner()
+    handoff = _legacy_bridge_ownerless_login_gap(runner)
+    runner.login_pod["metadata"]["ownerReferences"] = _legacy_bridge_owner(runner.target)
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="drifted from its exact workload/label binding",
+    ):
+        migration._legacy_rootfs_exact_login_backend(  # noqa: SLF001
+            handoff=handoff,
+            command_runner=runner,
+            kube_context="external-context",
+        )
+
+
+def test_legacy_rootfs_login_backend_rejects_live_source_in_ownerless_gap() -> None:
+    runner = _LegacyRootfsBridgeRunner()
+    handoff = _legacy_bridge_ownerless_login_gap(runner)
+    runner.source_absent = False
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="source SlurmCluster to be absent",
+    ):
+        migration._legacy_rootfs_exact_login_backend(  # noqa: SLF001
+            handoff=handoff,
+            command_runner=runner,
+            kube_context="external-context",
+        )
 
 
 def test_legacy_rootfs_login_backend_rejects_wrong_nonempty_peer_token() -> None:
@@ -65284,7 +71253,21 @@ def test_legacy_rootfs_slurm_config_bridge_checkpoints_before_exact_mutations() 
     assert "verified the shared jail digest" in lines[0]
     assert runner.events.index("checkpoint") < runner.events.index("replace:Deployment")
     assert runner.events.index("replace:ConfigMap") < runner.events.index("replace:Deployment")
-    assert runner.events.count("guard") == 2
+    mutation_events = [
+        event
+        for event in runner.events
+        if event == "guard" or event.startswith(("replace:", "scale:"))
+    ]
+    assert mutation_events == [
+        "guard",
+        "scale:sconfigcontroller:1->0",
+        "guard",
+        "replace:ConfigMap",
+        "guard",
+        "replace:Deployment",
+        "guard",
+        "scale:sconfigcontroller:0->1",
+    ]
     state = phase["legacy_rootfs_slurm_config_bridge"]
     assert migration._legacy_rootfs_slurm_config_bridge_is_active(phase)  # noqa: SLF001
     state["status"] = "target-compatibility-intent"
@@ -65328,7 +71311,7 @@ def test_legacy_rootfs_slurm_config_bridge_checkpoints_before_exact_mutations() 
         manifest for manifest in replace_manifests if manifest["kind"] == "ConfigMap"
     )
     assert deployment_manifest["metadata"]["uid"] == "source-sconfig-deployment-uid"
-    assert deployment_manifest["metadata"]["resourceVersion"] == "51"
+    assert deployment_manifest["metadata"]["resourceVersion"] == "52"
     assert deployment_manifest["metadata"]["labels"] == {"preserve": "yes"}
     assert deployment_manifest["spec"]["template"]["spec"]["serviceAccountName"] == (
         "soperator-sconfigcontroller-sa"
@@ -65336,6 +71319,286 @@ def test_legacy_rootfs_slurm_config_bridge_checkpoints_before_exact_mutations() 
     assert config_map_manifest["metadata"]["uid"] == "config-map-uid"
     assert config_map_manifest["metadata"]["resourceVersion"] == "31"
     assert config_map_manifest["data"]["cgroup.conf"] == "CgroupPlugin=autodetect\n"
+
+
+def test_legacy_rootfs_child_gap_accepts_exact_post_retirement_compatibility_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = "a" * 64
+    source = {"namespace": "soperator", "name": "source", "uid": "source-uid"}
+    target = {"namespace": "soperator", "name": "target", "uid": "target-uid"}
+    stage = {
+        "intent_at": "2026-07-30T01:00:00Z",
+        "deployment_uid": "sconfig-deployment-uid",
+        "service_account_name": "sconfig-service-account",
+        "service_account_uid": "sconfig-service-account-uid",
+        "deployment_spec_fingerprint": fingerprint,
+        "full_target_sha256": fingerprint,
+        "full_target_data_fingerprint": fingerprint,
+        "compatible_sha256": fingerprint,
+        "compatible_data_fingerprint": fingerprint,
+        "jailed_config_spec_fingerprint": fingerprint,
+        "jailed_config_items_fingerprint": fingerprint,
+        "jailed_config_item_count": 2,
+        "config_replace_intent_at": "2026-07-30T01:01:00Z",
+        "config_replace_applied_at": "2026-07-30T01:02:00Z",
+        "manager_pause_intent_at": "2026-07-30T01:03:00Z",
+        "manager_pause_resource_version": "manager-rv-6",
+        "manager_pause_from_generation": 5,
+        "manager_pause_expected_generation": 6,
+        "manager_pause_generation": 6,
+        "manager_pause_spec_fingerprint": fingerprint,
+        "manager_paused_at": "2026-07-30T01:04:00Z",
+        "manager_restore_intent_at": "2026-07-30T01:05:00Z",
+        "manager_restore_resource_version": "manager-rv-7",
+        "manager_restore_from_generation": 6,
+        "manager_restore_expected_generation": 7,
+        "manager_restore_generation": 7,
+        "manager_restore_spec_fingerprint": fingerprint,
+        "manager_restored_at": "2026-07-30T01:06:00Z",
+        "target_writer_refresh": {
+            "status": "zero",
+            "scale_up_intent_at": "2026-07-30T01:07:00Z",
+            "scale_up_from_generation": 9,
+            "scale_up_expected_generation": 10,
+            "scale_up_spec_fingerprint": fingerprint,
+            "writer_ready_generation": 10,
+            "writer_ready_deployment_uid": "sconfig-deployment-uid",
+            "writer_ready_spec_fingerprint": fingerprint,
+            "ready_pod_uid": "sconfig-pod-uid",
+            "digest_verified_at": "2026-07-30T01:08:00Z",
+            "scale_down_intent_at": "2026-07-30T01:09:00Z",
+            "scale_down_from_generation": 10,
+            "scale_down_expected_generation": 11,
+            "scale_down_spec_fingerprint": fingerprint,
+            "zero_generation": 11,
+            "zero_resource_version": "sconfig-rv-11",
+            "zero_at": "2026-07-30T01:10:00Z",
+        },
+    }
+    phase = {
+        "slurmcluster_handoff_binding": {
+            "source": source,
+            "target": target,
+        },
+        "immutable_child_handoff": {
+            "schema": migration._IMMUTABLE_CHILD_HANDOFF_SCHEMA,  # noqa: SLF001
+            "status": "target-children-created",
+            "target_children_created_at": "2026-07-30T00:59:00Z",
+            "manager_restored_generation": 3,
+            "manager": {
+                "uid": "manager-uid",
+                "replicas": 1,
+                "spec_fingerprint": fingerprint,
+            },
+            "source": source,
+            "target": target,
+        },
+        "accounting_handoff": {"status": "verified"},
+        "legacy_rootfs_slurm_config_bridge": {
+            "schema": migration._LEGACY_ROOTFS_SLURM_CONFIG_BRIDGE_SCHEMA,  # noqa: SLF001
+            "status": "target-compatibility-intent",
+            "writer_fence": {
+                "schema": migration._LEGACY_ROOTFS_SCONFIG_WRITER_FENCE_SCHEMA,  # noqa: SLF001
+                "status": "prepared",
+                "original_size": 1,
+                "target_uid": "target-uid",
+                "target_spec_fingerprint": fingerprint,
+                "target_jail_boundary_fingerprint": fingerprint,
+                "target_login_jail_submounts_fingerprint": fingerprint,
+                "prepared_at": "2026-07-30T00:58:00Z",
+            },
+            "target_compatibility_stage": stage,
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_legacy_rootfs_post_retirement_config_bindings_are_exact",
+        lambda _state: True,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_accounting_handoff_source_retirement_checkpoint_is_exact",
+        lambda **_kwargs: True,
+    )
+
+    assert migration._legacy_rootfs_slurm_config_bridge_supports_child_handoff_gap(  # noqa: SLF001
+        phase
+    )
+
+    stage["target_writer_refresh"]["zero_generation"] = 12
+    assert not migration._legacy_rootfs_slurm_config_bridge_supports_child_handoff_gap(  # noqa: SLF001
+        phase
+    )
+
+
+def test_legacy_rootfs_single_bridge_adopts_exact_pre_target_service_account_zero() -> None:
+    runner = _LegacyRootfsBridgeRunner()
+    canonical_config = runner.original_config.replace(
+        "MetricsType=metrics/openmetrics\n", ""
+    ).replace(
+        "PluginDir=/usr/lib/slurm",
+        f"PluginDir={migration._TARGET_SLURM_PLUGIN_DIR}",  # noqa: SLF001
+    )
+    runner.config_map["data"]["slurm.conf"] = canonical_config
+    runner.jail_data = copy.deepcopy(runner.config_map["data"])
+    runner.jail_digest = hashlib.sha256(canonical_config.encode()).hexdigest()
+    deployment = runner.sconfig_deployment
+    deployment["spec"]["replicas"] = 0
+    deployment["spec"]["template"]["spec"]["serviceAccountName"] = "soperator-sconfigcontroller-sa"
+    deployment["metadata"]["generation"] = 2
+    deployment["metadata"]["resourceVersion"] = "52"
+    deployment["status"] = {
+        "observedGeneration": 2,
+        "replicas": 0,
+        "readyReplicas": 0,
+        "availableReplicas": 0,
+        "updatedReplicas": 0,
+    }
+    runner.replica_set["spec"]["replicas"] = 0
+    runner.replica_set["status"] = {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "availableReplicas": 0,
+    }
+    runner.pod["spec"]["serviceAccountName"] = "soperator-sconfigcontroller-sa"
+    runner.sconfig_pod_present = False
+    phase: dict[str, Any] = {
+        "pre_target_helm_sconfig_writer_fence": {
+            "schema": migration._PRE_TARGET_HELM_SCONFIG_WRITER_FENCE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "source": copy.deepcopy(runner.source),
+            "deployment": {
+                "namespace": "soperator",
+                "name": "sconfigcontroller",
+                "uid": deployment["metadata"]["uid"],
+                "resourceVersion": deployment["metadata"]["resourceVersion"],
+                "original_replicas": 1,
+                "selector": copy.deepcopy(deployment["spec"]["selector"]["matchLabels"]),
+                "spec_fingerprint": migration._legacy_rootfs_scalable_spec_fingerprint(  # noqa: SLF001
+                    deployment,
+                    label="test single pre-target zero Deployment",
+                ),
+            },
+            "zero_generation": 2,
+            "zero_resource_version": deployment["metadata"]["resourceVersion"],
+            "writer_pod_count": 0,
+            "verified_at": "2026-07-30T00:00:00Z",
+        }
+    }
+    checkpoints: list[dict[str, Any]] = []
+
+    lines = migration._activate_legacy_rootfs_slurm_config_bridge(  # noqa: SLF001
+        phase=phase,
+        handoff=_legacy_bridge_handoff(runner),
+        source_binding=runner.source,
+        target_binding=runner.target,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: checkpoints.append(copy.deepcopy(phase)),
+        mutation_guard=lambda: runner.events.append("guard"),
+        verification_timeout_seconds=0,
+        poll_interval_seconds=0,
+        stability_checks=1,
+    )
+
+    state = phase["legacy_rootfs_slurm_config_bridge"]
+    sconfig = state["sconfig_deployment"]
+    writer_fence = state["dual_writer_fence"]
+    assert "verified the shared jail digest" in lines[0]
+    assert sconfig["original_service_account_present"] is True
+    assert sconfig["original_service_account_name"] == "soperator-sconfigcontroller-sa"
+    assert sconfig["service_account_adoption_mode"] == "adopted-pre-target-zero-binding"
+    assert "service_account_patch_applied_at" not in sconfig
+    assert writer_fence["adoption_mode"] == "pre-target-helm-zero-fence"
+    assert writer_fence["status"] == "ready"
+    assert state["configmap"]["original_sha256"] == state["configmap"]["compatible_sha256"]
+    assert state["configmap"]["removed_directives"] == {
+        "metrics_type": 0,
+        "plugin_dir": 0,
+    }
+    assert runner.sconfig_deployment["spec"]["replicas"] == 1
+    assert migration._legacy_rootfs_slurm_config_bridge_is_active(phase)  # noqa: SLF001
+    assert checkpoints
+    mutation_events = [
+        event
+        for event in runner.events
+        if event == "guard" or event.startswith(("replace:", "scale:"))
+    ]
+    assert mutation_events == [
+        "guard",
+        "scale:sconfigcontroller:0->1",
+    ]
+
+
+def test_legacy_rootfs_single_bridge_rejects_drifted_pre_target_service_account_zero() -> None:
+    runner = _LegacyRootfsBridgeRunner()
+    deployment = runner.sconfig_deployment
+    deployment["spec"]["replicas"] = 0
+    deployment["spec"]["template"]["spec"]["serviceAccountName"] = "soperator-sconfigcontroller-sa"
+    deployment["metadata"]["generation"] = 2
+    deployment["metadata"]["resourceVersion"] = "52"
+    deployment["status"] = {
+        "observedGeneration": 2,
+        "replicas": 0,
+        "readyReplicas": 0,
+        "availableReplicas": 0,
+        "updatedReplicas": 0,
+    }
+    runner.replica_set["spec"]["replicas"] = 0
+    runner.replica_set["status"] = {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "availableReplicas": 0,
+    }
+    runner.sconfig_pod_present = False
+    checkpoint_fingerprint = migration._legacy_rootfs_scalable_spec_fingerprint(  # noqa: SLF001
+        deployment,
+        label="test single pre-target zero Deployment",
+    )
+    deployment["spec"]["template"]["spec"]["containers"][0]["env"] = [
+        {"name": "DRIFT", "value": "true"}
+    ]
+    phase: dict[str, Any] = {
+        "pre_target_helm_sconfig_writer_fence": {
+            "schema": migration._PRE_TARGET_HELM_SCONFIG_WRITER_FENCE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "source": copy.deepcopy(runner.source),
+            "deployment": {
+                "namespace": "soperator",
+                "name": "sconfigcontroller",
+                "uid": deployment["metadata"]["uid"],
+                "resourceVersion": deployment["metadata"]["resourceVersion"],
+                "original_replicas": 1,
+                "selector": copy.deepcopy(deployment["spec"]["selector"]["matchLabels"]),
+                "spec_fingerprint": checkpoint_fingerprint,
+            },
+            "zero_generation": 2,
+            "zero_resource_version": deployment["metadata"]["resourceVersion"],
+            "writer_pod_count": 0,
+            "verified_at": "2026-07-30T00:00:00Z",
+        }
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="exact verified pre-target Helm fence",
+    ):
+        migration._activate_legacy_rootfs_slurm_config_bridge(  # noqa: SLF001
+            phase=phase,
+            handoff=_legacy_bridge_handoff(runner),
+            source_binding=runner.source,
+            target_binding=runner.target,
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+            verification_timeout_seconds=0,
+            poll_interval_seconds=0,
+            stability_checks=1,
+        )
+
+    assert phase["legacy_rootfs_slurm_config_bridge"]["status"] == "pending"
+    assert not any(event.startswith(("replace:", "scale:")) for event in runner.events)
 
 
 def test_legacy_rootfs_active_bridge_revalidates_after_exact_source_retirement() -> None:
@@ -65413,6 +71676,120 @@ def test_legacy_rootfs_active_bridge_revalidates_after_exact_source_retirement()
     assert any("verified source retirement" in line for line in lines)
     assert phase["legacy_rootfs_slurm_config_bridge"]["post_source_retirement_revalidated_at"]
     assert checkpoints
+
+
+def _legacy_rootfs_single_bridge_post_retirement_rebind_fixture() -> tuple[
+    _LegacyRootfsBridgeRunner,
+    dict[str, Any],
+    dict[str, Any],
+]:
+    runner = _LegacyRootfsBridgeRunner()
+    handoff = _legacy_bridge_handoff(runner)
+    phase: dict[str, Any] = {}
+    migration._activate_legacy_rootfs_slurm_config_bridge(  # noqa: SLF001
+        phase=phase,
+        handoff=handoff,
+        source_binding=runner.source,
+        target_binding=runner.target,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: None,
+        verification_timeout_seconds=0,
+        poll_interval_seconds=0,
+        stability_checks=1,
+    )
+    runner.enable_exact_manual_dual_bridge()
+    runner.take_over_dual(handoff)
+    runner.config_map["metadata"].pop("ownerReferences")
+    runner.jailed_config["metadata"].pop("ownerReferences")
+    phase["source_cleanup_started_at"] = "2026-07-16T09:47:36Z"
+    phase["source_accounting_owner_retired_at"] = "2026-07-16T09:51:12Z"
+    phase["slurmcluster_handoff_binding"] = {
+        "source": dict(runner.source),
+        "target": dict(runner.target),
+    }
+    phase["accounting_handoff"] = {
+        "source_orphan_finalizer_recovery": {
+            "status": "verified",
+            "verified_at": "2026-07-16T09:51:12Z",
+            "source": dict(runner.source),
+        },
+        "source_orphan_child_bindings": {
+            "schema": migration._SOURCE_ORPHAN_CHILD_BINDINGS_SCHEMA,  # noqa: SLF001
+            "source": dict(runner.source),
+            "target": dict(runner.target),
+            "items": [],
+        },
+    }
+    return runner, handoff, phase
+
+
+def test_legacy_rootfs_single_bridge_rebinds_exact_configs_after_source_retirement() -> None:
+    runner, handoff, phase = _legacy_rootfs_single_bridge_post_retirement_rebind_fixture()
+    checkpoints: list[dict[str, Any]] = []
+    state = phase["legacy_rootfs_slurm_config_bridge"]
+
+    migration._legacy_rootfs_rebind_single_config_after_source_retirement(  # noqa: SLF001
+        phase=phase,
+        state=state,
+        handoff=handoff,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: checkpoints.append(copy.deepcopy(phase)),
+    )
+
+    assert migration._legacy_rootfs_post_retirement_config_bindings_are_exact(  # noqa: SLF001
+        state
+    )
+    assert state["source_configmap"]["uid"] == "config-map-uid"
+    assert state["source_jailed_config"]["uid"] == "jailed-config-uid"
+    assert state["configmap"]["uid"] == "target-config-map-uid"
+    assert state["jailed_config"]["uid"] == "target-jailed-config-uid"
+    assert checkpoints
+
+    state["source_config_cleanup"] = {
+        "source_configmap": {
+            "uid": "config-map-uid",
+            "resource_version": runner.config_map["metadata"]["resourceVersion"],
+            "delete_intent_at": "2026-07-16T10:00:00Z",
+        },
+        "source_jailed_config": {
+            "uid": "jailed-config-uid",
+            "resource_version": runner.jailed_config["metadata"]["resourceVersion"],
+            "delete_intent_at": "2026-07-16T10:00:00Z",
+        },
+    }
+    runner.config_map = None  # type: ignore[assignment]
+    runner.jailed_config = None  # type: ignore[assignment]
+    migration._legacy_rootfs_rebind_single_config_after_source_retirement(  # noqa: SLF001
+        phase=phase,
+        state=state,
+        handoff=handoff,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: pytest.fail("exact recovery replay must not rewrite"),
+    )
+
+
+def test_legacy_rootfs_single_bridge_rebind_rejects_foreign_target_owner() -> None:
+    runner, handoff, phase = _legacy_rootfs_single_bridge_post_retirement_rebind_fixture()
+    assert runner.target_config_map is not None
+    runner.target_config_map["metadata"]["ownerReferences"] = _legacy_bridge_owner(
+        {"namespace": "soperator", "name": "foreign", "uid": "foreign-uid"}
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="allowed exact source/target SlurmCluster binding",
+    ):
+        migration._legacy_rootfs_rebind_single_config_after_source_retirement(  # noqa: SLF001
+            phase=phase,
+            state=phase["legacy_rootfs_slurm_config_bridge"],
+            handoff=handoff,
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: None,
+        )
 
 
 def test_legacy_rootfs_slurm_config_bridge_requires_paused_manager_before_intent() -> None:
@@ -65898,6 +72275,49 @@ def test_legacy_rootfs_client_config_uses_active_target_bridge_authority() -> No
     assert "StateSaveLocation=/mnt/controller-state" in rendered
 
 
+def test_in_place_bridge_client_config_seals_exact_plugin_dir_successor() -> None:
+    legacy_config = (
+        "ClusterName=external-cluster\n"
+        "PluginDir=/usr/lib/slurm\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-0\n"
+        "SlurmctldHost=cxcli-slurm-controller-bridge-1\n"
+    )
+    phase: dict[str, Any] = {
+        "legacy_rootfs_slurm_config_bridge": {
+            "status": "target-compatibility-active",
+        }
+    }
+    writes: list[dict[str, Any]] = []
+
+    compatible = migration._canonical_in_place_bridge_client_config(  # noqa: SLF001
+        phase=phase,
+        target_ref="external-cluster",
+        config_map_name="target-slurm-config",
+        slurm_conf=legacy_config,
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(phase)),
+    )
+
+    assert "PluginDir=/usr/lib/slurm" not in compatible
+    assert f"PluginDir={migration._TARGET_SLURM_PLUGIN_DIR}" in compatible  # noqa: SLF001
+    successor = phase["in_place_bridge_client_handoff"]["compatibility_config_successor"]
+    assert successor["status"] == "accepted"
+    assert successor["transform_counts"] == {"metrics_type": 0, "plugin_dir": 1}
+    assert (
+        successor["predecessor_config_sha256"] == hashlib.sha256(legacy_config.encode()).hexdigest()
+    )
+    assert successor["target_config_sha256"] == hashlib.sha256(compatible.encode()).hexdigest()
+    assert len(writes) == 1
+
+    replay = migration._canonical_in_place_bridge_client_config(  # noqa: SLF001
+        phase=phase,
+        target_ref="external-cluster",
+        config_map_name="target-slurm-config",
+        slurm_conf=compatible,
+        checkpoint_writer=lambda: pytest.fail("canonical replay must not rewrite intent"),
+    )
+    assert replay == compatible
+
+
 def test_legacy_rootfs_dual_bridge_adopts_exact_live_active_authority_recovery() -> None:
     runner = _LegacyRootfsBridgeRunner()
     runner.enable_fresh_dual_bridge()
@@ -66308,6 +72728,75 @@ def test_helm_target_values_preserve_bound_pv_immutable_fields_with_client_merge
     assert "--force-conflicts" not in helm_command
 
 
+def test_helm_target_dispatch_consumes_authorization_only_after_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_path = tmp_path / "chart"
+    chart_path.mkdir()
+    (chart_path / "Chart.yaml").write_text("apiVersion: v2\nname: test\nversion: 0.1.0\n")
+    events: list[str] = []
+    replay = {"status": "authorized"}
+
+    monkeypatch.setattr(migration, "_validate_target_values_volume_sources", lambda _values: None)
+    monkeypatch.setattr(migration, "_target_soperator_chart_path", lambda: chart_path)
+    monkeypatch.setattr(
+        migration,
+        "_ensure_soperator_chart_dependencies",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(migration, "_apply_soperator_crds", lambda **_kwargs: None)
+
+    def consume() -> None:
+        assert replay["status"] == "authorized"
+        replay["status"] = "dispatched"
+        events.append("dispatch-checkpoint")
+
+    def blocked_guard() -> None:
+        events.append("guard-blocked")
+        raise migration.SoperatorMigrationPhasePending("login guard blocked")
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="login guard blocked"):
+        migration._helm_upgrade_target_soperator(  # noqa: SLF001
+            command_runner=lambda *_args, **_kwargs: pytest.fail("Helm must not be dispatched"),
+            kube_context="external-context",
+            values={},
+            wait=False,
+            before_reconcile=blocked_guard,
+            before_dispatch=consume,
+            webhook_startup_retry_limit=0,
+        )
+
+    assert replay["status"] == "authorized"
+    assert events == ["guard-blocked"]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        assert replay["status"] == "dispatched"
+        events.append("helm")
+        raise RuntimeError("failed calling webhook: connection refused")
+
+    with pytest.raises(RuntimeError, match="connection refused"):
+        migration._helm_upgrade_target_soperator(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            values={},
+            wait=False,
+            before_reconcile=lambda: events.append("guard-passed"),
+            before_dispatch=consume,
+            webhook_startup_retry_limit=0,
+        )
+
+    assert replay["status"] == "dispatched"
+    assert events == ["guard-blocked", "guard-passed", "dispatch-checkpoint", "helm"]
+
+
 @pytest.mark.parametrize(
     "boundary",
     [
@@ -66469,9 +72958,15 @@ def test_jail_helm_internal_retry_reprobes_current_login_pods(
 def test_jail_helm_wrapper_gates_every_replay_during_controller_bridge_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    checkpoint = {
-        "controller_bridge": {
-            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+    checkpoint = _checkpoint_with_compute_source_binding()
+    checkpoint["target_ref"] = "target-cluster"
+    phase = {
+        "slurmcluster_handoff_binding": {
+            "target": {
+                "namespace": "soperator",
+                "name": "target-cluster",
+                "uid": "target-slurmcluster-uid",
+            }
         }
     }
     raw_values = {
@@ -66489,6 +72984,9 @@ def test_jail_helm_wrapper_gates_every_replay_during_controller_bridge_authority
     }
     gate_calls: list[Mapping[str, Any]] = []
     helm_values: list[Mapping[str, Any]] = []
+    bootstrap_values: list[Mapping[str, Any]] = []
+    bridge_phase: dict[str, Any] = {}
+    live_boundaries: list[str] = []
 
     def _gate(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["checkpoint"] is checkpoint
@@ -66497,7 +72995,15 @@ def test_jail_helm_wrapper_gates_every_replay_during_controller_bridge_authority
         return copy.deepcopy(gated_values)
 
     def _helm(**kwargs: Any) -> None:
+        kwargs["before_reconcile"]()
         helm_values.append(copy.deepcopy(kwargs["values"]))
+
+    def _bootstrap(**kwargs: Any) -> list[str]:
+        assert kwargs["boundary"] == "post-switch-resume"
+        assert kwargs["target_ref"] == "target-cluster"
+        assert kwargs["bridge_phase"] is bridge_phase
+        bootstrap_values.append(copy.deepcopy(kwargs["values"]))
+        return kwargs["helm_operation"]()
 
     monkeypatch.setattr(
         migration,
@@ -66505,10 +73011,24 @@ def test_jail_helm_wrapper_gates_every_replay_during_controller_bridge_authority
         _gate,
     )
     monkeypatch.setattr(migration, "_helm_upgrade_target_soperator", _helm)
+    monkeypatch.setattr(
+        migration,
+        "_run_target_helm_with_admission_bootstrap",
+        _bootstrap,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_enforce_jail_helm_login_session_policy",
+        lambda **_kwargs: (
+            ["session-checked"]
+            if live_boundaries == ["checked"]
+            else pytest.fail("live boundary must precede the session gate")
+        ),
+    )
 
     migration._helm_upgrade_target_soperator_with_jail_login_session_policy(  # noqa: SLF001
         checkpoint=checkpoint,
-        phase={},
+        phase=phase,
         command_runner=lambda *_args, **_kwargs: pytest.fail(
             "the wrapper gating test must not make cluster calls"
         ),
@@ -66520,10 +73040,15 @@ def test_jail_helm_wrapper_gates_every_replay_during_controller_bridge_authority
         login_session_drain_timeout_seconds=79,
         wait=False,
         checkpoint_writer=lambda: None,
+        force_target_admission_bootstrap=True,
+        target_admission_bridge_phase=bridge_phase,
+        pre_helm_live_boundary=lambda: live_boundaries.append("checked"),
     )
 
     assert gate_calls == [raw_values]
+    assert bootstrap_values == [gated_values]
     assert helm_values == [gated_values]
+    assert live_boundaries == ["checked"]
 
 
 def _open_metrics_resource(*, enabled: bool) -> dict[str, Any]:
@@ -66843,12 +73368,23 @@ def test_jail_open_metrics_restore_is_checkpointed_and_verified_before_release_c
     bridge_stage: migration.BridgeStage,
 ) -> None:
     checkpoint = {
-        "controller_bridge": {
-            "stage": bridge_stage.value,
-        }
+        "target_ref": "external-cluster",
+        "campaign_fingerprint": "f" * 64,
     }
+    journal = _new_controller_bridge_lifecycle_journal(checkpoint)
+    _advance_controller_bridge_fixture_to_source_ha(journal)
+    if bridge_stage is migration.BridgeStage.TARGET_HA_ACTIVE:
+        _advance_controller_bridge_fixture_to_target_ha(journal)
+    checkpoint["controller_bridge"] = journal
     phase: dict[str, Any] = {
         "rootfs_handoff_verification": {"status": "verified"},
+        "slurmcluster_handoff_binding": {
+            "target": {
+                "namespace": "soperator",
+                "name": "external-cluster",
+                "uid": "slurmcluster-uid-external-cluster",
+            }
+        },
     }
     state = migration._bind_jail_slurm_open_metrics_handoff(  # noqa: SLF001
         phase=phase,
@@ -66890,9 +73426,7 @@ def test_jail_open_metrics_restore_is_checkpointed_and_verified_before_release_c
         assert kwargs["values"]["controllerManager"]["replicas"] == 0
         assert (
             kwargs["values"]["slurmNodes"]["controller"]["slurmctld"]
-            == migration.target_controller_gate_values({})["slurmNodes"]["controller"][
-                "slurmctld"
-            ]
+            == migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
         )
         kwargs["before_reconcile"]()
         events.append("helm-restore")
@@ -66936,7 +73470,7 @@ def test_jail_open_metrics_restore_is_checkpointed_and_verified_before_release_c
     assert events[-1] == "checkpoint:restored"
     assert state["status"] == "restored"
     gate = phase["helm_login_session_gates"]["open-metrics-restore"]
-    assert gate["status"] == "passed"
+    assert gate["status"] == "deferred"
     assert gate["policy"] == migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE
     assert gate["timeout_seconds"] == 67
     assert state["observed_enabled"] is True
@@ -68202,7 +74736,7 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(
 
 @pytest.mark.parametrize(
     ("login_session_policy", "login_session_drain_timeout_seconds"),
-    [("wait-active", 137), ("grace-period", 0), ("target-ready", 0)],
+    [("wait-active", 137), ("grace-period", 0)],
 )
 def test_execute_rejects_login_session_policy_overrides(
     tmp_path: Path,
@@ -68212,7 +74746,7 @@ def test_execute_rejects_login_session_policy_overrides(
     snapshot = _snapshot_with_compute_source()
     source_report = _source_report(snapshot)
 
-    with pytest.raises(RuntimeError, match="one SSH-continuity contract"):
+    with pytest.raises(RuntimeError, match="one login availability contract"):
         execute_soperator_migration(
             config_path=tmp_path / "config.yaml",
             target_ref="external-cluster",
@@ -71850,6 +78384,11 @@ def _mock_target_helm_apply_proof(
 ) -> None:
     monkeypatch.setattr(
         migration,
+        "_run_target_helm_with_admission_bootstrap",
+        lambda **kwargs: kwargs["helm_operation"](),
+    )
+    monkeypatch.setattr(
+        migration,
         "_verify_target_worker_replacement_node_groups",
         lambda **_kwargs: [],
     )
@@ -72210,6 +78749,7 @@ def test_rolling_compute_migration_blocks_when_all_login_pods_are_missing(
             worker_node_groups=("gpu-pool",),
             nebius_api=runner.nebius_api,
             command_runner=runner,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
         )
 
     assert not any(
@@ -72284,6 +78824,17 @@ def test_rolling_compute_migration_guards_login_before_target_values_reconciliat
 
     monkeypatch.setattr(migration, "_helm_upgrade_target_soperator", helm)
     _mock_target_helm_apply_proof(monkeypatch, events=events)
+
+    def admission_bootstrap(**kwargs: Any) -> list[str]:
+        assert kwargs["boundary"] == "target-handoff"
+        events.append("admission-bootstrap")
+        return kwargs["helm_operation"]()
+
+    monkeypatch.setattr(
+        migration,
+        "_run_target_helm_with_admission_bootstrap",
+        admission_bootstrap,
+    )
     _mock_immutable_child_handoff(monkeypatch, events=events)
     _mock_source_cleanup_completion(monkeypatch)
 
@@ -72346,6 +78897,22 @@ def test_rolling_compute_migration_guards_login_before_target_values_reconciliat
 
     runner = _FakeCommandRunner()
     checkpoint = _checkpoint_with_compute_source_binding()
+    checkpoint["phase_state"] = {
+        "rolling-compute-migration": {
+            "slurmcluster_handoff_binding": {
+                "source": {
+                    "namespace": "soperator",
+                    "name": "soperator",
+                    "uid": "source-slurmcluster-uid",
+                },
+                "target": {
+                    "namespace": "soperator",
+                    "name": "external-cluster",
+                    "uid": "slurmcluster-uid-external-cluster",
+                },
+            }
+        }
+    }
     mutated, lines = migration._execute_rolling_compute_migration_phase(  # noqa: SLF001
         checkpoint=checkpoint,
         payload=_payload(),
@@ -72363,6 +78930,7 @@ def test_rolling_compute_migration_guards_login_before_target_values_reconciliat
 
     assert mutated is True
     assert events == [
+        "admission-bootstrap",
         "session-policy",
         "session-policy",
         "helm",
@@ -76101,6 +82669,160 @@ def test_immutable_child_adopts_exact_manually_paused_manager_from_helm(
     assert status == "manager-paused"
     assert binding == handoff["manager"]
     assert writes
+
+
+def test_immutable_child_adopts_exact_campaign_manager_pause_authority() -> None:
+    manager = _immutable_unit_manager(replicas=0, resource_version="19", generation=3)
+    runner = _ImmutableChildUnitRunner({("deployment", "soperator-manager"): manager})
+    manager_fingerprint = migration._immutable_child_manager_spec_fingerprint(  # noqa: SLF001
+        manager
+    )
+    pause_authority = {
+        "status": "verified",
+        "deployment_uid": "manager-uid",
+        "original_replicas": 1,
+        "spec_fingerprint": manager_fingerprint,
+        "pause_generation": 3,
+        "verified_at": "2026-07-30T00:00:00Z",
+    }
+    handoff: dict[str, Any] = {"status": "pending"}
+    writes: list[dict[str, Any]] = []
+
+    migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+        handoff=handoff,
+        manager=manager,
+        pause_authority=pause_authority,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(handoff)),
+    )
+
+    proof = handoff["checkpointed_manager_pause_adoption"]
+    assert handoff["status"] == "manager-paused"
+    assert handoff["manager"]["replicas"] == 1
+    assert handoff["manager_paused_generation"] == 3
+    assert proof["schema"] == (
+        migration._IMMUTABLE_CHILD_CHECKPOINTED_MANAGER_PAUSE_ADOPTION_SCHEMA  # noqa: SLF001
+    )
+    assert proof["status"] == "verified"
+    assert proof["authority_schema"] == (
+        migration._IMMUTABLE_CHILD_CHECKPOINTED_MANAGER_PAUSE_AUTHORITY_SCHEMA  # noqa: SLF001
+    )
+    assert proof["owned_manager_pod_count"] == 0
+    assert "manual_manager_pause_adoption" not in handoff
+    assert not any(call[0][0] == "helm" for call in runner.calls)
+    binding, status = migration._immutable_child_capture_manager_binding(  # noqa: SLF001
+        handoff=handoff,
+        manager=manager,
+    )
+    assert status == "manager-paused"
+    assert binding == handoff["manager"]
+    assert writes
+
+    authority_sha256 = proof["authority_sha256"]
+    observed_at = proof["observed_at"]
+    pause_authority["verified_at"] = "2026-07-30T00:05:00Z"
+    migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+        handoff=handoff,
+        manager=manager,
+        pause_authority=pause_authority,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(handoff)),
+    )
+    proof = handoff["checkpointed_manager_pause_adoption"]
+    assert proof["authority_sha256"] == authority_sha256
+    assert proof["observed_at"] == observed_at
+
+    proof["authority_sha256"] = "f" * 64
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="drifted from its durable proof",
+    ):
+        migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+            handoff=handoff,
+            manager=manager,
+            pause_authority=pause_authority,
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: pytest.fail("stable authority drift must not checkpoint"),
+        )
+
+
+def test_immutable_child_canonicalizes_legacy_refresh_timestamp_authority_hash() -> None:
+    manager = _immutable_unit_manager(replicas=0, resource_version="19", generation=3)
+    runner = _ImmutableChildUnitRunner({("deployment", "soperator-manager"): manager})
+    manager_fingerprint = migration._immutable_child_manager_spec_fingerprint(  # noqa: SLF001
+        manager
+    )
+    pause_authority = {
+        "status": "verified",
+        "deployment_uid": "manager-uid",
+        "original_replicas": 1,
+        "spec_fingerprint": manager_fingerprint,
+        "pause_generation": 3,
+        "verified_at": "2026-07-30T00:00:00Z",
+    }
+    handoff: dict[str, Any] = {"status": "pending"}
+
+    migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+        handoff=handoff,
+        manager=manager,
+        pause_authority=pause_authority,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: None,
+    )
+    legacy = handoff["checkpointed_manager_pause_adoption"]
+    legacy.pop("authority_schema")
+    legacy["authority_sha256"] = migration._fingerprint(pause_authority)  # noqa: SLF001
+    observed_at = legacy["observed_at"]
+    pause_authority["verified_at"] = "2026-07-30T00:05:00Z"
+    writes: list[dict[str, Any]] = []
+
+    migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+        handoff=handoff,
+        manager=manager,
+        pause_authority=pause_authority,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(handoff)),
+    )
+
+    proof = handoff["checkpointed_manager_pause_adoption"]
+    assert proof["authority_schema"] == (
+        migration._IMMUTABLE_CHILD_CHECKPOINTED_MANAGER_PAUSE_AUTHORITY_SCHEMA  # noqa: SLF001
+    )
+    assert proof["authority_sha256"] != migration._fingerprint(  # noqa: SLF001
+        pause_authority
+    )
+    assert proof["observed_at"] == observed_at
+    assert writes
+
+
+def test_immutable_child_checkpointed_pause_adoption_rejects_spec_drift() -> None:
+    manager = _immutable_unit_manager(replicas=0, resource_version="19", generation=3)
+    runner = _ImmutableChildUnitRunner({("deployment", "soperator-manager"): manager})
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="does not match the exact live Deployment",
+    ):
+        migration._adopt_exact_checkpointed_soperator_manager_pause(  # noqa: SLF001
+            handoff={"status": "pending"},
+            manager=manager,
+            pause_authority={
+                "status": "verified",
+                "deployment_uid": "manager-uid",
+                "original_replicas": 1,
+                "spec_fingerprint": "different-manager-spec",
+                "pause_generation": 3,
+                "verified_at": "2026-07-30T00:00:00Z",
+            },
+            command_runner=runner,
+            kube_context="external-context",
+            checkpoint_writer=lambda: pytest.fail("drift must not checkpoint"),
+        )
 
 
 def test_immutable_child_manual_manager_adoption_rejects_owned_pod(
@@ -82742,6 +89464,186 @@ def test_target_worker_reload_reasserts_checkpoint_gpu_successor_before_recreati
     assert proof["cycles"][-1]["reasserted_partitions"] == []
 
 
+def test_target_worker_reload_reuses_exact_pause_during_inert_controller_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main = _slurm_partition_pause_record_fixture("main")
+    gpu = _slurm_partition_pause_record_fixture("gpu")
+    records = (main, gpu)
+    payloads = [record.as_payload() for record in records]
+    config_sha256 = "a" * 64
+    authority_epoch = "target-test-epoch"
+    pod_names = ["worker-0", "worker-1"]
+    workers = {
+        pod_name: {
+            "status": "verified",
+            "successor": {
+                "pod_uid": f"{pod_name}-uid",
+                "node_name": f"{pod_name}-node",
+                "statefulset_uid": "worker-statefulset-uid",
+                "nodeset_uid": "worker-nodeset-uid",
+                "target_uid": "target-uid",
+                "lineage": "target-owned-successor",
+            },
+        }
+        for pod_name in pod_names
+    }
+    rollout: dict[str, Any] = {
+        "schema": migration._IN_PLACE_WORKER_BRIDGE_CONFIG_ROLLOUT_SCHEMA,  # noqa: SLF001
+        "status": "pending",
+        "authority_epoch": authority_epoch,
+        "target_config_sha256": config_sha256,
+        "pod_names": pod_names,
+        "workers": workers,
+        "affected_partition_pause": {
+            "schema": migration._IN_PLACE_WORKER_BRIDGE_PARTITION_PAUSE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "pod_names": pod_names,
+            "partitions": ["gpu", "main"],
+            "partition_pause": payloads,
+            "partition_pause_fingerprint": migration._fingerprint(payloads),  # noqa: SLF001
+        },
+        "affected_partition_pause_rebases": {
+            "schema": migration._IN_PLACE_WORKER_BRIDGE_PARTITION_REBASE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "authority_epoch": authority_epoch,
+            "config_sha256": config_sha256,
+            "latest_successor_partition_pause_fingerprint": migration._fingerprint(  # noqa: SLF001
+                [gpu.as_payload(), main.as_payload()]
+            ),
+        },
+    }
+    checkpoint: dict[str, Any] = {
+        "phase_state": {
+            migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID: {  # noqa: SLF001
+                "slurm_paused_partitions": [gpu.as_payload()],
+            },
+            "rolling-compute-migration": {
+                "slurm_paused_partitions": payloads,
+                "in_place_bridge_client_handoff": {
+                    "worker_config_rollout": rollout,
+                },
+            },
+        },
+    }
+    journal = {"partition_pause": [main.as_payload()]}
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_controller_gate_partition_pause_gap_records",
+        lambda _checkpoint: (main,),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_validated_in_place_controller_gap_binding_sha256",
+        lambda _checkpoint: "b" * 64,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state",
+        lambda **_kwargs: pytest.fail("the deliberately inert controller must not receive RPCs"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_reassert_controller_bridge_partition_pause_after_reconfigure",
+        lambda **_kwargs: pytest.fail("checkpoint-only reuse must not mutate Slurm"),
+    )
+
+    lines = migration._ensure_target_worker_recreation_partition_pause(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        reload_state=rollout,
+        expected_config_sha256=config_sha256,
+        authority_epoch=authority_epoch,
+        kube_context="external-context",
+        command_runner=_FakeCommandRunner(),
+        checkpoint_writer=lambda: writes.append(copy.deepcopy(checkpoint)),
+    )
+
+    assert "retained the exact checkpoint-owned DOWN records" in lines[0]
+    receipt = rollout["partition_pause_checkpoint_gap_reuse"]
+    assert receipt["status"] == "verified"
+    assert receipt["partitions"] == ["gpu", "main"]
+    assert receipt["bridge_partitions"] == ["main"]
+    assert (
+        rollout["partition_pause_reassertion"]["verification_route"]
+        == "checkpointed-inert-controller-gap"
+    )
+    assert (
+        rollout["checkpoint_partition_pause_reassertion"]["verification_route"]
+        == "checkpointed-inert-controller-gap"
+    )
+    assert writes
+
+
+def test_target_worker_reload_refuses_incomplete_checkpoint_gap_worker_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main = _slurm_partition_pause_record_fixture("main")
+    payload = main.as_payload()
+    config_sha256 = "a" * 64
+    authority_epoch = "target-test-epoch"
+    rollout: dict[str, Any] = {
+        "schema": migration._IN_PLACE_WORKER_BRIDGE_CONFIG_ROLLOUT_SCHEMA,  # noqa: SLF001
+        "status": "pending",
+        "authority_epoch": authority_epoch,
+        "target_config_sha256": config_sha256,
+        "pod_names": ["worker-0"],
+        "workers": {"worker-0": {"status": "delete-accepted"}},
+        "affected_partition_pause": {
+            "schema": migration._IN_PLACE_WORKER_BRIDGE_PARTITION_PAUSE_SCHEMA,  # noqa: SLF001
+            "status": "verified",
+            "pod_names": ["worker-0"],
+            "partitions": ["main"],
+            "partition_pause": [payload],
+            "partition_pause_fingerprint": migration._fingerprint([payload]),  # noqa: SLF001
+        },
+    }
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "slurm_paused_partitions": [payload],
+                "in_place_bridge_client_handoff": {
+                    "worker_config_rollout": rollout,
+                },
+            },
+        },
+    }
+    monkeypatch.setattr(
+        migration,
+        "_in_place_target_controller_gate_partition_pause_gap_records",
+        lambda _checkpoint: (main,),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_validated_in_place_controller_gap_binding_sha256",
+        lambda _checkpoint: "b" * 64,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            migration.SoperatorMigrationPhasePending("live RPC refused")
+        ),
+    )
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="live RPC refused"):
+        migration._ensure_target_worker_recreation_partition_pause(  # noqa: SLF001
+            checkpoint=checkpoint,
+            journal={"partition_pause": [payload]},
+            reload_state=rollout,
+            expected_config_sha256=config_sha256,
+            authority_epoch=authority_epoch,
+            kube_context="external-context",
+            command_runner=_FakeCommandRunner(),
+            checkpoint_writer=lambda: pytest.fail(
+                "incomplete checkpoint-only evidence must not be written"
+            ),
+        )
+
+    assert "partition_pause_checkpoint_gap_reuse" not in rollout
+
+
 def test_target_worker_reload_rebase_rejects_unknown_partition_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -86472,14 +93374,9 @@ def test_execute_allows_premutation_checkpoint_source_report_refresh(
         config_path,
         "test-pre-upgrade",
     )
-    assert {
-        key: checkpoint["backup"][key]
-        for key in expected_backup
-    } == expected_backup
+    assert {key: checkpoint["backup"][key] for key in expected_backup} == expected_backup
     assert checkpoint["backup"]["scope"] == "campaign"
-    assert checkpoint["backup"]["campaign_fingerprint"] == campaign[
-        "fingerprint"
-    ]
+    assert checkpoint["backup"]["campaign_fingerprint"] == campaign["fingerprint"]
     events = [event["event"] for event in checkpoint["events"]]
     refresh_index = events.index("execute-checkpoint-source-report-refreshed")
     backup_index = events.index("backup-metadata-checkpointed")
@@ -86963,9 +93860,7 @@ def test_backup_recovery_approval_is_bound_to_current_segment(
     assert state["status"] == "temporarily-unprotected"
     assert state["allowed_through_segment_id"] == saved["current_segment_id"]
     assert saved["backup_protection"]["status"] == "temporarily-unprotected"
-    assert migration.external_soperator_upgrade_backup_recovery_allows_current_segment(
-        saved
-    )
+    assert migration.external_soperator_upgrade_backup_recovery_allows_current_segment(saved)
     migration.record_soperator_migration_backup_binding(
         config_path=config_path,
         target_ref="external-cluster",
@@ -86978,9 +93873,7 @@ def test_backup_recovery_approval_is_bound_to_current_segment(
     assert retained["backup_recovery"]["status"] == "temporarily-unprotected"
     assert retained["events"][-1]["event"] == "campaign-backup-invalid-binding-retained"
     saved["current_segment_id"] = "segment-2"
-    assert not migration.external_soperator_upgrade_backup_recovery_allows_current_segment(
-        saved
-    )
+    assert not migration.external_soperator_upgrade_backup_recovery_allows_current_segment(saved)
 
 
 def test_backup_replacement_atomically_changes_active_binding_and_keeps_audit(
@@ -87069,9 +93962,7 @@ def test_backup_replacement_atomically_changes_active_binding_and_keeps_audit(
     assert saved["backup_protection"]["status"] == "protected"
     assert "backup_recovery" not in saved
     replacement_events = [
-        event
-        for event in saved["events"]
-        if event.get("event") == "campaign-backup-replaced"
+        event for event in saved["events"] if event.get("event") == "campaign-backup-replaced"
     ]
     assert len(replacement_events) == 1
     assert replacement_events[0]["old_sha256"] == "a" * 64

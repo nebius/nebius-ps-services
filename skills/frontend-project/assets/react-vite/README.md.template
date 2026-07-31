@@ -1,0 +1,12 @@
+# {{DISPLAY_NAME_MARKDOWN}}
+
+React, TypeScript, and Vite frontend component.
+
+## Commands
+
+```bash
+{{COMMANDS}}
+```
+
+Dependency installation and lockfile generation are intentionally separate
+explicit steps.

@@ -8,8 +8,10 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 Expose a durable private prompt workspace and coordinate the SDLC loop by
 reading accepted prompt revisions, specs, checkpoints, and local state,
 encouraging a safe live experiment environment when useful, selecting the next
-feature, refreshing active steering when needed, and choosing exactly one next
-skill. After plan lock it routes through execution preparation, keeps one active
+feature, conditionally establishing project-specific agent instructions after
+requirements and design, refreshing active steering when needed, and choosing
+exactly one next skill. After plan lock it routes through execution
+preparation, keeps one active
 feature while safe implementation tasks run in dependency waves, and returns
 to the project checkout only after exact promotion. In a managed outer
 worktree, it releases Agentic SDLC ownership only after final alignment, UAT,
@@ -45,6 +47,7 @@ There is no bare `$sdlc-start` resume action.
 ## Main Boundaries
 
 - Do not free-edit requirements or design.
+- Do not create, overwrite, or delete project instruction files directly.
 - Do not implement code directly.
 - Do not commit, push, create PRs, review PRs, or merge.
 - Do not bypass validation, tests, or evaluation.
@@ -57,6 +60,8 @@ There is no bare `$sdlc-start` resume action.
 
 - `docs/requirements.md`.
 - `docs/design.md` when present.
+- The active selected-project instruction file and latest private
+  `project-agent-instructions` decision when present.
 - Existing local run state when present.
 - One managed `agentic-sdlc/prompt-v1` file and its accepted immutable revision.
 - Optional live experiment environment details to route through requirements.
@@ -67,6 +72,8 @@ There is no bare `$sdlc-start` resume action.
 - Active run state is accurate and backed by a checkpoint.
 - Current feature and next skill are explicit.
 - Steering is refreshed or routed through `sdlc-auto-steering` when pending.
+- The conditional project-instruction decision is verified after requirements
+  and design and before auto-steering or planning.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss from the same prompt-bound command.

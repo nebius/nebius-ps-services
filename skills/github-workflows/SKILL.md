@@ -7,6 +7,18 @@ description: "Use for GitHub Actions workflow work: create, review, or standardi
 
 Apply repository-native GitHub Actions patterns instead of inventing one-off workflows.
 
+## Invocation Scope
+
+- `standalone`: create or update the selected repository workflows.
+- `coordinated-candidate`: receive exact workflow paths, project commands,
+  exclusions, and private bundle from `scaffold-project`; emit candidate YAML
+  only in that bundle and never write the target.
+
+In coordinated-candidate scope, use one newly assigned project-prefixed
+workflow file. Do not splice an existing workflow automatically, dispatch a
+workflow, change repository settings, or claim application/infrastructure
+files. Return candidate path, mode, provenance, and validation requirements.
+
 ## Use This Skill For
 
 - Creating or updating `.github/workflows/*.yml` files.
@@ -14,6 +26,8 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
 - Adding or reviewing bot-only merge automation.
 - Adding or reviewing tag-driven GitHub Release publication workflows.
 - Adding or reviewing container image publish workflows.
+- Translating a `container` build, platform, SBOM, provenance, vulnerability,
+  and verification contract into GitHub Actions YAML.
 
 ## Workflow
 
@@ -22,6 +36,9 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
    - For PR/push CI or merge automation, read `references/pr-merge.md`.
    - For GitHub Releases, read `references/publish-release.md`.
    - For container image publication, read `references/container-image-publish.md`.
+   - For a container workflow, obtain the approved build context, Dockerfile or
+     Bake target, target platforms, cache policy, and supply-chain requirements
+     from the `container` contract. Do not redesign the image in workflow YAML.
 
 2. Prefer repository conventions.
    - Scope monorepo workflows with `paths`.
@@ -64,6 +81,9 @@ URLs, customer data, raw logs, or one-off local state.
 - Release workflows must resolve the tagged commit explicitly and verify it belongs to the release branch.
 - Release note generation must fail if the matching changelog section is missing or empty.
 - Image publish workflows should emit immutable tags and record the published digest.
+- Container workflows own CI orchestration only. Image/runtime design and
+  validation requirements remain with `container`; registry release execution
+  remains with `publish-image`.
 - Merge automation should be bot-scoped and narrowly authorized.
 
 ## Resources

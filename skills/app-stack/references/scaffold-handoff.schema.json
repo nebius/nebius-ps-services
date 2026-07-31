@@ -1,0 +1,176 @@
+{
+  "$id": "https://example.invalid/app-stack/scaffold-handoff.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "components": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/nonEmptyString"
+                },
+                "revisit_trigger": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "selection": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "$ref": "#/$defs/status"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "selection",
+                "revisit_trigger"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "constraints": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "type": "array"
+          },
+          "component_class": {
+            "enum": [
+              "application",
+              "external-service",
+              "frontend",
+              "infrastructure"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "kind": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "revisit_trigger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/status"
+          },
+          "technology": {
+            "additionalProperties": false,
+            "properties": {
+              "framework": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "language": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "package_manager": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runtime": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "versions": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/nonEmptyString"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "language",
+              "framework",
+              "profile",
+              "runtime",
+              "package_manager",
+              "versions"
+            ],
+            "type": "object"
+          },
+          "validation_expectations": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "component_class",
+          "kind",
+          "status",
+          "technology",
+          "capabilities",
+          "constraints",
+          "validation_expectations",
+          "revisit_trigger"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "decision_id": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "schema_version": {
+      "const": 2
+    }
+  },
+  "required": [
+    "schema_version",
+    "decision_id",
+    "components"
+  ],
+  "title": "App Stack Scaffold Handoff",
+  "type": "object",
+  "$defs": {
+    "nonEmptyString": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "required",
+        "conditional",
+        "deferred",
+        "rejected"
+      ]
+    }
+  }
+}

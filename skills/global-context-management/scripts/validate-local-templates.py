@@ -532,7 +532,7 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat that policy request as sufficient\n  authorization",
         "do not ask for another user prompt only because the original",
         "close completed helpers when close controls are available",
-        "hard maximum of three\n  remediation attempts or 60 active",
+        "hard maximum of five\n  remediation attempts or 120 active",
         "never raise or disable the attempt maximum",
         "newly acquired evidence and a genuinely new evidence-derived hypothesis",
         "When evidence establishes a causally independent blocker",
@@ -541,6 +541,12 @@ def assert_doc_contracts(root: Path) -> None:
         "Agents may clean up temporary trees they created during the current task",
         'find "$task_temp_dir" -depth -delete',
         "Preserve an active `codex-remediation-budget:v1` marker exactly",
+        "## Nested project instructions",
+        "read every applicable instruction file from the repository root",
+        "Nested instructions must not weaken higher-level security",
+        "If applicable instructions are irreconcilable, stop before mutation",
+        "When a workflow creates or refreshes an `AGENTS.md`, read",
+        "Treat `AGENTS.override.md` as the active file for its directory",
     )
     for needle in required_agents_template:
         if needle not in agents_template:

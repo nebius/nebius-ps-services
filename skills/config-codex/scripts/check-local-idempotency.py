@@ -29,13 +29,13 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
         "After one remediation fails against the same blocker, use "
         "`troubleshoot` before another repair."
     ),
-    "maximum of three",
-    "remediation attempts or 60 active minutes",
+    "maximum of five",
+    "remediation attempts or 120 active minutes",
     "never raise",
     "disable the attempt maximum",
     "newly acquired evidence",
     "evidence-derived hypothesis",
-    "attempts 1 and 2 as progress",
+    "attempts 1 through 4 as progress",
     "at exhaustion, make only the exact",
     "private task-state update that records the stop",
     "call no other",
@@ -49,6 +49,13 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     "Agents may clean up temporary trees they created during the current task",
     'find "$task_temp_dir" -depth -delete',
     "never target the temporary root or an unresolved variable",
+    "Nested project instructions",
+    "read every applicable instruction file from the repository root",
+    "Root and ancestor instructions remain applicable",
+    "Nested instructions must not weaken higher-level security",
+    "If applicable instructions are irreconcilable, stop before mutation",
+    "When a workflow creates or refreshes an `AGENTS.md`, read",
+    "Treat `AGENTS.override.md` as the active file for its directory",
     (
         "For non-trivial planning, implementation, debugging, refactoring, "
         "migration, architecture, review, testing, CI failure, or multi-file "

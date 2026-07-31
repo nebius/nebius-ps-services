@@ -531,6 +531,7 @@ def _coordinator_claims(
     prefix = "" if scope == "." else f"{scope}/"
     claims = [
         {"kind": "prefix", "path": f"{prefix}docs"},
+        {"kind": "exact", "path": f"{prefix}AGENTS.md"},
         {"kind": "exact", "path": f"{prefix}README.md"},
         {"kind": "exact", "path": f"{prefix}CHANGELOG.md"},
     ]

@@ -6,12 +6,12 @@
 - [Core Concepts](#core-concepts)
   - [Agent model](#agent-model)
   - [Agent-selected phases](#agent-selected-phases)
-  - [Committed product truth](#committed-product-truth)
+  - [Committed project truth](#committed-project-truth)
   - [Private local run state](#private-local-run-state)
   - [Feature execution plane](#feature-execution-plane)
   - [Hooks as guardrails](#hooks-as-guardrails)
   - [MCP servers and external capabilities](#mcp-servers-and-external-capabilities)
-- [Requirements And Design Templates](#requirements-and-design-templates)
+- [Requirements, Design, And Project Instructions](#requirements-design-and-project-instructions)
 - [Workflow](#workflow)
 - [Workflow Verification](#workflow-verification)
   - [Verification principles](#verification-principles)
@@ -25,6 +25,7 @@
   - [`sdlc-start`](#sdlc-start)
   - [`sdlc-gather-context`](#sdlc-gather-context)
   - [`sdlc-create-design`](#sdlc-create-design)
+  - [`project-agent-instructions`](#project-agent-instructions)
   - [`sdlc-auto-steering`](#sdlc-auto-steering)
   - [`sdlc-create-plan`](#sdlc-create-plan)
   - [`sdlc-prepare-execution`](#sdlc-prepare-execution)
@@ -93,28 +94,40 @@ selected by ordinary prompt matching outside an active Agentic SDLC run.
 
 Every phase skill owns a narrow responsibility. For example,
 `sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
-owns `docs/design.md`, `sdlc-create-plan` owns a locked private task graph, and
-`sdlc-prepare-execution` owns the persistent integration resource.
+owns `docs/design.md`, `project-agent-instructions` owns the conditional
+generated project-root `AGENTS.md`, `sdlc-create-plan` owns a locked private
+task graph, and `sdlc-prepare-execution` owns the persistent integration
+resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
 `sdlc-commit` owns final sealing and exact local promotion after evidence passes.
 
-### Committed product truth
+### Committed project truth
 
-The committed SDLC truth inside a target project is:
+The always-present committed SDLC truth inside a target project is:
 
 - `<project>/docs/requirements.md`
 - `<project>/docs/design.md`
 
-These files are intentionally committed because they describe what the product
-must do and how features are designed. Other SDLC artifacts are local runtime
-state and must not be committed.
+After both documents validate, `project-agent-instructions` decides whether
+durable project-specific operating rules add to the inherited instruction
+chain. Only when that evidence gate passes does committed project truth also
+include:
+
+- `<project>/AGENTS.md`
+
+A missing file with no meaningful project-specific delta is a valid
+`not-needed` outcome. Other SDLC artifacts, including the decision manifest and
+receipt, are local runtime state and must not be committed.
 
 Ownership is strict:
 
 - Only `sdlc-create-requirements` writes `docs/requirements.md`.
 - Only `sdlc-create-design` writes `docs/design.md`.
-- Other skills route spec changes back to the owning skill instead of editing
-  those files directly.
+- Only `project-agent-instructions` may create or refresh a provenance-owned
+  generated project-root `AGENTS.md`; human-owned instruction files are
+  preserved.
+- Other skills route changes back to the owning skill instead of editing those
+  files directly.
 
 ### Private local run state
 
@@ -337,7 +350,7 @@ and total, fast, and deep remaining budgets needed for the next call. Invalid
 relevance, authority, selector, window, or budget is rejected before any
 external call and is not classified as an environment outage.
 
-## Requirements And Design Templates
+## Requirements, Design, And Project Instructions
 
 The two committed product-truth documents are created from templates in their
 owning skills:
@@ -382,6 +395,16 @@ The design template also records:
   must not be committed
 - an ID policy that forbids renumbering existing feature IDs
 
+Project instructions intentionally have no fill-every-section template.
+`project-agent-instructions/references/decision-contract.md` defines the
+evidence gate, generated section allowlist, provenance marker, ownership
+rules, and deterministic inspect/apply/verify helper. The skill runs only
+after both specifications validate. It creates a concise selected-project
+`AGENTS.md` only for durable, project-specific, actionable rules not already
+provided by inherited instructions; it omits empty sections, task state,
+acceptance criteria, architecture essays, generic advice, and reusable
+procedures.
+
 ## Workflow
 
 The high-level workflow is:
@@ -400,21 +423,22 @@ The implementation state schema uses this phase order:
 1. requirements
 2. context
 3. design
-4. sdlc-auto-steering
-5. plan
-6. execution preparation
-7. sdlc-tdd in the integration worktree
-8. implementation dependency waves
-9. validation at the recorded integration HEAD
-10. test at the recorded integration HEAD
-11. evaluation at the recorded integration HEAD
-12. sdlc-update-documents in the integration worktree
-13. sdlc-align-specs in the integration worktree
-14. sdlc-commit final seal, ff-only promotion, and cleanup
-15. uat from the promoted project checkout
-16. create-pr
-17. review-pr
-18. sdlc-merge-pr, only after explicit user request
+4. project-agent-instructions
+5. sdlc-auto-steering
+6. plan
+7. execution preparation
+8. sdlc-tdd in the integration worktree
+9. implementation dependency waves
+10. validation at the recorded integration HEAD
+11. test at the recorded integration HEAD
+12. evaluation at the recorded integration HEAD
+13. sdlc-update-documents in the integration worktree
+14. sdlc-align-specs in the integration worktree
+15. sdlc-commit final seal, ff-only promotion, and cleanup
+16. uat from the promoted project checkout
+17. create-pr
+18. review-pr
+19. sdlc-merge-pr, only after explicit user request
 
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
@@ -501,8 +525,8 @@ The preflight must verify and record:
   placement in the workflow contract
 - `sdlc-prepare-execution` discovery, task-graph/state-schema contract, and
   deterministic scheduler plus real-Git lifecycle tests
-- installed `worktree`, installed `nebius-grafana-query`, and installed
-  conditional `troubleshoot` availability plus
+- installed `worktree`, installed `nebius-grafana-query`, installed
+  `project-agent-instructions`, and conditional `troubleshoot` availability plus
   source-installed parity for every required SDLC skill, both runtime support
   classes, and `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
@@ -584,6 +608,9 @@ Required happy-path evidence:
 - `sdlc-gather-context` records a compact context pack, including layer and
   boundary facts when the feature may span a vertical slice.
 - `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
+- `project-agent-instructions` records a verified conditional decision and
+  creates or refreshes a selected-project `AGENTS.md` only when current
+  evidence requires durable rules beyond inherited instructions.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked task graph with dependencies,
@@ -783,9 +810,10 @@ Owns exactly `$sdlc-start workspace init [project-folder]` and the prompt-bound
 creates one starter only when empty. `run` binds one managed prompt to one
 active run, snapshots each changed digest once, returns `ALREADY_COMPLETE` for
 an unchanged completed prompt, and routes changed active revisions to
-`sdlc-auto-steering`. It then coordinates the active SDLC run and reads `docs/requirements.md`,
-`docs/design.md`, `active-run.json`, `current-state.json`, feature queue,
-fingerprints, latest checkpoint, `STEERING.md`,
+`sdlc-auto-steering`. It then coordinates the active SDLC run and reads
+`docs/requirements.md`, `docs/design.md`, the project-instruction decision,
+`active-run.json`, `current-state.json`, feature queue, fingerprints, latest
+checkpoint, `STEERING.md`,
 `steering/auto-steering.json`, and evidence. It selects the highest-priority
 incomplete feature whose dependencies are satisfied, routes stale or unresolved
 steering to `sdlc-auto-steering`, writes a checkpoint, and returns exactly one
@@ -834,18 +862,35 @@ new fingerprint or loop; an admitted design change preserves stable feature
 IDs, records the decision/change log and new fingerprint, and requires plan
 vN+1.
 
+### `project-agent-instructions`
+
+Runs after validated requirements and design and before auto-steering or
+planning. It inspects the exact selected project, inherited instruction chain,
+active project instruction file, and relevant repository evidence. A new file
+is justified only by durable, project-specific, actionable rules that change
+agent behavior beyond inherited guidance.
+
+The deterministic helper records a private manifest, decision, and state.
+It creates `AGENTS.md` exclusively, refreshes it only when the provenance
+marker and body digest prove the generated file is unchanged, and explicitly
+reads the active file after a write. Human-owned files, same-directory
+`AGENTS.override.md`, and configured fallback files are never overwritten.
+Conflicts, material gaps, unsafe targets, stale provenance, or concurrent
+changes block the workflow instead of silently weakening instructions.
+
 ### `sdlc-auto-steering`
 
 Refreshes private runtime steering for the active run. It records every accepted
 same-prompt revision in `STEERING.md`, linked by prompt ID, revision, digest,
 and snapshot, with only a compact redacted summary and never raw prompt text,
 keeps `steering/auto-steering.json` as the machine-readable disposition state,
-and derives compact reminders from requirements, design, context, locked plan,
-fingerprints, steering, and recent evidence. It classifies entries with exact
-disposition values such as `runtime-only`, `requirements-change`,
-`design-change`, `docs-update`, `resolved`, `superseded`, `rejected`, or
-`needs-human`. It does not choose the next phase directly and does not edit
-committed product-truth docs.
+and derives compact reminders from requirements, design, project instructions,
+context, locked plan, fingerprints, steering, and recent evidence. It
+classifies entries with exact disposition values such as `runtime-only`,
+`requirements-change`, `design-change`,
+`project-agent-instructions-change`, `docs-update`, `resolved`, `superseded`,
+`rejected`, or `needs-human`. It does not choose the next phase directly and
+does not edit committed project-truth docs.
 
 ### `sdlc-create-plan`
 

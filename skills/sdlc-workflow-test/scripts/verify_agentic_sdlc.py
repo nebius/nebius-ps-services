@@ -58,6 +58,7 @@ REQUIRED_SDLC_SKILLS = (
 REQUIRED_RUNTIME_SUPPORT_SKILLS = (
     "worktree",
     "nebius-grafana-query",
+    "project-agent-instructions",
     "troubleshoot",
 )
 SOURCE_PARITY_SKILLS = (
@@ -93,6 +94,7 @@ GOLDEN_PHASE_SEQUENCE = (
     "sdlc-start",
     "sdlc-gather-context",
     "sdlc-create-design",
+    "project-agent-instructions",
     "sdlc-auto-steering",
     "sdlc-create-plan",
     "sdlc-prepare-execution",
@@ -160,12 +162,14 @@ LIVE_LANE_REQUIRED_ASSERTIONS = {
 SKILL_EVIDENCE_BASES = {skill: "live" for skill in REQUIRED_SDLC_SKILLS}
 SKILL_EVIDENCE_BASES.update(
     {
+        "project-agent-instructions": "live",
         "sdlc-start": "deterministic",
         "sdlc-prepare-execution": "deterministic",
         "sdlc-implement-plan": "deterministic",
         "sdlc-merge-pr": "safety-only",
     }
 )
+REQUIRED_EVIDENCE_SKILLS = tuple(SKILL_EVIDENCE_BASES)
 SKILL_REQUIRED_ASSERTIONS = {
     "sdlc-align-specs": [
         "requirements_design_traceability",
@@ -193,6 +197,10 @@ SKILL_REQUIRED_ASSERTIONS = {
     "sdlc-implement-plan": ["worker_contract_tests", "scoped_integration"],
     "sdlc-merge-pr": ["merge_guardrails_tested", "no_real_merge_performed"],
     "sdlc-prepare-execution": ["execution_scheduler_tests", "recovery_contract_tests"],
+    "project-agent-instructions": [
+        "conditional_decision_recorded",
+        "instruction_ownership_preserved",
+    ],
     "sdlc-start": ["two_command_surface_tests", "prompt_bound_state_tests"],
     "sdlc-tdd": ["tests_preceded_implementation", "slice_contract_covered"],
     "sdlc-tui-test": ["disposable_tui_smoke", "terminal_state_asserted"],
@@ -843,6 +851,7 @@ def check_design(ctx: Context) -> None:
         "documents.md",
         "requirements-change",
         "design-change",
+        "project-agent-instructions-change",
         "docs-update",
         "PreToolUse",
         "Stop",
@@ -876,6 +885,7 @@ def check_design(ctx: Context) -> None:
         "predefined runtime operational criterion",
         "non-Grafana provenance",
         "installed `nebius-grafana-query`",
+        "installed\n  `project-agent-instructions`",
         "publication-only mode",
         "findings-and-readiness-only mode",
         'phase: "create-pr"',
@@ -1417,6 +1427,10 @@ def check_skill_discovery(ctx: Context) -> None:
         "troubleshoot": (
             "Conditional diagnosis runtime dependency",
             "runtime.troubleshoot-dependency",
+        ),
+        "project-agent-instructions": (
+            "Project agent instructions runtime dependency",
+            "runtime.project-agent-instructions-dependency",
         ),
     }
     for support_name in REQUIRED_RUNTIME_SUPPORT_SKILLS:
@@ -3207,7 +3221,7 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
         or not isinstance(lanes, dict)
         or set(lanes) != set(LIVE_LANES)
         or not isinstance(skills, dict)
-        or set(skills) != set(REQUIRED_SDLC_SKILLS)
+        or set(skills) != set(REQUIRED_EVIDENCE_SKILLS)
     ):
         reject("Live evidence identity or lane structure is stale or invalid.")
         return None
@@ -3785,7 +3799,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
 
 def summarize_skill_matrix(ctx: Context) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
-    for skill in REQUIRED_SDLC_SKILLS:
+    for skill in REQUIRED_EVIDENCE_SKILLS:
         checks = [
             check for check in ctx.checks if check.capability_id == f"skill.{skill}"
         ]

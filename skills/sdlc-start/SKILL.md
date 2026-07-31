@@ -43,6 +43,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 
 - `docs/requirements.md`.
 - `docs/design.md` when present.
+- The selected project root's active `AGENTS.md`, `AGENTS.override.md`, or
+  configured fallback instruction file when present.
 - Existing local run state when present.
 - The bound managed prompt and its latest immutable accepted revision.
 - Active `STEERING.md` and `steering/auto-steering.json` when present.
@@ -61,6 +63,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `checkpoints/latest.json`, and the latest checkpoint file.
 - `STEERING.md`.
 - `steering/auto-steering.json` when present.
+- The latest private `project-agent-instructions` manifest, decision, and state
+  when present.
 - Latest feature evidence and failure logs.
 - The active `failure-event-v1`, optional `diagnosis-v1`,
   `repair-control-v1`, append-only repair journal, and current repair pointer.
@@ -86,6 +90,9 @@ $sdlc-start run <prompt-path-or-unique-filename>
   remain owned by the deterministic `sdlc-classify-failure` helper.
 - Checkpoint pointers to execution state; Git resource mutation remains owned by
   `sdlc-prepare-execution`, `sdlc-implement-plan`, and `sdlc-commit`.
+- Private project-instruction decision pointers and fingerprints returned by
+  `project-agent-instructions`. That skill exclusively owns any generated
+  project-root `AGENTS.md`.
 
 ## Process
 
@@ -138,6 +145,17 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `sdlc-gather-context`.
 - If design is missing or stale and required context is present, route only to
   `sdlc-create-design`.
+- Once both requirements and design are current and validated, route to
+  `project-agent-instructions` before auto-steering, feature planning, or
+  execution. Pass the exact selected project root, `agentic-sdlc` ownership,
+  and a caller-owned private state directory. Continue only after `created`,
+  `refreshed`, `existing-sufficient`, or `not-needed`; explicitly read any
+  active project instruction file before proceeding.
+- Re-run `project-agent-instructions` when its decision is absent or when the
+  requirements, design, inherited instruction chain, selected project,
+  evidence, renderer, target, or prior decision fingerprint changes. Treat its
+  structured conflict or safety blocker as the current blocked state rather
+  than bypassing it.
 - Build or refresh the feature queue from `docs/design.md`.
 - Check `STEERING.md` and `steering/auto-steering.json` before every
   iteration.
@@ -147,6 +165,7 @@ $sdlc-start run <prompt-path-or-unique-filename>
   implementation phase.
 - Honor `sdlc-auto-steering` dispositions: route `requirements-change` to
   `sdlc-create-requirements`, `design-change` to `sdlc-create-design`,
+  `project-agent-instructions-change` to `project-agent-instructions`,
   `docs-update` to `sdlc-update-documents`, and `needs-human` to a blocked
   human-input state.
 - Select the highest-priority incomplete feature whose dependencies are complete.
@@ -230,9 +249,12 @@ $sdlc-start run <prompt-path-or-unique-filename>
   and steering returns the same current feature and `next_recommended_skill`.
 - Repeating with unchanged auto-steering state must not re-route to
   `sdlc-auto-steering` or duplicate steering history.
+- Repeating with a verified unchanged project-instruction decision reuses its
+  private state and must not rewrite the project file.
 - Completed features with unchanged fingerprints are skipped.
 - Changed requirements or design invalidate only affected features and
-  supersede stale plans; locked plan files are never edited in place.
+  supersede stale plans; they also invalidate the project-instruction decision
+  before planning resumes. Locked plan files are never edited in place.
 - If execution is already prepared, route requirement/design/plan changes
   through a new locked plan version and private `replan-future`. Replace only
   resource-free planned waves; do not reset or rewrite active/completed
@@ -266,6 +288,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
 ## Must Not
 
 - Free-edit requirements or design.
+- Create, overwrite, or delete project instruction files directly; route their
+  conditional ownership to `project-agent-instructions`.
 - Implement code directly.
 - Commit, push, create PRs, review PRs, or merge.
 - Bypass validation, tests, or evaluation.
@@ -287,15 +311,20 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - Active repair state, owner, invalidations, budgets, and stop reason are
   explicit and checkpointed when a failure cycle exists.
 - Steering has been consumed, refreshed, or routed to `sdlc-auto-steering`.
+- The current project-instruction decision is verified and its outcome and
+  fingerprint are checkpointed.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss.
 
 ## SDLC Invariants
 
-- Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
+- Treat `docs/requirements.md`, `docs/design.md`, and any
+  provenance-owned project-root `AGENTS.md` as committed project truth.
 - Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+  writes `docs/design.md`; only `project-agent-instructions` may create or
+  refresh its generated project-root `AGENTS.md`. Other skills route changes
+  to those owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - Keep editable prompts and project-level prompt workspace metadata under the
   matching private `~/.codex/sdlc-runs/<project-id>/` directory.

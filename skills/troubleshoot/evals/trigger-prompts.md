@@ -25,12 +25,12 @@ readiness only; fresh-session execution is required to observe activation.
    change production; correlate one failed request and specify the highest-value
    next experiment."
 9. "Forty-three repair attempts have run for hours without resolving the same
-   failure. Cap this blocker at three remediation attempts, require new evidence
+   failure. Cap this blocker at five remediation attempts, require new evidence
    and a new hypothesis before each retry, explain the blocker, and wait for me
    before continuing."
-10. "Three attempts exhausted a parser failure. A later assertion failure is
+10. "Five attempts exhausted a parser failure. A later assertion failure is
     causally independent. Prove the old attempts do not exhaust the new issue,
-    start it at attempt 1, and require human input only after three attempts
+    start it at attempt 1, and require human input only after five attempts
     against that one assertion blocker."
 11. "This cross-service failure has no proven cause yet. Investigate it first;
     if the durable remedy turns out to require a new service boundary or data

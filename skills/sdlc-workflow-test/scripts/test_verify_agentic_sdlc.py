@@ -212,7 +212,7 @@ class VerifierContractTests(unittest.TestCase):
             os.chmod(evidence, 0o600)
             lanes[lane] = {"status": lane_status, "evidence": [relative.as_posix()]}
         skills = {}
-        for skill in verifier.REQUIRED_SDLC_SKILLS:
+        for skill in verifier.REQUIRED_EVIDENCE_SKILLS:
             relative = Path("evidence") / "skills" / skill / "result.json"
             evidence = self.verification_root / relative
             evidence.parent.mkdir(parents=True, exist_ok=True)
@@ -402,15 +402,22 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_skill_evidence_contract_covers_all_required_skills(self) -> None:
         self.assertEqual(
-            set(verifier.SKILL_EVIDENCE_BASES), set(verifier.REQUIRED_SDLC_SKILLS)
+            set(verifier.SKILL_EVIDENCE_BASES),
+            {
+                *verifier.REQUIRED_SDLC_SKILLS,
+                "project-agent-instructions",
+            },
         )
         self.assertEqual(verifier.SKILL_EVIDENCE_BASES["sdlc-merge-pr"], "safety-only")
         self.assertEqual(
             set(verifier.SKILL_REQUIRED_ASSERTIONS),
-            set(verifier.REQUIRED_SDLC_SKILLS),
+            {
+                *verifier.REQUIRED_SDLC_SKILLS,
+                "project-agent-instructions",
+            },
         )
 
-    def test_observability_provider_is_a_runtime_parity_dependency(self) -> None:
+    def test_runtime_support_skills_are_parity_dependencies(self) -> None:
         self.assertIn(
             "nebius-grafana-query",
             verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
@@ -443,14 +450,40 @@ class VerifierContractTests(unittest.TestCase):
             check.capability_id: check.status
             for check in self.ctx.checks
             if check.capability_id
-            in {"runtime.worktree-dependency", "runtime.observability-dependency"}
+            in {
+                "runtime.worktree-dependency",
+                "runtime.observability-dependency",
+                "runtime.project-agent-instructions-dependency",
+            }
         }
         self.assertEqual(
             support_checks,
             {
                 "runtime.worktree-dependency": "PASS",
                 "runtime.observability-dependency": "PASS",
+                "runtime.project-agent-instructions-dependency": "PASS",
             },
+        )
+
+    def test_project_agent_instructions_is_runtime_support_and_golden_phase(
+        self,
+    ) -> None:
+        self.assertIn(
+            "project-agent-instructions",
+            verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS,
+        )
+        self.assertIn(
+            "project-agent-instructions",
+            verifier.SOURCE_PARITY_SKILLS,
+        )
+        design_index = verifier.GOLDEN_PHASE_SEQUENCE.index("sdlc-create-design")
+        self.assertEqual(
+            verifier.GOLDEN_PHASE_SEQUENCE[design_index + 1],
+            "project-agent-instructions",
+        )
+        self.assertEqual(
+            verifier.GOLDEN_PHASE_SEQUENCE[design_index + 2],
+            "sdlc-auto-steering",
         )
 
     def test_troubleshoot_is_conditional_runtime_support_not_golden_phase(self) -> None:
@@ -1137,10 +1170,13 @@ class VerifierContractTests(unittest.TestCase):
         lane_properties = schema["properties"]["lanes"]["properties"]
         self.assertEqual(set(lane_properties), set(verifier.LIVE_LANES))
         skill_properties = schema["properties"]["skills"]["properties"]
-        self.assertEqual(set(skill_properties), set(verifier.REQUIRED_SDLC_SKILLS))
+        self.assertEqual(
+            set(skill_properties),
+            set(verifier.REQUIRED_EVIDENCE_SKILLS),
+        )
         self.assertEqual(
             set(schema["properties"]["skills"]["required"]),
-            set(verifier.REQUIRED_SDLC_SKILLS),
+            set(verifier.REQUIRED_EVIDENCE_SKILLS),
         )
         for lane in verifier.LIVE_LANES:
             self.assertTrue(

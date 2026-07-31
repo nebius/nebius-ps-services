@@ -10,6 +10,18 @@ description: Create, refactor, or review Bash shell scripts with strict mode, sa
 Write scripts that are safe by default, easy to read, and predictable across repeated runs.
 For new scripts, start from `assets/script-template.sh`.
 
+## Invocation Scope
+
+- `standalone`: create, refactor, or review the selected target script.
+- `coordinated-candidate`: receive exact `.sh` paths, runtime assumptions,
+  exclusions, and private bundle from `scaffold-project`; emit exact candidates
+  only in that bundle and never write the target.
+
+In coordinated-candidate scope, do not create a root Makefile, CI workflow,
+application source, infrastructure, container, deployment, or agent
+instruction file. Return candidate path, executable mode, provenance, and
+shell validation requirements.
+
 ## Workflow
 
 1. Confirm scope and runtime assumptions (bash version, OS expectations, required tools).

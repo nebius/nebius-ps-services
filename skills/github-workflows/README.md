@@ -3,11 +3,17 @@
 `github-workflows` creates, reviews, and standardizes GitHub Actions workflows
 for repository automation.
 
+In `coordinated-candidate` scope it returns exact private workflow candidates
+for assigned `.github/workflows/` paths and performs no target or GitHub write.
+
 ## What It Does
 
 - Designs PR and merge CI workflows.
 - Reviews permissions, triggers, concurrency, and checkout behavior.
 - Creates release, image, and chart publication workflows.
+- Consumes `container` build, platform, cache, SBOM, provenance, vulnerability,
+  and verification requirements for image workflows without redesigning the
+  image or runtime contract.
 - Keeps workflow filenames, service scope, docs, and scripts aligned.
 - Applies least-privilege defaults where practical.
 
@@ -44,6 +50,8 @@ Validate syntax and workflow contracts
 - Avoid hardcoded service lists when a catalog or shared source of truth
   already exists.
 - Keep bot-safe merge and publish behavior explicit.
+- Keep image/runtime design with `container` and registry release execution
+  with `publish-image`; this skill owns the GitHub Actions YAML.
 
 ## Files
 

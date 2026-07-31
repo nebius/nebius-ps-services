@@ -899,6 +899,41 @@ def test_resume_slurmcluster_identity_accepts_passive_slot_target_creation_phase
     assert scope["target"]["uid"] == "target-slurmcluster-uid"
 
 
+def test_resume_slurmcluster_identity_accepts_precreation_source_only_handoff() -> None:
+    source = _jail_slurmcluster_resource()
+
+    selected, scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source,),
+        identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert selected == (source,)
+    assert scope == {}
+
+
+def test_resume_slurmcluster_identity_source_only_rejects_source_uid_drift() -> None:
+    source = _jail_slurmcluster_resource()
+    metadata = source["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["uid"] = "replacement-source-uid"
+
+    with pytest.raises(RuntimeError, match="live source SlurmCluster UID differs"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (source,),
+            identity_scope=_resume_slurmcluster_scope(),
+        )
+
+
+def test_resume_slurmcluster_identity_requires_checkpointed_target_to_remain_present() -> None:
+    with pytest.raises(RuntimeError, match="expected exactly 2 object"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(),),
+            identity_scope=_resume_slurmcluster_scope(
+                target_uid="target-slurmcluster-uid",
+            ),
+        )
+
+
 def test_resume_slurmcluster_identity_bootstrap_requires_checkpoint_target_version() -> None:
     scope = _resume_slurmcluster_scope()
     scope["target_version"] = ""
@@ -945,12 +980,7 @@ def test_resume_slurmcluster_identity_requires_explicit_checkpoint_namespace(
         (
             (_target_handoff_slurmcluster_resource(),),
             _resume_slurmcluster_scope(),
-            "expected exactly 2 object",
-        ),
-        (
-            (_jail_slurmcluster_resource(),),
-            _resume_slurmcluster_scope(),
-            "expected exactly 2 object",
+            "exactly one immutable source binding",
         ),
         (
             (
@@ -966,7 +996,7 @@ def test_resume_slurmcluster_identity_requires_explicit_checkpoint_namespace(
                 },
             ),
             _resume_slurmcluster_scope(),
-            "expected exactly 2 object",
+            "expected exactly 1 or 2 object",
         ),
         (
             (

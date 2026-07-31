@@ -88,6 +88,24 @@ Fix this Terraform module for the already-approved application architecture.
 Use `terraform`; no application-stack decision remains.
 
 ```text
+Use $scaffold-project to materialize this approved component graph.
+```
+
+Use the explicit scaffold coordinator without reopening stack selection.
+
+```text
+Create a React, TypeScript, and Vite package using these approved versions.
+```
+
+Use `frontend-project`; the stack and component boundary are fixed.
+
+```text
+Add a Dockerfile and local Compose service to this existing Python component.
+```
+
+Use `container`; no application-stack decision remains.
+
+```text
 Review PR #42 and tell me whether it can merge.
 ```
 
@@ -122,6 +140,14 @@ For should-trigger prompts, verify that the result:
 - coordinates narrow specialist skills only when implementation is requested.
 - returns a scoped stack decision to an active `design` workflow instead of
   recursively handing the full request back to `design`.
+- emits only logical technology decisions in a scaffold handoff and leaves
+  repository topology, paths, candidate sets, and per-file owners to
+  `scaffold-project`.
+- uses schema version 2, a closed component class, and a canonical technology
+  name for every scaffold-handoff component.
+- leaves non-frontend capability selections empty for the current executable
+  scaffold contract and records those requirements as constraints until a
+  specialist owns a closed binding.
 
 ## Manual Runtime Check
 

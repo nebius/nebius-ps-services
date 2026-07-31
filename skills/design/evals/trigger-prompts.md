@@ -98,6 +98,12 @@ Implement the selected design now.
 Use `/plan` and the relevant implementation or project skill.
 
 ```text
+Use $scaffold-project to apply this already approved component graph.
+```
+
+Use the explicit scaffold coordinator without re-entering design.
+
+```text
 This service fails intermittently and we do not know why. Find the root cause
 and repair it.
 ```

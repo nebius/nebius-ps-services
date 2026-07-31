@@ -6,6 +6,256 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Make managed and external Soperator login-role upgrades use one canonical
+  target-ready availability contract. cxcli keeps one exact source login Pod
+  protected until a distinct target-version peer with the preserved host key
+  is Ready behind the stable login Service and its exact EndpointSlice route,
+  then releases the UID/resourceVersion-bound hold and continues serial
+  replacement without waiting for established SSH sessions. Connections on
+  the replaced Pod may drop and reconnect through the stable Service. Serial
+  bridge-config restarts likewise require two Ready endpoints but no longer
+  inspect sessions. The same behavior is wired through `soperator upgrade` and
+  `ext-soperator upgrade`; neither exposes a session-policy or drain-timeout
+  override. First-adoption persistent copies that stop all login writers remain
+  a separate fail-closed maintenance-window boundary.
+- Resume an exact verified in-place login bridge writer refresh after later
+  checkpointed accounting, controller-gate, client-propagation, and temporary
+  login-surge transitions have restored the target SConfig writer to its
+  original positive size. The successor proof binds the target UID, stable
+  SlurmCluster spec fingerprint, surge reconciliation receipt, manager pause,
+  controller gate, client-config digest, accounting writer command fence, and
+  post-accounting rebind; any unrelated drift still requires the original
+  zero-writer fence.
+- Fix late in-place bridge-client staging restoring
+  `PluginDir=/usr/lib/slurm` after the legacy-rootfs compatibility handoff had
+  already selected the target image's multiarch plugin directory. The
+  bridge-only config now passes through the same exact compatibility transform
+  before any target ConfigMap write, controller-first release, shared-Jail
+  writer pulse, worker readiness check, or controller-gap live RPC. Recovery
+  checkpoints the predecessor and successor digests plus transform counts,
+  preserves the immutable controller-version release proof, archives the exact
+  completed writer pulse, and runs a new bounded `0 -> 1 -> 0` pulse for the
+  successor. Existing worker Pods that still mount the predecessor are then
+  recreated serially only after exact bridge authority, checkpoint-owned DOWN
+  partitions, and a fresh zero-active-job proof; each replacement must retain
+  its node, target SlurmCluster, and Kruise StatefulSet identities, become
+  Ready with a new UID/container identity, and load the successor before the
+  next worker. The pre-delete source may be the exact ownerless Pod preserved
+  by immutable-child handoff: cxcli accepts it only when its captured Pod UID,
+  former source StatefulSet UID, target selector, target StatefulSet successor,
+  and NodeSet owner all reproduce the checkpoint. It never treats arbitrary
+  ownerless Pods as target-owned. Unrelated config drift or identity changes
+  remain recovery-required.
+- Fix bridge-client propagation leaving the target ConfigMap newer than the
+  shared Jail while the target SConfig writer is deliberately fenced at zero.
+  cxcli now checkpoints the exact manager, target, ConfigMap, JailedConfig,
+  Deployment, ServiceAccount, and Jail bindings; pulses only that target writer
+  from zero to one; verifies every mapped file; and returns it to zero before
+  re-reading login clients. The target manager remains paused and the bounded
+  writer pulse returns to its exact successor fence. For non-legacy propagation
+  where a Pod restart is still required, cxcli proves two Ready Service
+  endpoints and restarts stale Pods serially without inspecting SSH sessions.
+- Fix the in-place temporary login surge deadlocking after Helm updated the
+  target SlurmCluster while the bridge-owned Soperator manager remained
+  deliberately paused. Before either surge or restore, cxcli now reasserts the
+  inert target controller and proves that every target login client has the
+  exact two-controller bridge configuration with live RPC connectivity. It
+  then reconciles only the target-owned OpenKruise login StatefulSet through a
+  durable UID/resourceVersion/current-replica/generation-fenced scale and
+  verifies the unchanged non-replica spec and target SlurmCluster owner. The
+  full manager never resumes, so it cannot overwrite bridge client
+  configuration or recreate the fenced controller. Foreign ownership,
+  unproven bridge propagation, manager/controller drift, or an unbounded
+  workload transition remains fail closed.
+- Recover the missing in-place ownership marker from a real post-retirement
+  target-compatibility checkpoint after config-binding rebind has intentionally
+  replaced the original bridge digests. The recovery now requires the exact
+  source-retirement proof, target identities, manager pause/restore generation
+  chain, config fingerprints, and complete SConfig `0 -> 1 -> 0` writer-refresh
+  receipt before reusing the sealed partition pause. Partial or status-only
+  intents remain fail closed. The same receipt now authorizes later
+  bridge-service manager rearm from the compatibility restore generation,
+  including exact campaign-adopted immutable-child pause origins, without
+  assuming unrelated Helm pulses preserve adjacent manager generations. Strict
+  login rollout readiness is unchanged.
+- Treat an exact source-owned zero-controller deferral as a deferral, not a
+  started target command-gate transition, after immutable handoff reaches
+  `target-children-created`, including after the exact terminal ownership
+  receipt is checkpointed. Post-switch resume now proceeds to the ordinary
+  manager-pause and target-gate path instead of requiring a pause journal that
+  cannot exist before that path starts. Incomplete ownership receipts and any
+  real target-gate status without its checkpointed manager pause remain
+  recovery-required.
+- Recover the legacy-rootfs handoff when a valid single-ConfigMap bridge
+  reaches source retirement before the target manager materializes its
+  separate ConfigMap and JailedConfig. With the manager paused, the source
+  SlurmCluster absent, its orphan cleanup journal exact, and target children
+  durably created, cxcli now checkpoints distinct preserved-source and
+  target-owned name/UID bindings before the target SConfig pulse. Replay
+  revalidates both live target owners and accepts missing source objects only
+  after their exact UID/resourceVersion delete intent. Ambiguous writers,
+  overlapping identities, foreign owners, or unjournaled disappearance remain
+  fail closed.
+- Defer the in-place controller bridge Slurm-version transition only until
+  source retirement materializes the manager-generated target Slurm ConfigMap.
+  The first bridge-client reconciliation now checkpoints an exact release and
+  uses the existing simultaneous, backup-protected source-to-target controller
+  transition before requiring any target-version login or other client RPC.
+  A pre-target-write failure restores and proves the exact source bridge before
+  returning pending; exact source/target images and versions, target identity,
+  client-config digest, target HA authority, and downgrade prohibition remain
+  fail-closed bindings. This prevents a newer login `scontrol` from being
+  required to pass a live-RPC gate against older serving controllers. The
+  post-provider compute tail idempotently revalidates or reuses target HA
+  before singleton handoff.
+- Recover a verified in-place controller gap whose older checkpoint predates
+  its sealed semantic binding. After target-version bridge HA, exact target
+  authority, manager pause, inert controller gate, admission target, workload,
+  and partition-pause identities all revalidate, cxcli seals the existing v2
+  contract before the config-only client proof. An existing malformed or
+  semantically drifted binding remains recovery-required, and replay reuses the
+  exact digest without rewriting it.
+- Bind immutable-child capture of an already paused Soperator manager to the
+  campaign's canonical pause journal. Bridge-gated Helm manifests correctly
+  declare zero replicas, so they are no longer required to reconstruct the
+  positive pre-pause replica authority. The adoption instead requires the
+  exact live Deployment UID, original replicas, non-replica spec fingerprint,
+  pause generation, verified state, and zero owned manager Pods; a manager
+  paused outside the campaign still uses the stricter deployed-Helm fallback.
+  The adoption fingerprint now contains only that stable authority material:
+  routine live revalidation may refresh its observational `verified_at`
+  timestamp without invalidating an unchanged pause. Exact older adoption
+  proofs are canonicalized once after all duplicated live identity, spec,
+  generation, replica, ReplicaSet, and Pod-absence fields revalidate; later
+  stable-authority hash drift remains fail closed.
+  The in-place Jail resume classifier recognizes the same exact campaign or
+  manual adoption proof as a valid pause origin, so the intentional
+  source-login/target-worker pre-ownership boundary is not misreported as
+  mixed rootfs consumers merely because no local pause intent was needed.
+- Fix the single-ConfigMap legacy-rootfs bridge rejecting an expected
+  SConfig ServiceAccount that was already present in the exact source-owned
+  Deployment captured by the pre-target zero-writer fence. The bridge now
+  adopts that binding only when the Deployment UID, owner, selector,
+  generation, non-replica spec, positive original replica count, and zero
+  owned Pods still match the verified fence. Single- and dual-ConfigMap
+  bridges use the same durable zero-writer lifecycle and the same exact
+  compatibility payload contract before replacing config or binding the
+  ServiceAccount, then restore the exact original replica count. A payload
+  that already has no `MetricsType` and the canonical legacy-compatible
+  `PluginDir` is adopted without a no-op ConfigMap replacement; unexpected
+  directive values, unbound ServiceAccounts, and other drift remain fail
+  closed.
+
+- Fix external Soperator initial target Helm reconciliation publishing
+  fail-closed NodeSet and SlurmCluster webhooks while the bridge-owned manager
+  is deliberately scaled to zero. cxcli now fingerprints and applies only the
+  exact rendered admission prerequisites, starts the isolated campaign-owned
+  webhook bridge, proves its Ready Service endpoint, publishes the exact
+  webhook configurations only after service is available, waits for injected
+  CA bundles, and keeps that endpoint live through the full Helm apply.
+  Every target Helm replay remains on this bootstrap path while controller
+  bridge authority fences the manager, even after a target SlurmCluster UID
+  exists; target existence is no longer treated as admission readiness.
+  A failed webhook head left by an interrupted intent is now authorized only
+  after cxcli proves the complete bounded, contiguous chain from one deployed
+  predecessor with identical chart, app, values, intent-time binding, allowed
+  failure class, and monotonic timestamps. Resume reuses that checkpoint once
+  instead of re-authorizing it forever, marks it consumed immediately before
+  Helm dispatch, rejects failed revisions as new predecessors, and accepts
+  only the exact next deployed revision as verification.
+  Foreign resource ownership or crash-resume chart/value drift fails closed,
+  and the temporary Deployment is removed by UID after success or failure.
+- Fix temporary login surge and restore Helm pulses nesting a rolling-phase
+  webhook bridge around a second target-admission bootstrap whose phase-local
+  cleanup journal used the same deterministic Deployment name. Admission
+  bootstrap lifecycle state and bridge ownership are now decoupled: both
+  pulses force one canonical bootstrap, keep their accounting live-boundary
+  proof immediately before Helm, and bind all bridge creation, readiness, and
+  UID cleanup to the single rolling-migration journal. A stale terminal bridge
+  journal in another phase can no longer reject or replace the live canonical
+  bridge.
+- Revalidate a completed target-admission Helm bootstrap against the currently
+  deployed release values before reusing its terminal proof. A later
+  checkpointed Helm pulse can legitimately supersede an earlier temporary
+  OpenMetrics compatibility override while preserving the same admission
+  substrate. cxcli now archives the exact superseded bootstrap proof and runs a
+  fresh fail-closed protected Helm pulse when the live release no longer has
+  the intended values; exact live values still reuse the completed proof
+  without creating another revision. Supersession history is bounded and
+  malformed terminal or history state remains fail closed.
+- Fix external Soperator accounting finalization calling fail-closed
+  SlurmCluster admission after the target Helm bootstrap had removed its
+  temporary endpoint. The source and target SlurmDBD command fences now run
+  inside a separate durable admission boundary that reuses the exact rendered
+  chart/webhook contract, proves the isolated Ready endpoint, keeps the real
+  manager paused, and UID-cleans the bridge after success or interruption.
+  Resume binds that operation to both exact SlurmCluster UIDs and reruns only
+  its idempotent incomplete boundary; a completed target Helm proof is not
+  mistaken for accounting admission readiness.
+- Fix external accounting finalization waiting for a target MariaDB Pod before
+  source retirement while the target manager is deliberately paused. The
+  final source dump can now be sealed under both exact SlurmDBD CR fences and a
+  live paused-manager/target-Pod-absence proof, with import durably deferred
+  until source retirement. After manager restoration, cxcli promotes that
+  absence checkpoint to the exact target Pod/StatefulSet/MariaDB/PVC binding
+  before schema bootstrap or SQL import; it never starts reconciliation early
+  or adopts an unbound database. The deferred-import journal now preserves the
+  complete absence proof instead of its incomplete live-database-field projection.
+  Resume canonically repairs only that exact pre-retirement projection when
+  every other source, target, dump, deployment, and replay binding still
+  matches. The canonical post-retirement target-fence waiter now discovers and
+  binds the newly manager-materialized database through that same sealed
+  absence proof before it validates the target PVC and writer fence, instead
+  of rejecting the intentionally missing pre-retirement binding. Later or
+  unrelated identity drift remains fail closed.
+- Fix in-place post-Jail resume requiring the fixed-name controller workload
+  to be target-owned before immutable-child handoff can create that successor.
+  While source-bridge HA owns authority, cxcli now accepts only a durable
+  source-owned deferral bound to the exact source and target SlurmCluster UIDs,
+  paused manager, canonical target command gate, bridge epoch, unchanged
+  workload spec, zero desired/status replicas, and absence of every live owned
+  Pod. It does not relabel or adopt the source workload. Once target ownership
+  exists, the canonical rolling-compute journal reasserts the target
+  SlurmCluster gate through a real restored admission window even when Helm
+  already rendered the same command, so later workload, Pod-lineage, and
+  singleton proofs never depend on synthetic gate acceptance.
+- Fix post-switch resume mistaking that source-owned zero-controller deferral
+  for an already-started target command gate after the source workload was
+  orphan-deleted. While immutable-child handoff has not bound target children,
+  the deferral no longer re-pauses the restored manager or requires the absent
+  target StatefulSet. A campaign already stopped in that exact gap may reopen
+  manager materialization only from the checkpointed Deployment UID,
+  non-replica spec, original replica count, and consecutive immutable-restore,
+  service-pause, and reopen generations. The premature pause is archived
+  before normal target-child reconciliation continues; foreign gate fields,
+  ownership, identity, spec, replica, resource-version, or generation drift
+  remains fail closed.
+- Fix legacy-rootfs health verification falling through to target-owned login
+  validation during the intentional immutable-child ownerless gap. In the
+  `children-prepared` and `manager-restored` stages only, cxcli may select one
+  exact captured Ready login Pod after proving its Orphan/relabel journal,
+  target selector plus handoff token, owner absence, source SlurmCluster and
+  fixed-name workload absence, and the exact ownerless retained Service and
+  Service-owned EndpointSlice backend. Direct exec repeats Pod UID, label,
+  owner, and readiness validation before and after every command; any target
+  binding, new owner, source survival, selector/endpoint drift, or other stage
+  remains fail closed.
+- Fix external Soperator resume discovery after a failed target Helm dispatch
+  that created no target `SlurmCluster`. The checkpoint-scoped target-handoff
+  inventory now accepts the exact immutable source alone only while no target
+  UID has ever been bound; a bound target that disappears, an unknown second
+  object, or source/target UID drift still fails closed.
+- Require an explicit `y` or `n` at every interactive action confirmation that
+  previously defaulted to No, including project/config overwrite, Soperator
+  campaign and backup-recovery approval, render replacement, generated-resource
+  destroy, Jail SFS resize, MK8s destroy recovery, and default-No component
+  wizard decisions. Blank input now reprompts instead of declining the action;
+  existing `q`/`qq` wizard controls remain available. For `ext-soperator
+  onboard`, an explicit `n` is a clean user cancellation instead of passing the
+  message-less wizard sentinel to the generic handler and printing a blank
+  `ERROR:`. The proposed campaign and discovery report remain unaccepted and
+  unwritten; any base project/config scaffold created before the prompt is
+  retained.
 - Fix the in-place Jail login handoff so one protected SSH Pod always stages a
   true extra target login replica instead of reusing the configured replica
   count. The temporary surge now has checkpointed Helm intent/proof, exact
@@ -74,11 +324,13 @@ All notable changes to this project are tracked here. This changelog follows
 - Recover a missing in-place ownership-handoff marker only from the exact
   checkpointed target-child gap proof: current target Helm evidence, immutable
   child bindings, manager generation, controller authority, and owned Slurm
-  partition pauses must all agree. Resume then reconciles the independently
-  proven temporary login surge before reaching the canonical protected-session
-  gate instead of waiting for a held OpenKruise rollout and reporting a generic
-  accounting-readiness failure; strict rollout and source-retirement checks
-  remain unchanged.
+  partition pauses must all agree. At `target-children-created`, the exact
+  source-owned zero-controller deferral is accepted only for this recovery and
+  only while its bridge epoch and full pause proof remain sealed. Resume then
+  reconciles the independently proven temporary login surge before reaching the
+  canonical protected-session gate instead of waiting for a held OpenKruise
+  rollout and reporting a generic accounting-readiness failure; strict rollout
+  and source-retirement checks remain unchanged.
 - Render external-upgrade provider table headings in bold black on
   color-capable terminals. When a phase signal contains the multiline provider
   table, the following `Slurm Workers` and `Soperator` summaries now start on a

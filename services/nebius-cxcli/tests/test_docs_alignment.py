@@ -159,9 +159,9 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
                 "same UID, address, allocation",
                 "2 Ready replicas on distinct nodes",
                 "≥ 1 exact backend",
-                "Socket disappearance is Indeterminate",
-                "no automatic timeout",
-                "unblocks final partition restoration",
+                "Active SSH sockets do not gate",
+                "may drop old connections",
+                "source availability hold",
             ),
         ),
     }
@@ -188,13 +188,13 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     login_source = (REPO_ROOT / "docs" / "soperator-login-node-continuity.svg").read_text(
         encoding="utf-8"
     )
-    assert login_source.index("unblocks final partition restoration") < (
-        login_source.index("the stable Service and target backend remain")
+    assert login_source.index("may drop old connections") < login_source.index(
+        "the stable Service and target backend remain"
     )
     assert (
-        login_source.index("require voluntary-exit ack")
-        < login_source.index("or explicit timeout continuation; then release")
-        < login_source.index("the exact source hold")
+        login_source.index("Prove a distinct Ready target peer")
+        < login_source.index("Require preserved host key and stable Service")
+        < login_source.index("source availability hold")
     )
 
 
@@ -209,7 +209,7 @@ def test_architecture_diagrams_are_referenced_once_and_explained() -> None:
         "soperator-controller-bridge-ha-continuity": (
             "The controller diagram traces single-writer authority"
         ),
-        "soperator-login-node-continuity": ("The login diagram separates connection lifetimes"),
+        "soperator-login-node-continuity": ("The login diagram shows the availability handoff"),
         "jail-rootfs-active-passive-storage": (
             "The Jail storage diagram separates replaceable rootfs generations"
         ),
@@ -774,19 +774,16 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Underlying MK8s upgrade ownership is different" in external_onboarding_section
     assert "--login-session-policy" not in managed_upgrade_section
     assert "--login-session-drain-timeout" not in managed_upgrade_section
-    assert "same unconditional login-continuity contract" in managed_upgrade_flat
-    assert "`soperator jobs --acknowledge-login-exit <fingerprint>`" in managed_upgrade_section
-    assert "`--authorize-login-timeout-continuation <fingerprint>`" in managed_upgrade_section
+    assert "same unconditional login-availability contract" in managed_upgrade_flat
+    assert "without waiting for established SSH" in managed_upgrade_section
     assert "--login-session-policy" not in external_upgrade_section
     assert "--login-session-drain-timeout" not in external_upgrade_section
-    assert "External login continuity is mandatory and has no automatic timeout policy" in (
+    assert "External login availability is mandatory and has no session-drain gate" in (
         external_upgrade_section
     )
-    assert "source hold never expires while the socket is live" in external_upgrade_section
-    assert "`ext-soperator jobs --acknowledge-login-exit <fingerprint>`" in (
+    assert "connections may drop and can reconnect through the stable Service" in (
         external_upgrade_section
     )
-    assert "`--authorize-login-timeout-continuation <fingerprint>`" in (external_upgrade_section)
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
     )
@@ -2433,21 +2430,19 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Managed upgrade retains its TTY `interactive` and non-TTY `fail` defaults" in (
         design_flat
     )
-    assert "The same journal owns protected-login exit confirmation" in design_flat
-    assert "records its socket fingerprint and absence epoch" in design_flat
-    assert "keeps the source Pod/node hold" in design_flat
-    assert "reports the handoff as `Indeterminate`" in design_flat
-    assert "It cannot release a live socket" in design_flat
-    assert "Source retirement and bridge cleanup remain pending" in design_flat
-    assert "no mechanism moves an established TCP connection between Pods" in design_flat
-    assert "every exact established socket keeps its hosting node indefinitely" in design_flat
-    assert "soperator jobs --acknowledge-login-exit <fingerprint>" in design_flat
-    assert "--authorize-login-timeout-continuation <fingerprint>" in design_flat
-    assert "There is no managed or external automatic login timeout" in design_flat
-    assert "A Pod/node carrying a protected connection is never rolled, deleted, replaced" in (
+    assert "The login handoff journal owns exact source Pod protection" in design_flat
+    assert "Current managed and external upgrades do not wait for SSH" in design_flat
+    assert "active SSH sockets do not gate the subsequent serial replacement" in design_flat
+    assert "No mechanism moves an established TCP connection between Pods" in design_flat
+    assert "inspection or repair of an older checkpoint" in design_flat
+    assert "--acknowledge-login-exit FINGERPRINT" in design_flat
+    assert "--authorize-login-timeout-continuation FINGERPRINT" in design_flat
+    assert "Neither legacy acknowledgement authorizes release of a current target-ready" in (
         design_flat
     )
-    assert "There is no automatic timeout or force-disconnect path" in design_flat
+    assert "external continuous-endpoint contract rejects that layout before mutation" in (
+        design_flat
+    )
     assert "The `?` key opens a scrollable help overlay" in design_flat
     assert (
         "canonical action keys are `r` refresh, `w` wait, `c` cancel, `q` requeue, "
@@ -2522,7 +2517,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "compute_migration.mode` is exactly `in-place` or `blue-green`" in design_flat
     assert "rolling compute follows the fingerprinted v6 mode" in design_flat
     assert "workers remain blocked until jobs and epilogs finish" in design_flat
-    assert "user voluntarily hands off" in design_flat
+    assert "without waiting for established SSH sessions to drain" in design_flat
     assert "in-place zero-surge and safe-surge expose only the accepted unavailable" in design_flat
     assert "mode: in-place" in design
     assert "max_unavailable: all" in design
@@ -2540,7 +2535,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "resource version CAS" in design_flat
     assert "accepted bootstrap count" in design_flat
     assert "retains busy source workers until jobs and epilogs finish" in design_flat
-    assert "retains protected login nodes" in design_flat
+    assert "source availability hold remains until a distinct Ready target peer" in design_flat
     assert "phase end, and pending gates" in design_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in design_flat

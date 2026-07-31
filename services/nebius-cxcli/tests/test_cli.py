@@ -9161,7 +9161,7 @@ def test_create_interactive_existing_project_requires_confirmation(
             str(deployments_root),
             "--no-validate-sources",
         ],
-        input="tenant-123\nproject-456\nn\n",
+        input="tenant-123\nproject-456\n\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -9171,7 +9171,13 @@ def test_create_interactive_existing_project_requires_confirmation(
     assert "Project ID [project-456]" not in result.output
     assert "Existing project detected." in result.output
     assert "Continue and overwrite the existing project folder from scratch?" in result.output
-    assert "(y/n, q/qq=stop wizard) [n]" in result.output
+    assert (
+        result.output.count(
+            "Continue and overwrite the existing project folder from scratch?"
+        )
+        == 3
+    )
+    assert "(y/n, q/qq=stop wizard) [n]" not in result.output
     assert "Existing deployments root detected." not in result.output
     assert "Continue and enter project identity?" not in result.output
     assert "Client name [client-a]" not in result.output
@@ -15379,13 +15385,11 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
-    assert "Login SSH continuity: protected explicit handoff" in result.output
-    assert "source login Pod, node, host-key identity, shell process, and TCP connection" in (
-        result.output
-    )
-    assert "remains pending indefinitely" in result.output
-    assert "with no timeout or forced disconnect" in result.output
-    assert "Existing TCP sessions are not migrated between Pods" in result.output
+    assert "Login availability: cxcli preserves one exact source login Pod" in result.output
+    assert "Ready peer with the preserved host key" in result.output
+    assert "without waiting for existing SSH sessions to drain" in result.output
+    assert "An affected connection may drop" in result.output
+    assert "reconnect through the same Service endpoint" in result.output
     assert "Slurm job policy: preserve" in result.output
     assert "Slurm job policy: interactive" not in result.output
     assert "Backup: one campaign-owned restore-capable archive" in result.output
@@ -15453,8 +15457,8 @@ def test_ext_soperator_upgrade_login_handoff_has_no_policy_flags() -> None:
     normalized_help = " ".join(help_result.output.split())
     assert "--login-session-policy" not in normalized_help
     assert "--login-session-drain-timeout" not in normalized_help
-    assert "Login continuity is unconditional" in normalized_help
-    assert "upgrade remains pending indefinitely" in normalized_help
+    assert "Login availability is unconditional" in normalized_help
+    assert "without waiting for existing SSH sessions" in normalized_help
 
     removed_flag = runner.invoke(
         app,
@@ -18989,15 +18993,15 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     assert checkpoint["pending_phase"] == "controller-ha-bridge"
 
 
-def test_ext_soperator_upgrade_uses_unconditional_indefinite_login_handoff(
+def test_ext_soperator_upgrade_uses_unconditional_target_ready_login_handoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
-    pending_reason = "Protected source SSH session remains active; voluntary handoff is pending."
+    pending_reason = "Distinct target login peer is not Ready behind the stable Service."
 
     def _execute(**kwargs: object) -> SoperatorMigrationExecutionResult:
-        assert kwargs["login_session_policy"] == "wait-active"
+        assert kwargs["login_session_policy"] == "target-ready"
         assert kwargs["login_session_drain_timeout_seconds"] == 0
         return SoperatorMigrationExecutionResult(
             checkpoint_path=tmp_path / "checkpoint.json",
@@ -19010,7 +19014,7 @@ def test_ext_soperator_upgrade_uses_unconditional_indefinite_login_handoff(
             lines=(
                 "Pending phase: populate-jail-refresh",
                 f"Pending reason: {pending_reason}",
-                "Next action: keep the source SSH session open and rerun the exact command.",
+                "Next action: restore the target login peer and rerun the exact command.",
             ),
         )
 
@@ -19037,7 +19041,7 @@ def test_ext_soperator_upgrade_uses_unconditional_indefinite_login_handoff(
 
     assert result.exit_code == 1, result.output
     assert "Pending phase: populate-jail-refresh" in result.output
-    assert "keep the source SSH session open and rerun the exact command" in result.output
+    assert "restore the target login peer and rerun the exact command" in result.output
     assert "--login-session-policy" not in result.output
     assert "--login-session-drain-timeout" not in result.output
 
@@ -20983,7 +20987,7 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
     assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
-def test_soperator_onboard_interactive_cluster_id_prompts_complete_in_place_settings(
+def test_soperator_onboard_interactive_blank_reprompts_until_explicit_decision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21077,24 +21081,36 @@ def test_soperator_onboard_interactive_cluster_id_prompts_complete_in_place_sett
     )
     monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
 
-    result = runner.invoke(
-        app,
-        [
-            "ext-soperator",
-            "onboard",
-            str(config_path),
-            "--cluster-id",
-            "mk8scluster-legacy",
-            "--target-id",
-            "legacy-cluster",
-            "--kube-context",
-            "legacy-context",
-            "--no-validate-sources",
-        ],
-        input="y\n",
-    )
+    command = [
+        "ext-soperator",
+        "onboard",
+        str(config_path),
+        "--cluster-id",
+        "mk8scluster-legacy",
+        "--target-id",
+        "legacy-cluster",
+        "--kube-context",
+        "legacy-context",
+        "--no-validate-sources",
+    ]
+    config_before = config_path.read_bytes()
+    acceptance_prompt = "Accept this exact campaign fingerprint in config.yaml?"
+
+    rejected = runner.invoke(app, command, input="\n\nN\n")
+
+    assert rejected.exit_code == 130
+    assert "Campaign fingerprint:" in rejected.output
+    assert rejected.output.count(acceptance_prompt) == 3
+    assert "[y/n]" in rejected.output
+    assert "Cancelled by user" in rejected.output
+    assert "ERROR:" not in rejected.output
+    assert config_path.read_bytes() == config_before
+    assert not _soperator_discovery_manifest_path(config_path, "legacy-cluster").exists()
+
+    result = runner.invoke(app, command, input="\n\ny\n")
 
     assert result.exit_code == 0, result.output
+    assert result.output.count(acceptance_prompt) == 3
     assert "Nebius MK8s cluster" not in prompt_labels
     assert (
         "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
@@ -26039,7 +26055,7 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     config_path = _project_config_path(deployments_root)
     result = _component_add(
         config_path,
-        input_text="managed-postgresql\n\ndemo-pg\ny\n\n",
+        input_text="managed-postgresql\nn\ndemo-pg\ny\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "Select apps components to add too?" in result.output
@@ -26266,7 +26282,7 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     result = _component_add(
         config_path,
         "mysterybox",
-        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\n\n",
+        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output

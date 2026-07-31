@@ -23,6 +23,7 @@ def main() -> int:
         "prompt workspace": read("references/prompt-workspace.md"),
         "implementation loop": read("references/implementation-loop.md"),
         "handoff": read("assets/handoff-template.md"),
+        "wave helper": read("scripts/prompt_workspace_waves.py"),
         "metadata": read("agents/openai.yaml"),
         "evals": read("evals/trigger-prompts.md"),
         "repo README": REPO_README.read_text(encoding="utf-8")
@@ -64,6 +65,8 @@ def main() -> int:
             "replacement worker invokes private `task-recover",
             "isolated correction tail",
             "coordinator-v1/v2/v3 runs are unsupported",
+            "$project-agent-instructions",
+            "spec owner",
         ),
         "README.md": common
         + (
@@ -78,6 +81,8 @@ def main() -> int:
             "first private transition",
             "background or autonomous heartbeat loops",
             "WORKER_SCOPE_VIOLATION",
+            "project-agent-instructions",
+            "workspace init",
         ),
         "prompt workspace": (
             "coordinator.json",
@@ -105,6 +110,8 @@ def main() -> int:
             "git merge --ff-only",
             "Never cherry-pick",
             "first private transition",
+            "$project-agent-instructions",
+            "selected project root `AGENTS.md`",
         ),
         "handoff": (
             "## Dependency Waves",
@@ -112,6 +119,12 @@ def main() -> int:
             "Conflict domains",
             "Worker assignment: private immutable record",
             "Tasks become done only after",
+            "## Project Agent Instructions",
+            "project-agent-instructions.decision.v1",
+        ),
+        "wave helper": (
+            '"path": f"{prefix}AGENTS.md"',
+            "coordinator_write_claims",
         ),
         "metadata": (
             "allow_implicit_invocation: false",
@@ -130,6 +143,7 @@ def main() -> int:
             "full-repository linked",
             "git merge --ff-only",
             "WORKFLOW_UPGRADE_REQUIRED",
+            "project-agent-instructions",
         ),
         "changelog": (
             "coordinator state to v4",

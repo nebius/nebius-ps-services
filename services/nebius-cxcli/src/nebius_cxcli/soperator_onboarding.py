@@ -4515,7 +4515,9 @@ def _resume_slurmcluster_identity_resources(
         if str(item.get("kind", "") or "").strip().lower() == "slurmcluster"
     )
     expected_counts = (
-        {1, 2} if mode == "source-cleanup" else ({2} if mode == "target-handoff" else {1})
+        {1, 2}
+        if mode == "source-cleanup" or (mode == "target-handoff" and target_uid_bootstrap)
+        else ({2} if mode == "target-handoff" else {1})
     )
     if len(slurmclusters) not in expected_counts:
         expected_text = "1 or 2" if len(expected_counts) > 1 else str(next(iter(expected_counts)))
@@ -4538,21 +4540,7 @@ def _resume_slurmcluster_identity_resources(
             "External Soperator checkpoint-scoped SlurmCluster inventory does not contain "
             "exactly one immutable source binding."
         )
-    if len(target_matches) != 1:
-        raise RuntimeError(
-            "External Soperator checkpoint-scoped SlurmCluster inventory does not contain "
-            "exactly one target binding."
-        )
     source_resource = source_matches[0] if source_matches else None
-    target_resource = target_matches[0]
-    if mode == "source-cleanup" and len(slurmclusters) == 2 and len(source_matches) != 1:
-        raise RuntimeError(
-            "External Soperator source-cleanup resume found an unbound second SlurmCluster."
-        )
-    if mode == "target-only" and source_matches:
-        raise RuntimeError(
-            "External Soperator source SlurmCluster reappeared after checkpointed cleanup."
-        )
     if source_resource is not None:
         live_source_uid = str(
             _mapping_value(source_resource.get("metadata")).get("uid", "") or ""
@@ -4562,6 +4550,22 @@ def _resume_slurmcluster_identity_resources(
                 "External Soperator live source SlurmCluster UID differs from the immutable "
                 "checkpoint binding."
             )
+    if mode == "target-handoff" and target_uid_bootstrap and len(slurmclusters) == 1:
+        return (source_resource,), {}
+    if len(target_matches) != 1:
+        raise RuntimeError(
+            "External Soperator checkpoint-scoped SlurmCluster inventory does not contain "
+            "exactly one target binding."
+        )
+    target_resource = target_matches[0]
+    if mode == "source-cleanup" and len(slurmclusters) == 2 and len(source_matches) != 1:
+        raise RuntimeError(
+            "External Soperator source-cleanup resume found an unbound second SlurmCluster."
+        )
+    if mode == "target-only" and source_matches:
+        raise RuntimeError(
+            "External Soperator source SlurmCluster reappeared after checkpointed cleanup."
+        )
     live_target_uid = str(
         _mapping_value(target_resource.get("metadata")).get("uid", "") or ""
     ).strip()

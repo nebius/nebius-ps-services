@@ -8,6 +8,13 @@ generation rules, and quality gates.
 
 Use one of these structures unless the user asks otherwise.
 
+In `coordinated-candidate` scope, `.` in these diagrams means the assigned
+Terraform materialization root, not the repository root. Root README,
+`.gitignore`, Makefile, CI, application, container, Helm, and agent-instruction
+paths remain excluded. Files shown at `.` belong to Terraform only when `.` is
+an assigned Terraform root below the repository root; otherwise return the
+integration requirement to the owning root skill.
+
 ### Profile A: Module Library
 
 Prefer this profile for reusable modules.

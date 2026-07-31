@@ -83,6 +83,32 @@ class SdlcStartContractTests(unittest.TestCase):
             ],
         )
 
+    def test_project_instructions_route_after_design(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "route to\n  `project-agent-instructions` before auto-steering",
+                "`agentic-sdlc` ownership",
+                "`created`,\n  `refreshed`, `existing-sufficient`, or `not-needed`",
+                "`project-agent-instructions-change`",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/references/state-schema.md",
+            [
+                "4. project-agent-instructions",
+                "19. sdlc-merge-pr",
+                '"project-agent-instructions": 0',
+            ],
+        )
+        self.assert_terms(
+            "sdlc-prepare-execution/SKILL.md",
+            [
+                "provenance-owned generated project-root",
+                "Reject an\n   unverified or human-owned `AGENTS.md`",
+            ],
+        )
+
     def test_no_current_bare_continuation_contract(self) -> None:
         hook = self.text("sdlc-start/assets/hooks/stop_sdlc_continue.py")
         self.assertIn("run {shlex.quote(prompt_filename)}", hook)

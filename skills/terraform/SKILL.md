@@ -7,6 +7,21 @@ description: "Use for Terraform repo/module hardening: scaffold, standardize, or
 
 Generate production-grade Terraform scaffolding and enforce module and environment best practices.
 
+## Invocation Scope
+
+- `standalone`: own the selected Terraform repository or Terraform root and
+  retain the normal output contract.
+- `coordinated-candidate`: receive the assigned Terraform root, exact path
+  ownership, root exclusions, and private bundle from `scaffold-project`;
+  generate exact candidates only in that bundle and never write the target.
+
+In coordinated-candidate scope, treat layout profiles as relative to the
+assigned Terraform root. Never claim repository-root README, `.gitignore`,
+Makefile, `.github/`, Helm, application source, containers, or agent
+instructions. Return those integration requirements to their root owner.
+Exact assignments may include Terraform-local files, such as a Makefile or
+`.gitignore` below the repository root.
+
 ## Scope and Guardrails
 
 - Treat Terraform as infrastructure/platform IaC only (networking, IAM, compute, managed Kubernetes infrastructure, storage, observability foundations).
@@ -41,6 +56,9 @@ Generate production-grade Terraform scaffolding and enforce module and environme
    - Full contents of each created file (one file at a time).
    - Short "How to use" with exact commands (`init`, `plan`, `apply`) and safe environment/var-file handling.
    - Notes on security, state, locking, upgrades, and CI hooks.
+
+In coordinated-candidate scope, replace direct file output with candidate
+path, mode, provenance, and validation requirements for the assigned paths.
 
 ## Standards Reference
 

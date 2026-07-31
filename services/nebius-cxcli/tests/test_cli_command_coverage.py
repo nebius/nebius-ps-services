@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import inspect
 import json
@@ -99,6 +100,47 @@ def _assert_not_copy_paste_command_styled(rendered: str, text: str) -> None:
         match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
     }
     assert text not in styled_texts
+
+
+def test_action_confirmations_never_default_to_no() -> None:
+    source = inspect.getsource(cli)
+    tree = ast.parse(source)
+    direct_confirm_defaults: list[object] = []
+    default_no_wizard_lines: list[int] = []
+    raw_no_prompt_lines: list[int] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function_name = ""
+        if isinstance(node.func, ast.Name):
+            function_name = node.func.id
+        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            function_name = f"{node.func.value.id}.{node.func.attr}"
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        default = keywords.get("default")
+        if function_name == "typer.confirm":
+            direct_confirm_defaults.append(
+                default.value
+                if isinstance(default, ast.Constant)
+                else "<missing-or-dynamic>"
+            )
+        elif (
+            function_name == "_wizard_continue_phase"
+            and isinstance(default, ast.Constant)
+            and default.value is False
+        ):
+            default_no_wizard_lines.append(node.lineno)
+        elif (
+            function_name == "typer.prompt"
+            and isinstance(default, ast.Constant)
+            and default.value == "n"
+        ):
+            raw_no_prompt_lines.append(node.lineno)
+
+    assert direct_confirm_defaults == [None]
+    assert default_no_wizard_lines == []
+    assert raw_no_prompt_lines == []
 
 
 def _bundled_flux_install_manifest_url() -> str:
@@ -1134,8 +1176,8 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         job_wait_timeout="45m",
         job_refresh_interval="10s",
         slurm_scheduling_pause=True,
-        login_session_policy="wait-active",
-        login_session_drain_timeout="20m",
+        login_session_policy="target-ready",
+        login_session_drain_timeout="0s",
         dry_run=False,
         approve_remediation=False,
     )
@@ -1428,8 +1470,8 @@ def _run_soperator_upgrade_for_test(
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
     jail_persistent_mounts: Sequence[str] = (),
-    login_session_policy: str = "wait-active",
-    login_session_drain_timeout: str = "30m",
+    login_session_policy: str = "target-ready",
+    login_session_drain_timeout: str = "0s",
     slurm_scheduling_pause: bool = True,
     dry_run: bool = False,
     interactive: bool = False,
@@ -5293,7 +5335,7 @@ def test_soperator_upgrade_config_ahead_validates_completed_job_before_desired_m
     ]
 
 
-def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
+def test_soperator_upgrade_target_ready_does_not_wait_for_managed_first_adoption_hold(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5344,11 +5386,10 @@ def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
     )
     _stub_soperator_upgrade_runtime(monkeypatch, paths, [])
 
-    with pytest.raises(RuntimeError, match="target-ready login session policy refuses"):
-        _run_soperator_upgrade_for_test(
-            config_path=paths.config_path,
-            login_session_policy="target-ready",
-        )
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        login_session_policy="target-ready",
+    )
 
     checkpoint = json.loads(
         cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s").read_text(
@@ -5356,8 +5397,10 @@ def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
         )
     )
     phase = checkpoint["phase_state"]["populate-jail-refresh"]
-    assert phase["persistent_migration_login_hold_policy"]["status"] == "pending"
-    assert phase["persistent_migration_writer_hold"] == {}
+    policy = phase["persistent_migration_login_hold_policy"]
+    assert policy["status"] == "allowed"
+    assert policy["session_drain"]["status"] == "skipped"
+    assert "do not gate" in policy["reason"]
 
 
 def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
@@ -8551,8 +8594,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
         slurm_scheduling_pause=True,
-        login_session_policy="wait-active",
-        login_session_drain_timeout="30m",
+        login_session_policy="target-ready",
+        login_session_drain_timeout="0s",
         dry_run=False,
         interactive=False,
     )
@@ -12204,12 +12247,12 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     assert excinfo.value.exit_code == 1
     rendered = rich_console.export_text()
     assert f"Slurm job policy: {expected_policy}" in rendered
-    assert "Login SSH continuity: protected explicit handoff" in rendered
-    assert "explicit fingerprint-bound authorization after an involuntary timeout" in rendered
+    assert "Login availability:" in rendered
+    assert "without waiting for existing SSH sessions to drain" in rendered
     assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
     assert captured["job_policy"] == expected_policy
     assert captured["slurm_scheduling_pause"] is True
-    assert captured["login_session_policy"] == "wait-active"
+    assert captured["login_session_policy"] == "target-ready"
     assert captured["login_session_drain_timeout_seconds"] == 0
     assert events == ["backup", "execute"]
 
@@ -14052,10 +14095,16 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     )
     monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
 
-    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
+    result = runner.invoke(
+        cli.app,
+        ["render", str(tmp_path / "config.yaml")],
+        input="\n\ny\n",
+    )
 
     assert result.exit_code == 0, result.output
-    assert "Continue and replace the existing generated artifacts?" in _plain_output(result.output)
+    output = _plain_output(result.output)
+    assert output.count("Continue and replace the existing generated artifacts?") == 3
+    assert "[y/n]" in output
     assert calls["rendered"] is True
 
 
@@ -27182,15 +27231,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
     assert "--login-session-policy" not in normalized_ext_soperator_upgrade_help
     assert "--login-session-drain-timeout" not in normalized_ext_soperator_upgrade_help
-    assert "Login continuity is unconditional" in normalized_ext_soperator_upgrade_help
-    assert "exact source login Pod/node, host-key identity, shell process, and TCP connection" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "upgrade remains pending indefinitely" in normalized_ext_soperator_upgrade_help
-    assert "never times out or forces the SSH session closed" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "existing TCP sessions are not migrated between Pods" in (
+    assert "Login availability is unconditional" in normalized_ext_soperator_upgrade_help
+    assert "one exact source login Pod/node" in normalized_ext_soperator_upgrade_help
+    assert "without waiting for existing SSH sessions" in normalized_ext_soperator_upgrade_help
+    assert "an affected connection may drop and can reconnect" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Container Engineering"
+  short_description: "Build, harden, troubleshoot, and validate production containers"
+  default_prompt: "Use $container to review this repository's container image and runtime setup, apply the relevant production standards, validate the result, and report evidence, exceptions, and sibling-skill handoffs."
+policy:
+  allow_implicit_invocation: true

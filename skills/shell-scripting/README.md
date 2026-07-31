@@ -2,6 +2,9 @@
 
 `shell-scripting` creates, refactors, and reviews Bash and shell automation.
 
+In `coordinated-candidate` scope it emits exact private `.sh` candidates for
+paths assigned by `scaffold-project` and never writes the target.
+
 ## What It Does
 
 - Builds strict, idempotent shell scripts.

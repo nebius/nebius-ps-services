@@ -17,16 +17,18 @@ import sys
 from typing import Any
 
 
-SCHEMA = "codex/remediation-budget-v2"
+SCHEMA = "codex/remediation-budget-v3"
 LEGACY_SCHEMA = "codex/remediation-budget-v1"
 MARKER_START = "<!-- codex-remediation-budget:v1\n"
 MARKER_END = "\n-->"
 MAX_MARKER_PREFIX_BYTES = 12 * 1024
 MAX_TASK_STATE_BYTES = 1024 * 1024
-DEFAULT_ATTEMPT_LIMIT = 3
-MAX_ATTEMPT_LIMIT = 3
-MAX_RECORDED_ATTEMPTS = 3
-DEFAULT_TIME_LIMIT_MINUTES = 60
+DEFAULT_ATTEMPT_LIMIT = 5
+MAX_ATTEMPT_LIMIT = 5
+MAX_RECORDED_ATTEMPTS = 5
+DEFAULT_TIME_LIMIT_MINUTES = 120
+HISTORICAL_MAX_ATTEMPT_LIMIT = 3
+HISTORICAL_DEFAULT_TIME_LIMIT_MINUTES = 60
 SUPPORTED_ATTEMPT_RESULTS = ("failed_same_blocker", "succeeded")
 SAFE_SESSION_RE = re.compile(r"[A-Za-z0-9._-]{1,80}")
 SENSITIVE_REPORT_RE = re.compile(
@@ -53,6 +55,7 @@ PRIVATE_HOST_RE = re.compile(
 )
 CLOUD_ACCESS_KEY_RE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
 REPORT_MARKER = "REMEDIATION_BUDGET_EXHAUSTED"
+MAX_REPORT_FIELD_CHARS = 70
 LEGACY_EVIDENCE_NOTE = (
     "Retry-admission evidence summaries were not recorded by the earlier "
     "terminal marker contract."
@@ -235,6 +238,8 @@ def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
     schema = data.get("schema")
     if schema not in {SCHEMA, LEGACY_SCHEMA}:
         raise GuardStateError(f"marker schema must be {SCHEMA}")
+    legacy_report_only = schema == LEGACY_SCHEMA
+    uses_historical_limits = legacy_report_only
     blocker_key = _bounded_string(data.get("blocker_key"), "blocker_key", 256)
     _bounded_string(data.get("blocker_summary"), "blocker_summary", 512)
     tranche = data.get("tranche")
@@ -246,12 +251,21 @@ def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
     time_limit = _positive_int_or_none(
         data.get("time_limit_minutes"), "time_limit_minutes"
     )
+    if uses_historical_limits and attempt_limit > HISTORICAL_MAX_ATTEMPT_LIMIT:
+        raise GuardStateError(
+            f"{schema} attempt_limit must be an integer from 1 to "
+            f"{HISTORICAL_MAX_ATTEMPT_LIMIT}"
+        )
     override = data.get("override_summary")
     if override is not None:
         _bounded_string(override, "override_summary", 512)
     uses_default_limits = (
         attempt_limit == DEFAULT_ATTEMPT_LIMIT
         and time_limit == DEFAULT_TIME_LIMIT_MINUTES
+    ) or (
+        uses_historical_limits
+        and attempt_limit == HISTORICAL_MAX_ATTEMPT_LIMIT
+        and time_limit == HISTORICAL_DEFAULT_TIME_LIMIT_MINUTES
     )
     if (not uses_default_limits or tranche > 1) and override is None:
         raise GuardStateError(
@@ -262,7 +276,6 @@ def _validate_data(data: object) -> tuple[dict[str, Any], bool, str | None]:
     status = data.get("status")
     if status not in {"active", "exhausted", "resolved"}:
         raise GuardStateError("status must be active, exhausted, or resolved")
-    legacy_report_only = schema == LEGACY_SCHEMA
     if legacy_report_only and status != "exhausted":
         raise GuardStateError(
             f"{LEGACY_SCHEMA} markers are accepted only as exhausted report-only "
@@ -462,49 +475,16 @@ def _attempt_label(index: int) -> str:
 def _continue_with_report(
     reason: str, state: GuardState, report_issue: str
 ) -> dict[str, Any]:
-    attempts = (state.data or {}).get("attempts")
-    attempt_count = len(attempts) if isinstance(attempts, list) else 0
-    attempt_labels = ", ".join(
-        _attempt_label(index) for index in range(1, attempt_count + 1)
-    )
-    legacy_evidence = isinstance(attempts, list) and any(
-        isinstance(attempt, dict) and attempt.get("new_evidence") is None
-        for attempt in attempts
-    )
-    details = [
-        reason,
-        f"Report validation issue: {report_issue}.",
-        "Do not troubleshoot further or call tools.",
-        "Return the existing Troubleshooting Report with these exact sections:",
-        *[f"- {heading}" for heading in REPORT_HEADINGS],
-        f"Include the marker `{REPORT_MARKER}` and the stop trigger.",
-        "Use an Outcome classification of UNRESOLVED, "
-        "BLOCKED_MISSING_EVIDENCE, or DIAGNOSED_NOT_FIXED.",
-        "Use `Blocker: ...` under Blocking Error and `Blocker key: ...` under Source.",
-        "For each attempt use exactly: "
-        "`- attempt-N | Remediation: ... | Verification: ... | Result: ...`.",
-        "For each evidence entry use exactly: `- attempt-N | Evidence: ...`.",
-    ]
-    if attempt_labels:
-        details.append(
-            "Attempt labels are derived from list order; cover these labels in "
-            f"both Attempts and Evidence: {attempt_labels}."
-        )
-    if legacy_evidence:
-        details.append(
-            f"Include this limitation under Evidence: {LEGACY_EVIDENCE_NOTE}"
-        )
-    details.extend(
-        [
-            "Do not use empty or placeholder-only report sections.",
-            "Redact secrets, private endpoints, customer data, and raw logs.",
-            "Return at least this hook-generated, bounded, redacted report:",
-            _fallback_report(state, report_issue),
-        ]
-    )
     return {
         "decision": "block",
-        "reason": "\n".join(details),
+        "reason": "\n".join(
+            [
+                reason,
+                "Do not troubleshoot further or call tools.",
+                "Return this hook-generated, bounded, redacted report exactly:",
+                _fallback_report(state, report_issue),
+            ]
+        ),
     }
 
 
@@ -747,7 +727,9 @@ def _contains_sensitive_report_value(text: str) -> bool:
     return False
 
 
-def _bounded_report_value(value: object, fallback: str, limit: int = 140) -> str:
+def _bounded_report_value(
+    value: object, fallback: str, limit: int = MAX_REPORT_FIELD_CHARS
+) -> str:
     text = " ".join(value.split()) if isinstance(value, str) else ""
     if not text or _contains_sensitive_report_value(text):
         text = fallback
@@ -757,7 +739,7 @@ def _bounded_report_value(value: object, fallback: str, limit: int = 140) -> str
 
 
 def _bounded_attempt_report_value(
-    value: object, fallback: str, limit: int = 140
+    value: object, fallback: str, limit: int = MAX_REPORT_FIELD_CHARS
 ) -> str:
     return _bounded_report_value(value, fallback, limit).replace("|", "/")
 

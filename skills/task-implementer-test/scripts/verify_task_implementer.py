@@ -64,6 +64,21 @@ def parity(source: Path, installed: Path) -> tuple[str, str]:
     )
 
 
+def dependency_parity(source: Path, installed: Path) -> tuple[str, str]:
+    if not source.is_dir():
+        return "FAIL", "project-agent-instructions source was not found"
+    if not installed.is_dir():
+        return "PARTIAL", "installed project-agent-instructions was not found"
+    return (
+        ("PASS", "source and installed project-agent-instructions copies match")
+        if _files(source) == _files(installed)
+        else (
+            "FAIL",
+            "source and installed project-agent-instructions copies differ",
+        )
+    )
+
+
 def contract(source: Path) -> tuple[str, str]:
     skill = (source / "SKILL.md").read_text(encoding="utf-8")
     metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
@@ -196,6 +211,8 @@ def verify(
     installed: Path,
     timeout: int,
     harness: Path | None = None,
+    dependency_source: Path | None = None,
+    dependency_installed: Path | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, str]] = []
     if not source.is_dir():
@@ -211,6 +228,17 @@ def verify(
         checks.append({"name": "public contract", "status": status, "detail": detail})
         status, detail = parity(source, installed)
         checks.append({"name": "installed parity", "status": status, "detail": detail})
+        if dependency_source is not None and dependency_installed is not None:
+            status, detail = dependency_parity(
+                dependency_source, dependency_installed
+            )
+            checks.append(
+                {
+                    "name": "project-agent-instructions parity",
+                    "status": status,
+                    "detail": detail,
+                }
+            )
         checks.extend(run_tests(source, timeout))
         if harness is not None:
             checks.append(run_harness_tests(harness, timeout))
@@ -260,6 +288,16 @@ def main() -> int:
         default=Path.home() / ".agents" / "skills" / "task-implementer",
     )
     parser.add_argument(
+        "--project-agent-instructions-source-root",
+        type=Path,
+        default=skill_root.parent / "project-agent-instructions",
+    )
+    parser.add_argument(
+        "--project-agent-instructions-installed-root",
+        type=Path,
+        default=Path.home() / ".agents" / "skills" / "project-agent-instructions",
+    )
+    parser.add_argument(
         "--report", type=Path, default=default_private_root() / "report.md"
     )
     parser.add_argument("--timeout", type=int, default=300)
@@ -271,6 +309,8 @@ def main() -> int:
         args.installed_root.expanduser().resolve(),
         args.timeout,
         skill_root,
+        args.project_agent_instructions_source_root.resolve(),
+        args.project_agent_instructions_installed_root.expanduser().resolve(),
     )
     report = args.report.expanduser().absolute()
     summary["report_path"] = str(report.resolve())

@@ -29,6 +29,17 @@ sequence and routes concrete work to the narrow installed skills that match the
 selection. This keeps Python, website, Terraform, Helm, workflow, security, and
 alignment guidance with their specialist owners.
 
+For an explicitly requested new or multi-component repository,
+`app-stack` emits a closed logical component and technology handoff to the
+explicit-only `scaffold-project` skill. It never assigns repository paths or
+file owners. `scaffold-project` owns topology, candidate routing, approval, and
+apply and does not route back into stack selection.
+
+The current handoff is schema version 2. Every component declares one closed
+component class and a canonical technology name so downstream composition can
+prove exact technology and external-service bindings without moving physical
+topology ownership upstream.
+
 ## Files
 
 - `SKILL.md`: trigger, selection workflow, safety boundaries, and output
@@ -40,6 +51,8 @@ alignment guidance with their specialist owners.
   official vendor sources.
 - `references/implementation-routing.md`: specialist ownership, sequencing,
   mutation boundaries, and completion evidence.
+- `references/scaffold-handoff.schema.json`: closed logical handoff consumed by
+  `scaffold-project`.
 - `evals/trigger-prompts.md`: trigger and output-quality examples.
 
 ## Boundaries
@@ -52,4 +65,6 @@ alignment guidance with their specialist owners.
   active workflow instead of starting a recursive design handoff.
 - Use a stack-specific skill directly when the stack is already fixed and no
   selection decision remains.
+- Use explicit `$scaffold-project` after the stack is approved when repository
+  topology and several specialist-owned components must be composed safely.
 - Use `align` after implementation to reconcile the changed project surfaces.

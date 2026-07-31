@@ -3,14 +3,21 @@
 `python-project` scaffolds and hardens Python projects with reusable modern
 defaults.
 
+It supports two scopes: standalone repository ownership and
+`coordinated-candidate`, where `scaffold-project` assigns a bounded Python
+component and this skill emits private candidate files without touching the
+target or claiming root cross-cutting artifacts.
+
 ## What It Does
 
 - Creates or improves `pyproject.toml` based projects.
 - Uses `src/` layout, setuptools-scm, Ruff, pytest, Typer, and Pydantic where
   appropriate.
-- Supports CLI tools, systemd services, APIs, UI apps, IaC automation, security
-  tooling, and AI/ML workflows.
+- Supports CLI tools, systemd services, APIs, Python-native internal UI apps,
+  IaC automation, security tooling, and AI/ML workflows.
 - Adds templates, tests, Makefile targets, and CI scaffolding when requested.
+- Routes public React/Vite frontend source to `frontend-project` and Docker or
+  Compose files to `container`.
 
 ## Architecture
 

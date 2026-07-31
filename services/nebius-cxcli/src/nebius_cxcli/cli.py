@@ -493,7 +493,6 @@ from .soperator_jail_mounts import (
 from .soperator_migration import (
     _ROOTFS_HANDOFF_VERIFICATION_REVISION,
     EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
-    EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SoperatorMigrationClusterLease,
     SoperatorMigrationCommandResult,
@@ -919,6 +918,15 @@ GRAFANA_STATUS_TIMEOUT_SECONDS = 300.0
 
 def _console_is_terminal() -> bool:
     return bool(console.is_terminal)
+
+
+def _confirm_explicit_action(prompt_text: str) -> bool:
+    """Require an explicit yes or no for an interactive action."""
+    return typer.confirm(
+        prompt_text,
+        default=None,
+        show_default=True,
+    )
 
 
 def _print_deployment_status_message(message: str) -> None:
@@ -14341,9 +14349,8 @@ def _require_external_soperator_backup_recovery_approval(
     if interactive and sys.stdin.isatty():
         with _soperator_upgrade_job_prompt_paused():
             console.print(f"[yellow]{warning}[/yellow]", soft_wrap=True)
-            if typer.confirm(
-                "Approve this exact bounded backup-recovery operation?",
-                default=False,
+            if _confirm_explicit_action(
+                "Approve this exact bounded backup-recovery operation?"
             ):
                 return "interactive"
         raise RuntimeError(
@@ -16023,10 +16030,11 @@ def soperator_scale_up_command(
     epilog=(
         "Example: nebius-cxcli soperator jobs <config.yaml> --target mk8s. "
         "Run this in a separate terminal while soperator upgrade is active. "
-        "Use --acknowledge-login-exit FINGERPRINT only after the user confirms the exact "
-        "protected SSH socket exited voluntarily. Use "
-        "--authorize-login-timeout-continuation FINGERPRINT only after the user confirms "
-        "an involuntary timeout and explicitly authorizes continuation. Actions are bound "
+        "For an older checkpoint with a pending protected-socket fingerprint, use "
+        "--acknowledge-login-exit FINGERPRINT only after the user confirms voluntary exit, "
+        "or --authorize-login-timeout-continuation FINGERPRINT after a confirmed "
+        "involuntary timeout. Current target-ready upgrades do not wait on these flags. "
+        "Actions are bound "
         "to immutable JobID, "
         "user, submit-time, restart lineage, and the checkpointed controller authority epoch."
     ),
@@ -16051,8 +16059,9 @@ def soperator_jobs_command(
         typer.Option(
             "--acknowledge-login-exit",
             help=(
-                "Acknowledge voluntary exit of an exact pending protected SSH socket "
-                "fingerprint; repeatable. This never disconnects a live session."
+                "For an older checkpoint, acknowledge voluntary exit of an exact pending "
+                "protected SSH socket fingerprint; repeatable. Current target-ready "
+                "upgrades do not wait on this flag."
             ),
         ),
     ] = None,
@@ -16061,9 +16070,9 @@ def soperator_jobs_command(
         typer.Option(
             "--authorize-login-timeout-continuation",
             help=(
-                "Authorize continuation after an involuntary timeout of the exact pending "
-                "protected SSH socket fingerprint; repeatable. This applies only to an "
-                "observed absent socket and never disconnects a live or reappeared session."
+                "For an older checkpoint, authorize continuation after an involuntary "
+                "timeout of the exact pending protected SSH socket fingerprint; repeatable. "
+                "Current target-ready upgrades do not wait on this flag."
             ),
         ),
     ] = None,
@@ -16424,7 +16433,7 @@ def soperator_upgrade_command(
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
             slurm_scheduling_pause=slurm_scheduling_pause,
-            login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout="0s",
             dry_run=not execute,
             approve_remediation=approve_remediation,
@@ -16568,7 +16577,7 @@ def _soperator_upgrade_command_args(
     slurm_scheduling_pause: bool,
     dry_run: bool,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
-    login_session_drain_timeout: str = "30m",
+    login_session_drain_timeout: str = "0s",
     approve_remediation: bool = False,
 ) -> tuple[str, ...]:
     args = [
@@ -18642,10 +18651,13 @@ def _run_managed_soperator_cluster_upgrade_locked(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
             "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
         )
-    if login_session_drain_timeout_seconds < 0:
+    if (
+        login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
+        or login_session_drain_timeout_seconds != 0
+    ):
         raise RuntimeError(
-            "The canonical protected-session wait cannot use a negative timeout. "
-            "A zero timeout means wait indefinitely for voluntary session exit."
+            "Managed Soperator upgrade requires the canonical target-ready login "
+            "availability contract and a zero session-drain timeout."
         )
 
     def _record_slurm_restore_nodes(
@@ -23091,10 +23103,8 @@ def _confirm_render_overwrite(paths: ProjectPaths, *, force: bool) -> bool:
             "Render would replace existing generated artifacts in a non-interactive session. "
             "Re-run with `--force` to confirm the replacement."
         )
-    return typer.confirm(
-        "Continue and replace the existing generated artifacts?",
-        default=False,
-        show_default=True,
+    return _confirm_explicit_action(
+        "Continue and replace the existing generated artifacts?"
     )
 
 
@@ -23112,11 +23122,7 @@ def _confirm_generated_destroy(
         raise RuntimeError(
             f"{action_label} is destructive in a non-interactive session. Re-run with `--yes` to confirm."
         )
-    return typer.confirm(
-        prompt_text,
-        default=False,
-        show_default=True,
-    )
+    return _confirm_explicit_action(prompt_text)
 
 
 def _exit_with_error(exc: Exception) -> None:
@@ -23606,7 +23612,7 @@ def _confirm_existing_project_overwrite(*, config_path: Path) -> bool:
     )
     return _wizard_continue_phase(
         "Continue and overwrite the existing project folder from scratch?",
-        default=False,
+        default=None,
     )
 
 
@@ -23626,7 +23632,7 @@ def _confirm_soperator_onboard_existing_config(*, config_path: Path) -> bool:
     _warn_soperator_onboard_existing_config(config_path=config_path)
     return _wizard_continue_phase(
         "Continue and update the existing config.yaml with Soperator onboarding?",
-        default=False,
+        default=None,
     )
 
 
@@ -28546,10 +28552,8 @@ def _print_soperator_campaign_acceptance(
                 f"OS {_non_empty_text(target.get('os'))}, drivers_preset "
                 f"{_non_empty_text(target.get('drivers_preset')) or 'operator-managed'}"
             )
-    if interactive and not typer.confirm(
-        "Accept this exact campaign fingerprint in config.yaml?",
-        default=False,
-        show_default=True,
+    if interactive and not _confirm_explicit_action(
+        "Accept this exact campaign fingerprint in config.yaml?"
     ):
         raise _WizardQuitRequested
 
@@ -35041,13 +35045,10 @@ def _ensure_jail_sfs_capacity_or_resize(
             )
         )
     if policy == "prompt":
-        confirmed = typer.confirm(
-            (
-                "Passive jail rootfs slot needs more free space. Resize "
-                f"{state.config_path} from {state.current_size_gib} GiB to "
-                f"{recommended_size_gib} GiB and run Terraform apply?"
-            ),
-            default=False,
+        confirmed = _confirm_explicit_action(
+            "Passive jail rootfs slot needs more free space. Resize "
+            f"{state.config_path} from {state.current_size_gib} GiB to "
+            f"{recommended_size_gib} GiB and run Terraform apply?"
         )
         if not confirmed:
             resize_payload["status"] = "declined"
@@ -35309,13 +35310,10 @@ def _ensure_external_jail_sfs_capacity_or_resize(
             )
         )
     if policy == "prompt":
-        confirmed = typer.confirm(
-            (
-                "Passive jail rootfs slot needs more free space. Resize existing Nebius "
-                f"filesystem {state.filesystem_id} from {state.current_size_gib} GiB to "
-                f"{recommended_size_gib} GiB with the Nebius SDK/API?"
-            ),
-            default=False,
+        confirmed = _confirm_explicit_action(
+            "Passive jail rootfs slot needs more free space. Resize existing Nebius "
+            f"filesystem {state.filesystem_id} from {state.current_size_gib} GiB to "
+            f"{recommended_size_gib} GiB with the Nebius SDK/API?"
         )
         if not confirmed:
             resize_payload["status"] = "declined"
@@ -36915,10 +36913,10 @@ def _wizard_phase_back_requested(decision: object) -> bool:
 def _wizard_continue_phase(
     prompt_label: str,
     *,
-    default: bool = True,
+    default: bool | None = True,
     allow_back: bool = False,
 ) -> _WizardPhaseDecision:
-    default_raw = "y" if default else "n"
+    default_raw = None if default is None else ("y" if default else "n")
     controls = (
         f"y/n, {WIZARD_EXIT_TOKEN}=back, {WIZARD_ABORT_TOKEN}=quit wizard"
         if allow_back
@@ -36929,7 +36927,7 @@ def _wizard_continue_phase(
             typer.prompt(
                 f"{prompt_label} ({controls})",
                 default=default_raw,
-                show_default=True,
+                show_default=default is not None,
             )
             .strip()
             .lower()
@@ -44822,7 +44820,7 @@ def _run_component_field_wizard(
                 pre_prompted_app_paths.add(version_path)
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
-            default=entry.scope == "infra",
+            default=True if entry.scope == "infra" else None,
             allow_back=True,
         )
         if _wizard_phase_back_requested(decision):
@@ -46230,8 +46228,8 @@ def _run_component_field_wizard(
             raw = (
                 typer.prompt(
                     f"Exit wizard and save the current config? (y/n, {WIZARD_ABORT_TOKEN}=quit wizard)",
-                    default="n",
-                    show_default=True,
+                    default=None,
+                    show_default=False,
                 )
                 .strip()
                 .lower()
@@ -57757,10 +57755,8 @@ def _confirm_mk8s_destroy_recovery_cleanup(
             "Destroy recovery wants to delete stuck MK8s node groups directly via the Nebius API "
             "before retrying Terraform destroy. Re-run with `--yes` to confirm."
         )
-    return typer.confirm(
-        "Delete the stuck MK8s node groups directly via the Nebius API and retry Terraform destroy?",
-        default=False,
-        show_default=True,
+    return _confirm_explicit_action(
+        "Delete the stuck MK8s node groups directly via the Nebius API and retry Terraform destroy?"
     )
 
 
@@ -62578,7 +62574,7 @@ def component_add_command(
                 if requested_infra:
                     apps_decision = _wizard_continue_phase(
                         "Select apps components to add too?",
-                        default=False,
+                        default=None,
                         allow_back=True,
                     )
                     if _wizard_phase_back_requested(apps_decision):
@@ -64591,7 +64587,7 @@ def soperator_onboard_command(
         )
     except typer.Exit:
         raise
-    except (KeyboardInterrupt, EOFError, typer.Abort):
+    except (KeyboardInterrupt, EOFError, typer.Abort, _WizardQuitRequested):
         console.print("[yellow]Cancelled by user[/yellow].")
         raise typer.Exit(code=130) from None
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -66924,13 +66920,11 @@ def _format_soperator_migration_plan_lines(
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
     lines.append(
-        "Login SSH continuity: protected explicit handoff. cxcli preserves the exact "
-        "source login Pod, node, host-key identity, shell process, and TCP connection while a "
-        "target login endpoint becomes ready. While the socket is live, the upgrade remains "
-        "pending indefinitely with no timeout or forced disconnect. After the exact socket is "
-        "observed absent, continuation requires either fingerprint-bound confirmation of a "
-        "voluntary exit or explicit fingerprint-bound authorization after an involuntary "
-        "timeout. Existing TCP sessions are not migrated between Pods."
+        "Login availability: cxcli preserves one exact source login Pod until a distinct "
+        "Ready peer with the preserved host key is routed by the stable login Service. It "
+        "then releases the availability hold and continues serial replacement without "
+        "waiting for existing SSH sessions to drain. An affected connection may drop and "
+        "the user can reconnect through the same Service endpoint."
     )
     lines.append(
         "Login LoadBalancer allocation retention: cxcli automatically converts and "
@@ -67276,10 +67270,10 @@ def ext_soperator_scale_up_command(
     epilog=(
         "Example: nebius-cxcli ext-soperator jobs "
         "./deployments/tenant/project/config.yaml --target external-cluster. "
-        "After the jobs screen reports an absent protected SSH socket, record the user's "
-        "explicit voluntary-exit confirmation with --acknowledge-login-exit FINGERPRINT. "
-        "For a confirmed involuntary timeout, record explicit continuation authorization "
-        "with --authorize-login-timeout-continuation FINGERPRINT instead. "
+        "For an older checkpoint whose jobs screen reports an absent protected SSH socket, "
+        "record voluntary-exit confirmation with --acknowledge-login-exit FINGERPRINT or "
+        "confirmed timeout authorization with --authorize-login-timeout-continuation "
+        "FINGERPRINT. Current target-ready upgrades do not wait on these flags. "
         "Run this in a separate terminal while ext-soperator upgrade is active. "
         "Actions are bound to immutable JobID, user, submit-time, and restart lineage. "
         "During controller gaps or accept-only handoffs, actions remain durably Queued; "
@@ -67308,10 +67302,9 @@ def ext_soperator_jobs_command(
         typer.Option(
             "--acknowledge-login-exit",
             help=(
-                "Acknowledge that the user voluntarily closed the exact protected SSH "
-                "socket fingerprint reported as absent; repeatable. The acknowledgement "
-                "is accepted only for a currently pending fingerprint and never disconnects "
-                "or releases a live session."
+                "For an older checkpoint, acknowledge that the user voluntarily closed "
+                "the exact protected SSH socket fingerprint reported as absent; repeatable. "
+                "Current target-ready upgrades do not wait on this flag."
             ),
         ),
     ] = None,
@@ -67320,9 +67313,9 @@ def ext_soperator_jobs_command(
         typer.Option(
             "--authorize-login-timeout-continuation",
             help=(
-                "Authorize continuation after an involuntary timeout of the exact protected "
-                "SSH socket fingerprint reported as absent; repeatable. This does not claim "
-                "voluntary exit and never disconnects a live or reappeared session."
+                "For an older checkpoint, authorize continuation after an involuntary "
+                "timeout of the exact protected SSH socket fingerprint reported as absent; "
+                "repeatable. Current target-ready upgrades do not wait on this flag."
             ),
         ),
     ] = None,
@@ -67390,11 +67383,11 @@ def ext_soperator_jobs_command(
         "at their existing /mnt/jail paths, so it does not require a copy-time login "
         "writer hold. Execute read-only probes those paths and requires the jail-mount "
         "DaemonSet plus Bound legacy, slot, and persistent PVCs before consumer switch. "
-        "Login continuity is unconditional: cxcli preserves the exact source login "
-        "Pod/node, host-key identity, shell process, and TCP connection until a target "
-        "login endpoint is ready and the user voluntarily exits the protected source "
-        "session. The upgrade remains pending indefinitely; it never times out or forces "
-        "the SSH session closed, and existing TCP sessions are not migrated between Pods. "
+        "Login availability is unconditional: cxcli preserves one exact source login "
+        "Pod/node until a distinct Ready peer with the preserved host key is routed by the "
+        "stable login Service. It then continues serial replacement without waiting for "
+        "existing SSH sessions; an affected connection may drop and can reconnect through "
+        "the same Service endpoint. "
         "Core external Soperator execution uses Nebius API and Kubernetes "
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "
@@ -68898,7 +68891,7 @@ def soperator_external_upgrade_command(
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
                     slurm_scheduling_pause=resolved_slurm_scheduling_pause,
-                    login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+                    login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
                     login_session_drain_timeout_seconds=0,
                     approve_remediation=approve_remediation,
                     campaign_fingerprint=(
@@ -69284,7 +69277,7 @@ def component_remove_command(
 
         if interactive_mode and not _wizard_continue_phase(
             "Remove selected components from config.yaml now?",
-            default=False,
+            default=None,
         ):
             console.print("No component changes applied.")
             return

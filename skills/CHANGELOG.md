@@ -6,6 +6,70 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the explicit-only `scaffold-project` composition skill for approved
+  greenfield and additive brownfield repositories. It models logical
+  capabilities, materialization units, runtime units, external services, and
+  one content owner per path; gathers exact private specialist candidates;
+  finalizes a closed canonical JSON plan with content-addressed payloads and
+  target preconditions; and applies an approved digest through a guarded
+  POSIX executor with all-path preflight, no-follow writes, private backups,
+  crash-safe journaling, created-directory identity binding, internal-bundle
+  symlink rejection, graph-to-operation ownership enforcement, unresolved
+  placeholder rejection, positive owner artifact contracts, runtime-authority
+  Unicode normalization, additive suffix-only brownfield merges, drift
+  detection, target-root compare-and-swap checks, retained-descriptor
+  greenfield roots with platform-native atomic no-replace publication,
+  per-operation architecture-source revalidation, bundle-wide apply locking,
+  exact in-memory use of the approved manifest, finalized action/payload
+  relation checks, apply-time semantic-merge revalidation, case-folded VCS
+  control-path rejection, architecture-source/output separation, unique
+  semantic-merge marker identities, structured filesystem failures, and
+  idempotent resume. It never
+  deletes files, runs native generators, installs dependencies, initializes
+  Git, provisions, deploys, publishes, or enters Agentic SDLC.
+- Added the implicit `frontend-project` specialist for standalone or
+  coordinated-candidate React, TypeScript, and Vite scaffolding, with
+  deterministic repo-owned templates, strict TypeScript, Vitest/Testing
+  Library coverage, context-safe display-name rendering, explicit
+  compatible-version inputs, and no dependency installation or lockfile
+  fabrication.
+- Added the implicit `container` specialist for OCI image and runtime
+  engineering from repository source through a validated local artifact and
+  structured deployment handoff. It covers Dockerfile/Containerfile,
+  BuildKit/buildx, Compose including approved single-host production profiles,
+  non-root and read-only hardening, signals, health, storage, networking,
+  multi-platform and GPU evidence, troubleshooting, and SBOM/provenance/
+  vulnerability/signing requirements. Docker-first audit and smoke helpers are
+  offline or isolated by default, redact values, bound output and resources,
+  verify task ownership before cleanup, and require explicit opt-in for builds,
+  runtime tests, network access, and supply-chain tooling. The retained typed
+  Python and React/Vite renderer still rejects instruction injection, requires
+  deterministic dependency and setuptools-scm version identity, and keeps its
+  local Compose validator fail-closed. Registry publication and signing actions
+  remain with `publish-image`, workflow YAML with `github-workflows`, and
+  Kubernetes resources with `helmchart`.
+- Added the explicit-only shared `project-agent-instructions` skill. After
+  workflow-validated requirements and design, it uses deterministic
+  inspect/apply/verify state to decide whether the exact selected project needs
+  a concise root `AGENTS.md`. It preserves human-owned and override files,
+  exclusively creates missing files, refreshes only unchanged
+  provenance-owned content, records private evidence, and fails closed on
+  ownership, scope, conflict, safety, or concurrent-change ambiguity. Its
+  helper uses Python 3.9-compatible annotation syntax and reports a structured
+  prerequisite when an older runtime cannot parse Codex TOML configuration.
+  Final transition postconditions now prevent race-modified targets from being
+  attested, mixed workflow markers fail closed in either specification,
+  generated files cannot claim a human-owned disposition, refresh failures
+  restore verified prior content when safe, and private evidence shape and
+  mode are revalidated. The helper now computes the exact remaining generated
+  body capacity under Codex's cumulative project-document limit, caps generation
+  at 7 KiB, and rejects oversized bodies without truncation. It rejects
+  Git-ignored decision evidence while accepting tracked files that merely match
+  ignore patterns, and splits contracts, discovery, private state, target I/O,
+  and workflow transitions into focused modules behind the unchanged canonical
+  CLI. Generated-body safety validation now also rejects bracketed private IPv6
+  endpoints, including loopback, unique-local, link-local, and unspecified
+  addresses.
 - Added the explicit-only `nosleep4mac` skill with one no-argument,
   idempotent workflow that atomically converges a public-safe per-user macOS
   LaunchAgent running `/usr/bin/caffeinate -s`. It preserves display and
@@ -15,9 +79,61 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Raised the global `troubleshoot` same-blocker remediation budget from three
+  attempts and 60 active minutes to five attempts and 120 active minutes. The
+  hook still requires new evidence and a new falsifiable hypothesis before
+  every retry and requires newly written state to use the canonical v3 schema.
+  It preserves historical exhausted v1 report delivery, makes previous v2 state
+  fail closed for exact marker repair instead of adding a dual-limits
+  compatibility path, and keeps fallback reports bounded while covering every
+  counted attempt.
+- Split complete application scaffolding into three explicit ownership layers:
+  `app-stack` now emits a closed logical-only technology handoff;
+  `scaffold-project` schema v2 owns repository topology, per-path routing,
+  digest-bound normalized candidate inputs, validation provenance, approval,
+  and guarded apply; and `frontend-project` deterministically materializes exact
+  React/TypeScript/Vite candidates inside its assigned root. The frontend
+  contract now includes an entrypoint and optional route shell, names-only
+  `.env.example`, typed public `VITE_*` validation, and opt-in component-local
+  Oxlint and Prettier profiles. App-stack-approved frontend package-manager,
+  version, profile, runtime, and capability decisions are rechecked against
+  candidate inputs, and unsupported required web UI profiles fail closed.
+  App-stack handoff schema v2 now carries a closed component class and
+  canonical technology name; scaffold finalization rejects omitted required
+  components, kind drift, application technology drift, mixed assigned-unit or
+  runtime contracts, unsupported non-frontend capability selections, unknown
+  frontend capability IDs, and external-service substitutions. Runtime units
+  now bind explicitly to their logical capability. Frontend requests accept
+  only npm, pnpm, Yarn, or Bun and reject separator-normalized public
+  API-key/access-key variable names.
+  Generated TypeScript includes Vite client types, while Markdown display names
+  are HTML-safe before Markdown escaping. Schema-v1 scaffold bundles are
+  rejected without a compatibility path.
+  External scaffold and frontend JSON documents now reject duplicate object
+  keys and non-standard numeric literals before structural or digest
+  validation.
+- Added coordinated-candidate scope to Python, Terraform, Helm, GitHub
+  Actions, `.gitignore`, and shell specialists so `scaffold-project` can
+  collect exact private candidates without overlapping target writes or
+  repository-root ownership. `app-stack` and `design` now emit one-way bounded
+  scaffold handoffs after architecture approval without calling back from the
+  scaffold workflow or starting Agentic SDLC.
+- Integrated `project-agent-instructions` into Task Implementer after managed
+  specifications and before contract commit or worker dispatch, and into
+  Agentic SDLC after design and before auto-steering or planning. Both
+  workflows now checkpoint the conditional decision, invalidate it when
+  specifications or inherited policy drift, preserve `workspace init` as
+  private-state-only, and allow only provenance-owned generated `AGENTS.md`
+  changes in their scoped contract commit. Added workflow, handoff, verifier,
+  steering, alignment, documentation, and source-installed parity coverage.
+- Added durable nested-project conflict and precedence rules to the global
+  Codex instruction template and live global instructions: read every
+  applicable ancestor/project instruction file, keep higher-level safeguards,
+  stop on irreconcilable conflicts, and explicitly reload newly generated
+  project instructions in the current session.
 - Redesigned the Agentic SDLC workflow image as a taller, readable task-to-skill
   map with substantially larger typography, an explicit `sdlc-start`
-  coordinator, all 18 golden-path task owners, clearer conditional failure
+  coordinator, all 19 golden-path task owners, clearer conditional failure
   routing, and readable stop-budget and private-evidence text. Arrow paths now
   meet the base of each arrowhead and every arrowhead tip touches its
   destination boundary. The design document now embeds the canonical SVG
@@ -359,7 +475,7 @@ All notable changes to the reusable Codex skills are tracked here.
   and clarified that the replacement worker—not the coordinator—must invoke
   `task-recover` so heartbeat and finish ownership bind to the right session.
 
-### Added
+### Added (earlier entries)
 
 - Added the implicitly invokable `optimize-pytest` skill for safe pytest
   performance measurement, cumulative fixture and collection-cost review,
@@ -630,7 +746,7 @@ All notable changes to the reusable Codex skills are tracked here.
   project environment/default files/single credential filenames.
 - Removed the `onboard-nebius-cxcli` and `release-generator` skills.
 
-### Changed
+### Changed (earlier entries)
 
 - Renamed setup to `agent-nebius-auth-setup` and made it explicit-only. Setup
   now discovers the project from current-session evidence,

@@ -7,6 +7,17 @@ description: Create or update a project's .gitignore file with sensible defaults
 
 Create or update `.gitignore` at the target repository root.
 
+## Invocation Scope
+
+- `standalone`: create or additively update the target repository `.gitignore`.
+- `coordinated-candidate`: receive the detected stack set, existing file,
+  exact root path, and private bundle from `scaffold-project`; emit the complete
+  additive candidate only in that bundle and never write the target.
+
+The coordinated candidate must retain every existing rule and comment, add
+only missing approved patterns, and return candidate path, mode, provenance,
+and validation requirements. It owns no component-local files.
+
 ## Workflow
 
 1. Detect stack markers from files in the repo:

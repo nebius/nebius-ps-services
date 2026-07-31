@@ -6,7 +6,7 @@ This file is private Agentic SDLC run state. Do not commit it.
 
 - Current feature: `<FEAT-ID>`
 - Current phase: `<phase>`
-- Routing request: `<none | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | HUMAN_INPUT_REQUIRED>`
+- Routing request: `<none | sdlc-create-requirements | sdlc-create-design | project-agent-instructions | sdlc-update-documents | HUMAN_INPUT_REQUIRED>`
 - Updated at: `<ISO-8601>`
 
 ## Auto-Steering Reminders
@@ -32,8 +32,8 @@ credentials, private endpoints, customer data, or noisy logs.
 - Source phase: `<phase>`
 - Current feature: `<FEAT-ID or none>`
 - Prompt summary: `<compact redacted summary only; never raw prompt text>`
-- Disposition: `<runtime-only | requirements-change | design-change | docs-update | resolved | superseded | rejected | needs-human>`
-- Owner skill: `<sdlc-start | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | none>`
+- Disposition: `<runtime-only | requirements-change | design-change | project-agent-instructions-change | docs-update | resolved | superseded | rejected | needs-human>`
+- Owner skill: `<sdlc-start | sdlc-create-requirements | sdlc-create-design | project-agent-instructions | sdlc-update-documents | none>`
 - Status: `<pending | active | resolved | blocked>`
 - Notes: `<short reason or blocker>`
 

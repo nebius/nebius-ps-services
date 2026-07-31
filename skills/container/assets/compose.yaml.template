@@ -1,0 +1,7 @@
+name: {{PROJECT_NAME}}
+
+services:
+{{SERVICE_DEFINITIONS}}
+
+volumes:
+{{VOLUME_DEFINITIONS}}

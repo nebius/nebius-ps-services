@@ -222,6 +222,14 @@ Rollout And Rollback:
 
 Risks And Stop Conditions:
 - ...
+
+Optional Scaffold Handoff:
+- repository shape: ...
+- logical capabilities and statuses: ...
+- materialization units, paths, and owners: ...
+- runtime units: ...
+- external services and materialization behavior: ...
+- cross-cutting artifacts: ...
 ```
 
 When the active Codex surface cannot switch to plan mode, output the same
@@ -253,6 +261,9 @@ ownership, new platform, or costly rollback.
   `sdlc-create-design` or `sdlc-create-plan`.
 - Design is complete and code should change: use `/plan`, then the relevant
   implementation, infrastructure, frontend, testing, or alignment skill.
+- Approved design needs a complete or multi-component repository skeleton:
+  include the optional scaffold handoff and let the user explicitly invoke
+  `scaffold-project`. Do not scaffold directly or start Agentic SDLC.
 - Design needs substantial topic, feature-requirement, product, standard, or
   technology due diligence: use `research`, then return to `design` for
   synthesis and `/plan` handoff.

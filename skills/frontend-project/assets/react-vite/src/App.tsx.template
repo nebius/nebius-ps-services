@@ -1,0 +1,10 @@
+export function App() {
+  const displayName = {{DISPLAY_NAME_JSON}};
+
+  return (
+    <main>
+      <h1>{displayName}</h1>
+      <p>Project scaffold is ready.</p>
+    </main>
+  );
+}

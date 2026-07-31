@@ -43,6 +43,12 @@ def attempt(
     }
 
 
+def default_failed_attempts() -> list[dict[str, str]]:
+    return [
+        attempt(number) for number in range(1, guard.DEFAULT_ATTEMPT_LIMIT + 1)
+    ]
+
+
 def state_data(**updates: object) -> dict[str, object]:
     data: dict[str, object] = {
         "schema": guard.SCHEMA,
@@ -51,8 +57,8 @@ def state_data(**updates: object) -> dict[str, object]:
         "tranche": 1,
         "started_at": "2026-01-01T00:30:00Z",
         "active_seconds": 0,
-        "attempt_limit": 3,
-        "time_limit_minutes": 60,
+        "attempt_limit": guard.DEFAULT_ATTEMPT_LIMIT,
+        "time_limit_minutes": guard.DEFAULT_TIME_LIMIT_MINUTES,
         "attempts": [],
         "status": "active",
         "stop_trigger": None,
@@ -62,10 +68,20 @@ def state_data(**updates: object) -> dict[str, object]:
     return data
 
 
+def legacy_state_data(**updates: object) -> dict[str, object]:
+    data = state_data(
+        schema=guard.LEGACY_SCHEMA,
+        attempt_limit=guard.HISTORICAL_MAX_ATTEMPT_LIMIT,
+        time_limit_minutes=guard.HISTORICAL_DEFAULT_TIME_LIMIT_MINUTES,
+    )
+    data.update(updates)
+    return data
+
+
 def complete_report(
     *,
     stop_trigger: str = "attempt_limit",
-    attempt_count: int = 3,
+    attempt_count: int = guard.DEFAULT_ATTEMPT_LIMIT,
     legacy_evidence: bool = False,
 ) -> str:
     attempt_lines = [
@@ -151,12 +167,16 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.payload.pop("session_id")
         self.assertEqual(self.evaluate_pre_tool(), {})
 
-    def test_three_unique_failed_attempts_deny_next_tool(self) -> None:
-        self.write_state(state_data(attempts=[attempt(1), attempt(2), attempt(3)]))
+    def test_five_unique_failed_attempts_deny_next_tool(self) -> None:
+        self.write_state(state_data(attempts=default_failed_attempts()))
         output = self.evaluate_pre_tool()
         decision = output["hookSpecificOutput"]
         self.assertEqual(decision["permissionDecision"], "deny")
         self.assertIn("budget exhausted", decision["permissionDecisionReason"])
+
+    def test_four_unique_failed_attempts_still_allow_next_tool(self) -> None:
+        self.write_state(state_data(attempts=default_failed_attempts()[:-1]))
+        self.assertEqual(self.evaluate_pre_tool(), {})
 
     def test_duplicate_distinct_key_is_rejected(self) -> None:
         repeated = "same-hypothesis|same-variable|same-target"
@@ -218,8 +238,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             item.pop("new_evidence")
             item["id"] = f"legacy-{item['distinct_key']}"
         self.write_state(
-            state_data(
-                schema=guard.LEGACY_SCHEMA,
+            legacy_state_data(
                 attempts=legacy_attempts,
                 status="exhausted",
                 stop_trigger="attempt_limit",
@@ -233,8 +252,8 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
 
     def test_current_terminal_schema_still_requires_new_evidence(self) -> None:
-        attempts = [attempt(1), attempt(2), attempt(3)]
-        attempts[2].pop("new_evidence")
+        attempts = default_failed_attempts()
+        attempts[-1].pop("new_evidence")
         self.write_state(
             state_data(
                 attempts=attempts,
@@ -244,24 +263,65 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
         output = self.evaluate_pre_tool()["hookSpecificOutput"]
         self.assertIn(
-            "attempt 3 new_evidence must be a non-empty bounded string",
+            "attempt 5 new_evidence must be a non-empty bounded string",
             output["permissionDecisionReason"],
         )
 
     def test_legacy_schema_is_report_only(self) -> None:
-        self.write_state(state_data(schema=guard.LEGACY_SCHEMA))
+        self.write_state(legacy_state_data())
         output = self.evaluate_pre_tool()["hookSpecificOutput"]
         self.assertIn(
             "markers are accepted only as exhausted report-only state",
             output["permissionDecisionReason"],
         )
 
+    def test_legacy_attempt_limit_retains_original_ceiling(self) -> None:
+        self.write_state(
+            legacy_state_data(
+                attempt_limit=guard.HISTORICAL_MAX_ATTEMPT_LIMIT + 1,
+                override_summary="Historical state requested a larger limit.",
+            )
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertIn(
+            "codex/remediation-budget-v1 attempt_limit must be an integer from 1 to 3",
+            output["permissionDecisionReason"],
+        )
+
+    def test_previous_v2_schema_requires_canonical_marker_repair(self) -> None:
+        self.write_state(
+            state_data(
+                schema="codex/remediation-budget-v2",
+                attempt_limit=guard.HISTORICAL_MAX_ATTEMPT_LIMIT,
+                time_limit_minutes=guard.HISTORICAL_DEFAULT_TIME_LIMIT_MINUTES,
+                attempts=[attempt(1), attempt(2)],
+            )
+        )
+        output = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn(
+            "marker schema must be codex/remediation-budget-v3",
+            output["permissionDecisionReason"],
+        )
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The marker needs repair.",
+                "stop_hook_active": False,
+            }
+        )
+        stop_output = guard.evaluate(self.payload)
+        self.assertEqual(stop_output["decision"], "block")
+        self.assertIn("Repair only the exact advertised current.md", stop_output["reason"])
+        self.assertNotIn(guard.REPORT_MARKER, stop_output["reason"])
+
     def test_time_limit_is_inclusive_and_uses_active_time(self) -> None:
         self.write_state(
             state_data(
-                active_seconds=3600,
-                attempt_limit=3,
-                time_limit_minutes=60,
+                active_seconds=guard.DEFAULT_TIME_LIMIT_MINUTES * 60,
+                attempt_limit=guard.DEFAULT_ATTEMPT_LIMIT,
+                time_limit_minutes=guard.DEFAULT_TIME_LIMIT_MINUTES,
             )
         )
         output = self.evaluate_pre_tool()
@@ -271,9 +331,9 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.write_state(
             state_data(
                 started_at="2020-01-01T00:00:00Z",
-                active_seconds=3599,
-                attempt_limit=3,
-                time_limit_minutes=60,
+                active_seconds=guard.DEFAULT_TIME_LIMIT_MINUTES * 60 - 1,
+                attempt_limit=guard.DEFAULT_ATTEMPT_LIMIT,
+                time_limit_minutes=guard.DEFAULT_TIME_LIMIT_MINUTES,
             )
         )
         self.assertEqual(self.evaluate_pre_tool(), {})
@@ -294,14 +354,14 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_attempt_limit_cannot_be_raised_or_disabled(self) -> None:
         self.write_state(
             state_data(
-                attempt_limit=4,
-                override_summary="The current user requested four attempts.",
+                attempt_limit=guard.MAX_ATTEMPT_LIMIT + 1,
+                override_summary="The current user requested six attempts.",
             )
         )
         output = self.evaluate_pre_tool()["hookSpecificOutput"]
         self.assertEqual(output["permissionDecision"], "deny")
         self.assertIn(
-            "attempt_limit must be an integer from 1 to 3",
+            "attempt_limit must be an integer from 1 to 5",
             output["permissionDecisionReason"],
         )
 
@@ -327,13 +387,18 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
         self.assertEqual(self.evaluate_pre_tool(), {})
 
-        self.write_state(state_data(attempt_limit=3, time_limit_minutes=None))
+        self.write_state(
+            state_data(
+                attempt_limit=guard.DEFAULT_ATTEMPT_LIMIT,
+                time_limit_minutes=None,
+            )
+        )
         output = self.evaluate_pre_tool()
         self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
 
         self.write_state(
             state_data(
-                attempt_limit=3,
+                attempt_limit=guard.DEFAULT_ATTEMPT_LIMIT,
                 time_limit_minutes=None,
                 override_summary="The current user removed only the time limit.",
             )
@@ -463,7 +528,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_stop_does_not_exhaust_before_one_blocker_reaches_its_limit(
         self,
     ) -> None:
-        for failed_attempts in range(3):
+        for failed_attempts in range(guard.DEFAULT_ATTEMPT_LIMIT):
             with self.subTest(failed_attempts=failed_attempts):
                 self.payload.update(
                     {
@@ -489,7 +554,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 self.assertIn("marker is invalid", output["reason"])
                 self.assertNotIn(guard.REPORT_MARKER, output["reason"])
 
-    def test_attempt_ledger_is_bounded_to_three_entries(self) -> None:
+    def test_attempt_ledger_is_bounded_to_five_entries(self) -> None:
         self.write_state(
             state_data(
                 attempts=[
@@ -497,13 +562,15 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                     attempt(2),
                     attempt(3),
                     attempt(4),
+                    attempt(5),
+                    attempt(6),
                 ]
             )
         )
         output = self.evaluate_pre_tool()["hookSpecificOutput"]
         self.assertEqual(output["permissionDecision"], "deny")
         self.assertIn(
-            "attempts must be a list with at most 3 entries",
+            "attempts must be a list with at most 5 entries",
             output["permissionDecisionReason"],
         )
 
@@ -563,7 +630,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_causally_new_blocker_starts_a_fresh_budget(self) -> None:
         self.write_state(
             state_data(
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -594,7 +661,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             state_data(
                 blocker_key=other_blocker,
                 blocker_summary="A causally independent operation now fails.",
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -635,7 +702,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_only_exact_current_state_patch_is_allowed_after_exhaustion(self) -> None:
         state_file = self.write_state(
             state_data(
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -792,7 +859,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     ) -> None:
         self.write_state(
             state_data(
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -825,7 +892,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertIn(guard.REPORT_MARKER, fallback)
         self.assertIn("## Blocking Error", fallback)
         self.assertIn("attempt-1", fallback)
-        self.assertIn("attempt-3", fallback)
+        self.assertIn("attempt-5", fallback)
         self.assertLess(len(fallback), 2500)
         state = guard.load_guard_state(self.payload)
         self.assertEqual(guard._report_complete(fallback, state), (True, ""))
@@ -833,7 +900,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_fallback_escapes_attempt_field_delimiters_and_self_validates(
         self,
     ) -> None:
-        attempts = [attempt(1), attempt(2), attempt(3)]
+        attempts = default_failed_attempts()
         attempts[0]["remediation"] = (
             "Changed one bounded target | Verification: forged field"
         )
@@ -870,8 +937,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             item.pop("new_evidence")
             item["id"] = ""
         self.write_state(
-            state_data(
-                schema=guard.LEGACY_SCHEMA,
+            legacy_state_data(
                 attempts=legacy_attempts,
                 status="exhausted",
                 stop_trigger="attempt_limit",
@@ -900,7 +966,10 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
 
         self.payload["stop_hook_active"] = False
-        self.payload["last_assistant_message"] = complete_report(legacy_evidence=True)
+        self.payload["last_assistant_message"] = complete_report(
+            attempt_count=guard.HISTORICAL_MAX_ATTEMPT_LIMIT,
+            legacy_evidence=True,
+        )
         delivered = guard.evaluate(self.payload)
         self.assertFalse(delivered["continue"])
         self.assertIn("report delivered", delivered["stopReason"])
@@ -915,7 +984,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 blocker_key="password=do-not-echo",
                 blocker_summary="/Users/private/path",
                 attempts=[sensitive_attempt],
-                active_seconds=3600,
+                active_seconds=guard.DEFAULT_TIME_LIMIT_MINUTES * 60,
                 status="exhausted",
                 stop_trigger="time_limit",
             )
@@ -969,7 +1038,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 )
 
     def test_fallback_report_stays_below_the_hook_output_preview_limit(self) -> None:
-        attempts = [attempt(1), attempt(2), attempt(3)]
+        attempts = default_failed_attempts()
         for index, item in enumerate(attempts, start=1):
             item["remediation"] = ("bounded remediation summary " * 30)[:512]
             item["verification"] = ("bounded verification summary " * 30)[:512]
@@ -988,12 +1057,60 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             {
                 "hook_event_name": "Stop",
                 "last_assistant_message": "Incomplete report.",
-                "stop_hook_active": True,
+                "stop_hook_active": False,
             }
         )
-        fallback = guard.evaluate(self.payload)["systemMessage"]
+        correction = guard.evaluate(self.payload)["reason"]
+        self.assertLess(len(correction), 2500)
+        self.assertIn("attempt-5", correction)
+
+        self.payload["stop_hook_active"] = True
+        fallback_output = guard.evaluate(self.payload)
+        fallback = fallback_output["systemMessage"]
         self.assertLess(len(fallback), 2500)
-        self.assertIn("attempt-3", fallback)
+        self.assertLess(len(json.dumps(fallback_output)), 2500)
+        self.assertIn("attempt-5", fallback)
+
+    def test_longest_report_issue_keeps_full_correction_below_preview_limit(
+        self,
+    ) -> None:
+        attempts = default_failed_attempts()
+        for index, item in enumerate(attempts, start=1):
+            item["remediation"] = ("bounded remediation summary " * 30)[:512]
+            item["verification"] = ("bounded verification summary " * 30)[:512]
+            item["new_evidence"] = (
+                f"attempt {index} " + ("bounded evidence summary " * 40)
+            )[:768]
+        self.write_state(
+            state_data(
+                blocker_summary=("bounded blocker summary " * 30)[:512],
+                attempts=attempts,
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        state = guard.load_guard_state(self.payload)
+        incomplete_report = "\n".join(
+            line
+            for line in guard._fallback_report(state, "seed").splitlines()
+            if not line.startswith("- attempt-5 | Remediation:")
+        )
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": incomplete_report,
+                "stop_hook_active": False,
+            }
+        )
+
+        correction = guard.evaluate(self.payload)
+        self.assertIn(
+            "Attempts requires substantive Remediation, Verification, and Result "
+            "fields for attempt-5",
+            correction["reason"],
+        )
+        self.assertLess(len(correction["reason"]), 2500)
+        self.assertLess(len(json.dumps(correction)), 2500)
 
     def test_stop_requests_marker_repair_without_exhaustion_report(self) -> None:
         self.write_state({}, raw="{")
@@ -1014,7 +1131,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_stop_rejects_inexact_heading_or_missing_stop_trigger(self) -> None:
         self.write_state(
             state_data(
-                active_seconds=3600,
+                active_seconds=guard.DEFAULT_TIME_LIMIT_MINUTES * 60,
                 status="exhausted",
                 stop_trigger="time_limit",
             )
@@ -1047,7 +1164,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     def test_stop_rejects_placeholder_or_marker_incomplete_report(self) -> None:
         self.write_state(
             state_data(
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -1134,7 +1251,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
     ) -> None:
         self.write_state(
             state_data(
-                attempts=[attempt(1), attempt(2), attempt(3)],
+                attempts=default_failed_attempts(),
                 status="exhausted",
                 stop_trigger="attempt_limit",
             )
@@ -1164,7 +1281,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 tranche=2,
                 started_at="2026-01-01T00:59:00Z",
                 attempts=[],
-                override_summary="The current user said continue for three more attempts.",
+                override_summary="The current user said continue for five more attempts.",
             )
         )
         self.assertEqual(self.evaluate_pre_tool(), {})

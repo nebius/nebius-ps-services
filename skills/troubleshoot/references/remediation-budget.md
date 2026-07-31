@@ -7,19 +7,19 @@ user a complete handoff before more time is spent.
 
 ## Defaults
 
-- One tranche allows at most three total remediation attempts against one
-  blocker. Three is a hard maximum, not only a default.
-- One tranche allows at most 60 active minutes recorded in `active_seconds`.
+- One tranche allows at most five total remediation attempts against one
+  blocker. Five is a hard maximum, not only a default.
+- One tranche allows at most 120 active minutes recorded in `active_seconds`.
 - The first reached limit stops the tranche.
 - A current-task user instruction may lower the attempt limit or change the
-  time limit. The attempt limit must remain an integer from 1 to 3 and cannot
+  time limit. The attempt limit must remain an integer from 1 to 5 and cannot
   be disabled.
 - After an exhaustion report, a bare user `continue` starts a fresh tranche for
-  the same blocker with three attempts and 60 minutes.
+  the same blocker with five attempts and 120 minutes.
 
 The agent must not extend, reset, or disable a tranche for the same blocker on
 its own. Even an explicit user continuation creates another bounded tranche; it
-does not raise the three-attempt maximum inside a tranche. A user-defined lower
+does not raise the five-attempt maximum inside a tranche. A user-defined lower
 attempt limit or non-default time limit in the initial task is an override, and
 a continuation after exhaustion must come from a new user message. Record a
 public-safe `override_summary` for every non-default limit and every continuation
@@ -75,8 +75,8 @@ Before each retry, update the evidence and hypothesis ledgers with steps 1 and
 highest-information next action.
 
 The attempt's `distinct_key` combines its hypothesis, changed variable, and
-target. Attempt labels are derived from list order as `attempt-1`, `attempt-2`,
-and `attempt-3`; do not author a separate ID field. Every recorded
+target. Attempt labels are derived from list order as `attempt-1` through
+`attempt-5`; do not author a separate ID field. Every recorded
 `distinct_key`, normalized hypothesis, and normalized `new_evidence` summary
 must be unique inside the tranche. The durable marker records the admitted
 evidence and hypothesis after verification; the workflow contract owns their
@@ -86,11 +86,11 @@ denials, and marker validation or repair are not attempts. A successful
 remediation is an attempt but does not trigger failure exhaustion; it must be
 the final ledger entry and set the marker to `resolved`.
 
-After attempts 1 and 2 fail, acquire the next evidence, rebuild the hypothesis,
-and send the user a concise progress update containing the count, attempted
-remediation, result, new evidence, and next hypothesis before another repair.
-After attempt 3 fails, update only the exact advertised `current.md` marker to
-record exhaustion, then do not call another tool.
+After attempts 1 through 4 fail, acquire the next evidence, rebuild the
+hypothesis, and send the user a concise progress update containing the count,
+attempted remediation, result, new evidence, and next hypothesis before another
+repair. After attempt 5 fails, update only the exact advertised `current.md`
+marker to record exhaustion, then do not call another tool.
 
 ## Durable Marker
 
@@ -100,14 +100,14 @@ the first 12 KiB of the current session's advertised `current.md`:
 ```markdown
 <!-- codex-remediation-budget:v1
 {
-  "schema": "codex/remediation-budget-v2",
+  "schema": "codex/remediation-budget-v3",
   "blocker_key": "component|operation|error-class|boundary",
   "blocker_summary": "Concise public-safe description.",
   "tranche": 1,
   "started_at": "2026-01-01T00:00:00Z",
   "active_seconds": 0,
-  "attempt_limit": 3,
-  "time_limit_minutes": 60,
+  "attempt_limit": 5,
+  "time_limit_minutes": 120,
   "attempts": [],
   "status": "active",
   "stop_trigger": null,
@@ -125,7 +125,7 @@ checkpoint and before another remediation. Each attempt object contains bounded
 must exactly match the marker's top-level `blocker_key`; a mixed or carried
 ledger is invalid. Its list position is its canonical attempt label. The list
 contains no more entries than the configured `attempt_limit`, which itself
-cannot exceed three.
+cannot exceed five.
 Supported results are `failed_same_blocker` and `succeeded`. Supported statuses
 are `active`, `exhausted`, and `resolved`; supported stop triggers are
 `attempt_limit` and `time_limit`.
@@ -137,7 +137,7 @@ Use this canonical attempt shape:
   "blocker_key": "component|operation|error-class|boundary",
   "distinct_key": "hypothesis|changed-variable|bounded-target",
   "hypothesis": "Concise causal prediction.",
-  "new_evidence": "Public-safe summary of a new log, stack trace, code inspection, or equivalent observation.",
+  "new_evidence": "Public-safe summary of a new observation.",
   "remediation": "One materially different bounded change.",
   "verification": "Original reproducer still showed the same blocker.",
   "result": "failed_same_blocker"
@@ -154,10 +154,12 @@ Historical v1 markers that predate required `new_evidence` may omit that field
 only when their data schema is `codex/remediation-budget-v1` and status is
 already `exhausted`. The hook accepts that shape only to deny further tools and
 deliver an honest final report; it labels the missing evidence record
-explicitly and never admits another remediation. Active, resolved, and newly
-written markers must use the canonical v2 data schema above. The v1 suffix on
-the enclosing HTML comment is the stable marker locator and is independent of
-the JSON data-schema version.
+explicitly and never admits another remediation. Previous v2 markers fail
+closed and require exact marker repair; there is no dual-limits compatibility
+path. Newly written markers must use the canonical v3 data schema above. The v1
+suffix on the enclosing HTML comment is the stable marker locator and is
+independent of the JSON data-schema version. Historical exhausted v1 records do
+not change the five-attempt, 120-minute defaults for newly authored v3 state.
 
 Initialize the marker before the second remediation. Record the already failed
 first remediation as attempt 1, use its start time when known, and include the

@@ -72,6 +72,9 @@ $task-implementer run <prompt-path-or-unique-filename>
   coordinator state, active wave, assignments, results, and journals.
 - Inspect relevant `AGENTS.md`, code, tests, README/design docs, changelog, Git
   state, managed requirements, and managed design records.
+- After managed requirements and design are valid, explicitly route to
+  `$project-agent-instructions` and read its final decision plus any active
+  selected-project instruction file before locking the coordinator contract.
 - Use `brainstorm` and `design` when their routing conditions apply.
 - Every worker uses `code-review` and exactly one `$commit`; the coordinator
   uses combined validation, integration `code-review`, and final `$align`.
@@ -111,9 +114,12 @@ Each linked worktree contains the full repository. For scope
 `<task-worktree>/services/example`. Never copy ignored/untracked files,
 dotenv files, credentials, caches, or primary-checkout local state.
 
-`handoff.md`, managed requirements/design records, shared README/design docs,
-and changelog evidence are coordinator-owned. Worker assignments are immutable;
-workers write only their locked product scope and private result record.
+`handoff.md`, managed requirements/design records, the private
+project-agent-instructions receipt, shared README/design docs, and changelog
+evidence are coordinator-owned. The shared skill exclusively owns creation or
+provenance-safe refresh of project-root `AGENTS.md`; workers never edit it.
+Worker assignments are immutable; workers write only their locked product scope
+and private result record.
 
 ## Process
 
@@ -133,7 +139,9 @@ workers write only their locked product scope and private result record.
 2. For a new or safely reconcilable run, inspect source and normalize stable
    requirements, task IDs, dependencies, write claims, conflict domains,
    validation, done criteria, and prompt/repository constraints in stable task
-   order. Repeat every applicable constraint in each task's stop context.
+   order. Repeat every applicable constraint in each task's stop context. Do
+   not decide project instructions until the managed requirements and design
+   records have both been rendered and validated.
 3. Combine overlapping work before IDs lock when it is one coherent result.
    Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
    cycles or malformed ownership. If the project checkout is a `worktree`
@@ -189,17 +197,23 @@ For each wave:
 2. Register resource intent in the managed outer lease when present, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
-3. Preallocate coordinator-owned requirement/design records. Commit the locked
-   contract only if tracked coordinator files changed; that commit is every
-   worker base.
-4. Invoke private `wave-dispatch`. It creates a unique validated branch and
+3. Preallocate and validate coordinator-owned requirement/design records.
+   Explicitly invoke `$project-agent-instructions` with spec owner
+   `task-implementer`, store its receipt under private orchestration state, and
+   stop on any structured blocker. Read any active selected-project instruction
+   file explicitly in the current coordinator session.
+4. Commit the locked contract only if tracked coordinator files changed. A
+   created or refreshed selected-project `AGENTS.md` is permitted in that one
+   coordinator-owned commit; that commit is every worker base. A `not-needed`
+   or `existing-sufficient` outcome changes only private state.
+5. Invoke private `wave-dispatch`. It creates a unique validated branch and
    locked full-repository worktree only for the active capacity batch, plus an
    immutable v7 assignment with absolute scope cwd, exact helper/workspace
    paths, base, digest, claims, domains, validation, criteria, canonical worker guardrails, and a
    digest-bound private incoming handoff. The
    handoff contains accepted evidence from all earlier completed waves and
    batches; only the first batch of the first wave has no predecessors.
-5. Reserve the main thread for coordination. Dispatch native worker agents up
+6. Reserve the main thread for coordination. Dispatch native worker agents up
    to available capacity. If unavailable, use fresh sequential `codex exec`
    workers in the same isolated worktrees; the coordinator never implements a worker task.
    Start every worker with only its immutable assignment and incoming handoff,
@@ -216,7 +230,7 @@ For each wave:
    60 seconds.
    After one failure, stop dispatching new batch members while
    active workers finish.
-6. Every worker first verifies its real worktree root, branch, base SHA, and
+7. Every worker first verifies its real worktree root, branch, base SHA, and
    absolute cwd, then invokes `task-start` with the embedded helper/workspace
    paths and the embedded digest unchanged. The helper verifies the canonical
    assignment digest. It next
@@ -251,7 +265,7 @@ For each wave:
    worker's behalf because session ownership is bound to the caller. Session
    hashes are append-only history: a
    recovered-away or completed identity can never be reused.
-7. The coordinator independently verifies a clean branch, exactly one
+8. The coordinator independently verifies a clean branch, exactly one
    direct-child task commit, exact changed paths within claims, and complete
    validation/review evidence. Invoke private `batch-advance` after every task
    in the active batch commits; it alone creates the next batch's assignments.
@@ -263,19 +277,19 @@ For each wave:
    no-progress worker.
    On the profile-specific `READ_ONLY_DEADLINE_NEAR`, require an immediate
    claimed-file edit or blocker instead of waiting for the hard cutoff.
-8. Invoke private `wave-integrate`. Merge task branches into the integration
+9. Invoke private `wave-integrate`. Merge task branches into the integration
    branch in stable task-ID order with `git merge --no-ff --no-edit`. Never
    cherry-pick, rebase, squash, push, or merge workers directly into the
    project branch.
-9. The coordinator updates only shared managed specs/docs/changelog and makes
+10. The coordinator updates only shared managed specs/docs/changelog and makes
    one final integration commit only for a non-empty diff. Product-code fixes
    become a new isolated correction task.
-10. Run combined validation and integration `code-review`; reconcile queued
+11. Run combined validation and integration `code-review`; reconcile queued
     steering. Invoke private `wave-promote` only when evidence is complete and
     the primary checkout remains clean, on the recorded branch, at the recorded
     base. Promotion is `git merge --ff-only <verified-integration-SHA>` after
     verifying the integration branch still identifies that exact commit.
-11. Mark tasks done only after promotion. Invoke private `wave-cleanup`; unlock
+12. Mark tasks done only after promotion. Invoke private `wave-cleanup`; unlock
     and non-force-remove clean reachable worktrees, then ancestry-proven
     branches with `git branch -d`. Cleanup uses `git worktree remove` without
     force and records each absent resource in the outer lease. Never run broad
@@ -289,6 +303,9 @@ For each wave:
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
+- Reuse an unchanged project-agent-instructions decision. Changed managed specs
+  or inherited guidance require a fresh decision at a safe wave boundary before
+  future workers dispatch.
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.

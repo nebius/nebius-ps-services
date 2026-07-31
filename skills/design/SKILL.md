@@ -46,6 +46,8 @@ codebase yet.
   use `system-design-rules` when the design exists and needs evaluation.
 - Do not use for a stack-selection-only request that does not need a complete
   solution design and `/plan`; use `app-stack` directly.
+- Do not create repository or component scaffolding directly. A completed
+  design may emit an optional handoff for explicit `scaffold-project` use.
 - Do not use inside an active Agentic SDLC workflow unless the coordinator
   routes here explicitly. Use `sdlc-create-design` and `sdlc-create-plan` for
   SDLC-owned `docs/design.md` and locked feature plans.
@@ -216,9 +218,18 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - tests and validation commands to add or run
 - documentation and changelog updates when in scope
 - rollout, rollback, and risk checks
+- when repository scaffolding is required, an optional scaffold handoff with
+  repository shape, logical capabilities, materialization units, runtime
+  units, external services, cross-cutting artifacts, owners, and component
+  statuses
 
 If `/plan` is not available in the current surface, output a section titled
 `/plan handoff` containing the exact plan content to give to `/plan`.
+
+The scaffold handoff is one-way. `design` may produce it after architecture and
+stack approval, but `scaffold-project` must return missing design decisions
+instead of invoking `design` recursively. Do not start Agentic SDLC from this
+handoff.
 
 ## Design Depth
 

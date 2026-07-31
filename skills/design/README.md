@@ -9,6 +9,11 @@ non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
 
+When the approved design needs a complete or multi-component repository
+skeleton, the handoff may include the component/materialization/runtime graph
+for a later explicit `$scaffold-project` invocation. `design` does not create
+that scaffold and the scaffold workflow does not call back into design.
+
 ## Files
 
 - `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
@@ -52,3 +57,6 @@ applications, and produces a Codex `/plan` handoff.
   workflow for SDLC-owned `docs/design.md`, `FEAT-*` IDs, and locked plans.
 - Use `/plan` or the relevant implementation skill once the design is complete
   and code should change.
+- Use explicit `$scaffold-project` after design and stack approval when the
+  implementation needs repository topology composed from several specialist
+  owners. This boundary remains outside Agentic SDLC.

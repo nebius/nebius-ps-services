@@ -71,11 +71,20 @@ shell, then record return status and observed `HEAD`. Create a unique sanitized
 integration branch and full-repository worktree from the exact project base,
 then lock it. Never include prompt text or secrets in branch names.
 
-The coordinator preallocates managed requirement/design IDs and records. Shared
-specifications, README/design documentation, and changelog are
-coordinator-owned. If this changes tracked files, create one locked contract
-commit in the integration worktree. Every worker branch starts at that exact
-commit.
+The coordinator preallocates and validates managed requirement/design IDs and
+records, then explicitly routes to `$project-agent-instructions` with spec
+owner `task-implementer`. The shared skill writes its decision receipt only
+under the private run root and may create or provenance-safely refresh only the
+selected project root `AGENTS.md`. Read an active project instruction file
+explicitly before continuing. Missing distinct rules is `not-needed`, not a
+generic file.
+
+Shared specifications, the selected-project `AGENTS.md`, README/design
+documentation, and changelog are coordinator-owned commit paths. If this
+changes tracked files, create one locked contract commit in the integration
+worktree. Every worker branch starts at that exact commit. Human-owned project
+instructions remain byte-for-byte unchanged; a material gap or conflict blocks
+dispatch.
 
 ## Assigning Workers
 
@@ -174,9 +183,11 @@ branch. An unexpected conflict aborts the merge, marks the wave blocked, leaves
 the project branch unchanged, and retains all worktrees/branches.
 
 After worker merges, the coordinator may update only shared managed specs,
-README/design docs, and changelog evidence. Make a final integration commit
-only for a non-empty shared-file diff. Any product-code correction becomes a
-new isolated task.
+provenance-owned project instructions, README/design docs, and changelog
+evidence. Requirements/design or inherited-instruction drift invalidates the
+project-agent-instructions receipt; rerun it at the safe boundary before future
+dispatch. Make a final integration commit only for a non-empty shared-file
+diff. Any product-code correction becomes a new isolated task.
 
 ## Validation And Promotion
 

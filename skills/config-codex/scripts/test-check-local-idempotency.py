@@ -28,19 +28,19 @@ MANAGED_BLOCK = "\n".join(
         "",
         "- After one remediation fails against the same blocker, use",
         "  `troubleshoot` before another repair. Each blocker tranche has a hard",
-        "  maximum of three remediation attempts or 60 active minutes, whichever",
+        "  maximum of five remediation attempts or 120 active minutes, whichever",
         "  comes first; a current instruction may lower but never raise or",
         "  disable the attempt maximum. Require newly acquired evidence and a",
         "  genuinely new evidence-derived hypothesis before every retry. Report",
-        "  attempts 1 and 2 as progress; at exhaustion, make only the exact",
-        "  private task-state update that records the stop, then call no other",
-        "  tool and return the complete troubleshooting report. If the evidence",
+        "  attempts 1 through 4 as progress; at exhaustion,",
+        "  make only the exact private task-state update that records the stop, then call",
+        "  no other tool and return the complete troubleshooting report. If the evidence",
         "  or hypothesis gate cannot be satisfied earlier, stop and return the",
         "  structured investigation report. Only a new explicit user",
         "  instruction may start another bounded tranche.",
         "- When evidence establishes a causally independent blocker, start its",
-        "  own fresh budget at attempt 1. Use the three-attempt maximum and default",
-        "  60-minute limit unless the current instruction sets a lower attempt",
+        "  own fresh budget at attempt 1. Use the five-attempt maximum and default",
+        "  120-minute limit unless the current instruction sets a lower attempt",
         "  limit or another time limit for the new blocker. Do not carry attempts,",
         "  active time, tranche, exhaustion status, or stop trigger from another",
         "  blocker. Permission denials and marker validation or repair consume no",
@@ -50,6 +50,29 @@ MANAGED_BLOCK = "\n".join(
         "  system temporary directory first, use a scoped non-forced deletion",
         '  such as `find "$task_temp_dir" -depth -delete`, and never target the',
         "  temporary root or an unresolved variable.",
+        "",
+        "## Nested project instructions",
+        "",
+        "- Before modifying files in a first-class project, resolve the exact",
+        "  project root and read every applicable instruction file from the",
+        "  repository root through that project directory. For work spanning",
+        "  projects, repeat this for every affected project.",
+        "- Root and ancestor instructions remain applicable. Treat nested",
+        "  instructions as additive unless they are a legitimate",
+        "  directory-scoped refinement of architecture, interfaces, commands,",
+        "  tests, documentation, or operations.",
+        "- Nested instructions must not weaken higher-level security, privacy,",
+        "  secret-handling, authorization, publication, or",
+        "  destructive-operation safeguards.",
+        "- If applicable instructions are irreconcilable, stop before mutation,",
+        "  identify the conflicting files and rules, and request direction. Do",
+        "  not silently choose or weaken a safeguard.",
+        "- Do not assume instructions for sibling projects were loaded from the",
+        "  current working directory. When a workflow creates or refreshes an",
+        "  `AGENTS.md`, read it explicitly because instruction discovery occurs",
+        "  when a session starts.",
+        "- Treat `AGENTS.override.md` as the active file for its directory. Do",
+        "  not create an override automatically.",
         "",
         "## Skills",
         "",
@@ -83,6 +106,19 @@ def copy_template(source: Path, target: Path) -> None:
 
 
 class CheckLocalIdempotencyTest(unittest.TestCase):
+    def test_agents_template_has_nested_project_conflict_policy(self) -> None:
+        template = (ASSETS / "AGENTS.md.template").read_text(encoding="utf-8")
+        for term in (
+            "## Nested project instructions",
+            "read every applicable instruction file from the repository root",
+            "Nested instructions must not weaken higher-level security",
+            "If applicable instructions are irreconcilable, stop before mutation",
+            "When a workflow creates or refreshes an `AGENTS.md`, read",
+            "Treat `AGENTS.override.md` as the active file for its directory",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, template)
+
     def test_public_config_template_defaults_to_sol_xhigh_fast(self) -> None:
         template_path = ASSETS / "config.toml.template"
         template_text = template_path.read_text(encoding="utf-8")
@@ -586,13 +622,32 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("AGENTS.md managed block is stale or incomplete", result.stdout)
 
+    def test_default_rejects_missing_nested_project_policy(self) -> None:
+        incomplete = MANAGED_BLOCK.replace(
+            "- Nested instructions must not weaken higher-level security, privacy,\n"
+            "  secret-handling, authorization, publication, or\n"
+            "  destructive-operation safeguards.\n",
+            "",
+            1,
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            incomplete,
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
     def test_default_rejects_incomplete_remediation_policy(self) -> None:
         required_lines = (
-            "  maximum of three remediation attempts or 60 active minutes, whichever",
+            "  maximum of five remediation attempts or 120 active minutes, whichever",
             "  disable the attempt maximum. Require newly acquired evidence and a",
             "  genuinely new evidence-derived hypothesis before every retry. Report",
-            "  attempts 1 and 2 as progress; at exhaustion, make only the exact",
-            "  tool and return the complete troubleshooting report. If the evidence",
+            "  attempts 1 through 4 as progress; at exhaustion,",
+            "  no other tool and return the complete troubleshooting report. If the evidence",
             "  instruction may start another bounded tranche.",
             "  limit or another time limit for the new blocker. Do not carry attempts,",
             "  blocker. Permission denials and marker validation or repair consume no",

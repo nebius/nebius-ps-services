@@ -42,7 +42,8 @@
         "sdlc-create-design", "sdlc-create-plan", "sdlc-create-requirements", "sdlc-evaluate",
         "sdlc-gather-context", "sdlc-gui-test", "sdlc-implement-plan", "sdlc-merge-pr",
         "sdlc-prepare-execution", "sdlc-start", "sdlc-tdd", "sdlc-tui-test",
-        "sdlc-update-documents", "sdlc-uat-tests", "sdlc-unit-tests", "sdlc-validate-codes"
+        "sdlc-update-documents", "sdlc-uat-tests", "sdlc-unit-tests", "sdlc-validate-codes",
+        "project-agent-instructions"
       ],
       "properties": {
         "sdlc-align-specs": {"$ref": "#/$defs/skill"},
@@ -64,7 +65,8 @@
         "sdlc-update-documents": {"$ref": "#/$defs/skill"},
         "sdlc-uat-tests": {"$ref": "#/$defs/skill"},
         "sdlc-unit-tests": {"$ref": "#/$defs/skill"},
-        "sdlc-validate-codes": {"$ref": "#/$defs/skill"}
+        "sdlc-validate-codes": {"$ref": "#/$defs/skill"},
+        "project-agent-instructions": {"$ref": "#/$defs/skill"}
       }
     }
   },

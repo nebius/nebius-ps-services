@@ -14,6 +14,7 @@ from verify_task_implementer import (
     HARNESS_TEST_SCRIPTS,
     TEST_SCRIPTS,
     contract,
+    dependency_parity,
     main,
     run_harness_tests,
     verify,
@@ -71,6 +72,27 @@ class VerifyTests(unittest.TestCase):
             source = self.make_skill(root / "source")
             result = verify(source, root / "missing", 10)
             self.assertEqual(result["deterministic"], "PARTIAL")
+
+    def test_project_agent_instructions_parity_is_required_when_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self.make_skill(root / "source")
+            installed = root / "installed"
+            shutil.copytree(source, installed)
+            dependency = root / "project-agent-instructions"
+            dependency.mkdir()
+            (dependency / "SKILL.md").write_text("source\n", encoding="utf-8")
+            missing = root / "missing-dependency"
+            result = verify(
+                source,
+                installed,
+                10,
+                dependency_source=dependency,
+                dependency_installed=missing,
+            )
+            self.assertEqual(result["deterministic"], "PARTIAL")
+            shutil.copytree(dependency, missing)
+            self.assertEqual(dependency_parity(dependency, missing)[0], "PASS")
 
     def test_contract_rejects_wrong_name_and_extra_public_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -134,12 +156,24 @@ class VerifyTests(unittest.TestCase):
             source = self.make_skill(root / "source")
             installed = root / "installed"
             shutil.copytree(source, installed)
+            dependency_source = root / "dependency-source"
+            dependency_source.mkdir()
+            (dependency_source / "SKILL.md").write_text(
+                "dependency\n",
+                encoding="utf-8",
+            )
+            dependency_installed = root / "dependency-installed"
+            shutil.copytree(dependency_source, dependency_installed)
             arguments = [
                 "verify_task_implementer.py",
                 "--source-root",
                 str(source),
                 "--installed-root",
                 str(installed),
+                "--project-agent-instructions-source-root",
+                str(dependency_source),
+                "--project-agent-instructions-installed-root",
+                str(dependency_installed),
             ]
             harness_pass = {
                 "name": "task-implementer-test helper suites",

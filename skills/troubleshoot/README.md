@@ -49,16 +49,16 @@ alternatives eliminated, confidence, regression oracle, evidence references,
 and the bounded owner handoff. Missing evidence and competing hypotheses stop;
 failure to find an implementation bug does not authorize redesign.
 
-Each autonomous blocker tranche is capped at three total remediation attempts
-or 60 active minutes. The three-attempt maximum cannot be raised or disabled.
+Each autonomous blocker tranche is capped at five total remediation attempts
+or 120 active minutes. The five-attempt maximum cannot be raised or disabled.
 Before every retry, the agent must acquire new logs, a new stack trace, new code
 inspection evidence, or an equivalent observation and derive a genuinely new
 falsifiable hypothesis. Rewording the same hypothesis or reusing evidence is
 not sufficient. If the retry gate cannot be satisfied, the agent stops with a
-structured investigation report. It also reports failures 1 and 2, then stops
-all tools and returns the complete report at the first numeric limit. Only an
-explicit user instruction starts another bounded tranche for that blocker. A
-causally independent blocker starts a fresh attempt-1 budget; prior attempts,
+structured investigation report. It also reports failures 1 through 4, then
+stops all tools and returns the complete report at the first numeric limit. Only
+an explicit user instruction starts another bounded tranche for that blocker.
+A causally independent blocker starts a fresh attempt-1 budget; prior attempts,
 elapsed active time, exhaustion state, and stop trigger do not carry over.
 Every counted attempt records the exact marker blocker key. A missing, mixed,
 or carried binding makes the marker invalid and enters repair instead of

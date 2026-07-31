@@ -274,9 +274,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   hypothesis set before running another experiment.
 - After one remediation fails against a stable blocker, initialize the
   remediation budget before a second repair. A blocker tranche permits no more
-  than three total remediation attempts and 60 active minutes, whichever is
+  than five total remediation attempts and 120 active minutes, whichever is
   reached first. A user may lower the attempt limit, but must not raise or
-  disable the three-attempt maximum.
+  disable the five-attempt maximum.
 - Admit a retry only after new evidence obtained since the preceding failed
   attempt changes the model and supports a genuinely new hypothesis with a
   falsifiable prediction. Record them in the working ledgers before the retry
@@ -292,15 +292,15 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   not evidence that the new blocker exhausted its budget.
 - Treat permission denials and remediation-marker validation or repair as
   coordination events, not counted remediation attempts or budget exhaustion.
-- Report failed attempts 1 and 2 to the user. After the third failed attempt or
-  time exhaustion, set the marker to `exhausted`, call no other tools, and
+- Report failed attempts 1 through 4 to the user. After the fifth failed attempt
+  or time exhaustion, set the marker to `exhausted`, call no other tools, and
   transition directly to `REPORTED`.
 - If the new-evidence or new-hypothesis gate cannot be satisfied before the
   maximum, stop without another remediation and return the structured
   investigation report with the exact missing evidence and next action.
 - Never extend or reset a tranche for the same blocker without an explicit
   current-task user instruction. A bare `continue` after the report starts a
-  fresh default tranche for that blocker, still capped at three attempts.
+  fresh default tranche for that blocker, still capped at five attempts.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 
@@ -329,7 +329,7 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   `MODEL` or `HYPOTHESES` rather than defending the earlier explanation.
 - If a remediation tranche is exhausted, return `UNRESOLVED`,
   `BLOCKED_MISSING_EVIDENCE`, or `DIAGNOSED_NOT_FIXED` as supported by the
-  evidence; do not attempt a fourth remediation before a new user instruction.
+  evidence; do not attempt a sixth remediation before a new user instruction.
 - If a retry lacks newly acquired evidence or a genuinely new hypothesis,
   return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported instead of
   repeating the prior remediation path.

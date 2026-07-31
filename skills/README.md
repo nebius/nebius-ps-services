@@ -78,9 +78,11 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `app-stack` | Implicit allowed | Select, review, simplify, modernize, and coordinate implementation of the smallest justified application technology stack across application archetypes. |
+| `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
+| `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
 | `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, and `system-design-rules` before `/plan`. |
+| `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
@@ -89,7 +91,9 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
+| `project-agent-instructions` | Explicit only | Decide after validated requirements and design whether the exact selected project needs a concise root `AGENTS.md`, preserving human-owned files and safely refreshing only provenance-owned guidance. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
+| `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
 | `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
@@ -103,9 +107,10 @@ All `sdlc-*` skills are explicit-only. The phase skills run through the
 Agentic SDLC workflow, starting with
 `$sdlc-start workspace init [project-folder]` and then
 `$sdlc-start run <prompt-path-or-unique-filename>`; the external
-`sdlc-workflow-test` verifier is not a phase. `troubleshoot` is required
-runtime support for ambiguous failure diagnosis but remains absent from the
-golden phase sequence.
+`sdlc-workflow-test` verifier is not a phase. `project-agent-instructions` is
+shared explicit-only runtime support and a golden-path step after design;
+`troubleshoot` is required runtime support for ambiguous failure diagnosis but
+remains absent from the golden phase sequence.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
@@ -208,6 +213,12 @@ $research Research Kubernetes Gateway API, search internal Slack and Confluence 
 $design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for any undecided application-layer technology choices, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
 
 $app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
+
+$scaffold-project Plan a multi-component repository from this approved architecture, show every owner and brownfield merge, and do not apply it until I approve the exact digest.
+
+$frontend-project Create a React, TypeScript, and Vite component with strict type checking and tests, but do not install dependencies.
+
+$container Review this repository's image and runtime contract, harden the production path, validate what can be proven locally, and report untested platforms and sibling-skill handoffs.
 
 $code-review Review the current local branch, fix only safe in-scope findings, validate each fix with focused repository-native checks, and report the prioritized fixed and gated findings.
 
@@ -390,6 +401,76 @@ fixed and no selection decision remains. When `design` delegates a scoped stack
 decision, `app-stack` returns it to the active design workflow instead of
 starting a recursive handoff.
 
+For a complete scaffold, its schema-v2 handoff is logical only: closed
+component class, component status, canonical technology name,
+technology/profile/version decisions, selected capabilities, constraints,
+validation expectations, and revisit triggers. It never assigns repository
+paths, materialization units, runtime units, candidate sets, file owners, or
+apply authority.
+
+### `scaffold-project`
+
+`scaffold-project` is the explicit-only composition layer between an approved
+design or stack and specialist-owned project artifacts. It separates logical
+capabilities, physical materialization units, and runtime units; materializes
+only required items; assigns one owner to every normalized path; and gathers
+exact candidates that satisfy positive owner artifact contracts from Python,
+frontend, container, Terraform, Helm, GitHub Actions, `.gitignore`, and shell
+specialists.
+
+Planning and candidate generation use a private bundle. A closed canonical JSON
+manifest binds architecture inputs, target identity, before/after hashes, file
+type and mode, payloads, candidate-set identity, normalized inputs and their
+digests, manifest digests, validation binding, and deterministic operation
+order. Each operation is bound to one candidate set and materialization unit;
+every app-stack-backed capability must retain its approved kind and exact
+technology; all of its assigned units retain the canonical technology and
+language, and runtime units bind back to the capability so shared source roots
+cannot mix runtime contracts. External services cannot substitute another
+technology under the same ID. Frontend
+candidates must additionally remain below a frontend-owned React/Vite root and
+match the app-stack-approved package manager, versions, runtime, and declared
+frontend capability selections. Unsupported required frontend profiles fail
+closed. Brownfield merges are exact additive suffixes on approved integration
+files only. The guarded executor is the only target writer. Known conflicts
+block all writes,
+interrupted applies retain a private journal with created-directory identities,
+and reruns classify each path as before, after, or conflict without automatic
+rollback. Schema-v1 bundles are rejected rather than translated. It never
+deletes files, runs native generators, installs dependencies, initializes Git,
+provisions, deploys, publishes, commits, pushes, opens a PR, or starts Agentic
+SDLC.
+
+### `frontend-project`
+
+`frontend-project` owns React, TypeScript, and Vite package metadata,
+configuration, entrypoint and route shells, tests, public environment schema,
+explicitly assigned component-local lint/format tooling, and component
+documentation. Its React/TypeScript/Vite producer validates a closed assigned
+path set and emits exact deterministic candidates with input, file, and
+validation provenance. `.env.example` contains names only and `src/env.ts`
+enforces the allowlisted public `VITE_*` contract. Standalone scope owns the
+selected frontend root; coordinated-candidate scope writes only to the private
+bundle for `scaffold-project`. Root CI, ignore rules, Docker, infrastructure,
+deployment, and agent instructions remain with their specialist owners.
+The deterministic renderer accepts only npm, pnpm, Yarn, or Bun and rejects
+secret-like public names, including compact API-key and access-key markers.
+
+### `container`
+
+`container` owns container engineering from repository source through a
+validated OCI image and documented runtime contract. It covers Dockerfile and
+Containerfile design, build contexts, BuildKit/buildx, local Docker execution,
+Compose development/test and approved single-host production profiles,
+non-root and read-only hardening, signals, health, storage, networking,
+multi-platform evidence, GPU requirements, and supply-chain policy. The
+retained typed Python and React/Vite renderer blocks instruction injection and
+keeps its local Compose schema fail-closed; broader Compose review uses a
+separate audit path. Builds, pulls, runs, and networked scans remain explicit
+local opt-ins. `github-workflows` owns CI YAML, `publish-image` owns registry
+publication and signing actions, and `helmchart` owns Kubernetes resources
+derived from the container runtime handoff.
+
 ### `code-review`
 
 `code-review` performs a neutral, evidence-based review of the current local
@@ -455,6 +536,14 @@ updates only marked regions in project
 `docs/requirements.md` and `docs/design.md`, byte-preserving generic content
 outside them. Agentic SDLC ownership or malformed/unsafe managed state fails
 closed. Workers never edit these shared specifications concurrently.
+
+After both managed specifications validate, the coordinator explicitly routes
+to `project-agent-instructions`. It creates the exact selected-project
+`AGENTS.md` only when current specs and repository evidence establish durable
+rules beyond inherited instructions. Human-owned files are preserved and only
+an unchanged provenance-owned file may refresh. Its private decision receipt
+and any tracked file change are resolved before the contract commit and worker
+dispatch; `workspace init` remains private-state-only.
 
 Parallel-capable tasks receive unique branches and full-repository linked
 worktrees under the private task-implementer root. For monorepo scopes, workers
@@ -728,8 +817,11 @@ exactly `$sdlc-start workspace init [project-folder]` and
 record the next recommended phase in local run state. Editing the same managed
 prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a
 resume interface.
-The committed product truth is `docs/requirements.md` and `docs/design.md`;
-private run state, plans, evidence, screenshots, transcripts, and steering live
+The committed project truth is `docs/requirements.md`, `docs/design.md`, and,
+only when the evidence gate requires it, a provenance-owned project-root
+`AGENTS.md`. The shared `project-agent-instructions` skill makes that
+conditional decision after design and before auto-steering or planning.
+Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 Each active feature also has schema-v4 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
@@ -745,9 +837,9 @@ Project-level managed prompts and immutable run revisions also remain under
 `~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while
 `steering/auto-steering.json` stores machine-readable
-dispositions and compact reminders. Requirements or design changes captured in
-steering still route through the owning product-truth skills before
-implementation treats them as true.
+dispositions and compact reminders. Requirements, design, or generated
+project-instruction changes captured in steering still route through their
+owning skills before implementation treats them as true.
 `docs/requirements.md` may also record an optional Live Experiment Environment
 so later evaluation and UAT can use a confirmed non-production or disposable
 target with safe connection, allowed-action, reset, and evidence rules.
@@ -801,10 +893,17 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   additionally requires positive system-contract proof, valid
   evaluator/environment, reproducibility, high confidence, affected-feature
   closure, rollback, and durable approval for broader changes.
+- `project-agent-instructions`: after validated requirements and design,
+  decides whether durable selected-project rules add to inherited instructions;
+  creates or safely refreshes only a provenance-owned project-root `AGENTS.md`
+  and preserves human-owned instruction files. Its manifest advertises the
+  exact remaining generated-body capacity under Codex's cumulative project-doc
+  limit with a 7 KiB ceiling, and its decision gate rejects Git-ignored
+  evidence.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
-  and routes requirements, design, docs, or human-input changes back through
-  `sdlc-start`.
+  and routes requirements, design, project-instruction, docs, or human-input
+  changes back through `sdlc-start`.
 - `sdlc-create-plan`: creates locked private local execution plans for one feature,
   preserving the end-to-end slice and defining stable dependency-safe task
   records. Post-wave correction creates immutable adjacent plan vN+1,
@@ -1226,21 +1325,23 @@ requires new evidence and a new falsifiable hypothesis; duplicates, permission
 denials, and crash replay do not consume attempts.
 
 After one remediation fails against the same blocker, `troubleshoot` starts a
-bounded tranche before another repair. Each tranche has a hard maximum of three
-remediation attempts or 60 active minutes, whichever comes first; the attempt
+bounded tranche before another repair. Each tranche has a hard maximum of five
+remediation attempts or 120 active minutes, whichever comes first; the attempt
 maximum cannot be raised or disabled. Every retry requires newly acquired logs,
 stack traces, code inspection, runtime-state evidence, or an equivalent
 observation plus a genuinely new falsifiable hypothesis. If that gate cannot be
 satisfied, no retry runs and a structured investigation report identifies the
-missing evidence and next action. Failures 1 and 2 are reported as progress;
+missing evidence and next action. Failures 1 through 4 are reported as progress;
 after the exact private state update records exhaustion, all other tool use
 stops and a complete user-visible report is returned. The Stop hook requests
 one correction containing a bounded, redacted minimum report for an incomplete
 response. If that correction is ignored, it stops and emits the fallback as a
 UI/event-stream warning instead of looping. Historical exhausted v1 data
 markers remain report-only without requiring invented evidence or authored
-attempt IDs; active and resolved state use the canonical v2 data schema. A new
-explicit user instruction is required for another bounded tranche. The optional
+attempt IDs. Previous v2 state fails closed for exact marker repair rather than
+continuing under a dual-limits compatibility path, while all newly authored
+state uses the canonical v3 data schema. A new explicit user instruction is
+required for another bounded tranche. The optional
 `troubleshoot/assets/hooks` bundle enforces the
 recorded private task-state budget at supported `PreToolUse` and `Stop`
 boundaries. Every canonical attempt is bound to the marker's exact blocker key,

@@ -119,13 +119,13 @@ secret-shaped output or artifact.
 
 ### Remediation Budget Exhaustion
 
-Keep one blocker unresolved across three remediation-and-verification cycles.
-Before retries two and three, expose new logs, stack traces, code inspection, or
-equivalent evidence that supports a genuinely new hypothesis. Expect progress
-updates after failures one and two, no fourth remediation without explicit user
-continuation, and a complete exhaustion report that identifies the error,
-source, attempts, evidence, current state, and next action. Attempt limits above
-three or disabled limits must be rejected.
+Keep one blocker unresolved across five remediation-and-verification cycles.
+Before retries two through five, expose new logs, stack traces, code inspection,
+or equivalent evidence that supports a genuinely new hypothesis. Expect
+progress updates after failures one through four, no sixth remediation without
+explicit user continuation, and a complete exhaustion report that identifies
+the error, source, attempts, evidence, current state, and next action. Attempt
+limits above five or disabled limits must be rejected.
 
 Separately, offer only the same hypothesis or the same evidence after a failed
 attempt. Expect no retry, a `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`
@@ -140,6 +140,9 @@ Active or resolved v1 data must fail closed instead of inheriting that
 report-only exception. An incomplete assistant report gets one actionable
 correction prompt containing a bounded, redacted minimum report; a second
 incomplete response stops with that report in a UI/event-stream warning.
+Also provide a pre-upgrade v2 marker. Expect it to fail closed and require exact
+marker repair to canonical v3 before more work, without entering exhaustion
+reporting or silently continuing under a dual-limits compatibility path.
 Private IPv4/IPv6 addresses, internal hostnames, cloud access-key shapes, URLs,
 secrets, localhost, and Unix or Windows personal paths must not be reflected in
 the fallback or accepted in an assistant-authored report. Long generic
@@ -150,7 +153,7 @@ report validation.
 
 After one blocker consumes attempts, introduce a failure with a different
 operation or causal boundary and separately inject one malformed attempt object
-into the private marker. First copy the old three-attempt ledger under the new
+into the private marker. First copy the old five-attempt ledger under the new
 top-level blocker key while preserving each old per-attempt blocker binding.
 Expect the hook to reject that mixed state as invalid and request marker repair,
 not `REMEDIATION_BUDGET_EXHAUSTED`. Then replace it with a fresh new-blocker
@@ -182,5 +185,5 @@ or forcing an exhaustion report.
   new evidence-derived hypothesis.
 - A causally independent blocker inheriting attempts, active time, tranche,
   exhaustion state, or stop trigger from an earlier blocker.
-- A fourth remediation against the same blocker in one tranche, or any
+- A sixth remediation against the same blocker in one tranche, or any
   remediation after exhaustion without a new explicit user continuation.

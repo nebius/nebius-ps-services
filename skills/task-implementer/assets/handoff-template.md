@@ -48,6 +48,19 @@
 - Pending steering revisions: none
 - Applied steering revisions: none
 
+## Project Agent Instructions
+
+- Decision schema: project-agent-instructions.decision.v1
+- Outcome: pending | created | refreshed | existing-sufficient | not-needed | blocked
+- Active instruction path: none
+- Decision SHA-256: none
+- Project instruction SHA-256: none
+- Requirements SHA-256: none
+- Design SHA-256: none
+- Inherited instruction fingerprint: none
+- Contract commit: none
+- Blocker: none
+
 ## Request Summary
 
 Summarize the bound prompt revision and constraints without copying the prompt

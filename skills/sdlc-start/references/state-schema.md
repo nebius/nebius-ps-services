@@ -118,6 +118,7 @@ bodies.
     "requirements": 0,
     "context": 0,
     "design": 0,
+    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -138,6 +139,12 @@ bodies.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
+  "project_agent_instructions": {
+    "outcome": "not-needed",
+    "decision_fingerprint": "<sha256>",
+    "state": "project-agent-instructions/state.json",
+    "active_instruction": null
+  },
   "repair": null,
   "execution": {
     "schema": "agentic-sdlc/execution-coordinator-v4",
@@ -227,6 +234,7 @@ without conversation history.
     "requirements": 0,
     "context": 0,
     "design": 0,
+    "project-agent-instructions": 0,
     "sdlc-auto-steering": 0,
     "plan": 0,
     "execution_preparation": 0,
@@ -247,10 +255,17 @@ without conversation history.
   },
   "last_successful_phase": "sdlc-create-plan",
   "next_recommended_skill": "sdlc-prepare-execution",
+  "project_agent_instructions": {
+    "outcome": "not-needed",
+    "decision_fingerprint": "<sha256>",
+    "state": "project-agent-instructions/state.json",
+    "active_instruction": null
+  },
   "repair": null,
   "fingerprint_ids": [
     "requirements:sha256:<digest>",
-    "design:sha256:<digest>"
+    "design:sha256:<digest>",
+    "project-agent-instructions:sha256:<digest>"
   ],
   "evidence": {
     "context": "context/FEAT-001.context.md",
@@ -360,21 +375,22 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 1. requirements
 2. context
 3. design
-4. sdlc-auto-steering
-5. plan
-6. execution preparation
-7. sdlc-tdd, in the integration worktree
-8. implementation dependency waves, in worker and integration worktrees
-9. validation, at the recorded integration HEAD
-10. test, at the recorded integration HEAD
-11. evaluation, at the recorded integration HEAD
-12. sdlc-update-documents, in the integration worktree
-13. sdlc-align-specs, in the integration worktree
-14. sdlc-commit: final seal, ff-only promotion, and integration cleanup
-15. uat, from the promoted project checkout
-16. create-pr
-17. review-pr
-18. sdlc-merge-pr, only after explicit user request
+4. project-agent-instructions
+5. sdlc-auto-steering
+6. plan
+7. execution preparation
+8. sdlc-tdd, in the integration worktree
+9. implementation dependency waves, in worker and integration worktrees
+10. validation, at the recorded integration HEAD
+11. test, at the recorded integration HEAD
+12. evaluation, at the recorded integration HEAD
+13. sdlc-update-documents, in the integration worktree
+14. sdlc-align-specs, in the integration worktree
+15. sdlc-commit: final seal, ff-only promotion, and integration cleanup
+16. uat, from the promoted project checkout
+17. create-pr
+18. review-pr
+19. sdlc-merge-pr, only after explicit user request
 
 `troubleshoot` is a conditional diagnostic branch, not an additional
 golden-path phase. A proven cause routes directly from
@@ -412,22 +428,25 @@ current PR head to remain that exact promoted and reviewed SHA.
 `STEERING.md` is temporary runtime steering, not a second requirements file.
 It is the active-run inbox and ledger for accepted managed prompt revisions,
 including runtime instructions, requirements-related notes,
-design-related notes, documentation updates, blockers, priority overrides,
+design-related notes, project-instruction updates, documentation updates,
+blockers, priority overrides,
 pause instructions, and UAT rerun requests.
 
 Each inbox entry links the managed prompt ID, revision, SHA-256 digest, and
 snapshot pointer, but includes only a compact safe summary rather than the full
 prompt body. `sdlc-auto-steering` owns refreshing `STEERING.md` and
 `steering/auto-steering.json`. Each unresolved entry must have one disposition:
-`runtime-only`, `requirements-change`, `design-change`, `docs-update`,
-`resolved`, `superseded`, `rejected`, or `needs-human`. Raw secrets,
+`runtime-only`, `requirements-change`, `design-change`,
+`project-agent-instructions-change`, `docs-update`, `resolved`, `superseded`,
+`rejected`, or `needs-human`. Raw secrets,
 credentials, private endpoints, customer data, and noisy logs must be redacted
 before they are persisted.
 
 Only compact active reminders and unresolved routing decisions should be
 injected into the agent loop. Durable product changes still route through
 `sdlc-create-requirements` and `sdlc-create-design`; documentation-only changes
-route through `sdlc-update-documents`.
+route through `sdlc-update-documents`; durable changes to generated project
+instructions route through `project-agent-instructions`.
 
 ## Hook Boundary
 

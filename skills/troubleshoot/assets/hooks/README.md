@@ -26,11 +26,11 @@ blocks supported tool calls after exhaustion, and requires the final report.
   safety limit fails closed instead of being treated as absent.
 - Contradictory lifecycle state fails closed: active or resolved markers cannot
   retain a stop trigger, and an exhausted trigger must match a reached limit.
-- Attempt limits above three or disabled attempt limits fail closed. The marker
+- Attempt limits above five or disabled attempt limits fail closed. The marker
   may lower the limit, and the tranche ledger cannot contain more entries than
   that configured limit.
 - Attempt labels are derived from list order as `attempt-1` through
-  `attempt-3`; an authored ID is ignored. Every active recorded retry must have
+  `attempt-5`; an authored ID is ignored. Every active recorded retry must have
   a `blocker_key` exactly matching the marker's one blocker, a unique
   `distinct_key`, normalized hypothesis, and normalized `new_evidence`
   summary. Missing or mismatched binding makes the marker invalid, so a ledger
@@ -38,12 +38,15 @@ blocks supported tool calls after exhaustion, and requires the final report.
   exhaustion. The guard catches structural or textual inconsistency; the skill
   remains responsible for blocker classification, semantic novelty, and
   pre-remediation timing.
-- The canonical data schema is `codex/remediation-budget-v2`. The surrounding
+- The canonical data schema is `codex/remediation-budget-v3`. The surrounding
   `codex-remediation-budget:v1` HTML marker remains the stable locator.
   Historical v1 data is accepted only when already exhausted and only for
-  report delivery; it may omit `new_evidence`, never authorizes a retry, and
-  requires the missing evidence-record limitation in the report. Active,
-  resolved, or newly written state must use v2.
+  report delivery; it keeps its original three-attempt ceiling, may omit
+  `new_evidence`, never authorizes a retry, and requires the missing
+  evidence-record limitation in the report. Previous v2 state fails closed and
+  requires exact marker repair before more work; the hook does not maintain a
+  dual-limits compatibility path. Newly written state must use v3 with the
+  five-attempt, 120-minute defaults.
 - A causally independent blocker starts with a fresh marker and budget. The
   parent owns that classification and must write an empty ledger. The hook
   requires consistent attempt bindings but does not infer semantic blocker
@@ -58,6 +61,8 @@ blocks supported tool calls after exhaustion, and requires the final report.
   `Verification`, `Result`, and `Evidence` fields for every positional attempt,
   bound to the guard's bounded, redacted marker-derived summaries. A report
   containing a detected sensitive value is rejected for correction. The
+  marker-derived report fields are capped at 70 characters so all five attempts
+  remain inside the existing fallback preview bound. The
   fallback normalizes pipe characters in attempt remediation and verification
   summaries so marker text cannot collide with the report field delimiters.
   If the continued response remains incomplete, the hook terminates and emits

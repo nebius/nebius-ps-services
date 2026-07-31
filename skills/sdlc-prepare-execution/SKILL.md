@@ -30,7 +30,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Active run directory, current `FEAT-*`, and locked plan.
 - Canonical project checkout, named feature branch, exact `HEAD`, and Git common
   directory, plus the exact initialized project folder and repo-relative scope.
-- Current requirements, design, context, steering, and checkpoint state.
+- Current requirements, design, project-instruction decision, context,
+  steering, and checkpoint state.
 
 ## Required Reads
 
@@ -45,16 +46,19 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `~/.codex/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when committed
-  product-truth files are the complete repo-root staged diff.
+  requirements, design, and a provenance-owned generated project-root
+  `AGENTS.md` are the complete repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 
 ## Process
 
 1. Require a named non-default branch. Reject unrelated dirt or private state
    inside the repository.
-2. If current requirements/design changes are the only tracked changes, stage
-   from the repository root with `git add -A`, create one authorized contract
-   commit, then require a clean checkout. Never make a partial mixed commit.
+2. If current requirements/design changes and an optional
+   `project-agent-instructions`-owned project-root `AGENTS.md` are the only
+   tracked changes, stage from the repository root with `git add -A`, create
+   one authorized contract commit, then require a clean checkout. Reject an
+   unverified or human-owned `AGENTS.md`; never make a partial mixed commit.
 3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
    records, validates dependencies/claims/domains, builds deterministic logical
    waves, records intent, and creates the integration branch/worktree from the
