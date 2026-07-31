@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .oci_image import is_immutable_oci_image_reference
+
 CONTROLLER_FENCE_SCHEMA = "nebius-cxcli-controller-runtime-fence/v1"
 CONTROLLER_CENSUS_SCHEMA = "nebius-cxcli-controller-runtime-census/v1"
 CONTROLLER_AUTHORITY_LEASE = "cxcli-slurm-controller-authority"
@@ -17,7 +19,6 @@ CONTROLLER_CENSUS_LABEL = "nebius.ai/cxcli-controller-runtime-census"
 CONTROLLER_INSPECTOR_NAMESPACE = "cxcli-soperator-upgrade-inspectors"
 CONTROLLER_INSPECTOR_LABEL = "nebius.ai/cxcli-controller-inspector"
 
-_DIGEST_IMAGE = re.compile(r"^[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}$")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
 _CONTAINER_ID = re.compile(r"^[a-z0-9][a-z0-9.+_-]*://([0-9a-f]{32,128})$")
 
@@ -407,7 +408,7 @@ def controller_runtime_census_pod(
     purpose = _safe_label(purpose, field="controller census purpose")
     if not re.fullmatch(r"[0-9a-f]{32}", str(attempt_id or "")):
         raise ValueError("controller census attempt_id must be a 32-character lowercase hex value.")
-    if not _DIGEST_IMAGE.fullmatch(str(image or "")):
+    if not is_immutable_oci_image_reference(image):
         raise ValueError("controller census image must be an immutable repository@sha256 digest.")
     suffix = hashlib.sha256(f"{target.node_uid}\0{purpose}\0{attempt_id}".encode()).hexdigest()[:16]
     labels = {
@@ -651,7 +652,7 @@ def controller_runtime_fence_pod(
 
     campaign = _sha256(campaign_fingerprint, field="controller fence campaign_fingerprint")
     epoch = _safe_label(authority_epoch, field="controller fence authority_epoch")
-    if not _DIGEST_IMAGE.fullmatch(str(image or "")):
+    if not is_immutable_oci_image_reference(image):
         raise ValueError("controller fence image must be an immutable repository@sha256 digest.")
     marker_digest = controller_fence_marker_sha256(target.state_markers)
     suffix = hashlib.sha256(f"{target.node_uid}\0{epoch}".encode()).hexdigest()[:12]

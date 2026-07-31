@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .oci_image import is_immutable_oci_image_reference
 from .soperator_populate_jail import active_passive_pod_scheduling_fields
 
 GPU_JAIL_POST_POPULATION_SCRIPT_KEY = "post-populate-gpu-jail.sh"
@@ -392,7 +393,7 @@ def build_jail_gpu_post_population_resources(
     image = runner_image
     if not image or image != image.strip():
         raise ValueError("runner_image must be the exact non-empty target controller image.")
-    if not re.fullmatch(r"[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}", image):
+    if not is_immutable_oci_image_reference(image):
         raise ValueError("runner_image must be an immutable target repository@sha256 digest.")
     target = str(target_ref or "").strip()
     if not target:

@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Replace four ambiguous immutable OCI image regular expressions with one
+  linear-time validator, eliminating attacker-amplifiable backtracking in
+  controller fencing and GPU migration inputs. Security regressions now cover
+  adversarial long references, and affected test doubles use exact Kubernetes
+  argv-token matching rather than URL-like substring checks.
 - Make managed and external Soperator login-role upgrades use one canonical
   target-ready availability contract. cxcli keeps one exact source login Pod
   protected until a distinct target-version peer with the preserved host key

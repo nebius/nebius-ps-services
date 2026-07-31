@@ -1288,34 +1288,87 @@ def test_post_roll_rebind_accepts_exact_dedicated_bridge_domains(
     )
 
 
+def _target_owned_controller_gate_resources(
+    *,
+    observed_gate: Mapping[str, Any],
+    workload_gate: Mapping[str, Any] | None = None,
+    workload_replicas: int = 1,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    target = {
+        "apiVersion": "slurm.nebius.ai/v1alpha1",
+        "kind": "SlurmCluster",
+        "metadata": {
+            "namespace": "soperator",
+            "name": "target",
+            "uid": "cluster-uid",
+            "resourceVersion": "42",
+        },
+        "spec": {
+            "slurmNodes": {
+                "controller": {
+                    "slurmctld": copy.deepcopy(dict(observed_gate)),
+                }
+            }
+        },
+    }
+    workload = {
+        "apiVersion": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "namespace": "soperator",
+            "name": "controller",
+            "uid": "workload-uid",
+            "resourceVersion": "84",
+            "ownerReferences": [
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "SlurmCluster",
+                    "name": "target",
+                    "uid": "cluster-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "replicas": workload_replicas,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "slurmctld",
+                            **copy.deepcopy(dict(workload_gate or observed_gate)),
+                        }
+                    ]
+                }
+            },
+        },
+    }
+    return target, workload
+
+
 def test_in_place_controller_roll_reasserts_reconciled_target_command_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkpoint = {
         "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-target",
+                "source_restart_prohibited": True,
+            },
             "target_singleton_takeover": {"command_gate_applied": True},
         }
     }
     phase: dict[str, Any] = {}
+    resources = iter(
+        _target_owned_controller_gate_resources(
+            observed_gate={"command": ["slurmctld"], "args": []},
+        )
+    )
     monkeypatch.setattr(
         migration,
         "_json_from_command",
-        lambda *_args, **_kwargs: {
-            "metadata": {
-                "uid": "cluster-uid",
-                "resourceVersion": "42",
-            },
-            "spec": {
-                "slurmNodes": {
-                    "controller": {
-                        "slurmctld": {
-                            "command": ["slurmctld"],
-                            "args": [],
-                        }
-                    }
-                }
-            },
-        },
+        lambda *_args, **_kwargs: next(resources),
     )
     commands: list[tuple[str, ...]] = []
 
@@ -1359,25 +1412,15 @@ def test_in_place_controller_roll_rearms_gate_for_a_later_bridge_owned_segment(
     }
     phase: dict[str, Any] = {}
     monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    resources = iter(
+        _target_owned_controller_gate_resources(
+            observed_gate={"command": ["slurmctld"], "args": []},
+        )
+    )
     monkeypatch.setattr(
         migration,
         "_json_from_command",
-        lambda *_args, **_kwargs: {
-            "metadata": {
-                "uid": "cluster-uid",
-                "resourceVersion": "42",
-            },
-            "spec": {
-                "slurmNodes": {
-                    "controller": {
-                        "slurmctld": {
-                            "command": ["slurmctld"],
-                            "args": [],
-                        }
-                    }
-                }
-            },
-        },
+        lambda *_args, **_kwargs: next(resources),
     )
     commands: list[tuple[str, ...]] = []
 
@@ -1411,31 +1454,26 @@ def test_in_place_controller_roll_uses_admission_window_while_manager_is_paused(
 ) -> None:
     checkpoint = {
         "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-target",
+                "source_restart_prohibited": True,
+            },
             "target_singleton_takeover": {"command_gate_applied": True},
         }
     }
     phase: dict[str, Any] = {
         "in_place_target_manager_pause": {"status": "verified"},
     }
+    resources = iter(
+        _target_owned_controller_gate_resources(
+            observed_gate={"command": ["slurmctld"], "args": []},
+        )
+    )
     monkeypatch.setattr(
         migration,
         "_json_from_command",
-        lambda *_args, **_kwargs: {
-            "metadata": {
-                "uid": "cluster-uid",
-                "resourceVersion": "42",
-            },
-            "spec": {
-                "slurmNodes": {
-                    "controller": {
-                        "slurmctld": {
-                            "command": ["slurmctld"],
-                            "args": [],
-                        }
-                    }
-                }
-            },
-        },
+        lambda *_args, **_kwargs: next(resources),
     )
     admission_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -1473,36 +1511,40 @@ def test_in_place_controller_roll_activates_one_exact_gated_workload_replica(
 ) -> None:
     checkpoint = {
         "controller_bridge": {
+            "stage": migration.BridgeStage.TARGET_HA_ACTIVE.value,
+            "authority": {
+                "owner": "bridge-target",
+                "source_restart_prohibited": True,
+            },
             "target_singleton_takeover": {"command_gate_applied": True},
         }
     }
-    phase: dict[str, Any] = {}
     expected = migration.target_controller_gate_values({})["slurmNodes"]["controller"]["slurmctld"]
+    phase: dict[str, Any] = {
+        "in_place_target_controller_command_gate": {
+            "status": "slurmcluster-accepted",
+            "slurmcluster_uid": "cluster-uid",
+            "resource_version": "42",
+            "contract_fingerprint": migration._fingerprint(expected),  # noqa: SLF001
+            "accepted_at": "accepted",
+            "slurmcluster_admission_window": {
+                "schema": "nebius-cxcli/in-place-slurmcluster-admission-window-v1",
+                "status": "restored",
+                "purpose": "target-controller-gate-rearm",
+                "original_failure_policy": "Fail",
+                "target_ref": "target",
+                "target_uid": "cluster-uid",
+                "uid": "webhook-uid",
+                "target_patched_at": "patched",
+                "restored_at": "restored",
+            },
+        }
+    }
     resources = iter(
-        (
-            {
-                "metadata": {"uid": "cluster-uid", "resourceVersion": "42"},
-                "spec": {"slurmNodes": {"controller": {"slurmctld": expected}}},
-            },
-            {
-                "metadata": {
-                    "uid": "workload-uid",
-                    "resourceVersion": "84",
-                    "ownerReferences": [
-                        {"controller": True, "uid": "cluster-uid"},
-                    ],
-                },
-                "spec": {
-                    "replicas": 0,
-                    "template": {
-                        "spec": {
-                            "containers": [
-                                {"name": "slurmctld", **expected},
-                            ]
-                        }
-                    },
-                },
-            },
+        _target_owned_controller_gate_resources(
+            observed_gate=expected,
+            workload_gate=expected,
+            workload_replicas=0,
         )
     )
     monkeypatch.setattr(

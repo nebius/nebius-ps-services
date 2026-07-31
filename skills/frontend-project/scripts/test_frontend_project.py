@@ -273,32 +273,32 @@ class FrontendProjectTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.FrontendProjectError, "VITE_ prefix"):
             self._render(invalid, "invalid-prefix")
 
-        secret_like = self._request(
+        invalid_case = self._request(
             variables=[{"name": "VITE_ACCESS_TOKEN", "required": True}]
         )
         with self.assertRaisesRegex(MODULE.FrontendProjectError, "secret-like"):
-            self._render(secret_like, "secret-like")
+            self._render(invalid_case, "secret-like")
 
-        api_key = self._request(variables=[{"name": "VITE_API_KEY", "required": True}])
+        invalid_case = self._request(variables=[{"name": "VITE_API_KEY", "required": True}])
         with self.assertRaisesRegex(MODULE.FrontendProjectError, "secret-like"):
-            self._render(api_key, "api-key")
+            self._render(invalid_case, "api-key")
 
-        access_key = self._request(
+        invalid_case = self._request(
             variables=[{"name": "VITE_ACCESS_KEY_ID", "required": True}]
         )
         with self.assertRaisesRegex(MODULE.FrontendProjectError, "secret-like"):
-            self._render(access_key, "access-key")
+            self._render(invalid_case, "access-key")
 
         for compact_name in ("VITE_APIKEY", "VITE_ACCESSKEY"):
             with self.subTest(compact_name=compact_name):
-                compact_key = self._request(
+                invalid_case = self._request(
                     variables=[{"name": compact_name, "required": True}]
                 )
                 with self.assertRaisesRegex(
                     MODULE.FrontendProjectError,
                     "secret-like",
                 ):
-                    self._render(compact_key, compact_name.lower())
+                    self._render(invalid_case, compact_name.lower())
 
         value_bearing = self._request()
         value_bearing["capabilities"]["public_environment"]["variables"][0]["value"] = (
