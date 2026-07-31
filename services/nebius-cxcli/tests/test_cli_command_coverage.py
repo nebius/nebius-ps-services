@@ -965,7 +965,9 @@ def _stub_soperator_upgrade_runtime(
                 }
             )
         elif (
-            "get" in arg_text and "statefulsets.apps.kruise.io" in arg_text and "login" in arg_text
+            "get" in arg_text
+            and any(arg == "statefulsets.apps.kruise.io" for arg in arg_text)
+            and "login" in arg_text
         ):
             stdout = json.dumps(
                 {

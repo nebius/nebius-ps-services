@@ -67,7 +67,7 @@ from .nebius_api_helpers import (
     sdk_parse_message,
     wait_nebius_operation,
 )
-from .oci_image import resolve_oci_image
+from .oci_image import is_immutable_oci_image_reference, resolve_oci_image
 from .paths import resolve_project_paths
 from .quota_checks import (
     QuotaCheck,
@@ -7240,7 +7240,6 @@ def _persistent_mount_migration_shell_command(
         "      printf 'persistent mount migration quarantine path has an invalid type\\n' >&2",
         "      exit 22",
         "    fi",
-        '    mkdir -p "$quarantine_parent"',
         "  fi",
         '  if [ -d "$target_path" ] && intent_matches && canonical_equal "$source_path" "$target_path"; then',
         '      source_digest=$(tree_digest "$source_path" strict)',
@@ -7258,6 +7257,7 @@ def _persistent_mount_migration_shell_command(
         "      printf 'persistent mount migration provisional target does not match the source without ACLs: %s\\n' \"$target_path\" >&2",
         "      exit 20",
         "    fi",
+        '    mkdir -p "$quarantine_parent"',
         '    mv -T -- "$target_path" "$quarantine_path"',
         '    portable_equal "$source_path" "$quarantine_path" || exit 20',
         '  elif [ "$entry_recovery_mode" = "true" ] && [ -e "$quarantine_path" ]; then',
@@ -47895,7 +47895,7 @@ def _gpu_fleet_probe_job_manifest(
         or not node_uid
         or not node_group_id
         or normalized_stage not in {"inventory", "activation"}
-        or not re.fullmatch(r"[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}", image)
+        or not is_immutable_oci_image_reference(image)
         or not all(source_contract)
     ):
         raise RuntimeError("GPU fleet probe manifest requires exact node/image/source evidence.")
@@ -132170,7 +132170,7 @@ def _ensure_in_place_gpu_driver_refresh_after_provider_rollout(
     populate_phase = _accepted_populate_jail_phase_state(checkpoint)
     image_lock = _mapping(_mapping(populate_phase.get("gpu_post_population")).get("image_lock"))
     immutable_image = str(image_lock.get("immutable_reference") or "").strip()
-    if not re.fullmatch(r"[^\s@]+(?:/[^\s@]+)*@sha256:[0-9a-f]{64}", immutable_image):
+    if not is_immutable_oci_image_reference(immutable_image):
         raise SoperatorMigrationPhasePending(
             "In-place GPU driver refresh requires the checkpointed immutable target "
             "controller image."

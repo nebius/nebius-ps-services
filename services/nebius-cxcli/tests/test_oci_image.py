@@ -10,7 +10,12 @@ from urllib.request import Request
 import pytest
 
 import nebius_cxcli.oci_image as oci_image
-from nebius_cxcli.oci_image import _default_requester, _redirect_request, resolve_oci_image
+from nebius_cxcli.oci_image import (
+    _default_requester,
+    _redirect_request,
+    is_immutable_oci_image_reference,
+    resolve_oci_image,
+)
 
 
 def _json_bytes(value: object) -> bytes:
@@ -37,6 +42,32 @@ _AMD64_BODY = _json_bytes(
 )
 _AMD64_DIGEST = _digest(_AMD64_BODY)
 _ARM64_DIGEST = "sha256:" + "c" * 64
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    (
+        ("registry.example/team/controller@sha256:" + "a" * 64, True),
+        ("registry.example/controller:latest", False),
+        ("registry.example/controller@sha256:" + "A" * 64, False),
+        ("registry.example/controller@sha256:" + "a" * 63, False),
+        ("registry.example/controller @sha256:" + "a" * 64, False),
+        ("registry.example/controller@tag@sha256:" + "a" * 64, False),
+        ("/registry.example/controller@sha256:" + "a" * 64, False),
+        ("registry.example/controller/@sha256:" + "a" * 64, False),
+        ("registry.example//controller@sha256:" + "a" * 64, False),
+        ("@sha256:" + "a" * 64, False),
+        (None, False),
+    ),
+)
+def test_immutable_oci_image_reference_validation(reference: object, expected: bool) -> None:
+    assert is_immutable_oci_image_reference(reference) is expected
+
+
+def test_immutable_oci_image_reference_rejects_long_adversarial_input() -> None:
+    reference = "!/" * 4096 + "!@sha256:" + "g" * 64
+
+    assert is_immutable_oci_image_reference(reference) is False
 
 
 class _TrackedBody(io.BytesIO):

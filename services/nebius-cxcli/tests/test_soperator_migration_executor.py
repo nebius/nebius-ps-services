@@ -28355,7 +28355,7 @@ def test_in_place_login_helm_webhook_bridge_serves_dry_runs_and_deletes_exact_de
             return copy.deepcopy(target)
         if "nodesets" in command:
             return {"items": [copy.deepcopy(nodeset)]}
-        if "endpointslices.discovery.k8s.io" in command:
+        if any(arg == "endpointslices.discovery.k8s.io" for arg in command):
             return {
                 "items": [
                     {
@@ -35018,7 +35018,7 @@ def test_retired_auxiliary_namespace_requires_exact_empty_residue(
         calls.append(command)
         if command[3:6] == ("get", "namespace", "mariadb-operator-system"):
             payload = namespace
-        elif "helmreleases.helm.toolkit.fluxcd.io" in command:
+        elif any(arg == "helmreleases.helm.toolkit.fluxcd.io" for arg in command):
             payload = {"items": []}
         elif "api-resources" in command:
             return SoperatorMigrationCommandResult(
@@ -43038,7 +43038,7 @@ def test_controller_bridge_target_login_surge_addition_requires_exact_owner_line
         command = tuple(argv)
         if "slurmcluster" in command:
             payload = {"metadata": {"uid": "target-slurmcluster-uid"}}
-        elif "statefulsets.apps.kruise.io" in command:
+        elif any(arg == "statefulsets.apps.kruise.io" for arg in command):
             payload = {
                 "metadata": {
                     "uid": "login-workload-uid",
@@ -46270,13 +46270,13 @@ def _jail_login_hold_release_fixture(
         args: Sequence[str],
         **_kwargs: object,
     ) -> dict[str, Any]:
-        if "statefulsets.apps.kruise.io" in args:
+        if any(arg == "statefulsets.apps.kruise.io" for arg in args):
             return copy.deepcopy(target_workload)
         if "pods" in args:
             return {"items": [copy.deepcopy(target_pod)]}
         if "services" in args:
             return {"items": [copy.deepcopy(service)]}
-        if "endpointslices.discovery.k8s.io" in args:
+        if any(arg == "endpointslices.discovery.k8s.io" for arg in args):
             return {"items": [copy.deepcopy(endpoint_slice)]}
         raise AssertionError(f"unexpected Kubernetes resource lookup: {args}")
 
@@ -54438,7 +54438,7 @@ def test_persistent_mount_migration_recovery_quarantines_provisional_target(
     source.mkdir(parents=True)
     target.mkdir(parents=True)
     (source / "payload.txt").write_text("copy-integrity\n", encoding="utf-8")
-    (target / "payload.txt").write_text("copy-integrity\n", encoding="utf-8")
+    shutil.copy2(source / "payload.txt", target / "payload.txt")
     shutil.copystat(source, target, follow_symlinks=False)
     script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
         [
@@ -62380,7 +62380,7 @@ def test_source_owned_zero_controller_defers_target_gate_until_immutable_handoff
         commands.append(command)
         if "slurmcluster" in command:
             payload = target
-        elif "statefulsets.apps.kruise.io" in command:
+        elif any(arg == "statefulsets.apps.kruise.io" for arg in command):
             payload = workload
         elif "pods" in command:
             payload = {"items": []}
@@ -62657,7 +62657,7 @@ def test_source_owned_zero_controller_deferral_rejects_a_live_owned_pod(
         command = tuple(str(item) for item in args)
         if "slurmcluster" in command:
             payload = target
-        elif "statefulsets.apps.kruise.io" in command:
+        elif any(arg == "statefulsets.apps.kruise.io" for arg in command):
             payload = workload
         elif "pods" in command:
             payload = {"items": [pod]}
@@ -62734,7 +62734,7 @@ def test_target_owned_exact_controller_gate_records_real_admission_acceptance(
         command = tuple(str(item) for item in args)
         if "slurmcluster" in command:
             payload = target
-        elif "statefulsets.apps.kruise.io" in command:
+        elif any(arg == "statefulsets.apps.kruise.io" for arg in command):
             payload = workload
         else:
             raise AssertionError(command)

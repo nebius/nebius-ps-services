@@ -36,6 +36,24 @@ _MANIFEST_MEDIA_TYPES = frozenset(
 _MAX_CONTROL_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
+def is_immutable_oci_image_reference(value: object) -> bool:
+    """Return whether value is an exact repository@sha256 reference in linear time."""
+
+    if not isinstance(value, str):
+        return False
+    repository, separator, digest = value.rpartition("@sha256:")
+    repository_segments = repository.split("/")
+    return (
+        separator == "@sha256:"
+        and all(
+            segment and "@" not in segment and not any(character.isspace() for character in segment)
+            for segment in repository_segments
+        )
+        and len(digest) == 64
+        and all(character in "0123456789abcdef" for character in digest)
+    )
+
+
 @dataclass(frozen=True)
 class OCIImageResolution:
     source: str

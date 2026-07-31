@@ -247,8 +247,12 @@ def test_source_fence_inventory_uses_discovered_canonical_mariadb_resource() -> 
 
     assert [item["resource"]["kind"] for item in inventory] == ["MariaDB"]
     assert inventory[0]["api_path"].endswith("/mariadbs/source-db")
-    assert any("mariadbs.k8s.mariadb.com" in command for command in calls)
-    assert not any("mariadb.k8s.mariadb.com" in command for command in calls)
+    assert any(
+        any(arg == "mariadbs.k8s.mariadb.com" for arg in command) for command in calls
+    )
+    assert not any(
+        any(arg == "mariadb.k8s.mariadb.com" for arg in command) for command in calls
+    )
 
 
 def test_source_fence_inventory_enumerates_served_networkpolicies() -> None:

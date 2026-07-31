@@ -176,7 +176,7 @@ def test_soperator_upstream_verifier_is_read_only_and_manual_sync_only() -> None
     assert "ACCEPT_IMAGE_BASELINE" in serialized_steps
     assert "--accept-review-baseline" in serialized_steps
     assert "--accept-image-baseline" in serialized_steps
-    assert "actions/download-artifact@v7" in serialized_steps
+    assert "actions/download-artifact@v8" in serialized_steps
     assert "github-token" in serialized_steps
     assert "run-id" in serialized_steps
     assert "gh api" in serialized_steps

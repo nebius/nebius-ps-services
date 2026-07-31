@@ -324,9 +324,9 @@ def test_mirrored_objects_pin_exact_source_role_uid_and_rules() -> None:
                 "metadata": {"uid": "source-service-account-uid"},
                 "imagePullSecrets": [],
             }
-        elif "rolebindings.rbac.authorization.k8s.io" in args:
+        elif any(arg == "rolebindings.rbac.authorization.k8s.io" for arg in args):
             payload = role_bindings
-        elif "role.rbac.authorization.k8s.io" in args:
+        elif any(arg == "role.rbac.authorization.k8s.io" for arg in args):
             payload = source_role
         else:
             raise AssertionError(args)
@@ -361,7 +361,7 @@ def test_source_role_uid_and_rules_are_written_to_the_bridge_journal() -> None:
         args: Sequence[str],
         **_kwargs: Any,
     ) -> migration.SoperatorMigrationCommandResult:
-        assert "rolebinding.rbac.authorization.k8s.io" in args
+        assert any(arg == "rolebinding.rbac.authorization.k8s.io" for arg in args)
         return _result(args, stdout=json.dumps(live_binding))
 
     observed = migration._controller_bridge_source_role_binding_contract(  # noqa: SLF001
@@ -450,9 +450,9 @@ def _writer_boundary_runner(
     ) -> migration.SoperatorMigrationCommandResult:
         if "configmap" in args:
             payload = config
-        elif "rolebinding.rbac.authorization.k8s.io" in args:
+        elif any(arg == "rolebinding.rbac.authorization.k8s.io" for arg in args):
             payload = live_binding
-        elif "role.rbac.authorization.k8s.io" in args:
+        elif any(arg == "role.rbac.authorization.k8s.io" for arg in args):
             payload = source_role
         else:
             raise AssertionError(args)

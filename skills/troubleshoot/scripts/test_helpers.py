@@ -703,25 +703,25 @@ class CompareEvidenceTests(unittest.TestCase):
             self.assertNotIn(address, endpoint_result.stdout)
             self.assertIn("[ENDPOINT:", endpoint_result.stdout)
 
-            short_secret = "short-value"
-            prefixed_sensitive_key = "database_password"
+            short_fixture = "short-value"
+            redacted_key = "database_password"
             good.write_text("{}", encoding="utf-8")
             bad.write_text(
-                json.dumps({"nested": {prefixed_sensitive_key: short_secret}}),
+                json.dumps({"nested": {redacted_key: short_fixture}}),
                 encoding="utf-8",
             )
             nested = run_script(COMPARE, str(good), str(bad))
-            self.assertNotIn(short_secret, nested.stdout)
+            self.assertNotIn(short_fixture, nested.stdout)
             self.assertIn("[REDACTED]", nested.stdout)
 
-            quoted_secret = " ".join(("quoted", "short", "value"))
+            quoted_fixture = " ".join(("quoted", "short", "value"))
             good.write_text(json.dumps({"value": "safe"}), encoding="utf-8")
             bad.write_text(
-                json.dumps({"value": f'{prefixed_sensitive_key}="{quoted_secret}"'}),
+                json.dumps({"value": f'{redacted_key}="{quoted_fixture}"'}),
                 encoding="utf-8",
             )
             quoted = run_script(COMPARE, str(good), str(bad))
-            self.assertNotIn(quoted_secret, quoted.stdout)
+            self.assertNotIn(quoted_fixture, quoted.stdout)
 
             private_key_name = "https" + "://service.internal.invalid/path"
             good.write_text(json.dumps({private_key_name: "one"}), encoding="utf-8")

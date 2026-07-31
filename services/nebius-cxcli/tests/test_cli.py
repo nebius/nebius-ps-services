@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from click import unstyle
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli_module
@@ -1141,7 +1142,7 @@ def _project_config_path(deployments_root: Path) -> Path:
 
 
 def _normalized_cli_output(text: str) -> str:
-    without_soft_hyphen_wraps = re.sub(r"-\s*\n\s*", "-", text)
+    without_soft_hyphen_wraps = re.sub(r"-\s*\n\s*", "-", unstyle(text))
     return " ".join(without_soft_hyphen_wraps.split())
 
 
@@ -12724,7 +12725,7 @@ def test_soperator_onboard_rejects_removed_target_chart_override(tmp_path: Path)
     )
 
     assert result.exit_code != 0
-    assert "No such option: --to-chart-version" in result.output
+    assert "No such option: --to-chart-version" in _normalized_cli_output(result.output)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert not payload.get("deploy") or payload["deploy"].get("targets", []) == []
 
@@ -15248,8 +15249,9 @@ def test_ext_soperator_upgrade_rejects_removed_service_role_downtime_option(
     )
 
     assert result.exit_code == 2
-    assert "No such option" in " ".join(result.output.split())
-    assert "--approve-service-role-downtime" in " ".join(result.output.split())
+    normalized_output = _normalized_cli_output(result.output)
+    assert "No such option" in normalized_output
+    assert "--approve-service-role-downtime" in normalized_output
     assert not config_path.exists()
 
 
@@ -15431,8 +15433,9 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     )
 
     assert grace_period.exit_code == 2
-    assert "No such option" in " ".join(grace_period.output.split())
-    assert "--login-session-policy" in " ".join(grace_period.output.split())
+    normalized_output = _normalized_cli_output(grace_period.output)
+    assert "No such option" in normalized_output
+    assert "--login-session-policy" in normalized_output
 
     removed_strategy_option = runner.invoke(
         app,
@@ -15473,8 +15476,9 @@ def test_ext_soperator_upgrade_login_handoff_has_no_policy_flags() -> None:
     )
 
     assert removed_flag.exit_code == 2
-    assert "No such option" in " ".join(removed_flag.output.split())
-    assert "--login-session-policy" in " ".join(removed_flag.output.split())
+    normalized_output = _normalized_cli_output(removed_flag.output)
+    assert "No such option" in normalized_output
+    assert "--login-session-policy" in normalized_output
 
 
 def test_external_soperator_jail_plan_preserves_later_active_slot() -> None:
@@ -15846,8 +15850,9 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
     )
 
     assert explicit_policy.exit_code == 2
-    assert "No such option" in " ".join(explicit_policy.output.split())
-    assert "--login-session-policy" in " ".join(explicit_policy.output.split())
+    normalized_output = _normalized_cli_output(explicit_policy.output)
+    assert "No such option" in normalized_output
+    assert "--login-session-policy" in normalized_output
 
     _write_locked_ext_soperator_checkpoint(
         config_path=config_path,
