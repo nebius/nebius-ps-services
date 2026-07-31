@@ -131,5 +131,5 @@ source = ["nebius_vpngw"]
 skip_empty = true
 
 [build-system]
-requires = ["setuptools>=80", "setuptools-scm>=9.2", "vcs-versioning>=2.2.2,<3.0.0"]
+requires = ["setuptools>=83.0.0", "setuptools-scm>=9.2", "vcs-versioning>=2.2.2,<3.0.0"]
 build-backend = "setuptools.build_meta"
