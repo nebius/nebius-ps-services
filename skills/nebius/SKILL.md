@@ -52,7 +52,12 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 
 ## Workflow
 
-1. Choose the track:
+1. Establish project context, then choose the track:
+   - when an implementation needs a project ID, start with
+     `references/project-selection.md`
+   - prefer an explicit current-task project
+   - when no explicit project exists and the workflow permits the user's CLI
+     default as authority, use the documented config-owned profile fallback
    - IAM/Object Storage:
      - start with `references/iam.md`
      - reuse code from `assets/iam/`
@@ -102,6 +107,7 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
    If script execution is not permitted, read the scripts as references and
    report that live script execution was skipped.
 3. Load only the references needed for the task:
+   - `references/project-selection.md`
    - `references/cloud-patterns.md`
    - `references/observability.md`
    - `references/route-inspection.md`
@@ -118,24 +124,19 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
 - Never print or commit private keys, tokens, or access key secrets.
+- Do not parse `~/.nebius/config.yaml` to infer the current project. Follow
+  `references/project-selection.md`, keep explicit task project selection
+  authoritative, and fail closed when fallback discovery is invalid.
 - Use Nebius role IDs like `editor`, not `roles/editor`.
 - Upload Nebius auth public keys in PEM format.
 - Prefer the current SDK auth order from `nebius/pysdk` README:
@@ -247,6 +248,7 @@ When execution is permitted, run scripts relative to the skill directory.
 
 ## References
 
+- `references/project-selection.md`
 - `references/iam.md`
 - `references/vpc-networking.md`
 - `references/cloud-patterns.md`

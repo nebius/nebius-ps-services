@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.8
+# check=error=true
+
+FROM {{PYTHON_BUILD_IMAGE}} AS build
+WORKDIR /build
+
+COPY {{PYTHON_LOCKFILE_COPY_JSON}}
+RUN python -m pip wheel --require-hashes --no-cache-dir \
+      --wheel-dir /wheels --requirement {{PYTHON_LOCKFILE_PATH}} \
+    && python -m pip install --require-hashes --no-cache-dir \
+      --no-index --find-links=/wheels --requirement {{PYTHON_LOCKFILE_PATH}}
+
+{{PACKAGE_SOURCE_COPY_LINES}}
+ENV {{SCM_PRETEND_VERSION_ENV}}={{PROJECT_VERSION}}
+RUN python -m pip wheel --no-cache-dir --no-build-isolation --no-deps \
+      --wheel-dir /wheels .
+
+FROM {{PYTHON_RUNTIME_IMAGE}} AS runtime
+WORKDIR /app
+
+COPY --from=build /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels \
+      "{{PYTHON_DISTRIBUTION_NAME}}=={{PROJECT_VERSION}}" \
+    && rm -rf /wheels
+
+USER {{RUNTIME_UID}}:{{RUNTIME_GID}}
+EXPOSE {{RUNTIME_PORT}}
+CMD {{RUNTIME_COMMAND_JSON}}

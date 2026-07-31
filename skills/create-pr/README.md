@@ -25,6 +25,10 @@ and GitHub steps.
 - Preserves explicit user-supplied PR titles and bodies.
 - When invoked from Agentic SDLC, checks local UAT evidence and summarizes
   requirements, features, validation, tests, evaluation, and UAT in the PR body.
+- In an active Agentic SDLC run, switches to publication-only mode: it requires
+  a clean exact promoted SHA with passing UAT and does not stage, commit, merge,
+  repair, or otherwise change that SHA. Push and CLI PR creation use one direct
+  action with explicit ref and head arguments.
 - When Agentic SDLC local state is available, records the PR URL and readiness
   summary in run evidence.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
@@ -70,8 +74,8 @@ Report PR number, URL, and blockers
    repair, and repair safe branch-owned failures.
 6. Push the branch with an explicit refspec.
 7. Open or reuse the PR with the requested title and body.
-8. For Agentic SDLC runs, include available SDLC evidence and use a draft PR
-   for explicitly requested early PRs when UAT is missing or failed.
+8. For active Agentic SDLC runs, require passing UAT and publish only the exact
+   promoted SHA; route any required branch change back through the coordinator.
 9. Keep repairing available branch-caused check failures when safe, or mark a
    real blocker. If GitHub checks are still pending, report the PR as pending
    instead of ready.
@@ -99,8 +103,12 @@ Report PR number, URL, and blockers
 - Treat a known fixable branch-owned failure as unfinished PR creation, not as
   a successful handoff with a link.
 - Do not call a PR ready while local tests or GitHub checks are still pending.
+- Treat active Agentic SDLC PR creation as publication-only. A different remote
+  head, conflict, failed check, or requested repair returns to the coordinator.
 
 ## Files
 
 - `SKILL.md`: PR creation workflow, guardrails, and command guidance.
 - `agents/openai.yaml`: UI metadata and default prompt.
+- `references/command-reference.md`: exact Git and GitHub CLI command cookbook
+  loaded when executing or validating PR operations.

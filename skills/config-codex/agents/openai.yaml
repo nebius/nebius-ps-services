@@ -1,6 +1,6 @@
 interface:
   display_name: "Config Codex"
-  short_description: "Bootstrap a public-safe local Codex runtime setup"
-  default_prompt: "Use $config-codex to configure my local Codex setup from public-safe templates: inspect first, back up only changed files, merge AGENTS.md/config.toml updates without replacing user-owned content, keep secrets out of config, install hooks/custom agents safely, create task-state layout, then validate and tell me how to restart and trust hooks."
+  short_description: "Configure or recover a public-safe local Codex setup"
+  default_prompt: "Use $config-codex to configure or recover my local Codex setup from public-safe templates: inspect first, recreate a missing config.toml only from the sanitized recovery baseline, back up only existing files that will change, merge AGENTS.md/config.toml updates without replacing user-owned content, keep private and plugin-managed state plus secrets out of public assets, install hooks/custom agents safely, create task-state layout, then validate and tell me how to restart and trust hooks."
 policy:
   allow_implicit_invocation: false

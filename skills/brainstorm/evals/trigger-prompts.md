@@ -30,6 +30,10 @@ Use $brainstorm to explore whether this should become an SDLC feature or just a 
 Use $brainstorm to think through this major architecture decision. If $design and $system-design-rules are available, consult them as advisors but keep the discussion chat-only.
 ```
 
+```text
+Use $brainstorm to compare these conflicting repo and vendor signals. If source priority cannot resolve the conflict, use bounded $research for that conflict and come back with options.
+```
+
 ## Should Not Trigger
 
 ```text
@@ -39,7 +43,7 @@ Implement the quota-aware preflight.
 Use the implementation or domain-specific skill instead.
 
 ```text
-Run $sdlc-start for this feature.
+Run $sdlc-start run feature-prompt.md for this feature.
 ```
 
 Use the explicit Agentic SDLC workflow.
@@ -75,7 +79,7 @@ When trigger precision matters, test these prompts in a fresh Codex thread
 where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `brainstorm` or produce a response that
-  follows its chat-only, source-ranked context workflow.
+  follows its chat-only, relevance-filtered source-ranked context workflow.
 - Should-not-trigger prompts should route to the implementation, Agentic SDLC,
   PR review, communication, or commit skill named by the request.
 - If `brainstorm` steals implementation, SDLC, or review tasks, narrow the

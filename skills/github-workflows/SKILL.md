@@ -7,6 +7,18 @@ description: "Use for GitHub Actions workflow work: create, review, or standardi
 
 Apply repository-native GitHub Actions patterns instead of inventing one-off workflows.
 
+## Invocation Scope
+
+- `standalone`: create or update the selected repository workflows.
+- `coordinated-candidate`: receive exact workflow paths, project commands,
+  exclusions, and private bundle from `scaffold-project`; emit candidate YAML
+  only in that bundle and never write the target.
+
+In coordinated-candidate scope, use one newly assigned project-prefixed
+workflow file. Do not splice an existing workflow automatically, dispatch a
+workflow, change repository settings, or claim application/infrastructure
+files. Return candidate path, mode, provenance, and validation requirements.
+
 ## Use This Skill For
 
 - Creating or updating `.github/workflows/*.yml` files.
@@ -14,6 +26,8 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
 - Adding or reviewing bot-only merge automation.
 - Adding or reviewing tag-driven GitHub Release publication workflows.
 - Adding or reviewing container image publish workflows.
+- Translating a `container` build, platform, SBOM, provenance, vulnerability,
+  and verification contract into GitHub Actions YAML.
 
 ## Workflow
 
@@ -22,6 +36,9 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
    - For PR/push CI or merge automation, read `references/pr-merge.md`.
    - For GitHub Releases, read `references/publish-release.md`.
    - For container image publication, read `references/container-image-publish.md`.
+   - For a container workflow, obtain the approved build context, Dockerfile or
+     Bake target, target platforms, cache policy, and supply-chain requirements
+     from the `container` contract. Do not redesign the image in workflow YAML.
 
 2. Prefer repository conventions.
    - Scope monorepo workflows with `paths`.
@@ -50,20 +67,12 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
@@ -72,6 +81,9 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 - Release workflows must resolve the tagged commit explicitly and verify it belongs to the release branch.
 - Release note generation must fail if the matching changelog section is missing or empty.
 - Image publish workflows should emit immutable tags and record the published digest.
+- Container workflows own CI orchestration only. Image/runtime design and
+  validation requirements remain with `container`; registry release execution
+  remains with `publish-image`.
 - Merge automation should be bot-scoped and narrowly authorized.
 
 ## Resources

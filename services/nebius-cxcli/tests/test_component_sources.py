@@ -583,7 +583,10 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             "platform": "cpu-d3",
             "preset": "32vcpu-128gb",
         }
-        for role in ("system", "controller", "login", "accounting"):
+        for role in ("system", "controller"):
+            assert "autoscaling_input" not in profile["mk8s"]["node_groups"][role]
+            assert "node_count_input" not in profile["mk8s"]["node_groups"][role]
+        for role in ("login", "accounting"):
             assert profile["mk8s"]["node_groups"][role]["autoscaling_input"] == (
                 f"soperator.{role}_autoscaling"
             )
@@ -725,15 +728,12 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         ),
     }
     assert all(
-        "autoscaling_input" not in worker
-        for worker in mixed_profile["mk8s"]["worker_nodesets"]
+        "autoscaling_input" not in worker for worker in mixed_profile["mk8s"]["worker_nodesets"]
     )
     all_worker_inputs = {
         value
         for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1")
-        for worker in soperator.soperator_nodesets.profiles[profile_name]["mk8s"][
-            "worker_nodesets"
-        ]
+        for worker in soperator.soperator_nodesets.profiles[profile_name]["mk8s"]["worker_nodesets"]
         for value in (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
@@ -2918,13 +2918,18 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
     for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
         node_groups = profiles[profile_name]["mk8s"]["node_groups"]
         assert node_groups["system"]["node_count"] == 3
-        assert node_groups["system"]["autoscaling"] == {
-            "min_node_count": 3,
-            "max_node_count": 5,
-        }
-        assert node_groups["system"]["node_count_input"] == "soperator.system_node_count"
-        assert node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
-        for role in ("controller", "login", "accounting"):
+        assert "autoscaling" not in node_groups["system"]
+        assert "node_count_input" not in node_groups["system"]
+        assert "autoscaling_input" not in node_groups["system"]
+        assert node_groups["system"]["node_labels"]["nebius.ai/soperator-bridge-domain"] == "system"
+        assert node_groups["controller"]["node_count"] == 2
+        assert "node_count_input" not in node_groups["controller"]
+        assert "autoscaling_input" not in node_groups["controller"]
+        assert (
+            node_groups["controller"]["node_labels"]["nebius.ai/soperator-bridge-domain"]
+            == "controller"
+        )
+        for role in ("login", "accounting"):
             assert node_groups[role]["node_count"] == 2
             assert node_groups[role]["node_count_input"] == f"soperator.{role}_node_count"
             assert node_groups[role]["autoscaling_input"] == f"soperator.{role}_autoscaling"
@@ -3308,7 +3313,10 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "required": True,
         "type_hint": "bool",
     }
-    assert "deploy.targets[].deployment_testing.mk8s_gpu.cluster_smoke.enabled" not in mk8s_wizard_fields
+    assert (
+        "deploy.targets[].deployment_testing.mk8s_gpu.cluster_smoke.enabled"
+        not in mk8s_wizard_fields
+    )
     assert mk8s_wizard_fields[
         "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
     ] == {

@@ -1,6 +1,6 @@
 ---
 name: global-context-management
-description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, targeted read-only subagents when useful and permitted, focused validation, and final risk review."
+description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, targeted read-only subagents when useful, focused validation, and final risk review."
 ---
 
 # Global Context Management
@@ -9,11 +9,11 @@ description: "Use for complex Codex work: planning, implementation, debugging, r
 
 Use this skill to keep long or complex Codex work focused and recoverable:
 concise parent context, durable task-state notes, bounded read-only subagents
-when authorized and useful, focused validation, and final risk review.
+when it is useful, focused validation, and final risk review.
 
 ## When To Use
 
-- Multi-file implementation, refactoring, migration, debugging, or architecture
+- Multi-file reading, understanding, validation, implementation, refactoring, migration, debugging, or architecture
   work.
 - CI failures, long logs, test failures, or unclear root-cause investigations.
 - Code review or risk review where many files or contracts may be relevant.
@@ -120,9 +120,12 @@ path is created when the hook payload has no session id. If no path is
 available, continue without durable task state rather than creating a manual or
 repo-local fallback.
 
-The hook only advertises or reuses the path; the parent creates and updates the
-file when continuity is useful. If a local PreToolUse write guard is installed,
-it must allow writes under
+Normal `SessionStart` only advertises or reuses the path. A `compact`
+`SessionStart`, or the first complex `UserPromptSubmit` for the session, creates
+an empty private scaffold with `0700` directories and a `0600` `current.md`.
+Hooks never copy prompt text into that scaffold. The parent owns all semantic
+content and rewrites the rolling summary when the task changes. If a local
+PreToolUse write guard is installed, it must allow writes under
 `$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
 runtime edits such as hook rewrites.
 
@@ -137,8 +140,18 @@ At task start, resume, or context transition, read existing task state when it
 may contain prior decisions, validation status, or next action. Keep
 `current.md` as a rolling summary, not an append-only log: retain only the
 objective, constraints, decisions, changed files, validation status, risks, and
-next action needed for continuation. Use `assets/task-state-template.md` only
-when a section template is helpful.
+next action needed for continuation. Keep it below 12 KiB when practical and
+use `assets/task-state-template.md` only when a section template is helpful.
+
+When `troubleshoot` records an active `codex-remediation-budget:v1` marker,
+preserve exactly one valid marker during every rolling-summary rewrite until it
+is resolved, superseded by a causally different blocker, or replaced by a new
+user-authorized tranche. Do not infer attempts, change limits, or copy raw
+failure evidence into it; `troubleshoot` owns those semantics. When
+`troubleshoot` establishes a causally different blocker, preserve only its
+fresh attempt-1 marker and keep the earlier outcome in prose; do not carry the
+old blocker's attempts, active time, tranche, exhaustion status, or stop trigger
+into the replacement marker.
 
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the
@@ -254,20 +267,12 @@ validating hook setup. For the human-facing design and architecture map, read
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

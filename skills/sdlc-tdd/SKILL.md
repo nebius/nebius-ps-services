@@ -1,6 +1,6 @@
 ---
 name: sdlc-tdd
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-create-plan` when an Agentic SDLC feature needs tests written before implementation. Converts acceptance criteria and design success criteria into failing or already-green tests."
+description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-prepare-execution` in the registered feature integration worktree when an Agentic SDLC feature needs tests written before dependency-wave implementation."
 ---
 
 # SDLC TDD
@@ -11,7 +11,8 @@ Define success before implementation by creating tests that prove the current fe
 
 ## When To Use
 
-- A locked feature plan exists and tests must be written before implementation.
+- A locked feature plan and verified `execution_prepared` state exist, and tests
+  must be written in the registered integration worktree before implementation.
 - Acceptance criteria need unit, integration, component, contract, or regression coverage.
 - Existing tests must be mapped to SDLC acceptance criteria.
 
@@ -27,12 +28,16 @@ Define success before implementation by creating tests that prove the current fe
 - Feature design.
 - Requirement acceptance criteria.
 - Existing test conventions.
+- Verified integration worktree, branch, base SHA, plan digest, and Git common
+  directory from private execution state.
 
 ## Required Reads
 
 - Locked plan.
 - Feature and requirement blocks.
 - Existing tests and test framework configuration.
+- The execution-plane reference owned by `sdlc-prepare-execution` and the
+  active coordinator record.
 
 ## Writes
 
@@ -43,10 +48,20 @@ Define success before implementation by creating tests that prove the current fe
 ## Process
 
 - Identify acceptance criteria that can be tested.
+- Change cwd to the recorded integration worktree and re-observe its Git root,
+  common directory, branch, exact recorded HEAD, and cleanliness. Fail with
+  `WORKTREE_CONFLICT` on drift; never write tests in the project checkout.
 - Choose the smallest useful test level first.
+- When the locked plan defines a planned end-to-end slice, map tests to its
+  behavior, layer contracts, and cross-layer validation target. Prefer the
+  smallest useful
+  unit, contract, component, or integration coverage that would fail if one
+  planned layer or boundary is missing.
 - Write tests that fail for missing behavior when implementation is absent.
 - Avoid over-mocking real behavior.
 - Run focused tests and record evidence.
+- Leave the integration changes uncommitted. `sdlc-implement-plan` seals the
+  TDD base exactly once before it creates worker branches.
 
 ## Idempotency
 
@@ -59,6 +74,9 @@ Define success before implementation by creating tests that prove the current fe
 - If test framework is missing, route to project scaffolding or design update.
 - If criteria are not testable, route to `sdlc-create-requirements`.
 - If design lacks test seams, route to `sdlc-create-design`.
+- If the planned slice cannot be tested from the available seams, route to
+  `sdlc-create-plan` or `sdlc-create-design` instead of replacing it with
+  layer-isolated tests only.
 
 ## Must Not
 
@@ -69,8 +87,11 @@ Define success before implementation by creating tests that prove the current fe
 ## Completion Criteria
 
 - Tests exist and map to acceptance criteria.
+- Planned end-to-end slice coverage is present or a plan/design blocker is
+  classified.
 - Test run evidence exists.
 - Expected red or already-green state is recorded.
+- Project checkout remains clean and unchanged at the prepared base.
 
 ## SDLC Invariants
 
@@ -87,20 +108,12 @@ Define success before implementation by creating tests that prove the current fe
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

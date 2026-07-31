@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import tarfile
@@ -8,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -50,9 +52,7 @@ def _source_payload() -> dict[str, Any]:
             },
         },
         "infra": {
-            "components": [
-                {"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}
-            ]
+            "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
         },
         "apps": {
             "charts": [
@@ -63,11 +63,7 @@ def _source_payload() -> dict[str, Any]:
                     "version": "0.26.0",
                     "namespace": "soperator",
                     "release-name": "soperator",
-                    "values": {
-                        "slurmNodes": {
-                            "accounting": {"externalDB": {"enabled": False}}
-                        }
-                    },
+                    "values": {"slurmNodes": {"accounting": {"externalDB": {"enabled": False}}}},
                 }
             ]
         },
@@ -272,7 +268,6 @@ def _chart_named_required_recreation_pvs() -> list[dict[str, Any]]:
 
 def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
-        target_ref="mk8scluster-e00wrz1h8fhxgbdf8j",
         chart_from="1.22.3",
         chart_to="1.22.3",
         k8s_from=None,
@@ -282,16 +277,11 @@ def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transiti
         include_transitions=False,
     )
 
-    assert (
-        filename
-        == "external-soperator-backup-mk8scluster-e00wrz1h8fhxgbdf8j-"
-        "20260629T203459Z-chart-1.22.3.tar.gz"
-    )
+    assert filename == "external-soperator-backup-20260629T203459Z-chart-1.22.3.tar.gz"
 
 
 def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
-        target_ref="external-cluster",
         chart_from="1.22.3",
         chart_to="4.0.2-ps.3",
         k8s_from="1.31",
@@ -301,9 +291,8 @@ def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> 
     )
 
     assert (
-        filename
-        == "ext-soperator-upgrade-external-cluster-"
-        "20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-k8s-1.31-to-1.32.tar.gz"
+        filename == "ext-soperator-upgrade-20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-"
+        "k8s-1.31-to-1.32.tar.gz"
     )
     assert "unknown" not in filename
 
@@ -434,7 +423,16 @@ def test_soperator_backup_archive_contains_restore_material(
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
                 args,
-                json.dumps({"spec": {"replicas": 1}, "metadata": {"name": "accounting"}}),
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "name": "accounting",
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
             )
         if args[:1] == ["scale"]:
             return _command_result(args)
@@ -520,6 +518,7 @@ def test_soperator_backup_archive_contains_restore_material(
 
     assert os.stat(backup.path.parent).st_mode & 0o777 == 0o700
     assert os.stat(backup.path).st_mode & 0o777 == 0o600
+    assert backup.path.parent == tmp_path / "backups" / "soperator-clusters" / "mk8s"
     assert "-chart-0.26.0.tar.gz" in backup.path.name
     assert "-to-" not in backup.path.name
     assert "unknown" not in backup.path.name
@@ -547,35 +546,36 @@ def test_soperator_backup_archive_contains_restore_material(
             archive.extractfile("kubernetes/restore/deployments.yaml").read().decode()
         )
         generic_pvc_restore = (
-            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pv_restore = yaml.safe_load_all(
-            archive.extractfile("recreation/restore/persistentvolumes.yaml")
-            .read()
-            .decode()
+            archive.extractfile("recreation/restore/persistentvolumes.yaml").read().decode()
         )
         required_pvc_restore = yaml.safe_load_all(
-            archive.extractfile("recreation/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("recreation/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pvs = list(required_pv_restore)
         required_pvcs = list(required_pvc_restore)
 
     assert manifest["schema"] == "nebius-cxcli-soperator-backup/v1"
     assert manifest["source_kind"] == "managed-backup"
+    assert manifest["cluster_key"] == "mk8s"
+    assert manifest["cluster_id"] == ""
+    assert manifest["cluster_name"] == ""
+    assert manifest["target_ref"] == "mk8s"
+    assert restore_plan["cluster_key"] == "mk8s"
+    assert restore_plan["target_ref"] == "mk8s"
     assert manifest["kubernetes_restore_material"]["resource_counts"]["deployments"] == 1
     assert manifest["recreation_runbook_material"]["coverage_path"] == (
         "recreation/recreation-coverage.json"
     )
-    assert manifest["recreation_runbook_material"][
-        "retained_pv_bindings_are_command_restored"
-    ] is True
-    assert "recreation/restore/persistentvolumes.yaml" in manifest[
-        "recreation_runbook_material"
-    ]["restore_paths"]
+    assert (
+        manifest["recreation_runbook_material"]["retained_pv_bindings_are_command_restored"] is True
+    )
+    assert (
+        "recreation/restore/persistentvolumes.yaml"
+        in manifest["recreation_runbook_material"]["restore_paths"]
+    )
     assert "recreation/restore/persistentvolumes.yaml" in names
     assert "recreation/restore/persistentvolumeclaims.yaml" in names
     assert restore_plan["cluster_apply_order"] == ["recreation/restore/persistentvolumes.yaml"]
@@ -587,9 +587,9 @@ def test_soperator_backup_archive_contains_restore_material(
     ]
     assert "kubernetes/restore/deployments.yaml" in restore_plan["apply_order"]
     assert restore_plan["recreation_runbook"]["retained_pv_bindings_are_command_restored"] is True
-    assert "recreation/recreation-coverage.json" in restore_plan["restore_material"][
-        "recreation_raw"
-    ]
+    assert (
+        "recreation/recreation-coverage.json" in restore_plan["restore_material"]["recreation_raw"]
+    )
     assert coverage["items"]["bound_persistentvolumes"]["status"] == "collected"
     assert coverage["items"]["required_recreation_material"]["status"] == "collected"
     assert "clusterIP" not in service_restore
@@ -637,7 +637,16 @@ def test_soperator_backup_archive_deduplicates_chart_named_recreation_pvcs(
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
                 args,
-                json.dumps({"spec": {"replicas": 1}, "metadata": {"name": "accounting"}}),
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "name": "accounting",
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
             )
         if args[:1] == ["scale"]:
             return _command_result(args)
@@ -705,9 +714,7 @@ def test_soperator_backup_archive_deduplicates_chart_named_recreation_pvcs(
 
     with tarfile.open(backup.path, "r:gz") as archive:
         generic_pvc_restore = (
-            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pvcs = list(
             yaml.safe_load_all(
@@ -857,9 +864,7 @@ def test_soperator_backup_fails_when_required_recreation_material_missing(
     kubernetes_dir.mkdir()
     required_items = _required_recreation_items()
     required_items["secrets"] = [
-        item
-        for item in required_items["secrets"]
-        if item["metadata"]["name"] != "mariadb-root"
+        item for item in required_items["secrets"] if item["metadata"]["name"] != "mariadb-root"
     ]
     for label, items in required_items.items():
         (kubernetes_dir / f"{label}.json").write_text(
@@ -1087,7 +1092,7 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
                     {
                         "metadata": {"name": "image-storage-worker-0"},
                         "spec": {"volumeName": "pv-worker-0"},
-                    }
+                    },
                 ]
             }
         ),
@@ -1127,7 +1132,7 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
                                 "persistentVolumeReclaimPolicy": "Delete",
                                 "claimRef": {"name": "image-storage-worker-0"},
                             },
-                        }
+                        },
                     ]
                 }
             ),
@@ -1188,7 +1193,9 @@ def test_soperator_backup_uses_portable_wckey_snapshot_fields(
     assert "slurm/sacctmgr-wckeys.txt" in included
     assert discovery["commands"]["sacctmgr_wckeys"]["returncode"] == 0
     assert "sacctmgr -nP show wckey format=Cluster,User,WCKey" in commands
-    assert all("show wckey format=Cluster,Account,User,WCKey" not in command for command in commands)
+    assert all(
+        "show wckey format=Cluster,Account,User,WCKey" not in command for command in commands
+    )
 
 
 def test_soperator_backup_derives_sacctmgr_dump_cluster_from_slurm_conf(
@@ -1258,11 +1265,13 @@ def test_soperator_backup_resolves_target_mariadb_pod(monkeypatch) -> None:
     )
 
 
-def test_soperator_backup_uses_mariadb_root_password_env(
+def test_soperator_backup_long_cluster_dump_is_replay_safe_and_uses_password_env(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     exec_commands: list[str] = []
+    cluster_name = "soperator-long-customer-cluster-name-with-many-characters"
+    mariadb_pod = f"{cluster_name}-acct-db-0"
 
     def fake_kubectl(
         namespace: str,
@@ -1278,13 +1287,13 @@ def test_soperator_backup_uses_mariadb_root_password_env(
                         {
                             "apiVersion": "v1",
                             "kind": "Pod",
-                            "metadata": {"name": "mk8s-acct-db-0"},
+                            "metadata": {"name": mariadb_pod},
                             "status": {"phase": "Running"},
                         }
                     ]
                 ),
             )
-        if args[:2] == ["exec", "mk8s-acct-db-0"]:
+        if args[:2] == ["exec", mariadb_pod]:
             command = args[-1]
             exec_commands.append(command)
             if "mariadb-dump" in command or "mysqldump" in command:
@@ -1297,13 +1306,20 @@ def test_soperator_backup_uses_mariadb_root_password_env(
     cli._soperator_upgrade_dump_accounting_db(
         namespace="soperator",
         output_dir=tmp_path,
-        target_ref="mk8s",
+        target_ref=cluster_name,
     )
 
     assert len(exec_commands) == 2
     assert all("MARIADB_ROOT_PASSWORD" in command for command in exec_commands)
-    assert all("--defaults-extra-file=\"$defaults_file\"" in command for command in exec_commands)
+    assert all('--defaults-extra-file="$defaults_file"' in command for command in exec_commands)
     assert all("--password" not in command for command in exec_commands)
+    dump_command = next(
+        command for command in exec_commands if "mariadb-dump" in command or "mysqldump" in command
+    )
+    assert "--skip-extended-insert" in dump_command
+    assert "--ignore-table=slurm_acct_db.table_defs_table" in dump_command
+    assert "--ignore-table=slurm_acct_db.convert_version_table" in dump_command
+    assert "--all-databases" in dump_command
 
 
 def test_standalone_soperator_backup_does_not_require_generated_context(
@@ -1490,8 +1506,128 @@ def _write_restore_archive(
     archive_path = tmp_path / "soperator-backup.tar.gz"
     with tarfile.open(archive_path, "w:gz") as archive:
         for path in sorted(root.rglob("*")):
-            archive.add(path, arcname=path.relative_to(root))
+            archive.add(path, arcname=path.relative_to(root), recursive=False)
     return archive_path
+
+
+def _write_restore_archive_members(
+    archive_path: Path,
+    members: list[tuple[tarfile.TarInfo, bytes]],
+) -> None:
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for member, content in members:
+            archive.addfile(member, io.BytesIO(content) if member.isfile() else None)
+
+
+def test_soperator_restore_extract_rejects_duplicate_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "duplicate.tar.gz"
+    first = tarfile.TarInfo("duplicate")
+    first.size = 1
+    second = tarfile.TarInfo("duplicate")
+    second.size = 1
+    _write_restore_archive_members(
+        archive_path,
+        [(first, b"a"), (second, b"b")],
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate member"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_too_many_members(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "many.tar.gz"
+    members: list[tuple[tarfile.TarInfo, bytes]] = []
+    for index in range(2):
+        member = tarfile.TarInfo(f"file-{index}")
+        member.size = 1
+        members.append((member, b"x"))
+    _write_restore_archive_members(archive_path, members)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBERS", 1)
+
+    def _unexpected_getmembers(_archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+        raise AssertionError("restore validation must not materialize every tar member")
+
+    monkeypatch.setattr(
+        tarfile.TarFile,
+        "getmembers",
+        _unexpected_getmembers,
+    )
+
+    with pytest.raises(RuntimeError, match="too many members"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+@pytest.mark.parametrize(
+    ("member_limit", "total_limit", "message"),
+    (
+        (4, 100, "member is too large"),
+        (100, 4, "archive is too large"),
+    ),
+)
+def test_soperator_restore_extract_rejects_uncompressed_size_bounds(
+    tmp_path: Path,
+    monkeypatch,
+    member_limit: int,
+    total_limit: int,
+    message: str,
+) -> None:
+    archive_path = tmp_path / "large.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 5
+    _write_restore_archive_members(archive_path, [(member, b"12345")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_MEMBER_BYTES", member_limit)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_TOTAL_BYTES", total_limit)
+
+    with pytest.raises(RuntimeError, match=message):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_special_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "link.tar.gz"
+    member = tarfile.TarInfo("unsafe-link")
+    member.type = tarfile.SYMTYPE
+    member.linkname = "target"
+    _write_restore_archive_members(archive_path, [(member, b"")])
+
+    with pytest.raises(RuntimeError, match="link or special member"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_rejects_excessive_expansion_ratio(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "expansion.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 1
+    _write_restore_archive_members(archive_path, [(member, b"x")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO", 0)
+
+    with pytest.raises(RuntimeError, match="expansion ratio"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
+
+
+def test_soperator_restore_extract_requires_temporary_disk_headroom(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = tmp_path / "disk.tar.gz"
+    member = tarfile.TarInfo("payload")
+    member.size = 5
+    _write_restore_archive_members(archive_path, [(member, b"12345")])
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_MAX_EXPANSION_RATIO", 10_000)
+    monkeypatch.setattr(cli, "_SOPERATOR_RESTORE_ARCHIVE_DISK_HEADROOM_BYTES", 0)
+    monkeypatch.setattr(
+        cli.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=4),
+    )
+
+    with pytest.raises(RuntimeError, match="temporary-disk space"):
+        cli._soperator_restore_extract_archive(archive_path, tmp_path / "extract")
 
 
 def test_soperator_restore_dry_run_validates_archive_without_mutation(
@@ -1559,7 +1695,18 @@ def test_soperator_restore_execute_applies_manifests_and_imports_db(
                 ),
             )
         if args[:2] == ["get", "deployment/accounting"]:
-            return _command_result(args, json.dumps({"spec": {"replicas": 1}}))
+            return _command_result(
+                args,
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
+            )
         return _command_result(args)
 
     monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_cluster)

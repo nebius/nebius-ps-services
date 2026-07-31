@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Nebius Auth Diagnose"
+  short_description: "Diagnose Nebius auth and quota reads"
+  default_prompt: "Use $agent-nebius-auth-diagnose to resolve one current-task project without mutation, prefer an explicit task selector, safely fall back to the config-owned default profile project, split mixed local/Nebius payloads, retry shape-only denials once without setup, and route persistent failures safely."
+policy:
+  allow_implicit_invocation: true

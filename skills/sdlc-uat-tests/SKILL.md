@@ -51,11 +51,18 @@ Validate the full product, not just individual features, before PR creation.
 - Use `assets/templates/uat-report.md.template` for the report.
 - Build a UAT matrix from acceptance criteria.
 - Select GUI, TUI, API, service, or mixed harness.
+- When a UAT matrix row declares `computer-use`, route the GUI journey through
+  `sdlc-gui-test` with that exact harness and the declared browser. Browser or
+  Playwright evidence cannot substitute. Require fresh accessibility state
+  after each action and record an ordered action/observation ledger.
 - Use the Live Experiment Environment only when it is marked provided, has
   explicit non-production or disposable confirmation, and the UAT actions fit
   the recorded allowed operations and reset process. If unavailable or unsafe,
   classify the blocker instead of improvising against production.
 - Run end-to-end user journeys and negative criteria.
+- For data-backed GUI journeys, use an independent API, database, or service
+  oracle when required by the acceptance plan; screenshots alone are not PASS
+  evidence.
 - Validate cross-feature interactions.
 - Record evidence and classify failures.
 
@@ -90,7 +97,10 @@ Validate the full product, not just individual features, before PR creation.
 - Full UAT report exists.
 - All P0 acceptance criteria pass or blockers are classified.
 - Cross-feature flows pass.
-- Product is ready for `create-pr` only on pass.
+- Product is ready for publication-only `create-pr` only on pass and only for
+  the clean exact promoted SHA tested by UAT.
+- Every constrained GUI row records the actual harness, browser, ordered
+  actions, checkpoints, independent oracle, and cleanup/retention result.
 
 ## SDLC Invariants
 
@@ -107,20 +117,12 @@ Validate the full product, not just individual features, before PR creation.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

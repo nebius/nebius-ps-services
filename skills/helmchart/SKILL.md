@@ -7,11 +7,30 @@ description: "Use for Helm chart work: create, review, harden, refactor, lint, t
 
 Harden Helm charts for production and verify they render safely and consistently.
 
+## Invocation Scope
+
+- `standalone`: create or modify the selected chart in its target repository.
+- `coordinated-candidate`: receive an assigned chart path, exact owned files,
+  exclusions, and private bundle from `scaffold-project`; emit exact candidates
+  only in that bundle and never write the target.
+
+In coordinated-candidate scope, do not claim repository-root README,
+`.gitignore`, CI, Terraform, Docker, plain Kubernetes, application source, or
+agent instructions. Return candidate path, mode, provenance, and chart
+validation requirements to the coordinator.
+
 ## Workflow
 
 1. Identify chart scope
    - Locate target chart directories (`Chart.yaml`, `values.yaml`, `templates/`).
    - Confirm whether scope is one chart or a chart set.
+   - Obtain the `container` runtime handoff when the chart deploys an
+     application image: repository/tag/digest and platforms; process and
+     shutdown; ports; startup/readiness/liveness; configuration and secret
+     interfaces; writable/temporary/persistent paths; UID/GID and security
+     requirements; measured resources; networking; and devices.
+   - If required runtime facts are absent, return them to `container` rather
+     than inventing probes, ownership, writable paths, limits, or capabilities.
 
 2. Enforce chart structure baseline
    - Require:
@@ -158,24 +177,19 @@ When using this skill, provide:
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
 - Never put real secrets in `values.yaml`, templates, tests, or docs.
+- Own Kubernetes and Helm resources derived from the container contract;
+  Dockerfile, image-runtime, build, and publication changes remain outside this
+  skill.
 - Default optional integrations to disabled.
 - Do not add legacy aliases or compatibility wrappers unless the user explicitly requests them; call out breaking values/schema changes clearly.
 - Do not assume CRDs exist; gate and fail clearly if required features are enabled.

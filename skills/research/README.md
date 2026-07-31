@@ -36,5 +36,5 @@ matter?".
 - `design` owns solution design and `/plan` handoff after research findings are
   available.
 - `system-design-rules` owns checklist-style review of an existing proposal.
-- `$sdlc-start` and the relevant `sdlc-*` skills own Agentic SDLC context packs
+- `$sdlc-start run <prompt>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
   and committed SDLC artifacts.

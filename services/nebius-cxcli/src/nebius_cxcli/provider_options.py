@@ -888,42 +888,13 @@ class ProviderOptionLookup:
         try:
             from nebius.api.nebius.iam.v1 import (
                 GetProjectRequest,
-                GetTenantRequest,
                 ProjectServiceClient,
-                TenantServiceClient,
             )
         except Exception:
             return TenantProjectValidationResult(
                 valid=False,
                 message="Nebius IAM SDK bindings are unavailable in this environment.",
                 retryable=False,
-            )
-
-        try:
-            tenant = (
-                TenantServiceClient(sdk)
-                .get(
-                    GetTenantRequest(id=normalized_tenant_id),
-                    **_provider_request_kwargs(),
-                )
-                .wait()
-            )
-            resolved_tenant_id = _as_str(getattr(getattr(tenant, "metadata", None), "id", None))
-            if resolved_tenant_id and resolved_tenant_id != normalized_tenant_id:
-                return TenantProjectValidationResult(
-                    valid=False,
-                    message=(
-                        f"Resolved tenant id '{resolved_tenant_id}' does not match "
-                        f"input '{normalized_tenant_id}'."
-                    ),
-                )
-        except Exception as exc:
-            return TenantProjectValidationResult(
-                valid=False,
-                message=(
-                    f"Tenant '{normalized_tenant_id}' does not exist or is not accessible "
-                    f"with current credentials: {exc}"
-                ),
             )
 
         try:
@@ -955,6 +926,14 @@ class ProviderOptionLookup:
             )
 
         project_parent_id = _as_str(getattr(getattr(project, "metadata", None), "parent_id", None))
+        if not project_parent_id:
+            return TenantProjectValidationResult(
+                valid=False,
+                message=(
+                    f"Project '{normalized_project_id}' did not expose its parent tenant id; "
+                    "the tenant/project relationship cannot be validated."
+                ),
+            )
         if project_parent_id and project_parent_id != normalized_tenant_id:
             return TenantProjectValidationResult(
                 valid=False,

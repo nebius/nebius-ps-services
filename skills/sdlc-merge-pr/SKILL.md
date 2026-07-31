@@ -1,6 +1,6 @@
 ---
 name: sdlc-merge-pr
-description: "Use only as part of the Agentic SDLC workflow; use only when the user explicitly asks to merge a specific pull request in the Agentic SDLC workflow. Verifies readiness and merges only when policy, checks, reviews, branch state, and UAT allow it."
+description: "Use only as part of the Agentic SDLC workflow; use only when the user explicitly asks to merge a specific pull request in the Agentic SDLC workflow. Verifies the PR still points to the exact promoted and reviewed SHA, then merges only when policy, checks, reviews, branch state, and UAT allow it."
 ---
 
 # Merge PR
@@ -31,6 +31,7 @@ Merge only after explicit human instruction and final readiness verification.
 
 - PR status, checks, reviews, branch protection, and unresolved conversations when available.
 - Latest UAT and review evidence.
+- Execution and commit evidence containing the exact promoted SHA.
 - Current repository state.
 
 ## Writes
@@ -48,12 +49,25 @@ Merge only after explicit human instruction and final readiness verification.
 - Verify required reviews pass and unresolved conversations do not block policy.
 - Verify branch is up to date when required.
 - Verify UAT passed.
+- Require the current clean local HEAD, recorded promoted SHA, reviewed PR head,
+  and current remote PR head to be identical. Any drift or branch-changing fix
+  returns through `sdlc-classify-failure` and `sdlc-start`.
+- Build one exact canonical command in one of these forms:
+  `gh pr merge <pr-number-or-url> --match-head-commit <promoted-sha>` for a
+  merge queue, or `gh pr merge <pr-number-or-url>
+  --{merge|rebase|squash} --match-head-commit <promoted-sha>` for an explicit
+  strategy. Require an explicit PR number or URL. Do not add another flag,
+  shell operator, or command; in particular, do not use `--admin`,
+  `--delete-branch`, or a repository override.
 - Write `permissions/merge-authorization.json` in the active run directory
   immediately before merge execution. Include `allowed: true`,
   `phase: "sdlc-merge-pr"`, the specific PR URL or number,
-  `explicit_user_request: true`, checks status, review status, and
-  `expires_at`.
-- Merge using the allowed method and record result.
+  `expected_head: <promoted-sha>`, `exact_command`,
+  `explicit_user_request: true`, checks status, review status, UAT status, and
+  `expires_at`. All three readiness statuses must be `passed`.
+- Run only that exact authorized CLI command and record the result. Active
+  Agentic SDLC merge does not use a GitHub merge MCP call because the canonical
+  CLI path provides the required head-match guard.
 - Remove or expire `permissions/merge-authorization.json` after the merge
   attempt.
 
@@ -70,19 +84,26 @@ Merge only after explicit human instruction and final readiness verification.
 - Failing checks map to blocker.
 - Required review missing maps to blocker.
 - Conflict maps to blocker.
+- Local, remote, promoted, reviewed, or authorized head disagreement maps to
+  `PR_HEAD_DRIFT` and requires human ownership input without overwrite or
+  merge.
 
 ## Must Not
 
 - Merge without explicit user request.
 - Override branch protection.
 - Force merge.
+- Delete a branch as part of the guarded merge.
+- Run a compound merge command or any non-canonical merge flag.
 - Merge failed UAT.
 - Merge unreviewed PRs when review is required.
+- Merge a PR whose head differs from the exact promoted and reviewed SHA.
 
 ## Completion Criteria
 
 - PR is merged or blocker is reported.
 - Merge evidence is stored.
+- Merge evidence records the exact pre-merge PR head and authorized command.
 - SDLC run is marked complete when applicable.
 
 ## SDLC Invariants
@@ -100,20 +121,12 @@ Merge only after explicit human instruction and final readiness verification.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

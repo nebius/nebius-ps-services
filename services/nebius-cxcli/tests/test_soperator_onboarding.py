@@ -6,10 +6,13 @@ from collections.abc import Callable
 
 import pytest
 
+import nebius_cxcli.soperator_discovery as soperator_discovery_module
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
+from nebius_cxcli import soperator_migration as soperator_migration_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_discovery import (
     load_soperator_discovery_bundle,
+    soperator_discovery_jail_rootfs_record,
     soperator_discovery_k8s_minor_text,
 )
 from nebius_cxcli.soperator_onboarding import (
@@ -31,7 +34,6 @@ from nebius_cxcli.soperator_onboarding import (
     SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
-    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     build_soperator_onboarding_report_from_config,
     collect_kubectl_soperator_snapshot,
@@ -40,13 +42,281 @@ from nebius_cxcli.soperator_onboarding import (
     soperator_onboarding_fingerprint,
     soperator_onboarding_is_accepted,
     soperator_onboarding_report_for_modes,
-    soperator_onboarding_report_with_support_override,
+    soperator_report_with_accepted_onboarding_contract,
+    soperator_runtime_report_with_accepted_upgrade_plan,
     soperator_upgrade_support_findings,
-    soperator_upgrade_support_requires_override,
+    soperator_upgrade_support_rejected,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
 )
+from nebius_cxcli.soperator_upgrade_campaign import finalize_soperator_upgrade_campaign
+
+
+def test_controller_bridge_source_record_keeps_identities_and_only_one_way_hashes() -> None:
+    workload_items = [
+        {
+            "apiVersion": "apps.kruise.io/v1beta1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "controller",
+                "uid": "controller-workload-uid",
+                "resourceVersion": "7",
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "controller-0",
+                "uid": "controller-pod-uid",
+                "resourceVersion": "9",
+            },
+            "spec": {
+                "nodeName": "controller-node",
+                "initContainers": [
+                    {
+                        "name": "ensure-jail-mounted",
+                        "image": "registry.example/slurmctld:slurm24.11.6",
+                        "volumeMounts": [{"name": "jail", "mountPath": "/mnt/jail"}],
+                    }
+                ],
+                "containers": [
+                    {
+                        "name": "slurmctld",
+                        "image": "registry.example/slurmctld:slurm24.11.6",
+                        "volumeMounts": [
+                            {"name": "state", "mountPath": "/var/spool/slurmctld"},
+                            {"name": "jail", "mountPath": "/mnt/jail"},
+                        ],
+                    }
+                ],
+                "volumes": [
+                    {"name": "config", "configMap": {"name": "slurm-config"}},
+                    {"name": "auth", "secret": {"secretName": "slurm-auth"}},
+                    {
+                        "name": "state",
+                        "persistentVolumeClaim": {"claimName": "controller-spool-controller-0"},
+                    },
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                    },
+                ],
+            },
+            "status": {
+                "containerStatuses": [
+                    {
+                        "name": "slurmctld",
+                        "imageID": "registry.example/slurmctld@sha256:" + "a" * 64,
+                    }
+                ]
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "slurm-config",
+                "uid": "cm-uid",
+                "resourceVersion": "10",
+            },
+            "data": {"slurm.conf": "ClusterName=example"},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "slurm-auth",
+                "uid": "auth-uid",
+                "resourceVersion": "11",
+            },
+            "data": {
+                "munge.key": "sensitive-input-one",
+                "jwt_hs256.key": "sensitive-input-two",
+            },
+        },
+    ]
+    soperator_resources = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "example",
+                "uid": "slurmcluster-uid",
+                "resourceVersion": "3",
+            },
+            "spec": {
+                "volumeSources": [
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                    }
+                ],
+                "slurmNodes": {"controller": {"volumes": {"jail": {"volumeSourceName": "jail"}}}},
+            },
+        }
+    ]
+    pvcs = [
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "controller-spool-controller-0",
+                "uid": "pvc-uid",
+                "resourceVersion": "5",
+            },
+            "spec": {"volumeName": "controller-pv"},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "namespace": "soperator",
+                "name": "jail-pvc",
+                "uid": "jail-pvc-uid",
+                "resourceVersion": "12",
+            },
+            "spec": {
+                "volumeName": "jail-pv",
+                "storageClassName": "jail",
+                "accessModes": ["ReadWriteMany"],
+                "volumeMode": "Filesystem",
+            },
+        },
+    ]
+    pvs = [
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {"name": "controller-pv", "uid": "pv-uid", "resourceVersion": "6"},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {
+                "name": "jail-pv",
+                "uid": "jail-pv-uid",
+                "resourceVersion": "13",
+            },
+            "spec": {
+                "storageClassName": "jail",
+                "capacity": {"storage": "1Ti"},
+                "accessModes": ["ReadWriteMany"],
+                "volumeMode": "Filesystem",
+                "local": {"path": "/mnt/jail-store"},
+            },
+        },
+    ]
+
+    record = soperator_onboarding_module._controller_bridge_source_record(  # noqa: SLF001
+        workloads=workload_items,
+        soperator_resources=soperator_resources,
+        pvcs=pvcs,
+        pvs=pvs,
+        slurm_health={"output": "Slurm 24.11.6"},
+    )
+
+    assert record["status"] == "ready"
+    assert record["blockers"] == []
+    assert record["slurmcluster"] == {
+        "api_version": "slurm.nebius.ai/v1",
+        "kind": "SlurmCluster",
+        "namespace": "soperator",
+        "name": "example",
+        "uid": "slurmcluster-uid",
+        "resource_version": "3",
+    }
+    assert record["controller_workload"] == {
+        "api_version": "apps.kruise.io/v1beta1",
+        "kind": "StatefulSet",
+        "namespace": "soperator",
+        "name": "controller",
+        "uid": "controller-workload-uid",
+        "resource_version": "7",
+    }
+    assert record["controller_pod"] == {
+        "api_version": "v1",
+        "kind": "Pod",
+        "namespace": "soperator",
+        "name": "controller-0",
+        "uid": "controller-pod-uid",
+        "resource_version": "9",
+        "node_name": "controller-node",
+        "container_name": "slurmctld",
+        "declared_image": "registry.example/slurmctld:slurm24.11.6",
+        "resolved_image_digest": "registry.example/slurmctld@sha256:" + "a" * 64,
+        "slurm_version": "24.11.6",
+    }
+    assert record["controller_pvc"] == {
+        "api_version": "v1",
+        "kind": "PersistentVolumeClaim",
+        "namespace": "soperator",
+        "name": "controller-spool-controller-0",
+        "uid": "pvc-uid",
+        "resource_version": "5",
+    }
+    assert record["controller_pv"] == {
+        "api_version": "v1",
+        "kind": "PersistentVolume",
+        "namespace": "",
+        "name": "controller-pv",
+        "uid": "pv-uid",
+        "resource_version": "6",
+    }
+    assert record["jail_pvc"] == {
+        "api_version": "v1",
+        "kind": "PersistentVolumeClaim",
+        "namespace": "soperator",
+        "name": "jail-pvc",
+        "uid": "jail-pvc-uid",
+        "resource_version": "12",
+    }
+    assert record["jail_pv"] == {
+        "api_version": "v1",
+        "kind": "PersistentVolume",
+        "namespace": "",
+        "name": "jail-pv",
+        "uid": "jail-pv-uid",
+        "resource_version": "13",
+    }
+    assert record["jail_storage"] == {
+        "filesystem_id": "",
+        "local_path": "/mnt/jail-store",
+        "storage_class_name": "jail",
+        "storage_size": "1Ti",
+        "access_modes": ["ReadWriteMany"],
+        "volume_mode": "Filesystem",
+    }
+    assert record["configuration"]["config_map_names"] == ["slurm-config"]
+    assert record["configuration"]["data_keys"] == ["slurm.conf"]
+    assert len(record["configuration"]["fingerprint"]) == 64
+    assert record["munge"]["object_names"] == ["slurm-auth"]
+    assert record["munge"]["data_keys"] == ["munge.key"]
+    assert len(record["munge"]["fingerprint"]) == 64
+    assert record["jwt"]["object_names"] == ["slurm-auth"]
+    assert record["jwt"]["data_keys"] == ["jwt_hs256.key"]
+    assert len(record["jwt"]["fingerprint"]) == 64
+    serialized = json.dumps(record, sort_keys=True)
+    assert "sensitive-input-one" not in serialized
+    assert "sensitive-input-two" not in serialized
+
+    workload_items[1]["metadata"]["uid"] = ""  # type: ignore[index]
+    blocked = soperator_onboarding_module._controller_bridge_source_record(  # noqa: SLF001
+        workloads=workload_items,
+        soperator_resources=soperator_resources,
+        pvcs=pvcs,
+        pvs=pvs,
+        slurm_health={"output": "Slurm 24.11.6"},
+    )
+    assert blocked["status"] == "blocked"
+    assert "controller Pod immutable identity is incomplete" in blocked["blockers"]
 
 
 def _snapshot(*, release: dict[str, object] | None = None) -> dict[str, object]:
@@ -252,6 +522,851 @@ def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
     )
 
 
+def _jail_slurmcluster_resource(
+    *,
+    claim_name: str = "active-rootfs-pvc",
+    volume_source_name: str = "active-rootfs",
+) -> dict[str, object]:
+    return {
+        "apiVersion": "slurm.nebius.ai/v1",
+        "kind": "SlurmCluster",
+        "metadata": {
+            "name": "source-cluster",
+            "namespace": "soperator",
+            "uid": "slurmcluster-uid",
+        },
+        "spec": {
+            "volumeSources": [
+                {
+                    "name": volume_source_name,
+                    "persistentVolumeClaim": {"claimName": claim_name},
+                }
+            ],
+            "slurmNodes": {
+                "login": {"volumes": {"jail": {"volumeSourceName": volume_source_name}}}
+            },
+        },
+    }
+
+
+def _bound_jail_pvc(*, name: str = "active-rootfs-pvc") -> dict[str, object]:
+    return {
+        "metadata": {"name": name, "namespace": "soperator", "uid": "jail-pvc-uid"},
+        "spec": {"volumeName": "opaque-pv-name"},
+        "status": {"phase": "Bound"},
+    }
+
+
+def _bound_jail_pv(*, volume_handle: str = "filesystem-actual") -> dict[str, object]:
+    return {
+        "metadata": {"name": "opaque-pv-name", "uid": "pv-uid-must-not-be-used"},
+        "spec": {
+            "claimRef": {
+                "name": "active-rootfs-pvc",
+                "namespace": "soperator",
+                "uid": "jail-pvc-uid",
+            },
+            "csi": {
+                "driver": "filestore.csi.storage.nebius.cloud",
+                "volumeHandle": volume_handle,
+            },
+        },
+        "status": {"phase": "Bound"},
+    }
+
+
+def test_namespace_job_sanitizer_preserves_only_active_slot_identity_evidence() -> None:
+    resources = soperator_onboarding_module._sanitize_namespace_resource_items(  # noqa: SLF001
+        [
+            {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": "cluster-populate-jail-passive-slot-b",
+                    "namespace": "soperator",
+                    "uid": "job-uid",
+                    "creationTimestamp": "2026-07-11T00:00:00Z",
+                    "labels": {
+                        "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+                        "slurm.nebius.ai/jail-rootfs-slot": "slot-b",
+                    },
+                },
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {"name": "populate-jail", "image": "registry/populate:target"}
+                            ],
+                            "volumes": [
+                                {
+                                    "name": "rootfs",
+                                    "persistentVolumeClaim": {
+                                        "claimName": "jail-rootfs-slot-b-pvc"
+                                    },
+                                },
+                                {"name": "credentials", "secret": {"secretName": "private"}},
+                            ],
+                        }
+                    }
+                },
+                "status": {"succeeded": 1},
+            }
+        ]
+    )
+
+    assert resources == [
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "cluster-populate-jail-passive-slot-b",
+                "namespace": "soperator",
+                "uid": "job-uid",
+                "creationTimestamp": "2026-07-11T00:00:00Z",
+                "labels": {
+                    "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+                    "slurm.nebius.ai/jail-rootfs-slot": "slot-b",
+                },
+            },
+            "status": {"succeeded": 1},
+            "containers": [{"name": "populate-jail", "image": "registry/populate:target"}],
+            "pvc_claim_names": ["jail-rootfs-slot-b-pvc"],
+        }
+    ]
+
+
+def test_collect_snapshot_resolves_jail_identity_through_pvc_bound_pv_and_csi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unrelated_name_match = {
+        "metadata": {"name": "jail-looking-but-unrelated"},
+        "spec": {
+            "claimRef": {"name": "another-pvc", "namespace": "other"},
+            "csi": {"volumeHandle": "filesystem-wrong"},
+        },
+        "status": {"phase": "Bound"},
+    }
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [unrelated_name_match, _bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [_jail_slurmcluster_resource()]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert snapshot["cluster_identity"] == {
+        "kubernetes_uid": "kubernetes-uid",
+        "soperator_uid": "soperator-uid",
+        "slurmcluster_uid": "slurmcluster-uid",
+        "jail_filesystem_id": "filesystem-actual",
+    }
+
+
+def test_collect_snapshot_retries_failed_jail_pvc_inventory_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pvc_attempts = 0
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal pvc_attempts
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            pvc_attempts += 1
+            return {} if pvc_attempts == 1 else {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [_jail_slurmcluster_resource()]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert pvc_attempts == 2
+    assert snapshot["collection_errors"] == []
+    assert snapshot["cluster_identity"]["jail_filesystem_id"] == "filesystem-actual"
+
+
+def test_collect_snapshot_reports_failed_jail_pvc_read_without_calling_it_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pvc_attempts = 0
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal pvc_attempts
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            pvc_attempts += 1
+            return {}
+        if resource == "slurmclusters":
+            return {"items": [_jail_slurmcluster_resource()]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(RuntimeError, match="live PVC inventory collection failed after 3 attempts"):
+        collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert pvc_attempts == 3
+
+
+def test_collect_snapshot_keeps_authoritative_empty_jail_pvc_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pvc_attempts = 0
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal pvc_attempts
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {"items": [{"metadata": {"name": "soperator", "uid": "soperator-uid"}}]}
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            pvc_attempts += 1
+            return {"items": []}
+        if resource == "slurmclusters":
+            return {"items": [_jail_slurmcluster_resource()]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(RuntimeError, match="resolved to 0 live PVC objects"):
+        collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert pvc_attempts == 1
+
+
+def test_collect_snapshot_rejects_multiple_slurmcluster_identities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _jail_slurmcluster_resource()
+    second = _jail_slurmcluster_resource()
+    second_metadata = second["metadata"]
+    assert isinstance(second_metadata, dict)
+    second_metadata.update({"name": "second-cluster", "uid": "second-slurmcluster-uid"})
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [first, second]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(
+        RuntimeError,
+        match="expected exactly one discovered SlurmCluster identity, found 2",
+    ):
+        collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+
+def _target_handoff_slurmcluster_resource(
+    *,
+    uid: str = "target-slurmcluster-uid",
+    helm_owned: bool = True,
+    chart_name: str = "soperator",
+) -> dict[str, object]:
+    target = _jail_slurmcluster_resource()
+    metadata = target["metadata"]
+    assert isinstance(metadata, dict)
+    metadata.update({"name": "target-cluster", "uid": uid})
+    if helm_owned:
+        metadata["annotations"] = {
+            "meta.helm.sh/release-name": "soperator",
+            "meta.helm.sh/release-namespace": "soperator",
+        }
+        metadata["labels"] = {
+            "app.kubernetes.io/managed-by": "Helm",
+            "helm.sh/chart": f"{chart_name}-4.0.2-ps.4",
+        }
+    return target
+
+
+def _resume_slurmcluster_scope(
+    *,
+    mode: str = "target-handoff",
+    target_uid: str = "",
+) -> dict[str, object]:
+    return {
+        "schema": "nebius-cxcli-ext-soperator-resume-slurmcluster-identity/v1",
+        "mode": mode,
+        "phase_id": "rolling-compute-migration",
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "slurmcluster-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": target_uid,
+        },
+        "target_version": "4.0.2-ps.4",
+        "allow_target_uid_bootstrap": mode == "target-handoff" and not target_uid,
+    }
+
+
+def test_resume_slurmcluster_identity_bootstraps_exact_helm_owned_target_uid() -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+
+    selected, scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source, target),
+        identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert selected == (source,)
+    assert scope["identity_role"] == "source"
+    assert scope["target_uid_bootstrapped"] is True
+    assert scope["target"] == {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-slurmcluster-uid",
+    }
+
+
+def test_resume_slurmcluster_identity_accepts_passive_slot_target_creation_phase() -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+    identity_scope = _resume_slurmcluster_scope()
+    identity_scope["phase_id"] = "populate-jail-refresh"
+
+    selected, scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source, target),
+        identity_scope=identity_scope,
+    )
+
+    assert selected == (source,)
+    assert scope["phase_id"] == "populate-jail-refresh"
+    assert scope["target"]["uid"] == "target-slurmcluster-uid"
+
+
+def test_resume_slurmcluster_identity_accepts_precreation_source_only_handoff() -> None:
+    source = _jail_slurmcluster_resource()
+
+    selected, scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source,),
+        identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert selected == (source,)
+    assert scope == {}
+
+
+def test_resume_slurmcluster_identity_source_only_rejects_source_uid_drift() -> None:
+    source = _jail_slurmcluster_resource()
+    metadata = source["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["uid"] = "replacement-source-uid"
+
+    with pytest.raises(RuntimeError, match="live source SlurmCluster UID differs"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (source,),
+            identity_scope=_resume_slurmcluster_scope(),
+        )
+
+
+def test_resume_slurmcluster_identity_requires_checkpointed_target_to_remain_present() -> None:
+    with pytest.raises(RuntimeError, match="expected exactly 2 object"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(),),
+            identity_scope=_resume_slurmcluster_scope(
+                target_uid="target-slurmcluster-uid",
+            ),
+        )
+
+
+def test_resume_slurmcluster_identity_bootstrap_requires_checkpoint_target_version() -> None:
+    scope = _resume_slurmcluster_scope()
+    scope["target_version"] = ""
+
+    with pytest.raises(RuntimeError, match="requires exact Helm ownership"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+def test_resume_slurmcluster_identity_bootstrap_rejects_wrong_chart_same_version() -> None:
+    with pytest.raises(RuntimeError, match="requires exact Helm ownership"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(chart_name="unrelated"),
+            ),
+            identity_scope=_resume_slurmcluster_scope(),
+        )
+
+
+@pytest.mark.parametrize("binding", ["source", "target"])
+def test_resume_slurmcluster_identity_requires_explicit_checkpoint_namespace(
+    binding: str,
+) -> None:
+    scope = _resume_slurmcluster_scope()
+    bound_ref = scope[binding]
+    assert isinstance(bound_ref, dict)
+    bound_ref.pop("namespace")
+
+    with pytest.raises(
+        RuntimeError, match=f"incomplete {binding} binding|incomplete target binding"
+    ):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+@pytest.mark.parametrize(
+    ("resources", "scope", "message"),
+    [
+        (
+            (_target_handoff_slurmcluster_resource(),),
+            _resume_slurmcluster_scope(),
+            "exactly one immutable source binding",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(),
+                {
+                    "kind": "SlurmCluster",
+                    "metadata": {
+                        "namespace": "soperator",
+                        "name": "unexpected",
+                        "uid": "unexpected-uid",
+                    },
+                },
+            ),
+            _resume_slurmcluster_scope(),
+            "expected exactly 1 or 2 object",
+        ),
+        (
+            (
+                {
+                    **_jail_slurmcluster_resource(),
+                    "metadata": {
+                        "namespace": "soperator",
+                        "name": "source-cluster",
+                        "uid": "replaced-source-uid",
+                    },
+                },
+                _target_handoff_slurmcluster_resource(),
+            ),
+            _resume_slurmcluster_scope(),
+            "live source SlurmCluster UID differs",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(uid="replacement-target-uid"),
+            ),
+            _resume_slurmcluster_scope(target_uid="target-slurmcluster-uid"),
+            "live target SlurmCluster UID differs",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(helm_owned=False),
+            ),
+            _resume_slurmcluster_scope(),
+            "requires exact Helm ownership",
+        ),
+    ],
+)
+def test_resume_slurmcluster_identity_rejects_unbound_or_drifted_inventory(
+    resources: tuple[dict[str, object], ...],
+    scope: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            resources,
+            identity_scope=scope,
+        )
+
+
+def test_resume_slurmcluster_identity_source_cleanup_accepts_before_and_after_delete() -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+    scope = _resume_slurmcluster_scope(
+        mode="source-cleanup",
+        target_uid="target-slurmcluster-uid",
+    )
+
+    before, before_scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source, target),
+        identity_scope=scope,
+    )
+    after, after_scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (target,),
+        identity_scope=scope,
+    )
+
+    assert before == (source,)
+    assert before_scope["identity_role"] == "source"
+    assert after == (target,)
+    assert after_scope["identity_role"] == "target"
+
+
+def test_resume_slurmcluster_identity_target_only_rejects_source_reappearance() -> None:
+    scope = _resume_slurmcluster_scope(
+        mode="target-only",
+        target_uid="target-slurmcluster-uid",
+    )
+
+    with pytest.raises(RuntimeError, match="expected exactly 1 object"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+def test_collect_snapshot_scopes_exact_dual_cr_resume_to_immutable_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [source, target]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context="ctx",
+        slurmcluster_identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "slurmcluster-uid"
+    assert len(snapshot["soperator_resources"]) == 2
+    assert snapshot["identity_soperator_resources"] == [source]
+    assert snapshot["resume_slurmcluster_identity"]["target"]["uid"] == ("target-slurmcluster-uid")
+
+
+def test_collect_snapshot_source_cleanup_after_delete_retains_logical_source_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _target_handoff_slurmcluster_resource()
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [target]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context="ctx",
+        slurmcluster_identity_scope=_resume_slurmcluster_scope(
+            mode="source-cleanup",
+            target_uid="target-slurmcluster-uid",
+        ),
+    )
+
+    assert snapshot["resume_slurmcluster_identity"]["identity_role"] == "target"
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "slurmcluster-uid"
+    assert snapshot["identity_soperator_resources"] == [target]
+
+
+def test_collect_snapshot_resume_reads_exact_slurmclusters_when_crd_inventory_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+    calls: list[str] = []
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        calls.append(resource)
+        if resource == "crd":
+            return {"items": []}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [source, target]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context="ctx",
+        slurmcluster_identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert "slurmclusters" in calls
+    assert snapshot["soperator_resources"] == [source, target]
+    assert snapshot["identity_soperator_resources"] == [source]
+    assert snapshot["resume_slurmcluster_identity"]["target"]["uid"] == ("target-slurmcluster-uid")
+
+
+def test_slurmcluster_identity_requires_immutable_uid() -> None:
+    slurmcluster = _jail_slurmcluster_resource()
+    metadata = slurmcluster["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["uid"] = ""
+
+    with pytest.raises(RuntimeError, match="has no immutable UID"):
+        soperator_onboarding_module._soperator_slurmcluster_uid(  # noqa: SLF001
+            (slurmcluster,)
+        )
+
+
+def test_jail_identity_rejects_zero_discovered_pvc_bindings() -> None:
+    slurmcluster = _jail_slurmcluster_resource()
+    slurmcluster["spec"] = {"volumeSources": []}
+
+    with pytest.raises(RuntimeError, match="exactly one discovered Jail PVC binding, found 0"):
+        soperator_onboarding_module._soperator_jail_filesystem_identity(  # noqa: SLF001
+            soperator_resources=(slurmcluster,),
+            pvcs=(),
+            pvs=(),
+        )
+
+
+def test_jail_identity_rejects_ambiguous_discovered_pvc_bindings() -> None:
+    slurmcluster = _jail_slurmcluster_resource()
+    slurmcluster["spec"] = {
+        "slurmNodes": {
+            "controller": {"volumes": {"jail": {"persistentVolumeClaim": {"claimName": "jail-a"}}}},
+            "login": {"volumes": {"jail": {"persistentVolumeClaim": {"claimName": "jail-b"}}}},
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="exactly one discovered Jail PVC binding, found 2"):
+        soperator_onboarding_module._soperator_jail_filesystem_identity(  # noqa: SLF001
+            soperator_resources=(slurmcluster,),
+            pvcs=(),
+            pvs=(),
+        )
+
+
+@pytest.mark.parametrize("pvc_count", (0, 2))
+def test_jail_identity_rejects_missing_or_duplicate_live_pvc_binding(
+    pvc_count: int,
+) -> None:
+    pvc = _bound_jail_pvc()
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"active-rootfs-pvc resolved to {pvc_count} live PVC objects",
+    ):
+        soperator_onboarding_module._soperator_jail_filesystem_identity(  # noqa: SLF001
+            soperator_resources=(_jail_slurmcluster_resource(),),
+            pvcs=tuple(pvc for _index in range(pvc_count)),
+            pvs=(_bound_jail_pv(),),
+        )
+
+
+def test_jail_identity_defers_active_passive_local_pv_to_provider_attachment() -> None:
+    pv = _bound_jail_pv()
+    pv["spec"].pop("csi")  # type: ignore[union-attr]
+    pv["spec"]["local"] = {"path": "/mnt/jail-store/rootfs/slot-a"}  # type: ignore[index]
+
+    assert (
+        soperator_onboarding_module._soperator_jail_filesystem_identity(  # noqa: SLF001
+            soperator_resources=(_jail_slurmcluster_resource(),),
+            pvcs=(_bound_jail_pvc(),),
+            pvs=(pv,),
+        )
+        == ""
+    )
+
+
+def test_jail_identity_rejects_non_csi_non_local_pv() -> None:
+    pv = _bound_jail_pv()
+    pv["spec"].pop("csi")  # type: ignore[union-attr]
+
+    with pytest.raises(RuntimeError, match="has no CSI volumeHandle"):
+        soperator_onboarding_module._soperator_jail_filesystem_identity(  # noqa: SLF001
+            soperator_resources=(_jail_slurmcluster_resource(),),
+            pvcs=(_bound_jail_pvc(),),
+            pvs=(pv,),
+        )
+
+
+def test_jail_identity_resolves_one_provider_attachment_for_active_passive_slots() -> None:
+    node_groups = {
+        role: {
+            "provider": {
+                "node_group_name": role,
+                "node_template": {
+                    "filesystems": [
+                        {
+                            "mount_tag": "jail",
+                            "existing_filesystem": {"id": "filesystem-jail"},
+                        }
+                    ]
+                },
+            }
+        }
+        for role in ("controller", "login", "worker")
+    }
+
+    assert (
+        soperator_onboarding_module.soperator_jail_filesystem_identity_from_provider_node_groups(
+            node_groups
+        )
+        == "filesystem-jail"
+    )
+
+
+def test_jail_identity_rejects_provider_attachment_drift_between_node_groups() -> None:
+    node_groups = {
+        "controller": {
+            "provider": {
+                "node_template": {
+                    "filesystems": [
+                        {
+                            "mount_tag": "jail",
+                            "existing_filesystem": {"id": "filesystem-a"},
+                        }
+                    ]
+                }
+            }
+        },
+        "worker": {
+            "provider": {
+                "node_template": {
+                    "filesystems": [
+                        {
+                            "mount_tag": "jail",
+                            "existing_filesystem": {"id": "filesystem-b"},
+                        }
+                    ]
+                }
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="multiple backing filesystems"):
+        soperator_onboarding_module.soperator_jail_filesystem_identity_from_provider_node_groups(
+            node_groups
+        )
+
+
+def test_jail_identity_rejects_csi_and_provider_attachment_conflict() -> None:
+    node_groups = {
+        "worker": {
+            "provider": {
+                "node_template": {
+                    "filesystems": [
+                        {
+                            "mount_tag": "jail",
+                            "existing_filesystem": {"id": "filesystem-provider"},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="CSI identity.*conflicts"):
+        soperator_onboarding_module.soperator_jail_filesystem_identity_from_provider_node_groups(
+            node_groups,
+            kubernetes_identity="filesystem-csi",
+        )
+
+
 def test_collect_snapshot_discovers_soperator_helm_releases_across_namespaces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -414,6 +1529,95 @@ def test_collect_snapshot_discovers_gpu_stack_helm_releases_and_policies(
     }
 
 
+def test_discovery_collects_kubernetes_node_and_slurm_health_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def _run(args, **_kwargs):  # type: ignore[no-untyped-def]
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "Slurmctld(primary) at controller is UP\n",
+            "",
+        )
+
+    monkeypatch.setattr(soperator_onboarding_module.subprocess, "run", _run)
+    health = soperator_onboarding_module._collect_slurm_health_from_login(  # noqa: SLF001
+        kube_context="ctx",
+        workloads={
+            "items": [
+                {
+                    "kind": "Pod",
+                    "metadata": {
+                        "name": "login-0",
+                        "labels": {"app.kubernetes.io/component": "login"},
+                    },
+                    "status": {"phase": "Running"},
+                }
+            ]
+        },
+        timeout=30,
+        extra_env=None,
+    )
+    nodes = soperator_onboarding_module._sanitize_kubernetes_node_items(  # noqa: SLF001
+        [
+            {
+                "metadata": {
+                    "name": "worker-0",
+                    "uid": "worker-0-uid",
+                    "labels": {"nebius.com/node-group": "gpu"},
+                },
+                "spec": {"unschedulable": False},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+        ]
+    )
+
+    assert health["checked"] is True
+    assert health["healthy"] is True
+    assert calls[0][-2:] == ("scontrol", "ping")
+    assert nodes == [
+        {
+            "metadata": {
+                "name": "worker-0",
+                "uid": "worker-0-uid",
+                "labels": {"nebius.com/node-group": "gpu"},
+            },
+            "spec": {"unschedulable": False},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+    ]
+
+
+def test_kubectl_list_inventory_retries_transient_timeout_without_recording_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def _run(args, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired(args, timeout=30)
+        return subprocess.CompletedProcess(args, 0, '{"items": []}', "")
+
+    monkeypatch.setattr(soperator_onboarding_module.subprocess, "run", _run)
+    errors: list[dict[str, object]] = []
+
+    payload = soperator_onboarding_module._kubectl_list_json_with_bounded_retry(  # noqa: SLF001
+        ["kubectl", "get", "pods", "-o", "json"],
+        30,
+        errors=errors,
+    )
+
+    assert payload == {"items": []}
+    assert attempts == 2
+    assert errors == []
+
+
 def test_collect_snapshot_records_worker_nodeset_topology(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -427,7 +1631,8 @@ def test_collect_snapshot_records_worker_nodeset_topology(
                 "--context",
                 "ctx",
                 "get",
-                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
+                "deployments,statefulsets,statefulsets.apps.kruise.io,"
+                "daemonsets,pods,jobs,services,configmaps,secrets",
             ]
             and "-n" in cmd
         ):
@@ -643,9 +1848,10 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
     assert [phase.id for phase in report.migration_plan] == [
         "discovery-and-plan",
         "customer-approval",
+        "create-aligned-sfs",
+        "controller-ha-bridge",
         "external-node-template-upgrade",
         "target-gpu-stack-remediation",
-        "create-aligned-sfs",
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
@@ -653,6 +1859,16 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
+    controller_bridge = next(
+        phase for phase in report.migration_plan if phase.id == "controller-ha-bridge"
+    )
+    assert controller_bridge.title == "Establish the temporary two-controller Slurm HA bridge"
+    assert (
+        controller_bridge.progress_label
+        == "Controller Bridge: transferring source authority to HA pair"
+    )
+    assert controller_bridge.requires_customer_approval is True
+    assert any("roll-forward only" in note for note in controller_bridge.notes)
     assert any(
         finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
         for finding in report.findings
@@ -790,6 +2006,7 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
     assert [phase.id for phase in adjusted.migration_plan] == [
         "discovery-and-plan",
         "customer-approval",
+        "controller-ha-bridge",
         "external-node-template-upgrade",
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
@@ -842,9 +2059,17 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         finding.layer == "placements" and finding.status == "target-compatible"
         for finding in report.findings
     )
+    placement_finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "placements" and finding.status == "target-compatible"
+    )
+    assert "accepted in-place or blue-green compute migration" in placement_finding.message
+    assert "source node-group mutation" in placement_finding.message
     assert [phase.id for phase in report.migration_plan] == [
         "discovery-and-plan",
         "customer-approval",
+        "controller-ha-bridge",
         "external-node-template-upgrade",
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
@@ -856,7 +2081,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
     rolling_phase = next(
         phase for phase in report.migration_plan if phase.id == "rolling-compute-migration"
     )
-    assert rolling_phase.title == "Soperator chart upgrade with existing compute layout"
+    assert rolling_phase.title == "Soperator chart upgrade on accepted target compute"
     final_phase = next(
         phase for phase in report.migration_plan if phase.id == "final-control-plane-cutover"
     )
@@ -887,10 +2112,10 @@ def test_soperator_onboarding_skips_external_node_template_when_provider_invento
     assert finding.evidence["matched_node_group_count"] == 6
 
 
-def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> None:
-    snapshot = _with_provider_node_template_inventory(
-        _target_compatible_legacy_snapshot()
-    )
+def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> (
+    None
+):
+    snapshot = _with_provider_node_template_inventory(_target_compatible_legacy_snapshot())
     snapshot["helm_releases"] = [
         {
             "name": "soperator",
@@ -927,15 +2152,59 @@ def test_soperator_onboarding_plans_external_node_template_for_same_soperator_ve
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in selected_action_ids
     assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
     assert ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in selected_action_ids
-    assert "external-node-template-upgrade" in [phase.id for phase in report.migration_plan]
+    assert [phase.id for phase in report.migration_plan] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "controller-ha-bridge",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    ]
+    rolling_phase = next(
+        phase for phase in report.migration_plan if phase.id == "rolling-compute-migration"
+    )
+    assert rolling_phase.title == "Kubernetes target-version compute migration"
+    final_phase = next(
+        phase for phase in report.migration_plan if phase.id == "final-control-plane-cutover"
+    )
+    assert final_phase.title == "Final Kubernetes target-version compute and control-plane cutover"
     finding = next(
         finding
         for finding in report.findings
         if finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
     )
+    assert "separately accepted in-place or blue-green" in finding.message
+    assert "uses blue/green replacements" not in finding.message
     assert finding.evidence is not None
     assert finding.evidence["control_plane"]["current_k8s_version"] == "1.33"
     assert finding.evidence["control_plane"]["target_k8s_version"] == "1.34"
+
+
+def test_default_migration_plan_makes_k8s_only_upgrade_blue_green() -> None:
+    phases = soperator_onboarding_module._default_soperator_migration_plan(
+        include_data_migration=False,
+        include_compute_migration=False,
+        include_soperator_upgrade=False,
+        include_external_node_template_upgrade=True,
+    )
+
+    assert [phase.id for phase in phases] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "controller-ha-bridge",
+        "external-node-template-upgrade",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    ]
+    assert (
+        next(phase.title for phase in phases if phase.id == "rolling-compute-migration")
+        == "Kubernetes target-version compute migration"
+    )
 
 
 def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> (
@@ -1002,7 +2271,7 @@ def test_soperator_onboarding_keeps_external_node_template_when_provider_collect
     ]
 
 
-def test_soperator_onboarding_modes_follow_analyzer_for_compatible_layout() -> None:
+def test_soperator_onboarding_explicit_aligned_modes_override_compatible_layout() -> None:
     report = analyze_soperator_onboarding_snapshot(
         _target_compatible_legacy_snapshot(),
         target_ref="cluster1",
@@ -1017,16 +2286,12 @@ def test_soperator_onboarding_modes_follow_analyzer_for_compatible_layout() -> N
     )
 
     selected_action_ids = {action.id for action in adjusted.actions if action.selected}
-    assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS not in selected_action_ids
-    assert ONBOARDING_ACTION_PLAN_DATA_MIGRATION not in selected_action_ids
-    assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION not in selected_action_ids
-    assert "create-aligned-sfs" not in [phase.id for phase in adjusted.migration_plan]
-    assert "online-bulk-data-sync" not in [phase.id for phase in adjusted.migration_plan]
-    assert any(
-        phase.id == "rolling-compute-migration"
-        and phase.title == "Soperator chart upgrade with existing compute layout"
-        for phase in adjusted.migration_plan
-    )
+    assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS in selected_action_ids
+    assert ONBOARDING_ACTION_PLAN_DATA_MIGRATION in selected_action_ids
+    assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_action_ids
+    assert "create-aligned-sfs" in [phase.id for phase in adjusted.migration_plan]
+    assert "online-bulk-data-sync" in [phase.id for phase in adjusted.migration_plan]
+    assert any(phase.id == "rolling-compute-migration" for phase in adjusted.migration_plan)
 
 
 def test_soperator_onboarding_report_from_config_respects_selected_modes() -> None:
@@ -1070,6 +2335,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     assert [phase["id"] for phase in report["migration_plan"]] == [
         "discovery-and-plan",
         "customer-approval",
+        "controller-ha-bridge",
         "external-node-template-upgrade",
         "rolling-compute-migration",
         "final-control-plane-cutover",
@@ -1214,15 +2480,165 @@ def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_p
         target_ref="cluster1",
         snapshot=_snapshot(),
         report=source_report["report"],
+        kube_context="nebius-cluster1-mk8scluster-123-external",
     )
 
     written = write_soperator_onboarding_reports(payload, tmp_path / "generated")
 
     report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["onboard_description"] == (
+        soperator_onboarding_module.EXT_SOPERATOR_ONBOARD_DESCRIPTION
+    )
     assert report["findings"][0]["status"] == "verified"
     assert report["actions"][0]["id"] == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
     assert report["actions"][1]["id"] == ONBOARDING_ACTION_ADOPT_SOPERATOR
     assert report["migration_plan"] == []
+
+
+def test_accepted_onboarding_contract_preserves_live_evidence_and_replaces_plan() -> None:
+    raw_report = {
+        "schema": "nebius-cxcli-soperator-onboarding/v2",
+        "target_ref": "cluster1",
+        "analyzed_at": "2026-07-13T00:00:00Z",
+        "state": "existing-soperator-supported",
+        "fingerprint": "live-fingerprint",
+        "findings": [
+            {
+                "layer": "versions",
+                "status": "migration-required",
+                "severity": "warning",
+                "message": "Live Soperator requires an upgrade.",
+                "action_id": ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+                "evidence": {"live": True},
+            }
+        ],
+        "actions": [
+            {
+                "id": ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+                "title": "Upgrade Soperator",
+                "layer": "versions",
+                "selected": True,
+                "reason": "Live version differs.",
+            }
+        ],
+        "source_version": "1.22.3",
+        "target_version": "4.0.2-ps.4",
+        "migration_profile_id": "legacy-v1-to-target",
+        "migration_plan": [],
+        "live_extension": {"preserved": True},
+    }
+    onboarding = {
+        "state": "existing-soperator-supported",
+        "actions": [
+            ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+            ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+            ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ],
+        "source_version": "1.22.3",
+        "target_version": "4.0.2-ps.4",
+        "migration_profile_id": "legacy-v1-to-target",
+        "collection_errors": [],
+    }
+
+    effective = soperator_report_with_accepted_onboarding_contract(raw_report, onboarding)
+
+    assert effective["fingerprint"] == "live-fingerprint"
+    assert effective["analyzed_at"] == "2026-07-13T00:00:00Z"
+    assert effective["live_extension"] == {"preserved": True}
+    assert effective["findings"][0]["evidence"] == {"live": True}
+    assert [action["id"] for action in effective["actions"]] == onboarding["actions"]
+    phase_ids = [phase["id"] for phase in effective["migration_plan"]]
+    assert phase_ids.count("create-aligned-sfs") == 1
+    assert phase_ids.count("online-bulk-data-sync") == 1
+    assert phase_ids.index("create-aligned-sfs") < phase_ids.index("controller-ha-bridge")
+    assert phase_ids.index("controller-ha-bridge") < phase_ids.index("online-bulk-data-sync")
+
+
+def test_runtime_accepted_plan_preserves_fresh_discovery_evidence() -> None:
+    raw_report = {
+        "state": "existing-soperator-supported",
+        "fingerprint": "fresh-live-fingerprint",
+        "findings": [
+            {
+                "layer": "placements",
+                "status": "compatible",
+                "severity": "info",
+                "message": "Fresh placement evidence.",
+                "action_id": ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+            }
+        ],
+        "actions": [
+            {
+                "id": ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+                "selected": True,
+                "title": "Live upgrade recommendation",
+            }
+        ],
+        "migration_plan": [],
+    }
+    onboarding = {
+        "state": "existing-soperator-target",
+        "actions": [
+            ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+            ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+            ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ],
+    }
+
+    effective = soperator_runtime_report_with_accepted_upgrade_plan(raw_report, onboarding)
+
+    assert effective["state"] == "existing-soperator-supported"
+    assert effective["fingerprint"] == "fresh-live-fingerprint"
+    assert effective["findings"] == raw_report["findings"]
+    assert effective["actions"] == raw_report["actions"]
+    phase_ids = [phase["id"] for phase in effective["migration_plan"]]
+    assert "create-aligned-sfs" in phase_ids
+    assert "online-bulk-data-sync" in phase_ids
+
+
+def test_runtime_accepted_plan_preserves_known_unaccepted_live_action() -> None:
+    raw_report = {
+        "state": "existing-soperator-supported",
+        "actions": [
+            {
+                "id": ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                "selected": True,
+            }
+        ],
+    }
+    onboarding = {
+        "actions": [ONBOARDING_ACTION_UPGRADE_SOPERATOR],
+        "upgrade_path": {
+            "segments": [{"actions": [ONBOARDING_ACTION_UPGRADE_SOPERATOR]}],
+        },
+    }
+
+    effective = soperator_runtime_report_with_accepted_upgrade_plan(raw_report, onboarding)
+
+    assert effective["actions"] == raw_report["actions"]
+    assert "external-node-template-upgrade" not in {
+        phase["id"] for phase in effective["migration_plan"]
+    }
+
+
+def test_runtime_accepted_plan_rejects_unknown_selected_action() -> None:
+    raw_report = {
+        "state": "existing-soperator-supported",
+        "actions": [{"id": "future-destructive-action", "selected": True}],
+    }
+    onboarding = {
+        "actions": [ONBOARDING_ACTION_UPGRADE_SOPERATOR],
+        "upgrade_path": {
+            "segments": [{"actions": [ONBOARDING_ACTION_UPGRADE_SOPERATOR]}],
+        },
+    }
+
+    with pytest.raises(ValueError, match="future-destructive-action"):
+        soperator_runtime_report_with_accepted_upgrade_plan(raw_report, onboarding)
 
 
 def test_soperator_onboarding_analyzer_accepts_official_helm_soperator_chart_identity() -> None:
@@ -1338,7 +2754,7 @@ def test_soperator_support_policy_rejects_legacy_target_before_k8s_133() -> None
     assert finding["severity"] == "required"
     assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
     assert finding["evidence"]["target_k8s_version"] == "1.33"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_rejects_pre_123_target_before_source_age_rule() -> None:
@@ -1360,7 +2776,7 @@ def test_soperator_support_policy_rejects_pre_123_target_before_source_age_rule(
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
     assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_marks_unmatched_legacy_source_not_validated() -> None:
@@ -1382,7 +2798,7 @@ def test_soperator_support_policy_marks_unmatched_legacy_source_not_validated() 
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["evidence"]["rule_id"] == "legacy-before-1-22-not-validated"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
@@ -1403,18 +2819,13 @@ def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
 
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
-    assert (
-        finding["evidence"]["rule_id"]
-        == "k8s-before-1-33-soperator-1-22-plus-supported"
-    )
+    assert finding["evidence"]["rule_id"] == "k8s-before-1-33-soperator-1-22-plus-supported"
     assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["target_app_version"] == "4.0.2"
     assert finding["evidence"]["target_chart_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
-    assert finding["evidence"]["recommended_order"] == {
-        "soperator_after_k8s_min": "1.32"
-    }
-    assert not soperator_upgrade_support_requires_override(report)
+    assert finding["evidence"]["recommended_order"] == {"soperator_after_k8s_min": "1.32"}
+    assert not soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_marks_intermediate_target_not_validated() -> None:
@@ -1437,7 +2848,7 @@ def test_soperator_support_policy_marks_intermediate_target_not_validated() -> N
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["severity"] == "required"
     assert finding["evidence"]["rule_id"] == "soperator-target-before-cxcli-pin-not-validated"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
@@ -1461,10 +2872,8 @@ def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
     assert finding["evidence"]["rule_id"] == "k8s-1-33-soperator-4-supported"
     assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["target_app_version"] == "4.0.2"
-    assert finding["evidence"]["recommended_order"] == {
-        "soperator_after_k8s_min": "1.32"
-    }
-    assert not soperator_upgrade_support_requires_override(report)
+    assert finding["evidence"]["recommended_order"] == {"soperator_after_k8s_min": "1.32"}
+    assert not soperator_upgrade_support_rejected(report)
 
 
 @pytest.mark.parametrize("target_chart_version", ["4.0.2", "4.0.2-ps.1", "4.0.2-ps.999"])
@@ -1490,14 +2899,11 @@ def test_soperator_support_policy_marks_same_app_non_pin_target_not_validated(
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["severity"] == "required"
-    assert (
-        finding["evidence"]["rule_id"]
-        == "soperator-target-same-app-non-cxcli-pin-not-validated"
-    )
+    assert finding["evidence"]["rule_id"] == "soperator-target-same-app-non-cxcli-pin-not-validated"
     assert finding["evidence"]["target_version"] == target_chart_version
     assert finding["evidence"]["target_app_version"] == "4.0.2"
     assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_marks_newer_upstream_target_not_validated() -> None:
@@ -1520,7 +2926,7 @@ def test_soperator_support_policy_marks_newer_upstream_target_not_validated() ->
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["severity"] == "required"
     assert finding["evidence"]["rule_id"] == "soperator-target-newer-than-cxcli-pin-not-validated"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_support_policy_marks_unmatched_path_not_validated() -> None:
@@ -1542,10 +2948,124 @@ def test_soperator_support_policy_marks_unmatched_path_not_validated() -> None:
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["evidence"]["rule_id"] == "default-not-validated"
-    assert soperator_upgrade_support_requires_override(report)
+    assert soperator_upgrade_support_rejected(report)
 
 
-def test_soperator_support_policy_override_records_marker() -> None:
+def test_host_driver_jail_cuda_policy_parses_committed_driver_facts() -> None:
+    policy = soperator_onboarding_module.soperator_host_driver_jail_cuda_policy()
+
+    assert policy["schema"] == ("nebius-cxcli-soperator-host-driver-jail-cuda-policy/v1")
+    assert policy["driver_presets"] == {
+        "cuda12.8": {"driver_branch": 570},
+        "cuda13.0": {"driver_branch": 580},
+    }
+    assert policy["jail_cuda"]["12.9.0"]["minimum_driver_branch"] == 575
+    assert policy["jail_cuda"]["12.9.0"]["allow_newer_driver_branches"] is True
+
+
+def test_host_driver_jail_cuda_policy_allows_cuda13_and_rejects_cuda12_8() -> None:
+    managed_gpu_operator = {
+        "component_id": "nvidia-gpu-operator",
+        "chart": "gpu-operator",
+        "chart_version": "v25.10.0",
+        "repository": (
+            "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/"
+            "nvidia-gpu-operator/chart/gpu-operator"
+        ),
+    }
+    target = {
+        "name": "worker-gpu",
+        "gpu_software_mode": "provider-managed",
+        "target": {"drivers_preset": "cuda13.0"},
+    }
+
+    soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+        jail_cuda_version="12.9.0",
+        node_group_targets=(target,),
+        managed_gpu_operator_target=managed_gpu_operator,
+    )
+
+    target["target"]["drivers_preset"] = "cuda12.8"  # type: ignore[index]
+    with pytest.raises(RuntimeError, match=r"branch 570, below Jail CUDA 12\.9\.0.*575"):
+        soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+            jail_cuda_version="12.9.0",
+            node_group_targets=(target,),
+            managed_gpu_operator_target=managed_gpu_operator,
+        )
+
+
+def test_host_driver_jail_cuda_policy_operator_managed_requires_exact_gpu_operator() -> None:
+    policy = soperator_onboarding_module.soperator_host_driver_jail_cuda_policy()
+    required = policy["jail_cuda"]["12.9.0"]["operator_managed"][  # type: ignore[index]
+        "required_managed_gpu_operator"
+    ]
+    target = {
+        "name": "worker-gpu",
+        "gpu_software_mode": "operator-managed",
+        "target": {"drivers_preset": ""},
+    }
+
+    soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+        jail_cuda_version="12.9",
+        node_group_targets=(target,),
+        managed_gpu_operator_target=required,
+    )
+
+    drifted = dict(required)
+    drifted["chart_version"] = "v25.9.0"
+    with pytest.raises(
+        RuntimeError,
+        match="operator-managed mode requires the exact committed managed GPU operator target",
+    ):
+        soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+            jail_cuda_version="12.9.0",
+            node_group_targets=(target,),
+            managed_gpu_operator_target=drifted,
+        )
+
+
+def test_host_driver_jail_cuda_policy_fails_closed_for_unknown_cuda_or_preset() -> None:
+    provider_target = {
+        "name": "worker-gpu",
+        "gpu_software_mode": "provider-managed",
+        "target": {"drivers_preset": "cuda12.7"},
+    }
+    with pytest.raises(RuntimeError, match="drivers_preset cuda12.7 is not committed"):
+        soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+            jail_cuda_version="12.9.0",
+            node_group_targets=(provider_target,),
+            managed_gpu_operator_target={},
+        )
+    with pytest.raises(RuntimeError, match="has no rule for Jail CUDA 13.0.0"):
+        soperator_onboarding_module.validate_soperator_host_driver_jail_cuda_compatibility(
+            jail_cuda_version="13.0.0",
+            node_group_targets=(provider_target,),
+            managed_gpu_operator_target={},
+        )
+
+
+def test_host_driver_jail_cuda_policy_rejects_malformed_committed_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        soperator_onboarding_module,
+        "_load_soperator_migration_profile_data",
+        lambda: {
+            "host_driver_jail_cuda_policy": {
+                "schema": (
+                    soperator_onboarding_module.SOPERATOR_HOST_DRIVER_JAIL_CUDA_POLICY_SCHEMA
+                ),
+                "driver_presets": {"cuda13.0": {"driver_branch": "580"}},
+                "jail_cuda": {},
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="driver_branch must be a positive integer"):
+        soperator_onboarding_module.soperator_host_driver_jail_cuda_policy()
+
+
+def test_soperator_support_policy_rejects_stale_override_evidence() -> None:
     report = analyze_soperator_onboarding_snapshot(
         _snapshot(
             release={
@@ -1559,16 +3079,13 @@ def test_soperator_support_policy_override_records_marker() -> None:
         pinned_chart_version="1.22.5",
         pinned_app_version="1.22.5",
         target_k8s_version="1.33",
+    ).to_dict()
+    finding = next(
+        item for item in report["findings"] if item["layer"] == SOPERATOR_UPGRADE_SUPPORT_LAYER
     )
+    finding["evidence"]["override_used"] = True
 
-    overridden = soperator_onboarding_report_with_support_override(report, override_used=True)
-    finding = _single_support_finding(overridden)
-
-    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
-    assert finding["severity"] == "recommended"
-    assert finding["evidence"]["override_used"] is True
-    assert finding["evidence"]["original_severity"] == "required"
-    assert not soperator_upgrade_support_requires_override(overridden)
+    assert soperator_upgrade_support_rejected(report)
 
 
 def test_soperator_onboarding_analyzer_ignores_shadowed_stale_source_record() -> None:
@@ -2198,6 +3715,18 @@ def _onboarding_payload() -> dict[str, object]:
                         "target_version": "4.0.1-ps.1",
                         "source_version": "",
                         "migration_profile_id": "",
+                        "compute_migration": {
+                            "mode": "in-place",
+                            "slurm_scheduling_pause": True,
+                            "node_group_rollout": {
+                                "strategy": "zero-surge",
+                                "worker": {
+                                    "max_unavailable": "all",
+                                    "drain_timeout": "10m",
+                                    "max_parallel_groups": 8,
+                                },
+                            },
+                        },
                         "actions": [
                             ONBOARDING_ACTION_INSTALL_SOPERATOR,
                             ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
@@ -2245,6 +3774,13 @@ def _onboarding_payload() -> dict[str, object]:
     return payload
 
 
+def _onboarding_campaign_payload() -> dict[str, object]:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    target["cluster_id"] = "mk8scluster-123"  # type: ignore[index]
+    return payload
+
+
 def _locked_upgrade_path_payload() -> dict[str, object]:
     jail_rootfs = {
         "current_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
@@ -2257,15 +3793,70 @@ def _locked_upgrade_path_payload() -> dict[str, object]:
         "slurmcluster_name": "mk8s",
         "target_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
         "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_cuda_version": "12.9.0",
+        "target_digest": "",
+        "target_identity_warning": ("Artifact digest unavailable; campaign pins catalog identity."),
         "target_source": "pinned-chart-defaults",
         "refresh_required": False,
         "reason": "current populate-jail image matches target chart image",
     }
-    return {
+    campaign = {
         "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
         "locked": True,
+        "identity": {
+            "project_id": "project-456",
+            "cluster_id": "mk8scluster-123",
+            "cluster_name": "cluster1",
+            "target_ref": "cluster1",
+            "kubernetes_uid": "kubernetes-uid-123",
+            "soperator_uid": "soperator-uid-123",
+            "slurmcluster_uid": "slurmcluster-uid-123",
+            "jail_filesystem_id": "filesystem-123",
+        },
+        "source_provenance": {
+            "discovery": "live-kubernetes-and-nebius-sdk",
+            "provider_capabilities": ("nebius-sdk-list-versions-and-compatibility-matrix"),
+            "component_catalog": "component_sources.yaml",
+            "support_policy": "committed-soperator-upgrade-support-policy",
+            "source_contract": "campaign-source-waypoints",
+        },
+        "catalog_fingerprint": "a" * 64,
+        "capabilities_source": "nebius-sdk",
         "source_k8s_version": "1.32",
         "target_k8s_version": "1.33",
+        "mk8s": {
+            "control_plane": {"source_version": "1.32", "target_version": "1.33"},
+            "node_groups": [
+                {
+                    "id": "nodegroup-123",
+                    "name": "cpu-a",
+                    "role": "worker",
+                    "platform": "cpu-d3",
+                    "preset": "8vcpu-32gb",
+                    "gpu_software_mode": "none",
+                    "fixed_size": 1,
+                    "provider_identity": {
+                        "resource_uid": "nodegroup-123",
+                        "resource_version": 201,
+                        "reservation_policy": "",
+                        "reservation_ids": [],
+                        "failure_domains": [],
+                        "gpu_cluster_id": "",
+                    },
+                    "source": {
+                        "kubernetes_version": "1.32",
+                        "os": "ubuntu22.04",
+                        "drivers_preset": "",
+                    },
+                    "target": {
+                        "kubernetes_version": "1.33",
+                        "os": "ubuntu24.04",
+                        "drivers_preset": "",
+                    },
+                    "compatibility_source": "nebius-sdk-get-compatibility-matrix",
+                }
+            ],
+        },
         "soperator_app": {
             "current_version": "1.23.3",
             "target_version": "4.0.2",
@@ -2276,39 +3867,115 @@ def _locked_upgrade_path_payload() -> dict[str, object]:
             "target_version": "4.0.2-ps.3",
             "upgrade_required": True,
         },
+        "migration_profile": {
+            "id": "legacy-v1-to-target",
+            "execution_contract": {
+                "source_controller_pause": {
+                    "required_before_target_compute_reconcile": True,
+                }
+            },
+        },
         "jail_rootfs": jail_rootfs,
         "support_status": "supported",
         "support_rule_id": "k8s-1-33-soperator-4-supported",
         "recommended_order": [],
         "recommended_order_policy": {},
+        "final_targets": {
+            "kubernetes": "1.33",
+            "soperator_app": "4.0.2",
+            "soperator_chart": "4.0.2-ps.3",
+            "jail_rootfs_image": ("cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"),
+            "jail_rootfs_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+            "jail_cuda_version": "12.9.0",
+            "jail_artifact_digest": "",
+            "jail_artifact_identity_warning": (
+                "Artifact digest unavailable; campaign pins catalog identity."
+            ),
+        },
+        "managed_operators": {},
+        "compute_migration": {
+            "mode": "in-place",
+            "slurm_scheduling_pause": True,
+            "node_group_rollout": {
+                "strategy": "zero-surge",
+                "worker": {
+                    "max_unavailable": "all",
+                    "resolved_max_unavailable": {"nodegroup-123": 1},
+                    "drain_timeout": "10m",
+                    "max_parallel_groups": 8,
+                },
+            },
+        },
         "segments": [
             {
                 "id": "segment-1-kubernetes-1-32-1-33",
                 "index": 1,
+                "depends_on": [],
                 "kind": "external-node-template-hop",
                 "title": "Kubernetes 1.32 -> 1.33",
                 "current_k8s_version": "1.32",
                 "target_k8s_version": "1.33",
                 "soperator_app": {
-                    "current_version": "4.0.2",
+                    "current_version": "1.23.3",
                     "target_version": "4.0.2",
-                    "upgrade_required": False,
+                    "upgrade_required": True,
                 },
                 "soperator_chart": {
-                    "current_version": "4.0.2-ps.3",
+                    "current_version": "1.23.3",
                     "target_version": "4.0.2-ps.3",
-                    "upgrade_required": False,
+                    "upgrade_required": True,
                 },
                 "jail_rootfs": jail_rootfs,
                 "k8s_upgrade_required": True,
-                "soperator_upgrade_required": False,
+                "soperator_upgrade_required": True,
+                "mk8s": {
+                    "control_plane": {
+                        "source_version": "1.32",
+                        "target_version": "1.33",
+                    },
+                    "node_groups": [
+                        {
+                            "id": "nodegroup-123",
+                            "name": "cpu-a",
+                            "role": "worker",
+                            "fixed_size": 1,
+                            "platform": "cpu-d3",
+                            "preset": "8vcpu-32gb",
+                            "gpu_software_mode": "none",
+                            "provider_identity": {
+                                "resource_uid": "nodegroup-123",
+                                "resource_version": 201,
+                                "reservation_policy": "",
+                                "reservation_ids": [],
+                                "failure_domains": [],
+                                "gpu_cluster_id": "",
+                            },
+                            "source": {
+                                "kubernetes_version": "1.32",
+                                "os": "ubuntu22.04",
+                                "drivers_preset": "",
+                            },
+                            "target": {
+                                "kubernetes_version": "1.33",
+                                "os": "ubuntu24.04",
+                                "drivers_preset": "",
+                            },
+                            "compatibility_source": ("nebius-sdk-get-compatibility-matrix"),
+                        }
+                    ],
+                },
                 "actions": [
                     ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
                     ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                    ONBOARDING_ACTION_UPGRADE_SOPERATOR,
                 ],
             }
         ],
     }
+    return finalize_soperator_upgrade_campaign(
+        campaign,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
 
 
 def test_onboarding_acceptance_refuses_stale_analysis() -> None:
@@ -2376,7 +4043,13 @@ def test_onboarding_acceptance_rejects_unsupported_action_even_with_current_fing
 
 
 def test_onboarding_fingerprint_allows_day2_soperator_chart_pin_changes() -> None:
-    payload = _onboarding_payload()
+    payload = _onboarding_campaign_payload()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    onboarding["upgrade_path"] = _locked_upgrade_path_payload()  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
     original = soperator_onboarding_fingerprint(payload, target_ref="cluster1")
     chart = payload["apps"]["charts"][0]  # type: ignore[index]
     chart["version"] = "0.26.0"
@@ -2442,11 +4115,40 @@ def test_onboarding_fingerprint_ignores_ephemeral_helm_release_metadata() -> Non
 
 
 def test_runtime_validation_accepts_external_soperator_target_without_mk8s_infra() -> None:
-    validate_runtime_payload(_onboarding_payload())
+    payload = _onboarding_campaign_payload()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    onboarding["upgrade_path"] = _locked_upgrade_path_payload()  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_managed_gpu_operator_pins_for_cpu_only_campaign() -> None:
+    payload = _onboarding_campaign_payload()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    campaign = _locked_upgrade_path_payload()
+    campaign["managed_operators"] = {"gpu": {}}
+    onboarding["upgrade_path"] = finalize_soperator_upgrade_campaign(  # type: ignore[index]
+        campaign,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path\.managed_operators must be empty.*CPU-only",
+    ):
+        validate_runtime_payload(payload)
 
 
 def test_runtime_validation_accepts_soperator_onboarding_with_locked_upgrade_path() -> None:
-    payload = _onboarding_payload()
+    payload = _onboarding_campaign_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
     onboarding["actions"] = [  # type: ignore[index]
@@ -2458,14 +4160,6 @@ def test_runtime_validation_accepts_soperator_onboarding_with_locked_upgrade_pat
         "target_k8s_version": "1.33",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
-        "rollout": {
-            "strategy": "zero-surge",
-            "worker_group_strategy": {
-                "max_surge_count": 0,
-                "max_unavailable_count": 1,
-                "drain_timeout": "30m",
-            },
-        },
     }
     onboarding["upgrade_path"] = _locked_upgrade_path_payload()  # type: ignore[index]
     onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
@@ -2507,7 +4201,9 @@ def test_runtime_validation_rejects_soperator_onboarding_unknown_key() -> None:
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> None:
+def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> (
+    None
+):
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
@@ -2540,11 +4236,23 @@ def test_runtime_validation_rejects_soperator_onboarding_bad_target_k8s_version(
         validate_runtime_payload(payload)
 
 
+def test_runtime_validation_requires_v6_campaign_for_external_onboarding() -> None:
+    payload = _onboarding_campaign_payload()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    onboarding.pop("upgrade_path", None)  # type: ignore[union-attr]
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path is required and must use 'nebius-cxcli-ext-soperator-upgrade-campaign/v6'",
+    ):
+        validate_runtime_payload(payload)
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
         (
-            lambda path: path.update({"schema": "wrong-schema"}),
+            lambda path: path.update({"schema": "nebius-cxcli-ext-soperator-upgrade-path/v2"}),
             r"upgrade_path\.schema must be",
         ),
         (
@@ -2559,13 +4267,92 @@ def test_runtime_validation_rejects_soperator_onboarding_bad_target_k8s_version(
             lambda path: path.pop("support_status"),
             r"upgrade_path\.support_status is required",
         ),
+        (
+            lambda path: path["identity"].pop("kubernetes_uid"),
+            r"upgrade_path\.identity\.kubernetes_uid must be a non-empty string",
+        ),
+        (
+            lambda path: path["segments"][0].update({"index": 2}),
+            r"upgrade_path\.segments\[0\]\.index must be 1",
+        ),
+        (
+            lambda path: path["segments"][0]["mk8s"]["control_plane"].update(
+                {"target_version": "1.34"}
+            ),
+            r"upgrade_path\.segments\[0\]\.mk8s\.control_plane must advance exactly one",
+        ),
+        (
+            lambda path: path["segments"][0]["mk8s"]["node_groups"][0]["target"].pop(
+                "drivers_preset"
+            ),
+            r"upgrade_path\.segments\[0\]\.mk8s\.node_groups\[0\]\.target\.drivers_preset is required",
+        ),
+        (
+            lambda path: path["segments"][0]["mk8s"]["node_groups"][0].update({"preset": ""}),
+            r"upgrade_path\.segments\[0\]\.mk8s\.node_groups\[0\]\.preset must be a non-empty string",
+        ),
+        (
+            lambda path: path["segments"][0]["mk8s"]["node_groups"][0].update(
+                {"unexpected": "value"}
+            ),
+            r"upgrade_path\.segments\[0\]\.mk8s\.node_groups\[0\] has unsupported field",
+        ),
+        (
+            lambda path: path["source_provenance"].pop("source_contract"),
+            r"upgrade_path\.source_provenance\.source_contract must be a non-empty string",
+        ),
+        (
+            lambda path: path["final_targets"].update({"kubernetes": "1.34"}),
+            r"upgrade_path\.final_targets\.kubernetes must match target_k8s_version",
+        ),
+        (
+            lambda path: (
+                path["mk8s"]["node_groups"][0].update(
+                    {
+                        "platform": "gpu-h100-sxm",
+                        "gpu_software_mode": "operator-managed",
+                    }
+                ),
+                path["segments"][0]["mk8s"]["node_groups"][0].update(
+                    {
+                        "platform": "gpu-h100-sxm",
+                        "gpu_software_mode": "operator-managed",
+                    }
+                ),
+            ),
+            r"upgrade_path\.managed_operators\.gpu must be a mapping",
+        ),
+        (
+            lambda path: path["segments"][0].update({"depends_on": ["not-prior"]}),
+            r"upgrade_path\.segments\[0\]\.depends_on must be \[\]",
+        ),
+        (
+            lambda path: path["compute_migration"].update({"mode": "rolling"}),
+            r"upgrade_path\.compute_migration\.mode must be one of",
+        ),
+        (
+            lambda path: path["compute_migration"].pop("node_group_rollout"),
+            r"upgrade_path\.compute_migration\.node_group_rollout must be a mapping",
+        ),
+        (
+            lambda path: path["compute_migration"].update({"slurm_scheduling_pause": "true"}),
+            r"upgrade_path\.compute_migration\.slurm_scheduling_pause must be true or false",
+        ),
+        (
+            lambda path: path["migration_profile"].pop("execution_contract"),
+            r"upgrade_path\.migration_profile\.execution_contract must be a non-empty mapping",
+        ),
+        (
+            lambda path: path.update({"rollout": {"strategy": "zero-surge"}}),
+            r"upgrade_path has unsupported field\(s\): rollout",
+        ),
     ],
 )
 def test_runtime_validation_rejects_soperator_onboarding_malformed_upgrade_path(
     mutation: Callable[[dict[str, object]], object],
     match: str,
 ) -> None:
-    payload = _onboarding_payload()
+    payload = _onboarding_campaign_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
     upgrade_path = _locked_upgrade_path_payload()
@@ -2576,22 +4363,205 @@ def test_runtime_validation_rejects_soperator_onboarding_malformed_upgrade_path(
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_accepts_soperator_worker_rollout_config() -> None:
-    payload = _onboarding_payload()
+def test_runtime_validation_rejects_soperator_campaign_stale_fingerprint() -> None:
+    payload = _onboarding_campaign_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
-    onboarding["node_template_upgrade"] = {  # type: ignore[index]
-        "rollout": {
-            "strategy": "safe-surge",
-            "worker_wave_percent": 1,
-            "max_parallel_worker_groups": 10,
-            "worker_group_strategy": {
-                "max_surge_count": 2,
-                "max_unavailable_count": 0,
-                "drain_timeout": "30m",
-            },
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["catalog_fingerprint"] = "b" * 64
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path\.fingerprint does not match the immutable campaign payload",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_campaign_id_not_derived_from_fingerprint() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["campaign_id"] = "campaign-ffffffffffffffff"
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path\.campaign_id must be .* for the campaign fingerprint",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_campaign_identity_mismatch() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["identity"]["cluster_id"] = "another-cluster"  # type: ignore[index]
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path\.identity\.cluster_id must match the owning config value",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_duplicate_soperator_campaign_segment_id() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    first_segment = upgrade_path["segments"][0]  # type: ignore[index]
+    duplicate_segment = json.loads(json.dumps(first_segment))
+    duplicate_segment["index"] = 2
+    duplicate_segment["depends_on"] = [first_segment["id"]]  # type: ignore[index]
+    upgrade_path["segments"].append(duplicate_segment)  # type: ignore[union-attr]
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(
+        ValueError,
+        match=r"upgrade_path\.segments\[1\]\.id .* is duplicated",
+    ):
+        validate_runtime_payload(payload)
+
+
+def _runtime_payload_with_refinalized_campaign(
+    upgrade_path: dict[str, object],
+) -> dict[str, object]:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["upgrade_path"] = finalize_soperator_upgrade_campaign(  # type: ignore[index]
+        upgrade_path,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+    return payload
+
+
+def test_runtime_validation_rejects_refingerprinted_campaign_that_omits_soperator_work() -> None:
+    upgrade_path = _locked_upgrade_path_payload()
+    segment = upgrade_path["segments"][0]  # type: ignore[index]
+    for record_name in ("soperator_app", "soperator_chart"):
+        record = segment[record_name]
+        record["current_version"] = record["target_version"]
+        record["upgrade_required"] = False
+    segment["soperator_upgrade_required"] = False
+    segment["actions"] = [
+        action for action in segment["actions"] if action != ONBOARDING_ACTION_UPGRADE_SOPERATOR
+    ]
+    payload = _runtime_payload_with_refinalized_campaign(upgrade_path)
+
+    with pytest.raises(
+        ValueError,
+        match=r"soperator_app.current_version must match the previous segment target",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_refingerprinted_soperator_segment_flag_mismatch() -> None:
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["segments"][0]["soperator_upgrade_required"] = False  # type: ignore[index]
+    payload = _runtime_payload_with_refinalized_campaign(upgrade_path)
+
+    with pytest.raises(
+        ValueError,
+        match=r"soperator_upgrade_required must be true for its app/chart version transitions",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_refingerprinted_version_record_flag_mismatch() -> None:
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["soperator_chart"]["upgrade_required"] = False  # type: ignore[index]
+    payload = _runtime_payload_with_refinalized_campaign(upgrade_path)
+
+    with pytest.raises(
+        ValueError,
+        match=r"soperator_chart.upgrade_required must be true because current_version differs",
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_refingerprinted_campaign_that_omits_jail_refresh() -> None:
+    upgrade_path = _locked_upgrade_path_payload()
+    campaign_jail = upgrade_path["jail_rootfs"]  # type: ignore[index]
+    campaign_jail["current_image"] = "cr.example/populate_jail:1.23.3-cuda12.8.0"
+    campaign_jail["current_version"] = "1.23.3-cuda12.8.0"
+    campaign_jail["refresh_required"] = True
+    segment_jail = upgrade_path["segments"][0]["jail_rootfs"]  # type: ignore[index]
+    segment_jail["current_image"] = campaign_jail["current_image"]
+    segment_jail["current_version"] = campaign_jail["current_version"]
+    segment_jail["refresh_required"] = False
+    payload = _runtime_payload_with_refinalized_campaign(upgrade_path)
+
+    with pytest.raises(
+        ValueError,
+        match=r"segments must contain exactly one Jail rootfs refresh",
+    ):
+        validate_runtime_payload(payload)
+
+
+def _two_hop_soperator_campaign() -> dict[str, object]:
+    upgrade_path = _locked_upgrade_path_payload()
+    first_segment = upgrade_path["segments"][0]  # type: ignore[index]
+    second_segment = json.loads(json.dumps(first_segment))
+    second_segment.update(
+        {
+            "id": "segment-2-kubernetes-1-33-1-34",
+            "index": 2,
+            "depends_on": [first_segment["id"]],  # type: ignore[index]
+            "title": "Kubernetes 1.33 -> 1.34",
+            "current_k8s_version": "1.33",
+            "target_k8s_version": "1.34",
+            "soperator_upgrade_required": False,
         }
+    )
+    for record_name in ("soperator_app", "soperator_chart"):
+        record = second_segment[record_name]
+        record["current_version"] = record["target_version"]
+        record["upgrade_required"] = False
+    second_segment["actions"] = [
+        action
+        for action in second_segment["actions"]
+        if action != ONBOARDING_ACTION_UPGRADE_SOPERATOR
+    ]
+    second_segment["mk8s"]["control_plane"] = {
+        "source_version": "1.33",
+        "target_version": "1.34",
     }
+    second_group = second_segment["mk8s"]["node_groups"][0]
+    second_group["source"] = json.loads(
+        json.dumps(first_segment["mk8s"]["node_groups"][0]["target"])  # type: ignore[index]
+    )
+    second_group["target"] = {
+        "kubernetes_version": "1.34",
+        "os": "ubuntu24.04",
+        "drivers_preset": "",
+    }
+    upgrade_path["segments"].append(second_segment)  # type: ignore[union-attr]
+    upgrade_path["target_k8s_version"] = "1.34"
+    upgrade_path["final_targets"]["kubernetes"] = "1.34"  # type: ignore[index]
+    upgrade_path["mk8s"]["control_plane"]["target_version"] = "1.34"  # type: ignore[index]
+    upgrade_path["mk8s"]["node_groups"][0]["target"] = json.loads(  # type: ignore[index]
+        json.dumps(second_group["target"])
+    )
+    return finalize_soperator_upgrade_campaign(
+        upgrade_path,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+
+
+def test_runtime_validation_accepts_contiguous_two_hop_soperator_campaign() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["upgrade_path"] = _two_hop_soperator_campaign()  # type: ignore[index]
     onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
         payload,
         target_ref="cluster1",
@@ -2600,51 +4570,98 @@ def test_runtime_validation_accepts_soperator_worker_rollout_config() -> None:
     validate_runtime_payload(payload)
 
 
-def test_runtime_validation_rejects_soperator_worker_rollout_conflicting_budget() -> None:
-    payload = _onboarding_payload()
+def test_runtime_validation_rejects_discontinuous_node_group_tuple_between_hops() -> None:
+    payload = _onboarding_campaign_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
-    onboarding["node_template_upgrade"] = {  # type: ignore[index]
-        "rollout": {
-            "strategy": "safe-surge",
-            "worker_wave_groups": 1,
-            "worker_wave_percent": 1,
-        }
-    }
+    upgrade_path = _two_hop_soperator_campaign()
+    second_group = upgrade_path["segments"][1]["mk8s"]["node_groups"][0]  # type: ignore[index]
+    second_group["source"]["os"] = "ubuntu22.04"
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
 
-    with pytest.raises(ValueError, match="must set only one"):
+    with pytest.raises(
+        ValueError,
+        match=r"node group 'nodegroup-123' source tuple must match its previous segment",
+    ):
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_rejects_soperator_fixed_groups_with_parallel_cap() -> None:
-    payload = _onboarding_payload()
-    target = payload["deploy"]["targets"][0]  # type: ignore[index]
-    onboarding = target["soperator_onboarding"]  # type: ignore[index]
-    onboarding["node_template_upgrade"] = {  # type: ignore[index]
-        "rollout": {
-            "strategy": "safe-surge",
-            "worker_wave_groups": 2,
-            "max_parallel_worker_groups": 2,
-        }
-    }
+def test_runtime_validation_rejects_refingerprinted_discontinuous_soperator_chart_hops() -> None:
+    upgrade_path = _two_hop_soperator_campaign()
+    second_segment = upgrade_path["segments"][1]  # type: ignore[index]
+    second_chart = second_segment["soperator_chart"]
+    second_chart["current_version"] = "4.0.1-ps.1"
+    second_chart["upgrade_required"] = True
+    second_segment["soperator_upgrade_required"] = True
+    payload = _runtime_payload_with_refinalized_campaign(upgrade_path)
 
-    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
+    with pytest.raises(
+        ValueError,
+        match=r"soperator_chart.current_version must match the previous segment target",
+    ):
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_rejects_zero_surge_worker_wave_fields() -> None:
+def test_runtime_validation_accepts_complete_empty_soperator_campaign() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["source_k8s_version"] = "1.32"
+    upgrade_path["target_k8s_version"] = "1.32"
+    upgrade_path["final_targets"]["kubernetes"] = "1.32"  # type: ignore[index]
+    upgrade_path["segments"] = []
+    upgrade_path["mk8s"]["control_plane"]["target_version"] = "1.32"  # type: ignore[index]
+    upgrade_path["mk8s"]["node_groups"][0]["target"] = json.loads(  # type: ignore[index]
+        json.dumps(upgrade_path["mk8s"]["node_groups"][0]["source"])  # type: ignore[index]
+    )
+    for record_name in ("soperator_app", "soperator_chart"):
+        record = upgrade_path[record_name]  # type: ignore[index]
+        record["current_version"] = record["target_version"]  # type: ignore[index]
+        record["upgrade_required"] = False  # type: ignore[index]
+    onboarding["upgrade_path"] = finalize_soperator_upgrade_campaign(  # type: ignore[index]
+        upgrade_path,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_accepts_external_scheduling_pause_override() -> None:
+    payload = _onboarding_campaign_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["compute_migration"]["slurm_scheduling_pause"] = False  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    upgrade_path["compute_migration"]["slurm_scheduling_pause"] = False  # type: ignore[index]
+    onboarding["upgrade_path"] = finalize_soperator_upgrade_campaign(  # type: ignore[index]
+        upgrade_path,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_legacy_external_rollout_config() -> None:
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
     onboarding["node_template_upgrade"] = {  # type: ignore[index]
-        "rollout": {
-            "strategy": "zero-surge",
-            "worker_wave_groups": 2,
-            "max_parallel_worker_groups": 2,
-        }
+        "rollout": {"strategy": "zero-surge"},
     }
 
-    with pytest.raises(ValueError, match="zero-surge.*does not use worker wave"):
+    with pytest.raises(
+        ValueError,
+        match=r"node_template_upgrade has unsupported field\(s\): rollout",
+    ):
         validate_runtime_payload(payload)
 
 
@@ -2655,10 +4672,24 @@ def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:
 
     assert len(written) == 1
     report_path = written[0]
-    assert report_path == tmp_path / "generated" / "reports" / "soperator-onboarding-cluster1.json"
-    report = report_path.read_text(encoding="utf-8")
-    assert '"target_ref": "cluster1"' in report
-    assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") in report
+    assert report_path == (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / "nebius-cluster1-mk8scluster-123-external"
+        / "onboarding"
+        / "report.json"
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["target_ref"] == "cluster1"
+    assert report["onboard_description"] == (
+        soperator_onboarding_module.EXT_SOPERATOR_ONBOARD_DESCRIPTION
+    )
+    assert report["accepted_fingerprint"] == soperator_onboarding_fingerprint(
+        payload,
+        target_ref="cluster1",
+    )
 
 
 def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None:
@@ -2689,8 +4720,9 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         tmp_path
         / "generated"
         / "reports"
-        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-        / "cluster1"
+        / "soperator-clusters"
+        / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     payload = load_soperator_discovery_bundle(path)
@@ -2714,10 +4746,7 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
 
 def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> None:
     output_root = tmp_path / "custom-root"
-    jail_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
-    )
+    jail_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2773,8 +4802,9 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
         output_root
         / "generated"
         / "reports"
-        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "soperator-clusters"
         / "cluster1"
+        / "discovery"
         / "manifest.json"
     )
     assert not (output_root / "manifest.json").exists()
@@ -2787,8 +4817,9 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
     assert payload["jail_rootfs"]["current_image"] == jail_image
     assert payload["jail_rootfs"]["current_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
     assert payload["jail_rootfs"]["target_image"] == jail_image
-    assert payload["jail_rootfs"]["refresh_required"] is False
-    assert payload["report"]["jail_rootfs"]["refresh_required"] is False
+    assert payload["jail_rootfs"]["refresh_required"] is True
+    assert "evidence is incomplete" in payload["jail_rootfs"]["reason"]
+    assert payload["report"]["jail_rootfs"]["refresh_required"] is True
     kubernetes = json.loads((path.parent / "kubernetes.json").read_text(encoding="utf-8"))
     assert [item["metadata"]["name"] for item in kubernetes["nodesets"]] == ["worker"]
 
@@ -2797,13 +4828,9 @@ def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_cha
     tmp_path,
 ) -> None:
     current_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.8.0"
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0"
     )
-    target_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
-    )
+    target_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2851,17 +4878,9 @@ def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_cha
     assert "- Target Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
 
 
-def test_source_discovery_report_writer_prefers_completed_populate_jail_job_image(
+def test_source_discovery_round_trip_preserves_sshd_secret_reference(
     tmp_path,
 ) -> None:
-    live_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.8.0"
-    )
-    completed_job_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
-    )
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2873,22 +4892,269 @@ def test_source_discovery_report_writer_prefers_completed_populate_jail_job_imag
     snapshot["soperator_resources"] = [
         {
             "kind": "SlurmCluster",
-            "metadata": {"name": "mk8s", "namespace": "soperator"},
-            "spec": {"populateJail": {"image": live_image}},
+            "metadata": {
+                "name": "legacy-source",
+                "namespace": "soperator",
+                "uid": "source-uid",
+            },
+            "spec": {
+                "secrets": {"sshdKeysName": "customer-host-identity"},
+            },
         }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="target-cluster",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="target-cluster",
+        snapshot=snapshot,
+        report=report,
+    )
+    loaded = load_soperator_discovery_bundle(path)
+    persisted_snapshot = loaded["snapshot"]
+
+    assert persisted_snapshot["soperator_resources"][0]["spec"]["secrets"] == "[redacted]"
+    assert loaded["source_slurmcluster_ref"] == {
+        "status": "resolved",
+        "namespace": "soperator",
+        "name": "legacy-source",
+        "uid": "source-uid",
+        "sshd_host_key_secret_name": "customer-host-identity",
+    }
+    assert (
+        soperator_migration_module._source_sshd_host_key_secret_name(  # noqa: SLF001
+            loaded,
+            target_ref="target-cluster",
+        )
+        == "customer-host-identity"
+    )
+
+
+def _active_passive_jail_snapshot(*, active_slot: str) -> dict[str, object]:
+    old_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0"
+    target_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    active_pvc = f"jail-rootfs-{active_slot}-pvc"
+    active_source = f"jail-rootfs-{active_slot}"
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator", "uid": "slurm-uid"},
+            "spec": {
+                "populateJail": {"image": target_image},
+                "volumeSources": [
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": active_pvc},
+                    },
+                    {
+                        "name": active_source,
+                        "persistentVolumeClaim": {"claimName": active_pvc},
+                    },
+                ],
+                "slurmNodes": {
+                    "controller": {"volumes": {"jail": {"volumeSourceName": active_source}}},
+                    "login": {"volumes": {"jail": {"volumeSourceName": active_source}}},
+                },
+            },
+        },
+        {
+            "kind": "NodeSet",
+            "metadata": {"name": "worker", "namespace": "soperator"},
+            "spec": {
+                "slurmd": {
+                    "volumes": {"jail": {"persistentVolumeClaim": {"claimName": active_pvc}}}
+                }
+            },
+        },
     ]
     snapshot["soperator_namespace_resources"] = [
         {
             "kind": "Job",
             "metadata": {
-                "name": "mk8s-populate-jail",
+                "name": "mk8s-populate-jail-passive-slot-a",
                 "namespace": "soperator",
+                "uid": "populate-slot-a-uid",
+                "creationTimestamp": "2026-07-04T10:00:00Z",
+                "labels": {
+                    "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+                    "slurm.nebius.ai/jail-rootfs-slot": "slot-a",
+                },
+            },
+            "status": {"succeeded": 1, "completionTime": "2026-07-04T10:03:00Z"},
+            "containers": [{"name": "populate-jail", "image": old_image}],
+            "pvc_claim_names": ["jail-rootfs-slot-a-pvc"],
+        },
+        {
+            "kind": "Job",
+            "metadata": {
+                "name": "mk8s-populate-jail-passive-slot-b",
+                "namespace": "soperator",
+                "uid": "populate-slot-b-uid",
                 "creationTimestamp": "2026-07-05T10:00:00Z",
+                "labels": {
+                    "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+                    "slurm.nebius.ai/jail-rootfs-slot": "slot-b",
+                },
             },
             "status": {"succeeded": 1, "completionTime": "2026-07-05T10:03:00Z"},
-            "containers": [{"name": "populate-jail", "image": completed_job_image}],
-        }
+            "containers": [{"name": "populate-jail", "image": target_image}],
+            "pvc_claim_names": ["jail-rootfs-slot-b-pvc"],
+        },
     ]
+    snapshot["pvcs"] = [
+        {
+            "metadata": {
+                "name": f"jail-rootfs-{slot}-pvc",
+                "namespace": "soperator",
+                "uid": f"jail-rootfs-{slot}-pvc-uid",
+            },
+            "status": {"phase": "Bound"},
+        }
+        for slot in ("slot-a", "slot-b")
+    ]
+    snapshot["cluster_identity"] = {
+        "kubernetes_uid": "kubernetes-uid",
+        "soperator_uid": "soperator-uid",
+        "slurmcluster_uid": "slurm-uid",
+        "jail_filesystem_id": "jail-filesystem-id",
+    }
+    return snapshot
+
+
+def test_completed_passive_populate_job_is_not_current_before_consumer_switch() -> None:
+    target_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
+
+    jail_rootfs = soperator_discovery_jail_rootfs_record(
+        snapshot=_active_passive_jail_snapshot(active_slot="slot-a"),
+        report={"actions": []},
+        target_versions={
+            "jail_rootfs": {
+                "target_image": target_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    assert jail_rootfs["current_image"].endswith("cuda12.8.0")
+    assert jail_rootfs["current_job_name"] == "mk8s-populate-jail-passive-slot-a"
+    assert jail_rootfs["current_slot"] == "slot-a"
+    assert jail_rootfs["current_pvc_name"] == "jail-rootfs-slot-a-pvc"
+    assert jail_rootfs["current_evidence_status"] == "active-slot-verified"
+    assert jail_rootfs["refresh_required"] is True
+
+
+def test_active_jail_binding_follows_exact_resume_identity_across_dual_cr_handoff() -> None:
+    def slurmcluster(*, name: str, uid: str, pvc_name: str) -> dict[str, object]:
+        return {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": name, "namespace": "soperator", "uid": uid},
+            "spec": {
+                "volumeSources": [
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": pvc_name},
+                    }
+                ],
+                "slurmNodes": {"login": {"volumes": {"jail": {"volumeSourceName": "jail"}}}},
+            },
+        }
+
+    source = slurmcluster(name="source-cluster", uid="source-uid", pvc_name="source-jail-pvc")
+    target = slurmcluster(name="target-cluster", uid="target-uid", pvc_name="target-jail-pvc")
+    source_ref = {"namespace": "soperator", "name": "source-cluster", "uid": "source-uid"}
+    target_ref = {"namespace": "soperator", "name": "target-cluster", "uid": "target-uid"}
+    snapshot = {
+        "soperator_resources": [source, target],
+        "identity_soperator_resources": [source],
+        "resume_slurmcluster_identity": {
+            "identity_role": "source",
+            "source": source_ref,
+            "target": target_ref,
+        },
+        "pvcs": [
+            {
+                "metadata": {
+                    "name": "source-jail-pvc",
+                    "namespace": "soperator",
+                    "uid": "source-jail-pvc-uid",
+                },
+                "status": {"phase": "Bound"},
+            },
+            {
+                "metadata": {
+                    "name": "target-jail-pvc",
+                    "namespace": "soperator",
+                    "uid": "target-jail-pvc-uid",
+                },
+                "status": {"phase": "Bound"},
+            },
+        ],
+        "cluster_identity": {"jail_filesystem_id": "source-jail-filesystem-id"},
+    }
+
+    source_binding = soperator_discovery_module._active_jail_pvc_binding(snapshot)  # noqa: SLF001
+    assert source_binding["status"] == "bound"
+    assert source_binding["slurmcluster_name"] == "source-cluster"
+    assert source_binding["pvc_name"] == "source-jail-pvc"
+    assert source_binding["pvc_uid"] == "source-jail-pvc-uid"
+
+    snapshot["identity_soperator_resources"] = [target]
+    snapshot["resume_slurmcluster_identity"] = {
+        "identity_role": "target",
+        "source": source_ref,
+        "target": target_ref,
+    }
+    snapshot["cluster_identity"] = {"jail_filesystem_id": "target-jail-filesystem-id"}
+    target_binding = soperator_discovery_module._active_jail_pvc_binding(snapshot)  # noqa: SLF001
+    assert target_binding["status"] == "bound"
+    assert target_binding["slurmcluster_name"] == "target-cluster"
+    assert target_binding["pvc_name"] == "target-jail-pvc"
+    assert target_binding["pvc_uid"] == "target-jail-pvc-uid"
+
+
+def test_failed_active_slot_populate_job_is_not_current_evidence() -> None:
+    target_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    snapshot = _active_passive_jail_snapshot(active_slot="slot-b")
+    active_job = snapshot["soperator_namespace_resources"][1]  # type: ignore[index]
+    active_job["status"]["failed"] = 1  # type: ignore[index]
+
+    jail_rootfs = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report={"actions": []},
+        target_versions={
+            "jail_rootfs": {
+                "target_image": target_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    assert jail_rootfs["current_source"] == "slurmcluster.spec.populateJail.image"
+    assert jail_rootfs["current_evidence_status"] == "unverified"
+    assert jail_rootfs["refresh_required"] is True
+
+
+def test_source_discovery_report_writer_accepts_completed_job_after_active_consumer_switch(
+    tmp_path,
+) -> None:
+    completed_job_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _active_passive_jail_snapshot(active_slot="slot-b")
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
@@ -2913,10 +5179,47 @@ def test_source_discovery_report_writer_prefers_completed_populate_jail_job_imag
     jail_rootfs = payload["jail_rootfs"]
     assert jail_rootfs["current_image"] == completed_job_image
     assert jail_rootfs["current_source"] == "completed-populate-jail-job"
-    assert jail_rootfs["current_job_name"] == "mk8s-populate-jail"
-    assert jail_rootfs["live_desired_image"] == live_image
+    assert jail_rootfs["current_job_name"] == "mk8s-populate-jail-passive-slot-b"
+    assert jail_rootfs["current_job_uid"] == "populate-slot-b-uid"
+    assert jail_rootfs["current_slot"] == "slot-b"
+    assert jail_rootfs["current_pvc_name"] == "jail-rootfs-slot-b-pvc"
+    assert jail_rootfs["current_pvc_uid"] == "jail-rootfs-slot-b-pvc-uid"
+    assert jail_rootfs["current_jail_filesystem_id"] == "jail-filesystem-id"
+    assert jail_rootfs["current_evidence_status"] == "active-slot-verified"
+    assert jail_rootfs["live_desired_image"] == completed_job_image
     assert jail_rootfs["target_image"] == completed_job_image
     assert jail_rootfs["refresh_required"] is False
+
+
+def test_jail_rootfs_matching_desired_image_without_completed_job_requires_refresh() -> None:
+    image = "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
+    snapshot = {
+        "soperator_resources": [
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "mk8s", "namespace": "soperator"},
+                "spec": {"populateJail": {"image": image}},
+            }
+        ],
+        "soperator_namespace_resources": [],
+    }
+
+    jail_rootfs = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report={"actions": []},
+        target_versions={
+            "jail_rootfs": {
+                "target_image": image,
+                "target_source": "pinned-chart-defaults",
+                "target_cuda_version": "12.9.0",
+            }
+        },
+    )
+
+    assert jail_rootfs["current_source"] == "slurmcluster.spec.populateJail.image"
+    assert jail_rootfs["current_image"] == image
+    assert jail_rootfs["refresh_required"] is True
+    assert "does not prove a completed active-slot population" in jail_rootfs["reason"]
 
 
 def test_source_discovery_report_writer_filters_resource_labels_by_namespace(tmp_path) -> None:

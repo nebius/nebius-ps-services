@@ -1,6 +1,6 @@
 ---
 name: sdlc-validate-codes
-description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, and configuration validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
+description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
 ---
 
 # Validate Codes
@@ -37,6 +37,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - Changed files.
 - Project tooling.
 - Existing tests and design context needed for implementation review.
+- Active execution coordinator and exact integration HEAD.
 
 ## Required Reads
 
@@ -56,9 +57,16 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 ## Process
 
 - Use `assets/templates/validate.md.template` for evidence.
+- Run from the registered integration worktree after verifying its Git common
+  directory, branch, exact recorded HEAD, and cleanliness. Bind all commands,
+  review scope, and evidence to that SHA; do not validate the stale project
+  checkout.
 - Detect the project stack and reuse configured project commands.
 - Run the smallest reliable validation set first.
 - Include syntax, linting, type checking when configured, Python import checks when relevant, config validation, and feasible build checks.
+- Compare changed files, configuration, generated artifacts, and entry points
+  against the locked plan and its End-To-End Slice. Record whether the
+  implementation stayed inside the planned layers and boundary contracts.
 - Record exact commands and outcomes.
 - After mechanical checks pass, use `code-review` in review-only mode on the
   current feature diff, changed files, nearby tests, locked plan, and design
@@ -79,6 +87,8 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 ## Failure Handling
 
 - Syntax, lint, type, import, build, or config failure maps to `VALIDATION_DEFECT`.
+- Changed files outside the locked slice map to `IMPLEMENTATION_DEFECT` unless
+  the plan was incomplete, in which case route to `sdlc-create-plan`.
 - Missing tooling maps to `ENVIRONMENT_DEFECT` unless intentionally absent.
 - Missing or unavailable `code-review` maps to `ENVIRONMENT_DEFECT` unless
   local SDLC policy explicitly waives the review gate.
@@ -102,9 +112,11 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 - Validation evidence exists.
 - Required checks pass or blocker is classified.
+- Slice boundary validation passes or the responsible blocker is classified.
 - `code-review` decision is recorded.
 - State moves to `validated` only when mechanical validation passes and
   `code-review` does not request changes or owner review.
+- Evidence records the integration SHA and coordinator identity used.
 
 ## SDLC Invariants
 
@@ -121,20 +133,12 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

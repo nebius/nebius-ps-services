@@ -147,10 +147,16 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
-      {{- with (required ".Values.nodesets[*].slurmd.volumes.jail is required" .jail) }}
       jail:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- if eq (include "slurm-cluster-storage.jailRootfs.legacyActive" $) "true" }}
+        persistentVolumeClaim:
+          claimName: {{ include "slurm-cluster-storage.jailRootfs.legacyPvc" $ | quote }}
+          readOnly: false
+        {{- else }}
+        persistentVolumeClaim:
+          claimName: {{ include "slurm-cluster-storage.jailRootfs.active.pvc" $ }}
+          readOnly: false
+        {{- end }}
 
       {{- $jailSubMounts := (.jailSubMounts | default list) }}
       {{- $existingMounts := dict }}
@@ -163,12 +169,13 @@ spec:
       {{- if $.Values.externalNfs.enabled }}
       {{- $_ := set $existingMounts (trimSuffix "/" (required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." $.Values.externalNfs.mountPath)) true }}
       {{- end }}
-      {{- if or $jailSubMounts $.Values.jailPersistentMounts }}
+      {{- $attachPersistentJailMounts := and (eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" $) "true") (ne (include "slurm-cluster-storage.jailRootfs.legacyActive" $) "true") }}
+      {{- if or $jailSubMounts (and $attachPersistentJailMounts $.Values.jailPersistentMounts) $.Values.externalNfs.enabled }}
       jailSubMounts:
         {{- if $jailSubMounts }}
         {{- toYaml $jailSubMounts | nindent 8 }}
         {{- end }}
-        {{- if eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" $) "true" }}
+        {{- if $attachPersistentJailMounts }}
         {{- range $mount := $.Values.jailPersistentMounts }}
         {{- $mountPath := trimSuffix "/" (required "jailPersistentMounts[].mountPath is required." $mount.mountPath) }}
         {{- if not (hasKey $existingMounts $mountPath) }}
@@ -182,9 +189,6 @@ spec:
         {{- end }}
       {{- end }}
       {{- if $.Values.externalNfs.enabled }}
-      {{- if and (not $jailSubMounts) (not $.Values.jailPersistentMounts) }}
-      jailSubMounts:
-      {{- end }}
         - name: external-home
           mountPath: {{ required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." $.Values.externalNfs.mountPath | quote }}
           volumeSourceName: external-home
@@ -205,6 +209,10 @@ spec:
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"nvidia-driver-root\". The chart owns this GPU driver jail mount; remove the custom mount." $ns.name) }}
       {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/run/nvidia/driver") }}
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/run/nvidia/driver\". The chart owns this GPU driver jail mount; use another mountPath." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "name") "gpu-health-sysfs") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"gpu-health-sysfs\". The chart owns this GPU health sysfs jail mount; remove the custom mount." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/mnt/jail/sys-host") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/mnt/jail/sys-host\". The chart owns this GPU health sysfs jail mount; use another mountPath." $ns.name) }}
       {{- end }}
       {{- end }}
       customVolumeMounts:
@@ -213,6 +221,7 @@ spec:
         {{- include "nodesets.slurmConfigJailMount" (list $) | nindent 8 }}
         {{- if $gpuDriverJailEnabled }}
         {{- include "nodesets.gpuDriverJailMount" . | nindent 8 }}
+        {{- include "nodesets.gpuHealthSysfsJailMount" . | nindent 8 }}
         {{- end }}
         {{- range $customVolumeMounts }}
         {{- toYaml (list .) | nindent 8 }}

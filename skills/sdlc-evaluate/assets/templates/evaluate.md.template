@@ -1,8 +1,10 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Evaluation Evidence
 
 ## Route
 
-<sdlc-gui-test | sdlc-tui-test | api | service | manual-review>
+<sdlc-gui-test | sdlc-tui-test | api | service | observability | manual-review>
 
 ## Control
 
@@ -18,16 +20,76 @@
 | Allowed Actions Used | <summary> |
 | Cleanup Completed | <yes, no, not-needed> |
 
+## Observability Evidence
+
+| Field | Value |
+| --- | --- |
+| Decision | <not-applicable, skipped, used, partial, unavailable, rejected> |
+| Rejection Reason | <missing_authority, unresolved_selector, invalid_window, irrelevant_evidence, invalid_budget, none> |
+| Admitted Criterion ID | <one REQ/AC ID or none> |
+| Evidence Source | <passive-production-read, non-production-live, frozen-snapshot, mocked-tool-trace, none> |
+| Authority And Scope Provenance | <requirements/user reference and sanitized selectors or none> |
+| Signal Family And Candidate | <one metric, log fingerprint, trace selector, platform-state signal, or change feed, or none> |
+| Signal Provenance | <sanitized user/requirements/instrumentation/dashboard/rule/catalog/runbook/feed reference or none> |
+| Measurement | <aggregation, dimensions, and unit or none> |
+| Candidate Version Or Workload | <attributed identity or none> |
+| Candidate Selector Attribution | <how samples are tied to the candidate or none> |
+| Baseline Or Control Identity | <attributed identity or none> |
+| Baseline Or Control Selector Attribution | <how samples are tied to the baseline/control or none> |
+| Candidate Window | <absolute UTC start/end or none> |
+| Baseline Or Control Window | <absolute UTC start/end or none> |
+| Required Coverage | <predefined coverage rule or none> |
+| Pass Condition | <predefined comparator and threshold or none> |
+| Fail Condition | <predefined comparator and threshold or none> |
+| Inconclusive Conditions | <predefined attribution, comparability, coverage, and data-gap conditions or none> |
+| Grade-Change Relation | <how the admitted result can change this criterion grade or none> |
+| Observed Comparison | <candidate value, baseline/control value, comparison, and achieved coverage or none> |
+| Criterion Interpretation | <apply only the predefined conditions; provider does not grade> |
+| Connectivity State | <unknown, available, unavailable, not-checked> |
+| Connectivity Checks | <0 or 1> |
+| Provider Stages Used | <fast, deep, fast-and-deep, none> |
+| Fast Data Queries | <count> |
+| Deep Data Queries | <count> |
+| Total Data Queries | <count> |
+| Remaining Query Budget | <0-10> |
+| Remaining Fast Query Budget | <0-6> |
+| Remaining Deep Query Budget | <0-4> |
+| Series And Rows Returned | <bounded counts> |
+| Coverage And Data Gaps | <summary or none> |
+
 ## Observation
 
 <What was observed.>
+
+## End-To-End Slice Observation
+
+| Field | Value |
+| --- | --- |
+| Planned Slice | <summary or N/A> |
+| Flow Observed | <yes, no, N/A> |
+| Layer Boundaries Exercised | <summary or N/A> |
+| Cross-Layer Result | <pass, fail, blocked, N/A> |
 
 ## Acceptance Result
 
 | Criterion | Result | Evidence |
 | --- | --- | --- |
-| REQ-<id> AC-<id> | <pass, fail> | <path-or-summary> |
+| REQ-<id> AC-<id> | <pass, fail, inconclusive> | <path-or-summary> |
 
 ## Failure Classification
 
-<classification or none>
+| Field | Value |
+| --- | --- |
+| Failure Event | <failure-event-v1 ID or none> |
+| Stable Blocker Key | <component \| operation \| error class \| source boundary, or none> |
+| Expected Behavior | <criterion expectation or none> |
+| Observed Behavior | <bounded deviation or none> |
+| Reproduction Oracle | <exact command or evidence procedure or none> |
+| Integration Commit | <exact evaluated commit or none> |
+| Requirements Fingerprint | <sha256 digest or none> |
+| Design Fingerprint | <sha256 digest or none> |
+| Plan Fingerprint | <sha256 digest or none> |
+| Cause Status | <proven, high_confidence, ambiguous, unknown, or none> |
+| Proven Owner | <classification or none> |
+| Disposition | <proven_owner, diagnosis_required, or none> |
+| Classifier Record | <failure-classification-v1 ID or none> |

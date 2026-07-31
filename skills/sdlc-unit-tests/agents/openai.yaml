@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Unit Tests"
   short_description: "Run SDLC behavior tests"
-  default_prompt: "Use $sdlc-unit-tests to answer whether Agentic SDLC code behaves correctly against the feature tests and acceptance criteria."
+  default_prompt: "Use $sdlc-unit-tests to answer whether Agentic SDLC code behaves correctly against the feature tests, acceptance criteria, and any planned end-to-end slice."
 policy:
   allow_implicit_invocation: false

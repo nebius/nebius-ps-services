@@ -1,6 +1,6 @@
 ---
 name: code-info
-description: "Read-only project information gathering: summarize local project folders or GitHub repositories in a copy/paste-friendly code metrics report without changing code or files. Use when the user asks for basic project code information, repository statistics, LOC by language or component, repo size, repo link, test file counts, CLI command counts, module/package counts, build artifact sizes, available test coverage, or a GitHub repo that may not be cloned locally."
+description: "Read-only project information gathering: summarize a local project folder or GitHub repository in a copy/paste-friendly report without changing project files. Use for a concise project description, documented feature count, hierarchical CLI command/subcommand counts through three levels, total or per-language LOC, package and dependency counts, famous-project size comparisons, repo size/link, tests, artifacts, coverage, or a GitHub repo that is not cloned locally."
 ---
 
 # Code Info
@@ -40,8 +40,8 @@ and easy to make inconsistent by hand.
    Add `--github-ref <branch-or-tag-or-sha>` when the user asks for a specific
    branch, tag, or commit.
 
-   Use `--top <n>` when the user wants more or fewer rows in component,
-   language, package, or artifact tables.
+   Use `--top <n>` when the user wants more or fewer detail rows. Summary
+   totals are never truncated.
 3. Return the script's Markdown output as the primary answer so the user can
    copy and paste it.
 4. Mention only material limitations, such as missing coverage artifacts or
@@ -53,13 +53,23 @@ and easy to make inconsistent by hand.
 
 The script reports:
 
-- LOC per language.
+- A concise description from root package metadata or the primary README.
+- Best-effort documented feature names and count from the primary README's
+  `Features`, `Capabilities`, or `What It Does` section.
+- Comparable code LOC, test LOC, documentation/configuration LOC, overall
+  analyzed LOC, and per-language totals.
 - Repo size for tracked files in scope, plus `.git` size when available.
 - Repo link from `origin` when available.
 - LOC per top-level package or component.
 - Number of test files.
-- Best-effort number of CLI commands and subcommands.
-- Number of package/module markers and source module files.
+- Best-effort CLI command paths and counts at depths one, two, and three;
+  package-manager scripts are reported separately.
+- Project/workspace packages, package/module markers, and source module files.
+- Unique direct runtime, development, optional, statically selected/resolved,
+  and derived transitive dependency counts from supported Python, Node.js, Go,
+  and Rust manifests, lockfiles, or Go module requirements.
+- Approximate comparison with one or two pinned SQLite and Redis source trees
+  measured using the same code-LOC method.
 - Binary or build artifact sizes when detected.
 - Test coverage from common coverage files when available.
 
@@ -90,6 +100,10 @@ Authentication behavior:
   `git rev-parse`, `git config`, `git ls-files`, and `git status --porcelain`.
   The script sets `GIT_OPTIONAL_LOCKS=0` for Git commands so status inspection
   does not refresh or lock the Git index as a side effect.
+- Parse manifests and lockfiles as data only. Never import project modules,
+  execute manifests, or invoke a package manager to fill missing metrics.
+- Ignore symlinked files and directories so analysis cannot escape the selected
+  project folder.
 - For remote GitHub repositories, the script downloads a tar archive into a
   disposable temporary directory outside the project, analyzes it, and removes
   the temporary directory when the report is complete.
@@ -107,20 +121,16 @@ Authentication behavior:
 - Keep caveats short and placed after the report.
 - Do not invent unavailable metrics. Report `Not detected` or `Unavailable`
   when the evidence is missing.
+- Treat feature, command, and dependency counts as static best-effort evidence,
+  not proof of runtime behavior or dependency use.
+- Treat famous-project comparisons as approximate size context only, never as
+  measures of complexity, quality, effort, productivity, or value.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.

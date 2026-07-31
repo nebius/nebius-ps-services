@@ -121,11 +121,22 @@ tests:
           value:
             name: nvidia-driver-root
             mountPath: /run/nvidia/driver
-            readOnly: false
+            readOnly: true
             volumeSource:
               hostPath:
                 path: /
                 type: ""
+        documentIndex: 1
+      - equal:
+          path: spec.slurmd.volumes.customVolumeMounts[4]
+          value:
+            name: gpu-health-sysfs
+            mountPath: /mnt/jail/sys-host
+            readOnly: true
+            volumeSource:
+              hostPath:
+                path: /sys
+                type: Directory
         documentIndex: 1
       - equal:
           path: spec.customInitContainers[0].name
@@ -153,12 +164,57 @@ tests:
           value: cr.eu-north1.nebius.cloud/soperator/worker_slurmd:4.0.2-slurm25.11.3
         documentIndex: 1
       - equal:
+          path: spec.customInitContainers[1].resources
+          value:
+            limits:
+              nvidia.com/gpu: 1
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[1].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - SYS_CHROOT
+        documentIndex: 1
+      - equal:
           path: spec.customInitContainers[1].volumeMounts
           value:
             - name: jail
               mountPath: /mnt/jail
+              readOnly: true
             - name: nvidia-driver-root
               mountPath: /run/nvidia/driver
+              readOnly: true
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'marker="\$\{jail\}/etc/nebius-cxcli/gpu-driver-jail.env"'
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'validated cxcli NVIDIA driver evidence without modifying the shared jail'
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'jail_loader="\$\{jail\}/lib64/ld-linux-x86-64.so.2"'
+        documentIndex: 1
+      - matchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: '--library-path "\$\{jailed_library_path\}" "\$\{jail\}/usr/bin/nvidia-smi" -L'
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: 'chroot "\$\{jail\}" /usr/bin/nvidia-smi -L'
+        documentIndex: 1
+      - notMatchRegex:
+          path: spec.customInitContainers[1].args[0]
+          pattern: '(cp|ln|mkdir|mv|rm) '
         documentIndex: 1
 
   - it: renders generated mixed shard NodeSet refs in SlurmCluster partitions

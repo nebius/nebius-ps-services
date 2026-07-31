@@ -797,11 +797,11 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
     )
     monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
 
-    phase_prompts: list[tuple[str, bool]] = []
+    phase_prompts: list[tuple[str, bool | None]] = []
 
     def _capture_continue_phase(
-        label: str, *, default: bool = True, allow_back: bool = False
-    ) -> bool:
+        label: str, *, default: bool | None = True, allow_back: bool = False
+    ) -> bool | None:
         _ = allow_back
         phase_prompts.append((label, default))
         return default
@@ -933,7 +933,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
     assert completed is True
     assert phase_prompts == [
         ("Configure 'mk8s' component fields now?", True),
-        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", False),
+        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", None),
     ]
     assert "infra.components[0].inputs.node_groups.gpu.resource" in prompted_paths
     assert "infra.components[0].inputs.node_groups.gpu.gpu_stack_source" in prompted_paths
@@ -5535,10 +5535,10 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
     )
     monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
 
-    phase_prompts: list[tuple[str, bool]] = []
+    phase_prompts: list[tuple[str, bool | None]] = []
 
     def _capture_continue_phase(
-        label: str, *, default: bool = True, allow_back: bool = False
+        label: str, *, default: bool | None = True, allow_back: bool = False
     ) -> bool:
         _ = allow_back
         phase_prompts.append((label, default))
@@ -5595,8 +5595,8 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
     assert completed is True
     assert phase_prompts == [
         ("Configure 'mk8s' component fields now?", True),
-        ("Configure 'nvidia-network-operator on mk8s' component fields now?", False),
-        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", False),
+        ("Configure 'nvidia-network-operator on mk8s' component fields now?", None),
+        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", None),
     ]
     payload = yaml.safe_load(updated_yaml)
     assert [item["id"] for item in payload["apps"]["charts"]] == [
@@ -5684,10 +5684,12 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
     )
     monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
 
-    phase_prompts: list[tuple[str, bool]] = []
+    phase_prompts: list[tuple[str, bool | None]] = []
     phase_answers = iter((True, False, True))
 
-    def _capture_continue_phase(label: str, *, default: bool = True, allow_back: bool = False):
+    def _capture_continue_phase(
+        label: str, *, default: bool | None = True, allow_back: bool = False
+    ):
         _ = allow_back
         phase_prompts.append((label, default))
         return next(phase_answers)
@@ -5743,8 +5745,8 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
     assert completed is True
     assert phase_prompts == [
         ("Configure 'mk8s' component fields now?", True),
-        ("Configure 'nvidia-network-operator on mk8s' component fields now?", False),
-        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", False),
+        ("Configure 'nvidia-network-operator on mk8s' component fields now?", None),
+        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", None),
     ]
     payload = yaml.safe_load(updated_yaml)
     assert [item["id"] for item in payload["apps"]["charts"]] == [

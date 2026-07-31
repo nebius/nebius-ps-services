@@ -8,6 +8,7 @@ import pytest
 from nebius_cxcli.capacity_dashboard import (
     CapacityAdviceAvailability,
     CapacityResourceAdvice,
+    capacity_availability,
     capacity_summary_text,
     list_capacity_resource_advice,
 )
@@ -44,6 +45,19 @@ def test_capacity_summary_text_shows_vm_slots_and_gpu_total() -> None:
         capacity_summary_text(item)
         == "regular-vm 2 VMs (2 x 8-GPU = 16 GPUs), reserved 1 VM (1 x 8-GPU = 8 GPUs)"
     )
+
+
+def test_capacity_availability_preserves_lane_data_state() -> None:
+    availability = capacity_availability(
+        SimpleNamespace(
+            available=2,
+            limit=4,
+            availability_level=SimpleNamespace(name="AVAILABILITY_LEVEL_MEDIUM"),
+            data_state=SimpleNamespace(name="DATA_STATE_STALE"),
+        )
+    )
+
+    assert availability.data_state == "DATA_STATE_STALE"
 
 
 def test_list_capacity_resource_advice_rejects_repeated_page_token(

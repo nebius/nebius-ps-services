@@ -64,12 +64,18 @@ after feature evaluation or UAT.
 
 ## Process
 
+- Resolve and verify the registered integration worktree before editing project
+  documentation. Keep the original project checkout unchanged until final
+  promotion, and record the resulting integration HEAD in document evidence.
 - Reload active run state and evidence before editing any documentation.
 - Determine whether the scope is `feature` or `run`: feature scope runs after
   evaluation; run scope runs after UAT or before PR creation.
 - Compare implemented behavior and evidence against existing docs. Update only
   documentation that describes the active feature, run-level product behavior,
   commands, configuration, examples, or usage that actually changed.
+- When docs describe a multi-layer feature flow, base the wording on evaluated
+  end-to-end slice evidence instead of implementation intent alone. If the
+  planned slice was not evaluated, route the gap back to `sdlc-evaluate`.
 - Record documentation evidence with files changed, source evidence, steering
   entries consumed, and any docs intentionally left unchanged.
 - Mark consumed `docs-update` steering entries resolved only after the relevant
@@ -93,6 +99,8 @@ after feature evaluation or UAT.
 
 - Missing implementation, validation, test, or evaluation evidence routes back
   to the responsible phase.
+- Missing evaluated slice evidence for docs that describe multi-layer behavior
+  routes back to `sdlc-evaluate`.
 - Requirements drift routes to `sdlc-create-requirements`.
 - Design drift routes to `sdlc-create-design`.
 - Ambiguous user-facing wording or unresolved product decision maps to
@@ -114,6 +122,8 @@ after feature evaluation or UAT.
 ## Completion Criteria
 
 - In-scope user-facing docs match implemented and evaluated behavior.
+- Multi-layer behavior docs are backed by evaluated end-to-end slice evidence
+  when applicable.
 - Changelog is updated when a user-facing behavior, command, workflow, or
   documentation contract changed and a changelog exists.
 - Documentation evidence is written under the active private run directory.
@@ -138,20 +148,12 @@ after feature evaluation or UAT.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

@@ -59,14 +59,7 @@ def _canonical_gpu_driver_jail_mount(mount: Mapping[str, Any]) -> bool:
     host_path = _mapping(volume_source.get("hostPath"))
     if str(host_path.get("path", "") or "").strip() != SOPERATOR_GPU_DRIVER_JAIL_HOST_PATH:
         return False
-    read_only = mount.get("readOnly", False)
-    return _bool_false(read_only) or read_only in (
-        None,
-        False,
-        "false",
-        "False",
-        "0",
-    )
+    return mount.get("readOnly") is True
 
 
 def normalize_soperator_gpu_driver_jail_mounts(
@@ -109,7 +102,8 @@ def normalize_soperator_gpu_driver_jail_mounts(
                 f"{context} has a conflicting customVolumeMount for the Soperator GPU "
                 f"driver jail. The chart owns {SOPERATOR_GPU_DRIVER_JAIL_MOUNT_NAME} at "
                 f"{SOPERATOR_GPU_DRIVER_JAIL_MOUNT_PATH} from hostPath "
-                f"{SOPERATOR_GPU_DRIVER_JAIL_HOST_PATH}; remove or rename the custom mount."
+                f"{SOPERATOR_GPU_DRIVER_JAIL_HOST_PATH} read-only; remove or rename the "
+                "custom mount."
             )
         changed = True
 

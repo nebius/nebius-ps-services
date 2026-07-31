@@ -1,6 +1,6 @@
 ---
 name: sdlc-gather-context
-description: "Use only as part of the Agentic SDLC workflow; use when an Agentic SDLC feature needs technical, product, vendor, internal, codebase, or test context before design or implementation. Produces a compact feature-specific context pack."
+description: "Use only as part of the Agentic SDLC workflow; use when an Agentic SDLC feature needs technical, product, vendor, internal, codebase, layer, or test context before design or implementation. Produces a compact feature-specific context pack."
 ---
 
 # Gather Context
@@ -32,7 +32,8 @@ Gather only the context needed for one feature and produce a compact context pac
 
 - `docs/requirements.md`.
 - `docs/design.md` if present.
-- Relevant source files, tests, README, and architecture docs.
+- Relevant source files, tests, README, architecture docs, and layer boundary
+  contracts when the feature spans serial application layers.
 - Official vendor docs first.
 - Internal Confluence, Slack, Jira, GitHub, or MCP resources when available.
 
@@ -47,6 +48,10 @@ Gather only the context needed for one feature and produce a compact context pac
 - Identify technologies and vendors used by the feature.
 - Gather official vendor facts first, internal docs second, code and tests third.
 - Summarize only facts that affect design or implementation.
+- For serial multi-layer features, gather the facts needed to design one
+  vertical slice: existing layer owners, API or command contracts, data or
+  persistence contracts, boundary contracts, fixtures, integration seams, and
+  observed gaps between layers.
 - Record exact versions, APIs, constraints, unresolved risks, and design implications.
 
 ## Idempotency
@@ -71,6 +76,8 @@ Gather only the context needed for one feature and produce a compact context pac
 
 - Context pack exists.
 - Important facts have source traceability.
+- Layer and boundary facts are recorded when the feature likely spans a
+  vertical slice.
 - Design implications and open blockers are explicit.
 
 ## SDLC Invariants
@@ -88,20 +95,12 @@ Gather only the context needed for one feature and produce a compact context pac
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

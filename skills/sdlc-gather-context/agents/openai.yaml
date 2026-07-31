@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Gather Context"
   short_description: "Build feature context packs"
-  default_prompt: "Use $sdlc-gather-context to gather only the Agentic SDLC context needed for one feature and produce a compact context pack for design and planning."
+  default_prompt: "Use $sdlc-gather-context to gather only the Agentic SDLC context needed for one feature, including layer and boundary facts when a vertical slice may apply, and produce a compact context pack for design and planning."
 policy:
   allow_implicit_invocation: false

@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. Do not use for direct commit-and-push only."
+description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. In an active Agentic SDLC run, switch to publication-only mode and publish only the clean exact promoted SHA after passing UAT. Do not use for direct commit-and-push only."
 ---
 
 # Create PR
@@ -39,9 +39,8 @@ branch, and report the order the user should merge the PRs manually.
 - Honoring an explicit user-provided PR title or body instead of inventing one.
 - Returning PR numbers, URLs, readiness state, and merge order so the user can
   review or merge manually.
-- In an Agentic SDLC run, creating or reusing the PR only after `sdlc-uat-tests`
-  evidence says the product is ready for PR creation, unless the user
-  explicitly requests an early draft PR.
+- In an Agentic SDLC run, publishing or reusing the PR only after
+  `sdlc-uat-tests` passes for the clean exact SHA promoted by `sdlc-commit`.
 
 ## Requirements
 
@@ -50,6 +49,46 @@ branch, and report the order the user should merge the PRs manually.
 - A clean worktree before switching between existing branches or updating
   remote PR branches. If local work is dirty on the active branch, move or
   commit it before updating other branches.
+
+## Active Agentic SDLC Publication Mode
+
+When the current project has a matching active Agentic SDLC run, this mode
+overrides the generic branch-preparation, repair, and base-merge steps below.
+`create-pr` is then a publication handoff, not another implementation gate.
+
+Before any push or PR creation/reuse:
+
+- Reload the active run, current checkpoint, feature evidence, execution
+  coordinator, commit evidence, and UAT evidence.
+- Require the run to route to `create-pr`, the outer project lease to be
+  released, UAT to have passed, and the current named non-default branch to be
+  clean.
+- Resolve one canonical `promoted_head` from execution and commit evidence.
+  Require current `HEAD`, the recorded promoted HEAD, and any existing remote
+  PR head to equal that exact SHA.
+- Stop on missing, stale, or conflicting evidence. Do not infer a replacement
+  SHA from branch history. Identity disagreement maps to `PR_HEAD_DRIFT`.
+
+In this mode, do not stage, format, edit, commit, amend, merge the base, resolve
+conflicts, switch or create branches, repair checks, or otherwise change the
+promoted commit. Fetching refs and reading PR/check state are allowed. If the
+base moved, the PR conflicts, a branch-owned check fails, or any code/docs/test
+change is needed, record the blocker and route it through
+`sdlc-classify-failure` and `sdlc-start`. The responsible validation,
+evaluation, documentation, alignment, commit, and UAT gates must produce and
+promote a new exact SHA before publication is retried.
+
+Immediately before each authorized push or GitHub PR creation call, write a
+short-lived `permissions/pr-authorization.json` containing at least
+`allowed: true`, `phase: "create-pr"`, the exact branch,
+`expected_head: <promoted_head>`, `uat_status: "passed"`, and `expires_at`.
+Publish with one direct `git push origin HEAD:<branch>` action, and create a PR
+with one direct `gh pr create --head <branch> ...` action or a PR-creation MCP
+call whose `head` is that branch. Do not use a shell wrapper, prepend or append
+another command, or omit the explicit PR head. Reuse an existing remote branch
+or PR only when its head is the exact promoted SHA; any other remote head is a
+blocker, not permission to update or overwrite it. Remove or expire the
+authorization when publication completes or stops.
 
 ## Local Check Order
 
@@ -65,8 +104,8 @@ For any dirty local work this skill will commit:
 - Run the focused local tests after formatting, whitespace, and lint fixes.
   Wait for each test command to finish before staging or committing. If a test
   is still running, pending, or waiting on external state, do not commit yet
-  unless the user explicitly asked for an early draft PR and the blocker is
-  recorded.
+  unless generic non-SDLC mode applies, the user explicitly asked for an early
+  draft PR, and the blocker is recorded.
 - If validation fails and the failure is plausibly caused by branch work,
   repair it, rerun the failed check, and keep the loop bounded to safe,
   branch-owned fixes.
@@ -136,6 +175,9 @@ without rewriting branch history.
    - whether the user named target branches or expects current-branch fallback
    - whether an Agentic SDLC UAT report exists for the current run and whether
      it passed, when this skill is invoked from the SDLC workflow
+   - whether a matching active Agentic SDLC run selects the restricted
+     publication mode above; if so, follow that mode and skip generic
+     branch-preparation, base-merge, repair, and commit steps
 2. Resolve and commit the current feature-branch path before any branch
    creation or switching.
    - If `HEAD` is detached, stop and explain the problem.
@@ -226,10 +268,9 @@ without rewriting branch history.
 9. Publish each branch.
    In an Agentic SDLC run, write
    `permissions/pr-authorization.json` in the active run directory immediately
-   before pushing or opening/reusing the PR. Include `allowed: true`,
-   `phase: "create-pr"`, the branch, UAT status, and a short `expires_at`
-   timestamp. If UAT failed or is missing, create this authorization only when
-   the user explicitly requested an early draft PR and record that scope.
+   before pushing or opening/reusing the PR. Follow the stricter active-run
+   publication contract above; missing or failed UAT cannot authorize an
+   Agentic SDLC PR.
    If a branch has no upstream yet, push it with upstream tracking. If conflict
    resolution or base merge work created new commits, push those commits to the
    same branch with an explicit `HEAD:<branch>` refspec.
@@ -261,8 +302,8 @@ without rewriting branch history.
    observed check state.
    In an Agentic SDLC run, include requirements covered, feature list,
    validation, tests, evaluation, and UAT evidence summary in the PR body when
-   that local evidence exists. If UAT failed or is missing, use a draft PR only
-   when the user explicitly requested early PR creation.
+   that local evidence exists. If UAT failed or is missing, stop and route
+   through the coordinator instead of creating an early Agentic SDLC PR.
    Record the PR URL and readiness summary in the active SDLC run evidence
    when local run state is available; if local state cannot be updated, report
    the missing write explicitly.
@@ -279,90 +320,27 @@ without rewriting branch history.
     - recommended manual merge order
     - any blockers that remain
 
-## Recommended Commands
+## Command Reference
 
-- Default branch detection:
-  - `gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'`
-  - fallback: `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##'`
-- Refresh refs:
-  - `git fetch origin`
-- Pre-test hygiene and local validation before committing:
-  - `git status --short`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-  - `git diff --check`
-  - run existing formatter/lint commands for touched files when available
-  - run focused local tests and wait for completion
-- Conflict checks:
-  - `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`
-  - `git diff --name-only --diff-filter=U`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-- Base branch merge before PR creation:
-  - `git fetch origin`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rerun focused validation after the merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
-- Complete local-work staging:
-  - `git status --short`
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
-- Current feature-branch PR path:
-  - `git branch --show-current`
-  - `git status --short`
-  - `git diff --check`
-  - run existing formatter/lint commands for touched files when available
-  - run focused local tests and wait for completion
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
-  - `git fetch origin`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rerun focused validation after merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
-  - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
-- Ordered merge simulation:
-  - `git switch --detach origin/<base>`
-  - `git switch -c tmp/pr-order-check-<short-id>`
-  - `git merge --no-edit <first-branch-or-origin/first-branch>`
-  - `git merge --no-edit <next-branch-or-origin/next-branch>`
-  - if a simulation merge conflicts: `git merge --abort`
-  - `git switch <original-branch>`
-  - `git branch -D tmp/pr-order-check-<short-id>`
-- Existing PR lookup:
-  - `gh pr list --head <branch> --state open --json number,url,headRefName,baseRefName`
-- PR readiness:
-  - `gh pr view <number> --json number,url,headRefName,baseRefName,mergeable,mergeStateStatus`
-  - `gh pr checks <number>`
-  - `gh pr checks <number> --watch`
-- PR creation:
-  - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
-  - draft variant: `gh pr create --draft ...`
+Read `references/command-reference.md` when exact Git or GitHub CLI commands
+are needed for branch detection, validation, base merges, ordered merge
+simulation, PR lookup, checks, or PR creation.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
+- In active Agentic SDLC mode, never mutate the clean promoted SHA or publish a
+  different local or remote head.
+- In active Agentic SDLC mode, route any required repair through
+  `sdlc-classify-failure` and the coordinator so all invalidated gates rerun.
 - Never keep new work on the default branch once the user asks to open a PR.
 - Do not create a second feature branch if the current branch is already a
   feature branch. With no user-named branch and a current non-default branch,

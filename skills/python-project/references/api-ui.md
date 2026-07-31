@@ -31,7 +31,9 @@ Load this reference when generating web APIs, operator dashboards, or internal w
 Choose based on target:
 
 - Internal ops UI: Streamlit/Gradio/FastAPI templates are acceptable for speed.
-- Public-facing UI: separate frontend stack and keep Python as API backend.
+- Public-facing React/TypeScript/Vite UI: route source scaffolding to
+  `frontend-project` and keep Python as the API backend. Container files remain
+  owned by `container`.
 
 For Python-based UI apps:
 

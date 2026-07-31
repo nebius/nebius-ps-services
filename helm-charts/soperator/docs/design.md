@@ -195,9 +195,23 @@ Default storage expectations:
   PV/PVC requests are informational and do not allocate a per-slot quota.
 - `jailPersistentMounts` renders writable PVC-backed jail submounts for
   customer-owned paths that stay outside rootfs generation slots. Managed
-  greenfield defaults `/home` to `/mnt/jail-store/shared/home`; external
-  single-SFS adoption can point `/home` at `/mnt/jail/home` and add explicit
-  customer paths such as `/data` without copying data.
+  greenfield defaults `/home` to `/mnt/jail-store/shared/home`. Automatic
+  external single-SFS adoption keeps `/home`, `/data`, `/scripts`, and
+  `/models` in place under `/mnt/jail`; only an explicitly requested
+  non-overlapping relocation uses another local path.
+  While `jailRootfs.adoption.activeSource=legacy-rootfs`, the chart derives all
+  controller, login, and worker jail references from `legacyPvcName` and
+  withholds the persistent submounts. For automatic in-place paths, cxcli does
+  not hold writers or copy data; an explicit relocation uses the guarded copy
+  workflow. cxcli populates the passive rootfs slot and switches `activeSource`
+  to `slot` before the chart attaches paths such as `/home` and `/data`. The
+  chart always derives the canonical `jail` volume
+  source, controller and login volume-source references, and every worker
+  NodeSet PVC from the active source and slot. SConfigController and REST
+  consume that same alias. Accounting keeps an alias-backed volume declaration,
+  but the current operator workload does not mount the jail.
+  `rollbackSource=legacy-rootfs` retains the old
+  PV/PVC for rollback without changing the active alias.
 - Nodes that should mount the jail must match
   `storage.jail.matchExpressions`, which defaults to
   `slurm.nebius.ai/jail=true`.
@@ -391,7 +405,7 @@ The Nebius production profile uses SFS for the shared Slurm filesystems:
 
 | Filesystem | Mount Tag | Host Path | Main Consumers |
 | --- | --- | --- | --- |
-| `jail` | `jail` | `/mnt/jail` | `populateJail`, controller, login, accounting, and workers. |
+| `jail` | `jail` | `/mnt/jail` | `populateJail`, controller, login, SConfigController, REST, and workers. |
 | `controller-spool` | `controller-spool` | `/mnt/controller-spool` | Slurm controller pods and `slurmctld` state/spool. |
 | `accounting` | `accounting` | `/mnt/accounting` | Accounting/database persistence when the production profile enables accounting storage. |
 
@@ -423,6 +437,11 @@ like this:
 | `login` | Login pods | `jail` |
 | `accounting` | `slurmdbd`, accounting MUNGE, MariaDB database workload | `jail`, `accounting` |
 | `worker` or worker shards | Worker `NodeSet` pods and user jobs | `jail` |
+
+The production profile still attaches `jail` to the accounting node group and
+the accounting workload retains an alias-backed volume declaration. The current
+operator workload does not mount that volume, so accounting is not a jail
+rootfs consumer in the cutover convergence gate.
 
 In an onboarded or compact cluster, several Soperator roles may map to the same
 CPU node group. In that case the node group must attach the union of the SFS
@@ -1890,6 +1909,14 @@ The same underlying Kubernetes labels and taints can also be reused by
 `storage.*` node affinity, helper workload affinities, and
 `rebooter.tolerations` when the install needs tighter placement control.
 
+`slurmNodes.controller.openMetrics` is rendered directly into the
+SlurmCluster controller spec. Its chart default enables the native Slurm 25.11
+OpenMetrics endpoint. Because that setting emits the 25.11-only
+`MetricsType=metrics/openmetrics` key, an external first-adoption workflow must
+set it to `false` while login or worker consumers still execute an older legacy
+rootfs and through exact target-slot consumer verification, then restore the
+configured value before final pre-release checks and partition release.
+
 #### Scheduling And Preemption
 
 Slurm scheduling, accounting enforcement, preemption, and per-partition policy
@@ -2632,27 +2659,42 @@ narrower set, while rendering or visualization workers may need `graphics`.
 `gpuDriverJail.enabled` defaults to `true` and applies only to GPU NodeSets.
 For each GPU worker NodeSet, the chart injects:
 
-- `nvidia-driver-root`: hostPath `/` mounted at `/run/nvidia/driver`, with
-  `readOnly: false` because upstream helper paths may chroot through this root.
+- `nvidia-driver-root`: hostPath `/` mounted read-only at
+  `/run/nvidia/driver`.
+- `gpu-health-sysfs`: hostPath `/sys` mounted read-only at
+  `/mnt/jail/sys-host`, which is `/sys-host` inside the activated Jail and
+  supplies the host PCI/InfiniBand topology required by `health-checker`.
 - `cxcli-gpu-driver-jail`: an init guard using the same `slurmd` image as the
-  worker.
+  worker, requesting one GPU and mounting the active jail read-only.
 
-The init guard mounts the shared jail at `/mnt/jail` and the host driver root
-at `/run/nvidia/driver`. It fails fast if host `nvidia-smi` is missing or the
-host driver libraries are unavailable, removes stale zero-byte `libcuda` and
-`libnvidia-ml` artifacts from the shared jail, refreshes `libcuda.so.1` and
-`libnvidia-ml.so.1` from the host driver root, runs jail `ldconfig`, and writes
-a `cxcli_gpu_driver_jail_prep` marker. It does not run GPU inventory from the
-init container because Kubernetes does not inject GPU devices until a
-GPU-requesting container starts; GPU visibility remains validated from the
-worker container or Slurm job root. This keeps the durable fix in the local
-chart instead of editing upstream-owned `slurm_scripts/` files or image-owned
+The chart never populates or repairs NVIDIA libraries from worker pods. cxcli's
+single post-population Job is the only writer and runs while the rootfs slot is
+passive. It atomically installs `libcuda.so`, `libcuda.so.1`,
+`libnvidia-ml.so`, and `libnvidia-ml.so.1`, regenerates the jail linker cache,
+proves jailed `nvidia-smi -L`, and writes the strict
+`/etc/nebius-cxcli/gpu-driver-jail.env` evidence marker. The marker binds the
+rootfs to the architecture, driver version, exact source-library hashes, and
+host `nvidia-smi` hash.
+
+Each worker init guard is validation-only. It checks the marker schema and
+fields, executes host `nvidia-smi` inside the read-only host root, verifies the
+host version and hashes match the marker, proves all four jail symlinks have
+the canonical in-rootfs targets, checks the existing `ldconfig` cache, and
+runs jailed `nvidia-smi -L` with the Jail dynamic loader and library path in
+the GPU-requesting init container. It does not chroot into the shared rootfs,
+because that persistent filesystem intentionally contains no `/dev/nvidia*`
+device nodes; Kubernetes exposes the live devices in the init container.
+Any missing marker, mixed driver, broken or out-of-rootfs link, hash mismatch,
+or unavailable GPU blocks `slurmd` startup.
+This avoids concurrent writes to the shared active rootfs while keeping the
+durable repair outside upstream-owned `slurm_scripts/` and image-owned
 `complement_jail.sh`.
 
 The chart fails render for GPU NodeSets that define a custom mount named
-`nvidia-driver-root`, a custom mount at `/run/nvidia/driver`, or a custom init
-container named `cxcli-gpu-driver-jail`. CPU NodeSets do not receive this
-mount or init guard.
+`nvidia-driver-root` or `gpu-health-sysfs`, a custom mount at
+`/run/nvidia/driver` or `/mnt/jail/sys-host`, or a custom init container named
+`cxcli-gpu-driver-jail`. CPU NodeSets do not receive these mounts or the init
+guard.
 
 ### AppArmor And User Namespaces
 
@@ -2993,8 +3035,14 @@ The lock records:
 - upstream-owned CRD imports copied into this repository.
 - chart `appVersion` tracking for the parent and Soperator-family child charts.
 - image value imports checked against upstream chart values.
+- exact OCI references, image-index digests, per-required-platform digests,
+  and image-specific executable contracts for tracked upstream runtime images.
+  The pinned `login_sshd` image must expose the complete command set used by
+  cxcli's fail-closed protected-session probe.
 - review-only upstream logic hashes for templates, dashboards, custom
   ConfigMaps, and storage classes.
+- exact script/CRD sync targets and script render/mount consumers.
+- explicit values and schema paths that form cxcli's stable chart interface.
 - the local-owned paths that script sync must not overwrite and image sync must
   explicitly target.
 - a daily CI verifier path that reports public upstream release advances without
@@ -3067,9 +3115,12 @@ Image value sync is narrower: it may update only the value paths listed under
 from upstream, update the lock in the same PR so the verifier failure becomes
 an explicit review decision rather than hidden drift.
 
-Review-only hashes are updated by `--sync` so the PR records the upstream
-template, dashboard, custom ConfigMap, or storage class movement without
-copying those upstream files into this chart.
+Review-only hashes are never updated implicitly. After inspecting the upstream
+template, dashboard, custom ConfigMap, or storage-class diff, the operator must
+pass `--accept-review-baseline`; the resulting PR records that reviewed
+movement without copying those upstream files into this chart. OCI digest
+reference, image-index, or required-platform digest movement has the same
+fail-closed shape and requires the independent `--accept-image-baseline` flag.
 
 Validate the lock and upstream tracking with:
 
@@ -3082,7 +3133,27 @@ The report labels this lock group as `script`, matching `imports.scripts`.
 To intentionally move to a newer Soperator release:
 
 1. From any clean working tree, run
-   `scripts/verify-upstream-soperator-sync.sh --latest --sync --report`.
+   `scripts/verify-upstream-soperator-sync.sh --latest --sync --accept-review-baseline --accept-image-baseline --live-upgrade-evidence /path/to/soperator-disposable-upgrade-evidence.json --report`.
+   A persisted upstream pin promotion or either baseline acceptance fails
+   closed without successful, non-expired evidence from a disposable v4
+   external-upgrade campaign bound to the proposed upstream release, exact
+   resolved commit, downstream chart version, and canonical post-validation
+   candidate tree. The lock separately fixes the required old-cluster source
+   release/chart version, release-tarball digest, migration-profile contract
+   fingerprint, and Slurm runtime-image-set digest, so evidence from another
+   source-to-target path cannot be reused. After dependency build, the target
+   manifest hashes every file and executable bit in the parent chart, local
+   child charts, generated dependency archives, exact import trees, tracked
+   image/version targets, and the lock, plus every runtime reference, index
+   digest, required platform, platform digest, and required-command contract.
+   Dependency archives use a canonical sorted entry-tree digest and
+   `Chart.lock` excludes only its
+   non-runtime `generated` timestamp; this removes tar/gzip/build-time
+   nondeterminism without weakening dependency content, mode, version, or
+   digest binding. The evidence covers
+   running-job identity/allocation/restart/exit preservation,
+   terminal TUI actions, voluntary SSH/login handoff, Jail/GPU verification,
+   final singleton authority, bridge cleanup, and report/checkpoint hashes.
 2. Review and test the unstaged diff locally.
 3. Stage and commit the reviewed sync changes.
 4. Open the PR. The PR is the human approval gate for copied scripts, CRD
@@ -3090,18 +3161,32 @@ To intentionally move to a newer Soperator release:
 
 The script refuses local `--sync` from a dirty working tree. When run from
 `main`, `master`, or the repository default branch, it creates a clean
-`sync-soperator-<release>` feature branch before mutating files. It refreshes
-the lock `tag` and resolved `commit`, updates derived chart metadata, copies
-approved scripts and CRDs, updates tracked image values, updates review-only
-hashes, regenerates dependency metadata when chart versions change, runs Helm
-dependency, lint, and template validation under a temporary Helm repository
-config/cache, and leaves the resulting diff unstaged for local review and
-testing. The temporary Helm config is populated from the parent chart's remote
+`sync-soperator-<release>` feature branch. It performs the entire candidate
+sync and Helm validation in an isolated clone and promotes only allowlisted
+changes after every exact-target, script-consumer, OCI digest/platform,
+values/schema, dependency, lint, render-based stable cxcli surface,
+singleton-controller, and Helm unit-test check succeeds. It refreshes the
+lock `tag` and resolved `commit`, updates derived chart metadata, copies
+approved scripts and CRDs, updates tracked image values and explicitly accepted
+review-only hashes, regenerates dependency metadata when chart versions
+change, and leaves the promoted diff unstaged for local review and testing.
+The temporary Helm config is populated from the parent chart's remote
 dependency repositories, so local and CI sync runs do not require ambient
-`helm repo add` state. Write mode requires the full `all` scope plus `yq` v4
-and Helm; scoped `scripts`, `crds`, or `images` runs are read-only verification
-only. With `--report`, it also prints the changed-file list with readable
-status labels after sync validation.
+`helm repo add` state. Write mode requires the full `all` scope plus `yq` v4.
+Full-contract read-only checks and write mode require Helm and the pinned
+`helm-unittest` v1.1.1 plugin. Image or full-contract checks also require Docker
+Buildx so the exact reference, image-index digest, and required `linux/amd64`
+platform digest are verified. The verifier also executes `/bin/sh` against an
+immutable platform digest under a network-disabled, read-only,
+capability-free, `no-new-privileges` container with bounded CPU, memory, and
+process counts when an image declares required commands. The pinned
+`login_sshd` contract includes `sshd`, `ssh-keyscan`, `ssh-keygen`, and the core
+utilities used by protected-session capture. Scoped `scripts` and `crds` do
+not require Docker. A configured evidence producer
+also makes an authenticated GitHub CLI with artifact-attestation support
+mandatory. Scoped checks are read-only. With
+`--report`, sync
+also prints the changed-file list with readable status labels after validation.
 Missing-tool errors include macOS and Linux install hints, but the script does
 not install packages automatically. Local runs do not stage, commit, push, or
 create the PR.
@@ -3109,14 +3194,28 @@ create the PR.
 The scheduled `soperator-upstream-verifier` GitHub workflow runs a read-only
 latest-release check and reports new public upstream Soperator SemVer releases
 through GitHub Actions warnings and the workflow step summary. When a newer
-release exists, it runs `--latest --sync --report` only in the disposable runner
-checkout to show the expected changed files and diff stat, then intentionally
-marks the scheduled run failed so the Actions run is the GitHub-native
-notification marker. It does not create a branch, stage, commit, push, open a
-PR, configure email, or post to Slack. The operator creates a feature branch,
-runs the sync locally, tests, commits, and opens the PR manually. Manual
-dispatch runs produce the same preview without using a failed run as the
-notification marker.
+release exists, it runs `--latest --sync --report` only in the disposable
+runner checkout. Scheduled runs do not accept changed review-only hashes or
+runtime-image baselines: they report the required baseline reviews and fail as
+the GitHub-native notification marker. After both surfaces have been reviewed,
+a manual dispatch with `accept_review_baseline=true`,
+`accept_image_baseline=true`, and the successful evidence-producing workflow
+run ID/artifact can generate the full disposable changed-file and diff-stat
+preview. With read-only Actions permission, the workflow downloads the fixed
+evidence JSON, verifies its GitHub artifact attestation and locked
+workflow/ref/run metadata, proves its separate source run succeeded in this
+repository, and binds its producer, resolved commit, and candidate manifest
+before baseline acceptance. Source identity must equal the lock's required
+old-cluster migration profile, and the candidate manifest is computed only
+after dependency build and chart validation. The verifier workflow is
+explicitly forbidden
+from producing its own evidence. The current lock deliberately has
+`producer_workflow: null`; until a separate trusted disposable-campaign
+workflow publishes and attests this artifact, pin promotion and baseline
+acceptance remain unavailable and fail closed. It does not create a branch,
+stage, commit, push, open a PR,
+configure email, or post to Slack. The operator creates a feature branch, runs
+the explicitly accepted sync locally, tests, commits, and opens the PR.
 `scripts/verify-upstream-soperator-sync.sh --check-latest`
 remains a read-only local or CI check and is not required before sync.
 Before the scheduled preview, the script compares the lock release with the

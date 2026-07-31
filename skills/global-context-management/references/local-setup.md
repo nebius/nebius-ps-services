@@ -14,6 +14,7 @@ $CODEX_HOME/
 |-- config.toml
 |-- hooks.json
 |-- hooks/
+|   |-- global_context_state.py
 |   |-- session_start_context.py
 |   |-- user_prompt_context.py
 |   `-- global_context_policy.json  # optional local opt-in
@@ -66,14 +67,21 @@ global file.
   the `global-context-management` skill.
 - Read the durable task-state file injected by global hooks at task start,
   resume, or after compaction when prior context may matter. Update it with
-  concise checkpoints, and do not create repo-local task-state files unless
-  explicitly requested.
+  concise checkpoints. Hooks may create only an empty private scaffold at
+  compaction or the first complex prompt; the parent owns semantic content.
+  Do not create repo-local task-state files unless explicitly requested.
 - If hooks suggest same-workspace prior task-state candidate paths, read only
   candidates that appear relevant to the current task, treat them as stale
   hints, and verify against current repo or runtime evidence.
 - Keep `current.md` as a rolling summary, not an append-only transcript:
   replace stale details with the latest validated state, and summarize any
   oversized historical task-state file before relying on it.
+- Preserve an active `codex-remediation-budget:v1` marker exactly while
+  rewriting the current task state. Attempt classification and limits belong to
+  `troubleshoot`, not the global-context hooks. When `troubleshoot` establishes
+  a causally independent blocker, preserve its fresh attempt-1 marker without
+  carrying the earlier blocker's attempts, active time, tranche, exhaustion
+  state, or stop trigger forward.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
@@ -112,8 +120,7 @@ hooks = true
 multi_agent = true
 
 [agents]
-max_threads = 4
-max_depth = 1
+max_concurrent_threads_per_session = 16
 
 [agents.repo_mapper]
 description = "Read-only codebase explorer for relevant files, symbols, execution paths, dependencies, and conventions."
@@ -148,11 +155,11 @@ When delegation is authorized and useful but the active tool list does not show
 subagent controls, and `tool_search` is available, Codex should search for
 multi-agent/subagent tools before reporting delegation unavailable.
 
-Keep `max_threads = 4` as the conservative local thread budget. Do not spawn
-every configured read-only role by default: use `repo_mapper` and
-`test_strategist` early only when useful and independent, close completed
-helpers after consolidation, and use `risk_reviewer` near the end only for
-non-trivial or risky changes.
+Keep `max_concurrent_threads_per_session = 16` as the configured local thread
+budget. Do not spawn every configured read-only role by default: use
+`repo_mapper` and `test_strategist` early only when useful and independent,
+close completed helpers after consolidation, and use `risk_reviewer` near the
+end only for non-trivial or risky changes.
 Completed helpers can still count toward concurrency until closed, so cleanup
 is part of the parent agent's completion contract when close controls exist.
 
@@ -207,6 +214,7 @@ from pathlib import Path
 
 codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
 for path in (
+    codex_home / "hooks/global_context_state.py",
     codex_home / "hooks/session_start_context.py",
     codex_home / "hooks/user_prompt_context.py",
 ):
@@ -232,9 +240,9 @@ injected task-state path appears. Treat runtime activation as unverified until
 observed in the target Codex surface.
 
 For persistence, also confirm any installed PreToolUse write guard allows
-agent edits under `$CODEX_HOME/task-state`. The global-context hooks only
-advertise or reuse the session-scoped `current.md`; the parent agent creates
-and updates that file when continuity is useful. Keep broader runtime paths
+agent edits under `$CODEX_HOME/task-state`. Normal startup stays lazy;
+compaction and the first complex prompt create only an empty private scaffold.
+The parent agent writes and updates all semantic content. Keep broader runtime paths
 such as `$CODEX_HOME/hooks` protected unless the user deliberately syncs hook
 sources.
 Treat existing `current.md` files as compact rolling summaries: replace stale
@@ -246,10 +254,8 @@ bucket. It must not inject the contents of those files. Treat candidate paths
 as optional stale context to inspect only when relevant; the current session's
 advertised `current.md` remains the write target.
 
-Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values should not create task-state files or directories. They
-validate hook path calculation and prompt-time hints, not active persistent
-model state. Prefer
+Do not run complex synthetic hook probes against a live `$CODEX_HOME`; the
+first complex prompt intentionally creates an empty scaffold. Prefer
 `scripts/validate-local-templates.py` for hook-unit validation because it uses
 disposable temporary homes. If a hook payload has no `session_id`, task state is
 unavailable and no manual or legacy fallback path is created.

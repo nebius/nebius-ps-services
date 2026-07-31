@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -265,6 +266,91 @@ def test_verify_mk8s_upgrade_plan_ready_confirms_live_k8s_os_and_gpu_stack() -> 
 
     assert result.ready_node_group_count == 1
     assert "Kubernetes 1.33" in result.summary()
+
+
+def test_format_mk8s_provider_node_group_status_includes_k8s_column() -> None:
+    ready = _node_group(id="ng-system", name="system", version="1.33")
+    ready.status = SimpleNamespace(
+        state="RUNNING",
+        ready_node_count=3,
+        target_node_count=3,
+        node_count=3,
+        outdated_node_count=0,
+        reconciling=False,
+        events=[],
+    )
+    rolling = _node_group(id="ng-gpu", name="gpu", version="1.33")
+    rolling.status = SimpleNamespace(
+        state="UPDATING",
+        ready_node_count=1,
+        target_node_count=2,
+        node_count=2,
+        outdated_node_count=1,
+        reconciling=True,
+        events=[SimpleNamespace(last_occurrence=SimpleNamespace(code="ROLLING"))],
+    )
+
+    lines = upgrade.format_mk8s_provider_node_group_status((rolling, ready))
+    rendered = "\n".join(lines)
+
+    assert "Provider node groups (source=Nebius API, groups=2)" in rendered
+    assert "group   state     k8s" in rendered
+    assert "system  RUNNING   1.33" in rendered
+    assert "gpu     UPDATING  1.33" in rendered
+    assert "ROLLING" in rendered
+
+
+def test_format_mk8s_provider_node_group_status_counts_active_ready_rollout() -> None:
+    rolling = _node_group(id="ng-worker-0-0", name="worker-0-0", version="1.32")
+    rolling.status = SimpleNamespace(
+        state="PROVISIONING",
+        ready_node_count=2,
+        target_node_count=2,
+        node_count=2,
+        outdated_node_count=1,
+        reconciling=False,
+        events=[SimpleNamespace(last_occurrence=SimpleNamespace(code="NodeProvisioning"))],
+    )
+
+    lines = upgrade.format_mk8s_provider_node_group_status((rolling,))
+    rendered = "\n".join(lines)
+
+    assert "total=2 upgraded=1 upgrading=1 remaining=1 ready/current=2/2" in rendered
+    assert (
+        "worker-0-0  PROVISIONING  1.32  2      1         1          1          "
+        "2/2            NodeProvisioning"
+    ) in rendered
+
+
+def test_format_mk8s_provider_node_group_status_selects_latest_event_by_time() -> None:
+    rolling = _node_group(id="ng-system", name="system", version="1.32")
+    rolling.status = SimpleNamespace(
+        state="PROVISIONING",
+        ready_node_count=2,
+        target_node_count=3,
+        node_count=3,
+        outdated_node_count=1,
+        reconciling=True,
+        events=[
+            SimpleNamespace(
+                last_occurrence=SimpleNamespace(
+                    code="Deleting",
+                    occurred_at=datetime(2026, 7, 11, 7, 59, 12, tzinfo=UTC),
+                )
+            ),
+            SimpleNamespace(
+                last_occurrence=SimpleNamespace(
+                    code="NodeProvisioning",
+                    occurred_at=datetime(2026, 7, 11, 7, 56, 56, tzinfo=UTC),
+                )
+            ),
+        ],
+    )
+
+    rendered = "\n".join(upgrade.format_mk8s_provider_node_group_status((rolling,)))
+
+    assert "Deleting" in rendered
+    assert "NodeProvisioning" not in rendered
 
 
 def test_verify_mk8s_upgrade_plan_ready_fails_when_live_os_does_not_match() -> None:

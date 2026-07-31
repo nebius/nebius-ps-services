@@ -1,6 +1,6 @@
 ---
 name: sdlc-gui-test
-description: "Use only as part of the Agentic SDLC workflow; use when browser-based GUI behavior must be controlled, observed, screenshotted, and evaluated against Agentic SDLC acceptance criteria, preferably through Playwright MCP when available."
+description: "Use only as part of the Agentic SDLC workflow; use when browser-based GUI behavior must be controlled, observed, screenshotted, and evaluated against acceptance criteria through the declared harness, including required human-like computer-use UAT or Browser/Playwright when allowed."
 ---
 
 # GUI Test
@@ -27,6 +27,9 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 - App URL or startup method.
 - Test data or account instructions.
 - Feature design.
+- Required harness and browser identity when the evaluation plan constrains
+  them. `computer-use` is not interchangeable with Browser or Playwright when
+  the acceptance contract explicitly requires human-like application control.
 
 ## Required Reads
 
@@ -44,11 +47,18 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 
 ## Process
 
-- Use Browser or Playwright MCP when available.
+- Honor the evaluation plan's required harness. Use `computer-use` when it is
+  explicitly required; otherwise use Browser or Playwright MCP when available.
 - Start or access the app environment.
-- Navigate to the target flow and use accessibility snapshots for interaction when available.
+- Navigate to the target flow and use accessibility state for interaction when
+  available. After every navigation, click, type, submit, refresh, filter,
+  restart, or other state-changing action, obtain fresh accessibility state
+  before selecting the next target; never reuse stale coordinates or element
+  references.
 - Perform the user journey.
 - Capture screenshots at meaningful checkpoints.
+- For data-backed GUI flows, correlate the GUI observation with an independent
+  API, database, or service oracle when the acceptance plan requires it.
 - Compare result to acceptance criteria and record reproduction steps for failures.
 
 ## Idempotency
@@ -68,12 +78,16 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 ## Must Not
 
 - Use screenshots as the only interaction source when DOM or accessibility snapshots are available.
+- Substitute Browser/Playwright evidence for a required `computer-use` harness.
+- Mark a data-backed GUI flow PASS from screenshots alone when the acceptance
+  plan requires an API, database, or service correlation.
 - Store secrets in screenshots or reports.
 - Use production data without explicit permission.
 
 ## Completion Criteria
 
 - Browser flow was executed.
+- The recorded harness and browser match the evaluation plan.
 - Evidence exists.
 - Acceptance criteria are pass/fail.
 - Screenshots or snapshots are stored locally.
@@ -93,20 +107,12 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

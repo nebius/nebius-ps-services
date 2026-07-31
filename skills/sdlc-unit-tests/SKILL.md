@@ -1,6 +1,6 @@
 ---
 name: sdlc-unit-tests
-description: "Use only as part of the Agentic SDLC workflow; use after validation in the Agentic SDLC loop to run behavior tests for the current feature, including unit, integration, component, contract, regression, and mock-based tests when applicable."
+description: "Use only as part of the Agentic SDLC workflow; use after validation in the Agentic SDLC loop to run behavior tests for the current feature and any planned end-to-end slice, including unit, integration, component, contract, regression, and mock-based tests when applicable."
 ---
 
 # Unit Tests
@@ -27,12 +27,14 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 - Test files created or selected by `sdlc-tdd`.
 - Locked plan.
 - Project test tooling.
+- Active execution coordinator and exact integration HEAD.
 
 ## Required Reads
 
 - Test configuration.
 - Test files.
 - Feature design.
+- Locked plan and its End-To-End Slice when present.
 - Acceptance criteria.
 - Existing test conventions.
 
@@ -45,9 +47,16 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## Process
 
 - Use `assets/templates/tests.md.template` for evidence.
+- Run from the registered integration worktree after verifying its branch, Git
+  common directory, exact recorded HEAD, and cleanliness. Record that SHA in
+  evidence and reject stale results from worker or project checkouts.
 - Run focused feature tests first.
 - Run nearby regression tests.
 - Run integration or component tests required by design.
+- When the locked plan defines an end-to-end slice, run or record the tests that
+  prove the slice's cross-layer validation target and layer contracts. If the
+  available suite cannot prove the slice, classify the gap instead of marking
+  the feature tested.
 - Run broader suite only when feasible.
 - Record commands and outcomes.
 
@@ -73,9 +82,11 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## Completion Criteria
 
 - Required tests pass.
+- Planned slice coverage passes or the blocker is classified.
 - Evidence file exists.
 - Failures are classified if not passing.
 - State moves to `tested`.
+- Evidence is bound to the current coordinator integration SHA.
 
 ## SDLC Invariants
 
@@ -92,20 +103,12 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

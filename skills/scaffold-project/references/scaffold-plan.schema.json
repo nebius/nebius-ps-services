@@ -1,0 +1,603 @@
+{
+  "$id": "https://example.invalid/scaffold-project/scaffold-plan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Structural mirror only. scaffold_project.py is authoritative for graph, ownership, path, and filesystem invariants.",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_sets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "input_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "manifest": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/relativePath"
+              },
+              {
+                "pattern": "^candidates/"
+              }
+            ]
+          },
+          "manifest_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "materialization_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "operation_paths": {
+            "items": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "owner": {
+            "$ref": "#/$defs/owner"
+          },
+          "profile": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "validation_ids": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "materialization_unit_id",
+          "profile",
+          "input_sha256",
+          "manifest",
+          "manifest_sha256",
+          "operation_paths",
+          "validation_ids"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "capabilities": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "kind": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "materialization_unit_ids": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "$ref": "#/$defs/status"
+          },
+          "technology": {
+            "$ref": "#/$defs/technology"
+          },
+          "trigger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "materialization_unit_ids",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "execution": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_apply": {
+          "const": true
+        },
+        "deploy": {
+          "const": false
+        },
+        "initialize_git": {
+          "const": false
+        },
+        "install_dependencies": {
+          "const": false
+        },
+        "network_access": {
+          "const": false
+        },
+        "provision_services": {
+          "const": false
+        }
+      },
+      "required": [
+        "allow_apply",
+        "initialize_git",
+        "install_dependencies",
+        "network_access",
+        "provision_services",
+        "deploy"
+      ],
+      "type": "object"
+    },
+    "external_services": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "kind": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "materialization": {
+            "enum": [
+              "configuration-only",
+              "none"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/status"
+          },
+          "technology": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "trigger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "technology",
+          "status",
+          "materialization",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "materialization_units": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "framework": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "invocation_scope": {
+            "const": "coordinated-candidate"
+          },
+          "kind": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "$ref": "#/$defs/owner"
+          },
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "technologies": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "path",
+          "language",
+          "framework",
+          "owner",
+          "invocation_scope"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "operations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "semantic_merge",
+              "unchanged"
+            ]
+          },
+          "candidate": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/relativePath"
+              },
+              {
+                "pattern": "^candidates/"
+              }
+            ]
+          },
+          "candidate_set_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "mode": {
+            "enum": [
+              "0644",
+              "0755"
+            ]
+          },
+          "owner": {
+            "$ref": "#/$defs/owner"
+          },
+          "materialization_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "required": [
+          "path",
+          "action",
+          "owner",
+          "materialization_unit_id",
+          "candidate",
+          "mode",
+          "candidate_set_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "additionalProperties": false,
+          "properties": {
+            "approval": {
+              "enum": [
+                "direct-user",
+                "approved-artifact"
+              ]
+            },
+            "approval_reference": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "handoff": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "$ref": "#/$defs/nonEmptyString"
+                    },
+                    "schema_version": {
+                      "const": 2
+                    },
+                    "sha256": {
+                      "$ref": "#/$defs/sha256"
+                    }
+                  },
+                  "required": [
+                    "schema_version",
+                    "path",
+                    "sha256"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "sources": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "$ref": "#/$defs/nonEmptyString"
+                  },
+                  "sha256": {
+                    "$ref": "#/$defs/sha256"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "approval",
+            "approval_reference",
+            "handoff",
+            "sources"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repository_shape": {
+          "enum": [
+            "single-component",
+            "modular-monolith",
+            "multi-component"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "repository_shape",
+        "architecture"
+      ],
+      "type": "object"
+    },
+    "runtime_units": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability_id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "kind": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "materialization_unit_id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "runtime": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "capability_id",
+          "materialization_unit_id",
+          "runtime"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "safety": {
+      "additionalProperties": false,
+      "properties": {
+        "reserved_paths": {
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "reserved_paths"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "validations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_set_id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "command": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "materialization_unit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "network_required": {
+            "type": "boolean"
+          },
+          "owner": {
+            "$ref": "#/$defs/owner"
+          },
+          "phase": {
+            "enum": [
+              "candidate",
+              "post-apply"
+            ]
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "pending",
+              "not-run",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "materialization_unit_id",
+          "candidate_set_id",
+          "phase",
+          "command",
+          "network_required",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "capabilities",
+    "materialization_units",
+    "runtime_units",
+    "external_services",
+    "candidate_sets",
+    "operations",
+    "validations",
+    "execution",
+    "safety"
+  ],
+  "title": "Scaffold Project Draft Plan",
+  "type": "object",
+  "$defs": {
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "type": "string"
+    },
+    "nonEmptyString": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "owner": {
+      "enum": [
+        "container",
+        "frontend-project",
+        "github-workflows",
+        "gitignore",
+        "helmchart",
+        "python-project",
+        "scaffold-project",
+        "shell-scripting",
+        "terraform"
+      ]
+    },
+    "relativePath": {
+      "$comment": "NFC is enforced by the Python validator because standard JSON Schema has no Unicode-normalization assertion.",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\\\)(?!.*[\\u0000-\\u001F\\u007F])(?!.*(?:^|/)\\.\\.?(?:/|$))[^/]+(?:/[^/]+)*$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "required",
+        "conditional",
+        "deferred",
+        "rejected"
+      ]
+    },
+    "technology": {
+      "additionalProperties": false,
+      "properties": {
+        "framework": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "package_manager": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "versions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "language",
+        "framework",
+        "profile",
+        "runtime",
+        "package_manager",
+        "versions"
+      ],
+      "type": "object"
+    }
+  }
+}

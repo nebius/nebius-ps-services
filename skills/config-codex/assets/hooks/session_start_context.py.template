@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Inject a global task-state path at Codex session start.
-
-This hook does not create a task-state scaffold for every session. It only
-advertises the session-scoped path and repairs permissions when a prior
-task-state file already exists.
-"""
+"""Inject global context and restore private session state when available."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-from pathlib import Path
-import re
-import subprocess
 import sys
+
+from global_context_state import (
+    TaskStateError,
+    codex_home,
+    prepare_state_file,
+    resolve_root,
+    state_file_for_payload,
+)
 
 
 def read_payload() -> dict:
@@ -24,68 +23,12 @@ def read_payload() -> dict:
         return {}
 
 
-def resolve_root(cwd: str) -> str:
-    cwd = os.path.abspath(cwd)
-
-    try:
-        root = subprocess.check_output(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        root = ""
-
-    return os.path.abspath(root or cwd)
-
-
-def safe_segment(value: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
-    return safe[:80]
-
-
-def chmod_private(path: Path, mode: int) -> None:
-    try:
-        path.chmod(mode)
-    except OSError:
-        pass
-
-
-def task_state_path_for_payload(root: str, payload: dict) -> Path | None:
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    codex_home = codex_home.expanduser()
-
-    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
-    workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
-    session_id = payload.get("session_id")
-    if not session_id:
-        return None
-    session_segment = safe_segment(str(session_id))
-    if not session_segment:
-        return None
-
-    state_dir = (
-        codex_home
-        / "task-state"
-        / f"{workspace_name}-{workspace_hash}"
-        / session_segment
-    )
-
-    state_path = state_dir / "current.md"
-    if state_path.exists():
-        chmod_private(codex_home / "task-state", 0o700)
-        chmod_private(state_dir.parent, 0o700)
-        chmod_private(state_dir, 0o700)
-        chmod_private(state_path, 0o600)
-
-    return state_path
-
-
 def main() -> int:
     payload = read_payload()
     cwd = payload.get("cwd") or os.getcwd()
     root = resolve_root(cwd)
-    state_file = task_state_path_for_payload(root, payload)
+    home = codex_home()
+    state_file = state_file_for_payload(root, payload, home)
     if state_file is None:
         task_state_context = """Durable task-state file: unavailable (hook payload missing session_id)
 
@@ -93,12 +36,37 @@ No session-scoped task-state path is available for this session. Continue
 without creating a manual fallback path or repo-local state file.
 """
     else:
-        task_state_context = f"""Durable task-state file: `{state_file}`
+        try:
+            state_status = prepare_state_file(
+                state_file,
+                home=home,
+                create=payload.get("source") == "compact",
+            )
+        except (TaskStateError, OSError):
+            task_state_context = """Durable task-state file: unavailable (private initialization failed)
 
-SessionStart only advertises this path; it does not create task-state, SDLC run
-state, or workflow state. If the file already exists, read it when prior
-decisions may matter. Keep current.md as a rolling summary, not an append-only
-transcript.
+Continue without durable task state for this session. Do not create a manual
+fallback path or repo-local state file.
+"""
+        else:
+            if state_status == "created":
+                state_note = (
+                    "Compaction initialized an empty private state scaffold. "
+                    "Reconstruct and write a concise rolling summary before continuing."
+                )
+            elif state_status == "existing":
+                state_note = (
+                    "An existing private task-state file is available. Read it when "
+                    "prior decisions may matter."
+                )
+            else:
+                state_note = (
+                    "SessionStart advertises this path without creating it. The first "
+                    "complex prompt initializes an empty private scaffold."
+                )
+            task_state_context = f"""Durable task-state file: `{state_file}`
+
+{state_note} Keep current.md as a rolling summary, not an append-only transcript.
 """
 
     context = f"""Global context is available.

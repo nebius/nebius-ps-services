@@ -1,6 +1,17 @@
 interface:
   display_name: "Task Implementer"
-  short_description: "Sequential brownfield task implementation"
-  default_prompt: "Use $task-implementer to break a brownfield request into ordered task-1..task-n steps, implement one task per fresh Codex session, run validation and code-review, fix scoped findings, commit through $commit, and maintain a markdown handoff checkpoint."
+  short_description: "Coordinate internal workers through dependency waves"
+  default_prompt: "Use $task-implementer workspace init [project-folder] once,
+    then $task-implementer run <prompt-path-or-unique-filename>. Keep the
+    two-command public surface and IDs private; plan deterministic dependency
+    waves from complete write claims and conflict domains; use
+    isolated full-repository worktrees and one reviewed direct-child commit per
+    worker;
+    when nested in a worktree-managed checkout, base on and promote only to
+    that exact outer branch while its private lease blocks publication;
+    integrate in stable order; validate and review the combined result;
+    reconcile steering; promote only by ff-only merge; clean up internal
+    resources without force; and release the outer lease only after final
+    alignment."
 policy:
   allow_implicit_invocation: false

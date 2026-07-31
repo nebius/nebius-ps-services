@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Plan v<N>
 
 ## Scope
@@ -5,6 +7,15 @@
 - Feature: FEAT-<id>
 - Requirements: REQ-<id>
 - Plan status: locked when matching `.lock` exists
+
+## Corrective Plan
+
+- Plan kind: <initial or corrective>
+- Supersedes: <exact prior plan filename or none>
+- Diagnosis: <diagnosis-v1 ID or none>
+- Regression oracle: <original failed evaluator oracle or none>
+- Completed task manifest digest: <sha256 digest or none>
+- Corrective tasks: <appended TASK IDs or none>
 
 ## Files To Inspect
 
@@ -18,13 +29,40 @@
 
 - <path>: <reason>
 
+## End-To-End Slice
+
+- Behavior: <user-visible or system-visible behavior>
+- Layer flow: <frontend -> API -> service -> database, or N/A>
+- Foundation prerequisites: <schema/auth/migration/harness/safety blockers, or none>
+- Cross-layer validation target: <expected observable result>
+
 ## TDD Steps
 
 1. <test-first step>
 
-## Implementation Steps
+## Task Graph
 
-1. <implementation step>
+Use stable, contiguous `TASK-*` IDs. Every task must be independently
+assignable. Use `unknown` for incomplete ownership; preparation will serialize
+that task rather than guessing that it is parallel-safe.
+
+### TASK-001
+
+- Requirements: REQ-<id>
+- Goal: <one coherent implementation result>
+- Depends on: none
+- Write claims: exact: <repo-relative-file>; prefix: <repo-relative-directory>
+- Conflict domains: <class>:<identity>, or unknown
+- Validation: <focused command or evidence>
+- Done criteria: <observable completion condition>
+- Rollback or stop conditions: <fail-closed boundary>
+- Diagnosis: <diagnosis-v1 ID for a corrective task, or none>
+- Regression oracle: <original evaluator oracle for a corrective task, or none>
+
+## Planned Dependency Waves
+
+- WAVE-001: TASK-001
+- <Informational only; sdlc-prepare-execution recomputes and verifies waves>
 
 ## Validation Commands
 
@@ -46,3 +84,5 @@
 
 - Design: <hash-or-summary>
 - Context: <hash-or-summary>
+
+<!-- markdownlint-enable MD033 -->

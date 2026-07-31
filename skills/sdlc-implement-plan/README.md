@@ -5,14 +5,42 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Implement production code for one feature while staying inside the locked plan.
+Coordinate dependency waves for one feature. Every safe task uses one fresh
+agent with its own branch and private worktree. The coordinator verifies one
+task commit, merges workers in stable order, runs combined evidence, and
+non-force-cleans worker resources before advancing.
+Capacity batches are enforced: only the active batch owns assignments and
+worktrees, and the next batch opens only after the current batch commits.
+Every assignment binds a private dependency handoff, and every task uses a
+worker session identity that has never owned another task in the run.
+
+Native isolated agents are preferred. When unavailable, the private launcher
+uses one sequential ephemeral `codex exec` process per assignment with exact
+scope cwd, `workspace-write`, stdin instructions, and schema-bound output. The
+coordinator—not the worker—performs the sensitive-content gate and task commit.
+
+For diagnosis-bound correction, immutable plan vN+1 preserves every prior task
+definition and digest, then appends corrective tasks and waves. Each corrective
+assignment carries the exact diagnosis and original regression oracle. The
+worker runs that oracle first after the bounded repair, followed by the
+affected-boundary check and normal validation. `task-finish` stores a passed,
+digest-protected oracle proof bound to the diagnosis and worker commit; missing
+or mismatched proof cannot enter integration. Completed, sealed, promoted, or
+completed-run execution is never reopened.
 
 ## Main Boundaries
 
-- Change unrelated features.
-- Modify locked plans.
-- Hide failures.
-- Remove tests to pass.
+- Do not change unrelated features.
+- Do not modify locked plans.
+- Do not hide failures.
+- Do not remove tests to pass.
+- Do not broaden implementation beyond the locked vertical slice; route plan or
+  design defects backward instead.
+- Do not let workers share agents, branches, worktrees, write claims, or
+  conflict domains.
+- Do not rewrite history or force-clean resources.
+- Do not speculate from an evaluation symptom, weaken acceptance criteria, or
+  dispatch a probable/incomplete diagnosis.
 
 ## Primary Inputs
 
@@ -21,10 +49,16 @@ Implement production code for one feature while staying inside the locked plan.
 - Feature design.
 - Context pack.
 - Existing codebase.
+- Prepared execution coordinator and task-wave assignments.
+- Exact diagnosis, original oracle, and invalidation set for corrective work.
 
 ## Output
 
-- Planned code changes are implemented.
+- Planned task waves are implemented and integrated.
+- Planned vertical slice is implemented or a plan/design defect is recorded.
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
+- Every task has validation, review, one direct-child commit, and cleanup proof.
+- Corrective work reruns the original oracle and invalidated downstream gates
+  at the new integration commit.
 - State moves to `implemented`.

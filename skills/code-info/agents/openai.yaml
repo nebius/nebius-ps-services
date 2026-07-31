@@ -1,6 +1,6 @@
 interface:
   display_name: "Code Info"
-  short_description: "Read-only local or GitHub repo metrics"
-  default_prompt: "Use $code-info to gather read-only, copy/paste-friendly code metrics for this local folder or GitHub repository without changing project files."
+  short_description: "Read-only project code statistics"
+  default_prompt: "Use $code-info to report a concise description, documented features, three-level CLI hierarchy, LOC, packages, dependencies, and approximate famous-project size comparisons for this local folder or GitHub repository without changing project files."
 policy:
   allow_implicit_invocation: false

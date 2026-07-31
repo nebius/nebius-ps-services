@@ -1,292 +1,384 @@
 ---
 name: task-implementer
-description: "Use only when the user explicitly asks for sequential brownfield implementation loops: break work into ordered task-1..task-n items, inspect target code first, route architecture/contracts/missing-code/ambiguous boundaries through design when available, then implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
+description: "Requires explicit invocation to initialize a private prompt workspace and run one durable brownfield implementation through dependency waves, internal full-repository Git worktrees, worker review/commit evidence, ordered integration, and fast-forward promotion, including safe nesting under a worktree-managed outer branch. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
 ---
 
 # Task Implementer
 
 ## Purpose
 
-Coordinate small to medium brownfield implementation work by turning the user
-request into an ordered task queue, then implementing that queue sequentially
-with a reviewed, committed checkpoint and markdown handoff between fresh Codex
-sessions.
+Coordinate a complex brownfield request from one durable private Markdown
+prompt. One `run` plans every task, groups compatible work into dependency
+waves, dispatches isolated workers, integrates verified commits, promotes each
+wave atomically, and continues until the run is done or blocked.
 
-This is a lightweight implementation loop, not the Agentic SDLC state machine.
+## Invocation Policy
+
+Requires explicit invocation. Keep `policy.allow_implicit_invocation: false`
+in `agents/openai.yaml`.
+
+## Public Interface
+
+Expose exactly these two actions:
+
+```text
+$task-implementer workspace init [project-folder]
+$task-implementer run <prompt-path-or-unique-filename>
+```
+
+- `workspace init` defaults to the exact current directory.
+- `run` accepts one managed absolute path or one unique managed filename.
+- Never require a prompt ID, run ID, wave ID, task ID, branch, worktree, or
+  internal transition.
+- Steering means editing the same prompt and repeating `run`; do not expose a
+  separate action.
+- Do not add public `parallel`, `merge`, `cleanup`, `upgrade`, or compatibility
+  aliases.
 
 ## When To Use
 
-- The user explicitly invokes `$task-implementer`.
-- The user asks for a sequential task implementation loop.
-- A brownfield request contains multiple dependent code, test, docs, config, or
-  validation tasks and would benefit from fresh context between tasks.
-- The user wants task ordering, per-task review, per-task local commits,
-  checkpoint handoff, and no concurrent write agents.
+- The user explicitly invokes one of the two actions.
+- A brownfield request benefits from durable steering, dependency ordering,
+  isolated worker commits, combined validation, and resumable integration.
+- Independent tasks have complete, disjoint ownership and can run in parallel.
+- Conflicting tasks need deterministic dependency waves.
 
 ## When Not To Use
 
-- Do not use for a normal single-turn implementation that fits cleanly in the
-  current context; implement directly with the applicable project skills.
-- Do not use for the Agentic SDLC workflow; use `$sdlc-start` and `sdlc-*`
-  phase skills.
-- Do not use for chat-only ideation; use `brainstorm`.
-- Do not use for design review without implementation; use `design` or
-  `system-design-rules` when available and appropriate.
-- Do not use for review-only work; use `code-review`, `review-pr`, or `align`.
-- Do not use for standalone commits, pushes, PR creation, PR review, or merge.
-  Use `commit`, `commit-push`, `create-pr`, `review-pr`, or `merge-pr`
-  directly for those jobs.
-- Do not run parallel write-capable agents or overlapping implementation
-  sessions in the same workspace.
+- Do not invoke it implicitly for a complex task or generic parallel-agent
+  request.
+- Do not use it for one-shot implementation, Agentic SDLC, chat-only ideation,
+  design-only work, standalone review/commit/PR/merge, release, or publication.
+- Do not use parallel workers when ownership is incomplete or tasks overlap.
 
 ## Inputs
 
-- The user's implementation prompt, constraints, acceptance criteria, and
-  explicit non-goals.
-- The current repository, working tree, visible branch state, and local
-  instructions such as `AGENTS.md`.
-- Optional user-provided paths, tickets, issue text, logs, screenshots,
-  sketches, or existing design notes.
-- Optional existing task-implementer handoff markdown from a previous session.
+- One explicit public action.
+- The canonical project checkout, current named branch, repo instructions, and
+  immutable prompt snapshot.
+- When the checkout is owned by `worktree`, its exact managed outer identity,
+  recorded scope, and current `HEAD`; that outer branch is the sole promotion
+  target for the full task run.
+- Complete task dependencies, exact or directory-prefix write claims, keyed
+  conflict domains, validation, and done criteria.
 
 ## Required Reads
 
-- Existing task-implementer handoff markdown when the prompt is a continuation.
-- `references/implementation-loop.md` before creating the queue or launching
-  follow-on sessions.
-- The `code-review` skill before reviewing the active task's code changes.
-- The `commit` skill before committing the active task checkpoint.
-- The relevant `AGENTS.md`, README, design docs, changelog, tests, and source
-  files for the target code.
-- `docs/agentic-sdlc-design.md` only when the boundary with Agentic SDLC is
-  unclear.
-- The `design` skill when the task needs architecture, contracts, missing code,
-  or ambiguous implementation boundaries and that skill is available. Let
-  `design` use `research`; do not duplicate research orchestration here.
-- Current official vendor documentation when product, cloud, API, CLI, SDK,
-  framework, package manager, or version-sensitive behavior affects the change.
+- Read `references/prompt-workspace.md` before workspace, routing, steering,
+  state recovery, or sandbox decisions.
+- Read `references/implementation-loop.md` before decomposition, wave planning,
+  worker dispatch, integration, promotion, or cleanup.
+- Read the run manifest, exact bound snapshot, steering ledger, full handoff,
+  coordinator state, active wave, assignments, results, and journals.
+- Inspect relevant `AGENTS.md`, code, tests, README/design docs, changelog, Git
+  state, managed requirements, and managed design records.
+- After managed requirements and design are valid, explicitly route to
+  `$project-agent-instructions` and read its final decision plus any active
+  selected-project instruction file before locking the coordinator contract.
+- Use `brainstorm` and `design` when their routing conditions apply.
+- Every worker uses `code-review` and exactly one `$commit`; the coordinator
+  uses combined validation, integration `code-review`, and final `$align`.
+- Verify version-sensitive Git and Codex guidance against official docs.
 
 ## Writes
 
-- Private local handoff markdown under:
+Private state stays outside Git:
 
-  ```text
-  ${CODEX_HOME:-$HOME/.codex}/task-implementer/<project-id>/<run-id>/handoff.md
-  ```
+```text
+${CODEX_HOME:-$HOME/.codex}/task-implementer/
+├── projects/<project>/<scope>/
+│   ├── workspace.json
+│   ├── prompts/*.md
+│   └── runs/<run>/
+│       ├── manifest.json
+│       ├── steering.json
+│       ├── inputs/<revision>/prompt.md
+│       ├── handoff.md
+│       └── orchestration/
+│           ├── coordinator.json
+│           ├── interop.json
+│           ├── waves/wave-001.json
+│           ├── tasks/wave-001/task-1.json
+│           ├── assignments/wave-001/task-1.json
+│           ├── incoming-handoffs/wave-001/task-1.json
+│           ├── results/wave-001/task-1.json
+│           └── journals/wave-001.jsonl
+└── worktrees/<project>/<scope>/<run>/wave-001/
+    ├── integration/
+    ├── task-1/
+    └── task-2/
+```
 
-- Focused source, test, docs, changelog, config, or generated-artifact edits
-  required by the active task.
-- Per-task validation, review, fix, and local commit evidence summarized in
-  the handoff; avoid raw logs.
+Each linked worktree contains the full repository. For scope
+`services/example`, a worker operates from
+`<task-worktree>/services/example`. Never copy ignored/untracked files,
+dotenv files, credentials, caches, or primary-checkout local state.
 
-Do not commit the handoff file, raw logs, secrets, private endpoints, customer
-data, or broad copied documentation.
+`handoff.md`, managed requirements/design records, the private
+project-agent-instructions receipt, shared README/design docs, and changelog
+evidence are coordinator-owned. The shared skill exclusively owns creation or
+provenance-safe refresh of project-root `AGENTS.md`; workers never edit it.
+Worker assignments are immutable; workers write only their locked product scope
+and private result record.
 
 ## Process
 
-1. Confirm the prompt asks for a sequential brownfield implementation loop or
-   continuation from an existing handoff. If not, do not continue as
-   `task-implementer`.
-2. Read an existing handoff if supplied; otherwise create a new private handoff
-   from `assets/handoff-template.md`.
-3. Inspect the target code before ordering tasks. Use targeted `rg`, small file
-   reads, and local docs instead of guessing from the prompt alone.
-4. Extract concrete work items from the prompt and repo evidence. Merge
-   duplicates and split only when a task has a clear independent result.
-5. Identify dependencies and order tasks as `task-1`, `task-2`, ..., `task-n`.
-   Order by prerequisite relationships first, then user priority, user-visible
-   risk, shared contracts, and validation value.
-6. For each task, record: goal, rationale, dependencies, likely files, design
-   need, implementation steps, validation commands, done criteria, and rollback
-   notes.
-7. If design is needed, invoke or explicitly route to `design` before editing
-   the task. If `design` is unavailable, do a compact local design pass and mark
-   the handoff assumption as `design_skill_unavailable`.
-8. Implement only the active task. Keep edits within its boundary; update docs,
-   README, and changelog only when they are in scope for that task.
-9. Run the narrowest relevant validation for the active task. Broaden only when
-   the changed surface requires it.
-10. Inspect the diff after each task. Do not hide failures, weaken tests, or
-    leave unrelated cleanup mixed into the task.
-11. Invoke `code-review` on the active task's code changes. Treat review
-    findings as a required gate before handoff.
-12. Fix the review findings that are safe, scoped to the active task, and
-    supported by evidence. Re-run focused validation and, when code changed as
-    part of the fix, re-run or refresh the review until no blocking finding
-    remains or a blocker is recorded.
-13. Invoke `$commit` to commit the completed active task only after validation
-    and review/fix gates pass. Let the `commit` skill own repo-root
-    `git add -A`, staged validation, commit hooks, message generation, and
-    no-push behavior. If unrelated or unsafe dirty changes would make the
-    whole-repo commit unsafe, classify `WORKTREE_CONFLICT`, update the
-    handoff, and stop before committing.
-14. Update the handoff with status, changed files, validation, code-review
-    result, fixes applied, commit hash/message or commit blocker, residual
-    risks, and the exact next-session prompt.
-15. End the current task session after the handoff is saved. Start the next
-    task only in a fresh agent session that receives the handoff markdown as
-    context material.
-16. Repeat until every task is `done` or a task is `blocked`.
-17. After all tasks are done, run changed-surface alignment with `$align` when
-    available, or perform the equivalent local checklist across code, tests,
-    docs, changelog, CLI/help, config, and generated artifacts.
+### `workspace init [project-folder]`
 
-## Fresh Session Contract
+1. Resolve the installed skill and canonical Git root/exact project scope.
+2. Invoke private `init`. Create or verify the private workspace and exactly
+   one starter prompt only when the prompt directory is empty.
+3. Open the generated VS Code workspace when available; editor failure does not
+   invalidate initialization.
+4. Return workspace paths and prompt metadata. Stop without queuing work.
 
-The skill cannot reset, close, or reopen its own current context. It must hand
-off through a markdown file and one of these operator/session mechanisms:
+### `run <prompt-path-or-unique-filename>`
 
-- Strict interactive close/open: update the handoff, run `/archive` or
-  `/quit` to close the current session, start a new `codex` session from the
-  repo root, and paste or send the next-session prompt from the handoff.
-- Interactive same-terminal reset: when the operator accepts a fresh
-  conversation inside the same CLI process as the session boundary, update the
-  handoff, run `/new`, and paste or send the next-session prompt from the
-  handoff.
-- Noninteractive automation: run a new `codex exec` process for each task.
-  Let the current process exit after saving the handoff; the supervising
-  script starts the next process and passes the handoff path in the prompt.
-  Grant access to the handoff directory when sandboxing requires it, for
-  example:
+1. Invoke private `intake`; validate the managed prompt, acquire the scope
+   lock, select one run, and snapshot accepted steering once.
+2. For a new or safely reconcilable run, inspect source and normalize stable
+   requirements, task IDs, dependencies, write claims, conflict domains,
+   validation, done criteria, and prompt/repository constraints in stable task
+   order. Repeat every applicable constraint in each task's stop context. Do
+   not decide project instructions until the managed requirements and design
+   records have both been rendered and validated.
+3. Combine overlapping work before IDs lock when it is one coherent result.
+   Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
+   cycles or malformed ownership. If the project checkout is a `worktree`
+   managed linked worktree, acquire its private v2 lease with owner kind
+   `task-implementer` at the exact current
+   outer `HEAD` before creating task resources. Reject any worker or
+   coordinator write claim that escapes the managed task scope; never clip it.
+4. Coordinate every recorded wave through the lifecycle below. A logical wave
+   may dispatch in capacity-sized batches, but batching never changes its wave.
+5. Reconcile queued steering only at a safe wave boundary. Contradictory
+   steering preserves work and stops before promotion. Before preparation,
+   private `wave-replan` may replace the resource-free planned tail. After the
+   final promoted wave is cleaned, it may also append a newly discovered
+   isolated correction tail before finalization. The active coordinator index
+   keeps only completed waves plus the replacement schedule;
+   superseded planned wave files remain blocked history outside that index.
+6. Continue with the next wave from the newly promoted project `HEAD`. After
+   the last cleanup, run final changed-surface `$align`, then invoke private
+   `run-finalize` with its concise evidence. Only that transition marks the
+   handoff done and releases a managed outer lease. An unchanged completed
+   prompt returns `ALREADY_COMPLETE`; an interrupted lease release returns a
+   private finalization-pending outcome and repeats the same final transition.
+   Edited completed content starts a new internal run only after release.
 
-  ```bash
-  codex --ask-for-approval never exec \
-    --cd <repo-root> \
-    --sandbox workspace-write \
-    --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer" \
-    'Use $task-implementer to continue <handoff-path>. Implement only task-N, run validation, use code-review, fix scoped findings, commit through $commit, update the handoff, and stop.'
-  ```
+## Dependency-Wave Contract
 
-Do not write `codex exec /new`; `/new` is an interactive slash command, while a
-new `codex exec` process is already a fresh noninteractive session. Do not use
-`codex exec resume` for normal next-task handoff because the handoff file is
-the intended context boundary.
+Build deterministic earliest-fit waves in stable task order:
 
-## Ordering Rules
+- dependencies must be in earlier completed waves;
+- write claims must be pairwise disjoint;
+- conflict-domain keys must be pairwise disjoint;
+- unknown or incomplete ownership forces a singleton wave;
+- external database, Kubernetes, Terraform, migration execution, and
+  publication actions are singleton domains and still need explicit authority;
+- cycles fail closed.
 
-- Preserve explicit user priority unless code dependencies make it impossible.
-- Put prerequisite schema, API, data-model, config, or contract changes before
-  consumers.
-- Put tests with the task they verify unless the task is explicitly a test-only
-  preparation step.
-- Put high-blast-radius shared code before leaf UI/docs cleanup only when the
-  shared change is a prerequisite.
-- Prefer smaller tasks that can be validated and checkpointed independently.
-- Do not create artificial tasks for ceremony. If the request is truly one
-  coherent change, record one task and implement it.
+Conflict domains cover core APIs, schemas, migration chains, dependency
+manifests/lockfiles, shared abstractions, Kubernetes/Terraform resource
+identities, exclusive test resources, external mutations, and architecture
+decisions. A worker discovering an undeclared path or domain stops with
+`REPLAN_REQUIRED` before editing or committing.
+
+## Wave Lifecycle
+
+Wave states are
+`planned -> preparing -> running -> integrating -> promotion_pending -> promoted -> cleanup -> done|blocked`.
+Task states are
+`planned -> assigned -> running -> committed -> merged|failed`.
+
+For each wave:
+
+1. Require a clean named project branch and record its exact `HEAD`.
+2. Register resource intent in the managed outer lease when present, journal
+   intent, create and lock an integration worktree/branch from that exact
+   commit, then re-observe Git state.
+3. Preallocate and validate coordinator-owned requirement/design records.
+   Explicitly invoke `$project-agent-instructions` with spec owner
+   `task-implementer`, store its receipt under private orchestration state, and
+   stop on any structured blocker. Read any active selected-project instruction
+   file explicitly in the current coordinator session.
+4. Commit the locked contract only if tracked coordinator files changed. A
+   created or refreshed selected-project `AGENTS.md` is permitted in that one
+   coordinator-owned commit; that commit is every worker base. A `not-needed`
+   or `existing-sufficient` outcome changes only private state.
+5. Invoke private `wave-dispatch`. It creates a unique validated branch and
+   locked full-repository worktree only for the active capacity batch, plus an
+   immutable v7 assignment with absolute scope cwd, exact helper/workspace
+   paths, base, digest, claims, domains, validation, criteria, canonical worker guardrails, and a
+   digest-bound private incoming handoff. The
+   handoff contains accepted evidence from all earlier completed waves and
+   batches; only the first batch of the first wave has no predecessors.
+6. Reserve the main thread for coordination. Dispatch native worker agents up
+   to available capacity. If unavailable, use fresh sequential `codex exec`
+   workers in the same isolated worktrees; the coordinator never implements a worker task.
+   Start every worker with only its immutable assignment and incoming handoff,
+   without inherited coordinator transcript or unrelated conversation context.
+   Invoke private `task-arm` only when a real worker slot is available, then
+   spawn that worker immediately. Queued assignments remain unarmed and do not
+   consume a start budget. The worker reads the assignment and makes
+   `task-start` its first private transition after verifying immediate Git/cwd
+   identity. It invokes the assignment's exact embedded helper/workspace paths
+   and passes the embedded digest unchanged; `task-start` performs the
+   authoritative canonical digest check, so the worker never invents JSON
+   serialization. It reads the incoming handoff and performs deeper preflight
+   only after that transition. An armed worker must reach `task-start` within
+   60 seconds.
+   After one failure, stop dispatching new batch members while
+   active workers finish.
+7. Every worker first verifies its real worktree root, branch, base SHA, and
+   absolute cwd, then invokes `task-start` with the embedded helper/workspace
+   paths and the embedded digest unchanged. The helper verifies the canonical
+   assignment digest. It next
+   verifies the incoming-handoff digest and claims; starts from a
+   worker session never used by another task in the run; implements one task; validates; runs
+   `code-review`; fixes scoped findings; creates exactly one direct-child
+   commit through `$commit`; and writes one private result. It never edits the
+   shared handoff or manages worktrees/refs. It obeys the immutable assignment's
+   canonical guardrails: stay inside the assigned worktree/private state and
+   use installed Codex skill instructions/helpers and standard local
+   executables read/execute-only as required by the assignment. It never
+   modifies installed files, intentionally writes other paths, or accesses
+   network, credentials, external services, or live runtimes unless that exact
+   action is explicitly authorized there.
+   It records `task-heartbeat` progress at least every 30 seconds. A
+   dependency-free `standard` assignment warns at 240 seconds and allows at
+   most 300 seconds of read-only preflight; a dependent `integration`
+   assignment warns at 360 seconds and allows at most 420 seconds. Before the
+   assigned cutoff the worker edits a claimed path or reports a blocker. Every
+   heartbeat is one direct bounded command; the hard stale cutoff is 240
+   seconds so bounded high-reasoning turns do not become false failures. Never
+   create a background process or autonomous heartbeat loop. Treat the immutable assignment and incoming
+   handoff as self-contained task context; do not reread the full prompt or
+   coordinator-only state.
+   `task-start` is single-use. Only mutations inside the immutable write claims
+   count as progress; any other mutation is `WORKER_SCOPE_VIOLATION`.
+   If a running worker stops, the coordinator confirms that it stopped, then
+   the fresh replacement worker invokes private `task-recover
+   --confirmed-stopped` from the assigned scope cwd as its first transition.
+   Recovery transfers only declared dirty state or one direct-child commit to
+   that replacement session; the coordinator must not invoke recovery on the
+   worker's behalf because session ownership is bound to the caller. Session
+   hashes are append-only history: a
+   recovered-away or completed identity can never be reused.
+8. The coordinator independently verifies a clean branch, exactly one
+   direct-child task commit, exact changed paths within claims, and complete
+   validation/review evidence. Invoke private `batch-advance` after every task
+   in the active batch commits; it alone creates the next batch's assignments.
+   From dispatch onward, invoke private `task-watch` every 30 seconds. Interrupt
+   a worker immediately on `WORKER_PRESTART_TIMEOUT`,
+   `WORKER_PRESTART_MUTATION`, `WORKER_STALLED`,
+   `WORKER_READ_ONLY_TIMEOUT`, `WORKER_SCOPE_VIOLATION`, or `WORKER_TIMEOUT`;
+   confirm it stopped before recovery. Never wait silently or blind-retry a
+   no-progress worker.
+   On the profile-specific `READ_ONLY_DEADLINE_NEAR`, require an immediate
+   claimed-file edit or blocker instead of waiting for the hard cutoff.
+9. Invoke private `wave-integrate`. Merge task branches into the integration
+   branch in stable task-ID order with `git merge --no-ff --no-edit`. Never
+   cherry-pick, rebase, squash, push, or merge workers directly into the
+   project branch.
+10. The coordinator updates only shared managed specs/docs/changelog and makes
+   one final integration commit only for a non-empty diff. Product-code fixes
+   become a new isolated correction task.
+11. Run combined validation and integration `code-review`; reconcile queued
+    steering. Invoke private `wave-promote` only when evidence is complete and
+    the primary checkout remains clean, on the recorded branch, at the recorded
+    base. Promotion is `git merge --ff-only <verified-integration-SHA>` after
+    verifying the integration branch still identifies that exact commit.
+12. Mark tasks done only after promotion. Invoke private `wave-cleanup`; unlock
+    and non-force-remove clean reachable worktrees, then ancestry-proven
+    branches with `git branch -d`. Cleanup uses `git worktree remove` without
+    force and records each absent resource in the outer lease. Never run broad
+    prune or gc. All worker and integration resources stay internal: they are
+    never pushed, published, or merged anywhere except the outer project branch.
 
 ## Idempotency
 
-- On every session, read the handoff first and verify it against current
-  `git status` and relevant source files before editing.
-- Before invoking `$commit`, verify that the dirty diff belongs to the active
-  task or to intentionally preserved prior task changes recorded in the
-  handoff. If not, stop with `WORKTREE_CONFLICT`.
-- Never renumber existing task IDs after implementation starts. Add new tasks
-  as `task-n+1` and mark superseded tasks explicitly.
-- If a task is already done, verify its evidence instead of redoing it.
-- If a task already has a commit hash recorded, verify the commit still exists
-  and the task evidence still matches before moving on.
-- If source drift invalidates a task, update that task to `blocked` or
-  `superseded`, add a new task with the revised plan, and explain why.
-- Keep one active task at a time. Do not launch the next fresh session until
-  the current one has finished, reviewed, committed, and updated the handoff.
+- Every Git mutation is journaled before execution and re-observed afterward.
+- Repeated `run` resumes recorded v4 execution state; it does not recreate assignments,
+  branches, worktrees, commits, merges, or revisions.
+- Immutable assignment retries must be byte-equivalent. Coordinator state owns
+  mutable task/wave transitions.
+- Reuse an unchanged project-agent-instructions decision. Changed managed specs
+  or inherited guidance require a fresh decision at a safe wave boundary before
+  future workers dispatch.
+- If promotion reports failure, classify observed project `HEAD` as unchanged,
+  promoted, or unexpectedly moved before any retry.
+- Cleanup failure retains an exact inventory and never rolls back promotion.
+- A managed outer lease spans every wave and final `$align`. While held it
+  blocks outer inspect, push, PR creation, and removal. It releases only from a
+  clean outer branch at the final promoted head with every internal resource
+  absent. Missing or malformed coordination state fails closed.
+- Execution-plane-v1 and coordinator-v1/v2/v3 runs are unsupported and return
+  `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
+  read path, execution shim, or migration path.
 
 ## Failure Handling
 
-Classify failures before retrying:
-
-- `DESIGN_GAP`: architecture, contracts, missing code, or boundary decisions
-  are unresolved. Route to `design`.
-- `CONTEXT_GAP`: required repo, ticket, internal, or vendor context is missing.
-- `IMPLEMENTATION_DEFECT`: code does not satisfy the task.
-- `TEST_DEFECT`: tests are wrong, incomplete, or not aligned with the task.
-- `VALIDATION_DEFECT`: lint, type, build, import, generated artifact, or config
-  validation fails.
-- `REVIEW_BLOCKER`: `code-review` found a blocking issue that cannot be fixed
-  safely inside the active task boundary.
-- `COMMIT_BLOCKER`: `$commit` stopped because staged validation failed,
-  commit hooks failed, the branch state is unsafe, or the commit message/scope
-  would be misleading.
-- `WORKTREE_CONFLICT`: unrelated user changes or concurrent edits block safe
-  progress.
-- `ENVIRONMENT_BLOCKER`: local tools, credentials, services, network, or
-  permissions are unavailable.
-- `HUMAN_INPUT_REQUIRED`: the next decision would be risky to guess.
-
-Retry only when the next change is clear and scoped. Stop, update the handoff,
-and report the blocker when the failure needs user input, unsafe permissions,
-or repeated attempts without new evidence.
+- Worker, merge, validation, review, steering, sandbox, or promotion failure
+  leaves the project branch unchanged and retains exact recovery resources.
+- Use `REPLAN_REQUIRED` for undeclared paths/domains;
+  `UNSUPPORTED_SUBMODULE_SCOPE` for claims crossing gitlinks;
+  `UNSUPPORTED_SYMLINK_SCOPE` for claims crossing tracked symlinks;
+  `WORKTREE_COLLISION` or `WORKTREE_CONFLICT` for identity/drift;
+  `INTEGRATION_CONFLICT` or `INTEGRATION_VALIDATION_FAILED` before promotion;
+  `PROMOTION_BLOCKED` or `PROMOTION_FAILED` for publication failure;
+  `CLEANUP_BLOCKED` for retained unsafe resources; and
+  `ENVIRONMENT_BLOCKER` for missing safe bootstrap state or access.
+- Native subagents inherit the parent sandbox but are not intrinsically bound
+  to a worktree. Verify absolute cwd and Git identity at every transition;
+  never widen permissions to make a worker pass.
+- Preflight private-root and shared Git-common-directory access. Linked
+  worktrees share objects, refs, config, and hooks despite separate indexes.
+- An unfinished pre-interop run detected inside a managed outer worktree
+  returns `WORKFLOW_UPGRADE_REQUIRED`; do not infer, migrate, or adopt its
+  resources. There is no TTL, PID-based recovery, force-clear, or compatibility
+  path for task leases.
 
 ## Must Not
 
-- Do not run multiple write-capable agents or implementation sessions at the
-  same time in the same workspace.
-- Do not treat the user prompt alone as the task order when code evidence says
-  the dependencies differ.
-- Do not create Agentic SDLC `docs/requirements.md`, `docs/design.md`, or
-  `~/.codex/sdlc-runs` state.
-- Do not use compatibility shims, deprecated aliases, or dual old/new paths
-  unless the user explicitly asks for them.
-- Do not bypass `code-review` for completed code tasks unless the handoff
-  records that no code changed and review was not applicable.
-- Do not commit by hand. Use `$commit` for the per-task local checkpoint, and
-  never push, open PRs, merge, publish, or run live external writes unless a
-  separate explicitly invoked skill owns that action.
-- Do not continue into the next task in the same session after a task
-  checkpoint is saved; stop so the next task starts from the handoff in a fresh
-  session.
-- Do not persist secrets, raw logs, private URLs, or customer data in the
-  handoff or reusable skill sources.
+- Do not expose internal IDs or transitions in user commands.
+- Do not let the coordinator implement worker tasks.
+- Do not run parallel tasks with overlapping claims, domains, shared specs,
+  dependency files, migrations, infrastructure identities, or architecture
+  assumptions.
+- Do not let workers touch the primary checkout, other refs/worktrees, shared
+  handoff/spec/docs, Git maintenance, external systems, or undeclared paths.
+- Do not push or publish internal task branches, target `origin/main`, or let
+  outer `worktree` push/create-pr/remove run while the task lease is active.
+- Do not force-remove worktrees, force-delete branches, copy local state,
+  initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,
+  or perform live external writes without separate authorization.
 
 ## Completion Criteria
 
-- The handoff contains an ordered `task-1` through `task-n` queue.
-- Exactly one task is active at a time, and each completed task records files
-  changed, validation, `code-review` outcome, fixes, commit hash/message, and a
-  short checkpoint summary.
-- Each task session stops after saving the reviewed and committed handoff
-  checkpoint; the next task starts in a fresh session using the handoff as
-  context.
-- Every task is `done`, `blocked`, or `superseded`.
-- The final session inspected the aggregate diff and ran changed-surface
-  alignment or recorded why it could not.
-- The final answer reports completed tasks, validation, remaining blockers, and
-  the handoff path.
-
-## Learning Loop
-
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+- The public interface remains exactly two explicit-only commands.
+- Every task belongs to a deterministic wave and has locked ownership.
+- Every promoted task has one verified worker commit, ordered merge evidence,
+  combined validation/review evidence, and handoff status updated after
+  promotion.
+- The project branch advances only by verified fast-forward promotion.
+- Successful cleanup leaves no managed temporary refs or worktrees; retained
+  resources are reported exactly.
+- Final changed-surface `$align` passes and the private finalizer releases any
+  outer task lease, or the run stops with a precise blocker.
 
 ## Output Contract
 
-Return:
+Return the project scope, prompt status, current wave/task outcome, validation
+and review status, promotion result, retained recovery inventory, and minimum
+next action. Never print prompt bodies, secrets, private internal IDs, or raw
+logs.
 
-- Handoff path.
-- Ordered task queue with statuses.
-- Current or completed task summary.
-- Files changed and validation performed.
-- Code-review result, fixes applied, and per-task commit hash/message when a
-  task completed.
-- Failure classification and next action when blocked.
-- Exact next-session prompt when work remains.
+## Learning Loop
 
-## References
-
-- Read `references/implementation-loop.md` before creating a queue or launching
-  fresh sessions.
-- Use `assets/handoff-template.md` when creating a new handoff.
-- Use `evals/trigger-prompts.md` when tuning or reviewing invocation behavior.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.

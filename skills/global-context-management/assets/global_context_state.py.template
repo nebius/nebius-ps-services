@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Private task-state path, initialization, and permission helpers."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+
+
+PRIVATE_DIR_MODE = 0o700
+PRIVATE_FILE_MODE = 0o600
+SAFE_SESSION_RE = re.compile(r"[A-Za-z0-9._-]{1,80}")
+
+
+class TaskStateError(RuntimeError):
+    """Raised when the advertised task-state path cannot be used safely."""
+
+
+def codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def resolve_root(cwd: str) -> str:
+    cwd = os.path.abspath(cwd)
+    try:
+        root = subprocess.check_output(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        root = ""
+    return os.path.abspath(root or cwd)
+
+
+def safe_segment(value: str, *, limit: int = 80) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+    return safe[:limit]
+
+
+def session_segment(value: object) -> str:
+    raw = str(value)
+    if SAFE_SESSION_RE.fullmatch(raw) and raw not in {".", ".."}:
+        return raw
+    prefix = safe_segment(raw, limit=48) or "session"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
+
+
+def workspace_state_dir(root: str, home: Path | None = None) -> Path:
+    home = home or codex_home()
+    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
+    workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
+    return home / "task-state" / f"{workspace_name}-{workspace_hash}"
+
+
+def state_file_for_payload(root: str, payload: dict, home: Path | None = None) -> Path | None:
+    session_id = payload.get("session_id")
+    if session_id is None or str(session_id) == "":
+        return None
+    return workspace_state_dir(root, home) / session_segment(session_id) / "current.md"
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.lstat().st_mode)
+
+
+def _ensure_private_directory(path: Path, *, create: bool) -> bool:
+    if path.is_symlink():
+        raise TaskStateError("task-state path contains a symbolic link")
+    if path.exists():
+        if not path.is_dir():
+            raise TaskStateError("task-state directory path is not a directory")
+        path.chmod(PRIVATE_DIR_MODE)
+        return True
+    if not create:
+        return False
+    try:
+        path.mkdir(mode=PRIVATE_DIR_MODE)
+    except FileExistsError:
+        if path.is_symlink() or not path.is_dir():
+            raise TaskStateError("task-state directory path is unsafe") from None
+    path.chmod(PRIVATE_DIR_MODE)
+    return True
+
+
+def prepare_state_file(state_file: Path, *, home: Path | None = None, create: bool) -> str:
+    """Create or secure one derived state file without changing its content."""
+
+    home = home or codex_home()
+    if home.is_symlink():
+        raise TaskStateError("CODEX_HOME must not be a symbolic link")
+    task_root = home / "task-state"
+    try:
+        relative = state_file.relative_to(task_root)
+    except ValueError as exc:
+        raise TaskStateError("task-state path is outside the private root") from exc
+    if (
+        len(relative.parts) != 3
+        or relative.parts[-1] != "current.md"
+        or any(part in {"", ".", ".."} for part in relative.parts[:-1])
+    ):
+        raise TaskStateError("task-state path has an unexpected shape")
+
+    workspace_dir = task_root / relative.parts[0]
+    session_dir = workspace_dir / relative.parts[1]
+    if not _ensure_private_directory(task_root, create=create):
+        return "missing"
+    if not _ensure_private_directory(workspace_dir, create=create):
+        return "missing"
+    if not _ensure_private_directory(session_dir, create=create):
+        return "missing"
+
+    if state_file.is_symlink():
+        raise TaskStateError("task-state file is a symbolic link")
+    if state_file.exists():
+        if not state_file.is_file():
+            raise TaskStateError("task-state path is not a regular file")
+        state_file.chmod(PRIVATE_FILE_MODE)
+        return "existing"
+    if not create:
+        return "missing"
+
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(state_file, flags, PRIVATE_FILE_MODE)
+    except FileExistsError:
+        if state_file.is_symlink() or not state_file.is_file():
+            raise TaskStateError("task-state file appeared with an unsafe type") from None
+        state_file.chmod(PRIVATE_FILE_MODE)
+        return "existing"
+    except OSError as exc:
+        raise TaskStateError("task-state file could not be initialized privately") from exc
+    else:
+        os.close(fd)
+    state_file.chmod(PRIVATE_FILE_MODE)
+    return "created"
+
+
+def permission_audit(home: Path, *, repair: bool = False) -> dict[str, int]:
+    task_root = home / "task-state"
+    result = {"directories_checked": 0, "files_checked": 0, "repaired": 0, "unsafe": 0}
+    if home.is_symlink():
+        result["unsafe"] += 1
+        return result
+    if task_root.is_symlink():
+        result["unsafe"] += 1
+        return result
+    if not task_root.exists():
+        return result
+    if not task_root.is_dir():
+        result["unsafe"] += 1
+        return result
+
+    directories = [task_root]
+    files: list[Path] = []
+    for workspace in task_root.iterdir():
+        if workspace.is_symlink():
+            result["unsafe"] += 1
+            continue
+        if not workspace.is_dir():
+            result["unsafe"] += 1
+            continue
+        directories.append(workspace)
+        for session in workspace.iterdir():
+            if session.is_symlink():
+                result["unsafe"] += 1
+                continue
+            if not session.is_dir():
+                result["unsafe"] += 1
+                continue
+            directories.append(session)
+            state_file = session / "current.md"
+            if state_file.is_symlink():
+                result["unsafe"] += 1
+            elif state_file.is_file():
+                files.append(state_file)
+            elif state_file.exists():
+                result["unsafe"] += 1
+
+    for directory in directories:
+        result["directories_checked"] += 1
+        if _mode(directory) != PRIVATE_DIR_MODE:
+            if repair:
+                directory.chmod(PRIVATE_DIR_MODE)
+                result["repaired"] += 1
+            else:
+                result["unsafe"] += 1
+    for state_file in files:
+        result["files_checked"] += 1
+        if _mode(state_file) != PRIVATE_FILE_MODE:
+            if repair:
+                state_file.chmod(PRIVATE_FILE_MODE)
+                result["repaired"] += 1
+            else:
+                result["unsafe"] += 1
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Audit or repair private Codex task-state permissions.")
+    parser.add_argument("--codex-home", type=Path, default=codex_home())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("audit-permissions", help="Report permission and symlink violations without changes.")
+    repair = subparsers.add_parser("repair-permissions", help="Repair directory and current.md modes only.")
+    repair.add_argument("--execute", action="store_true", help="Apply the content-preserving permission repair.")
+    args = parser.parse_args()
+    if args.command == "repair-permissions" and not args.execute:
+        parser.error("repair-permissions requires --execute")
+
+    result = permission_audit(
+        args.codex_home.expanduser(), repair=args.command == "repair-permissions"
+    )
+    print(json.dumps(result, sort_keys=True))
+    return 1 if result["unsafe"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

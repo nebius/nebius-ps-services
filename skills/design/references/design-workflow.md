@@ -72,9 +72,37 @@ For each technology, capture design-relevant facts:
 If a fact cannot be verified from official docs, say that it is unverified and
 avoid making it a hard design dependency.
 
-### 4. Design Solution
+### 4. Use `app-stack` For Stack Decisions
 
-Build the design from behavior and constraints before selecting tools. Define:
+When the application stack or any layer's technology is undecided, being
+reviewed, or being modernized, use `app-stack` before completing the solution
+design. Examples include selecting the frontend or client approach, web or API
+server, framework, and runtime, backend service technology, database or other
+data stores, asynchronous execution, deployment model, and observability stack.
+
+Pass only decision-relevant context:
+
+- application archetype, user journeys, and acceptance criteria
+- quality attributes and external constraints
+- current brownfield stack, locked decisions, and migration cost
+- team skills, operational ownership, deployment environment, and budget
+- research evidence and unresolved version-sensitive facts
+
+Use the returned stack decision as an input to the design. Preserve its
+required, conditional, deferred, and rejected classifications plus revisit
+triggers. `design` remains responsible for the complete solution boundaries,
+cross-layer contracts, flows, failure behavior, validation, rollout, and plan.
+The handoff is scoped: `app-stack` returns the stack decision to the active
+`design` workflow instead of starting another complete-design handoff.
+
+If all applicable technologies are already approved and the request does not
+reconsider them, state that the design follows the fixed stack and skip
+`app-stack`.
+
+### 5. Design Solution
+
+Build the detailed solution from behavior and constraints using the selected or
+fixed stack. Define:
 
 - component boundaries and responsibilities
 - technology choices and why each one is necessary
@@ -86,11 +114,27 @@ Build the design from behavior and constraints before selecting tools. Define:
 - observability, metrics, logs, traces, dashboards, alerts, and runbooks
 - tests, acceptance checks, validation commands, and evaluation criteria
 
+For serial multi-layer applications, design by vertical feature slice before
+planning broad layer work. A vertical slice ties one user-visible or
+system-visible behavior through the relevant layers, for example
+frontend -> API -> service -> database. Capture:
+
+- end-to-end trigger, request, state change, response, and user-visible result
+- each layer's responsibility and ownership
+- contracts between layers, including API shape, validation, error model, and
+  persistence expectations
+- data lifecycle across authoritative and derived state
+- tests and acceptance checks that prove the slice works through its boundaries
+
+Use horizontal foundation steps only when they are true prerequisites for
+multiple slices, such as schema contracts, auth, migrations, shared test
+harnesses, infrastructure safety, or observability needed before safe delivery.
+
 Brownfield designs should name likely files/modules and how the design fits the
 existing architecture. Greenfield designs should name the initial project
 shape, runtime, framework, storage, deployment target, and bootstrap order.
 
-### 5. Apply `system-design-rules` And Evaluate Alternatives
+### 6. Apply `system-design-rules` And Evaluate Alternatives
 
 For standard, deep, architecture-heavy, ADR-like, cross-boundary, or
 hard-to-reverse designs, use `system-design-rules` when it is installed and
@@ -122,7 +166,7 @@ Compare options only at the depth needed for the decision. Include:
 For each option, state what improves, what worsens, cost, risk, operational
 burden, migration effort, reversibility, and revisit trigger.
 
-### 6. Create Implementation Plan
+### 7. Create Implementation Plan
 
 The final design should be ready for Codex `/plan`. The plan content should be
 specific enough that implementation can start without re-deciding architecture.
@@ -149,6 +193,8 @@ Assumptions And Open Questions:
 
 Design Review:
 - `research` used/skipped: ...
+- `app-stack` used/skipped: ...
+- selected stack or fixed-stack boundary: ...
 - `system-design-rules` used/skipped: ...
 - Checklist findings that changed the design: ...
 
@@ -156,6 +202,11 @@ Implementation Steps:
 1. ...
 2. ...
 3. ...
+
+Vertical Slice Strategy:
+- end-to-end slice order: ...
+- prerequisite foundation steps: ...
+- cross-layer validation: ...
 
 Files Or Areas To Inspect/Modify:
 - ...
@@ -171,6 +222,14 @@ Rollout And Rollback:
 
 Risks And Stop Conditions:
 - ...
+
+Optional Scaffold Handoff:
+- repository shape: ...
+- logical capabilities and statuses: ...
+- materialization units, paths, and owners: ...
+- runtime units: ...
+- external services and materialization behavior: ...
+- cross-cutting artifacts: ...
 ```
 
 When the active Codex surface cannot switch to plan mode, output the same
@@ -202,8 +261,16 @@ ownership, new platform, or costly rollback.
   `sdlc-create-design` or `sdlc-create-plan`.
 - Design is complete and code should change: use `/plan`, then the relevant
   implementation, infrastructure, frontend, testing, or alignment skill.
+- Approved design needs a complete or multi-component repository skeleton:
+  include the optional scaffold handoff and let the user explicitly invoke
+  `scaffold-project`. Do not scaffold directly or start Agentic SDLC.
 - Design needs substantial topic, feature-requirement, product, standard, or
   technology due diligence: use `research`, then return to `design` for
   synthesis and `/plan` handoff.
+- Design needs to select or reconsider the application stack or technology for
+  any layer: use `app-stack`, then return to `design` for cross-layer synthesis
+  and `/plan` handoff.
+- The application stack is approved and no stack decision remains: keep the
+  fixed stack and continue `design` without `app-stack`.
 - Design exposes changed docs or contracts after implementation: run `align` on
   the changed surfaces.

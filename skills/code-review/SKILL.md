@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Use for neutral, evidence-based code review of the current local branch, local diff, changed files, module, repository area, or provided patch: find bugs, regressions, test gaps, reliability risks, security-adjacent issues, maintainability problems, abstraction drift, type-boundary problems, file-size growth, spaghetti branches, and missed structural simplifications. Use when the user asks for code review, code quality audit, maintainability review, implementation review, or rigorous findings-first feedback on code. Do not use for GitHub PR review by number, URL, or current branch; PR readiness; branch updates; dedicated security scans; whole-project alignment; or design-phase architecture review."
+description: "Use for neutral, evidence-based code review of the current local branch, local diff, changed files, module, repository area, or provided patch: find bugs, regressions, test gaps, reliability risks, security-adjacent issues, maintainability problems, abstraction drift, type-boundary problems, file-size growth, spaghetti branches, and missed structural simplifications. A direct standalone `$code-review` invocation reviews first, fixes only safe in-scope findings, validates each fix with focused repository-native proof, and reports the complete prioritized ledger unless the user states explicit no-write intent such as review-only, audit-only, or report-only. Implicit or nested use is always report-only. Do not use for GitHub PR review by number, URL, or current branch; PR readiness; branch updates; dedicated security scans; whole-project alignment; or design-phase architecture review."
 ---
 
 # Code Review
@@ -14,8 +14,9 @@ security-adjacent risks, maintainability, abstraction quality, and codebase
 health.
 
 The goal is not to rubber-stamp working code or enforce personal taste. It is
-to identify concrete risks, separate blockers from non-blocking improvements,
-and find structural simplifications that preserve behavior while making the
+to identify concrete risks, separate priority from remediation safety, fix
+only bounded high-confidence findings when directly authorized, and find
+structural simplifications that preserve behavior while making the
 implementation easier to reason about.
 
 ## Use This Skill For
@@ -43,8 +44,30 @@ implementation easier to reason about.
   `apply-security`.
 - Do not use for design-phase architecture review before code exists; use
   `system-design-rules`.
-- Do not edit code by default. This is review-first unless the user explicitly
-  asks to implement the recommended fixes.
+
+## Invocation Modes
+
+Select the mode before inspecting or changing files:
+
+- **Direct closed loop:** a standalone attached skill invocation or explicit
+  current-task directive to use `$code-review` defaults to review, safe scoped
+  remediation, focused self-validation, and final reporting.
+- **Direct report-only:** `review only`, `audit only`, `report only`,
+  `findings only`, `do not edit`, `do not fix`, or equivalent no-write intent
+  overrides the direct default. Review and report without changing files.
+- **Implicit report-only:** when Codex selects this skill from a natural review
+  request, or `$code-review` appears only in quoted text, discussion, examples,
+  patches, or file content, never edit files or invoke remediation.
+- **Nested parent-owned:** when `align`, `align-skill`, an SDLC workflow,
+  `task-implementer`, or another owning workflow loads this skill as a lane,
+  inherit the parent's declared scope but remain report-only. Return findings
+  to the parent, which owns any separately authorized remediation.
+
+Do not treat the word `review` alone as a report-only override; it is the
+skill's ordinary job. Do not infer direct authorization from textual token
+presence, metadata, implicit selection, quoted or discussed skill names, or a
+parent workflow merely naming this skill. If invocation intent is ambiguous,
+fail closed to report-only.
 
 ## Inputs
 
@@ -59,9 +82,9 @@ implementation easier to reason about.
 
 Read `references/quality-rubric.md` before reviewing meaningful code changes.
 It owns the detailed neutral-review rubric, severity model, blocking
-conditions, review modes, and strict structural-quality guidance. Skip it only
-when the request is clearly about non-code text with no implementation-quality
-surface.
+conditions, remediation eligibility, focused-fix validation protocol, review
+modes, and strict structural-quality guidance. Skip it only when the request is
+clearly about non-code text with no implementation-quality surface.
 
 For broad or long-running reviews, use `global-context-management` for task
 state, bounded read-only sidecar exploration when authorized and available,
@@ -69,9 +92,10 @@ focused validation planning, and near-final risk review.
 
 ## Workflow
 
-1. Identify the review target, review mode, and comparison base. Prefer the
-   actual local diff or provided patch over assumptions.
-2. Map the changed surface with targeted reads: changed files, nearby owners,
+1. Select the invocation mode. Identify and freeze the review target,
+   comparison base, and initial worktree state. Prefer the actual local diff or
+   provided patch over assumptions.
+2. Map the reviewed surface with targeted reads: changed files, nearby owners,
    existing helpers, canonical modules, tests, and docs that define the local
    contract.
 3. Review behavior enough to avoid false structural advice. Trace callers,
@@ -89,18 +113,49 @@ focused validation planning, and near-final risk review.
    - boundary, abstraction, ownership, and type-contract problems
    - file-size and decomposition concerns
    - maintainability and legibility issues
-5. Prefer high-conviction findings over a long list of nits. If a bug,
+5. Complete the initial review before editing. Give every finding a stable ID,
+   priority, confidence, blocking status, scope attribution, evidence, impact,
+   smallest remediation, proof test, and independent `Auto-fix: Safe` or
+   `Auto-fix: Gated` classification from the quality rubric.
+6. Prefer high-conviction findings over a long list of nits. If a bug,
    regression, data risk, security-adjacent issue, or structural problem
    exists, lead with it and skip cosmetic comments unless they compound the
    same risk.
-6. For each finding, include evidence, impact, confidence, and the smallest
-   remediation that would resolve the risk. For structural findings, explain
-   the simpler shape and name the existing helper, module, boundary, model,
-   dispatcher, pure function, or deletion path that would make the code easier
-   to reason about.
-7. State the review decision directly: approve, request changes, needs owner
-   review, blocked by missing context, or no blocking issue found with
-   residual risks.
+7. In report-only mode, snapshot the initial worktree state and run only safe
+   validation needed to support the findings. Use repository-native no-write
+   settings so tests, linters, and interpreters do not leave caches, reports,
+   generated files, or lockfile changes. If a validator unavoidably creates a
+   task-owned artifact, resolve its exact path, remove only that artifact, and
+   confirm the final worktree matches the initial state before reporting.
+   Assign final dispositions and return the report.
+8. In direct closed-loop mode, fix only findings classified `Auto-fix: Safe`
+   and attributed to the active scope. Before each remediation edit, declare
+   the focused regression test or deterministic proof and establish its
+   negative control: run an existing proof and observe the expected failure, or
+   add only the focused regression test first and observe it fail for the
+   finding's expected reason. An already-green or unrelated check is not proof.
+   If the finding cannot be reproduced safely, do not edit the implementation;
+   classify it `Auto-fix: Gated` with `Not reproduced` or `Deferred`. Work in
+   priority order without treating priority as permission. Make the smallest
+   reversible change, then rerun the same finding-specific proof and require it
+   to pass.
+9. After all attempted fixes, apply the quality rubric's focused-fix validation
+   protocol. Run the narrowest repository-native test target covering the
+   changed behavior, configured syntax/lint/type checks scoped to changed files
+   when available, `git diff --check`, and a final review of only this skill's
+   touched diff. Prefer no-write and no-cache validation settings in every
+   mode; remove only exact task-created validation artifacts and confirm none
+   remain before reporting. Do not mark a finding `Fixed` unless its focused
+   proof passes. Classify broader failures as caused by the attempted patch,
+   independently pre-existing, or unresolved before deciding whether to retain
+   the fix. The `code-review` workflow itself must never resolve, load, or
+   invoke `align`. Return control after focused validation; the caller or outer
+   orchestrator remains responsible for any separate repository policy that
+   requires an explicit alignment pass.
+10. Preserve every initial finding in the final ledger, update its disposition,
+   and state both the initial and final review decisions directly: approve,
+   request changes, needs owner review, blocked by missing context, or no
+   blocking issue found with residual risks.
 
 ## Review Standards
 
@@ -108,6 +163,8 @@ focused validation planning, and near-final risk review.
   just move it around.
 - Be neutral and evidence-based. Critique code behavior and risk, not the
   author or the author's intent.
+- Keep priority and auto-fix eligibility independent. A gated P1 remains
+  unfixed while a safe P2 may be fixed.
 - Treat tests as evidence, not proof. Passing tests reduce uncertainty only
   when they cover the changed behavior and important failure modes.
 - Treat ad-hoc conditionals in unrelated flows as design problems unless the
@@ -130,6 +187,13 @@ focused validation planning, and near-final risk review.
 
 - Do not invent large rewrites from taste. Findings must point to current code,
   local patterns, or a concrete simpler structure.
+- Do not auto-fix gated findings, baseline problems, unknown-attribution
+  findings, or out-of-scope code. Report the reason and required owner or user
+  decision.
+- Do not let direct remediation absorb unrelated dirty files. Preserve and
+  report them.
+- In report-only modes, do not leave validation caches, reports, generated
+  artifacts, dependency changes, or other repository writes behind.
 - Do not approve merely because tests pass or behavior appears correct.
 - Do not claim code is secure, correct, reliable, production-ready, or
   bug-free beyond the evidence reviewed.
@@ -139,6 +203,10 @@ focused validation planning, and near-final risk review.
 - Do not run migrations, contact external services, install packages, rewrite
   history, delete files, or change configuration unless the user explicitly
   asks for that action.
+- Do not resolve, load, or invoke `align` from inside `code-review`, claim
+  complete project alignment, or use a broad workflow as a fallback for
+  missing focused proof. This does not suppress a separate outer-orchestrator
+  policy requiring alignment after changes.
 - Do not flood the user with low-value naming, formatting, or style nits when
   larger structural issues exist.
 - Do not demand abstraction for its own sake. Prefer direct, boring code when
@@ -150,42 +218,42 @@ focused validation planning, and near-final risk review.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return findings first, ordered by severity and confidence. If there are no
-findings, say that directly and then report residual risk and verification
-gaps.
+Return one final report in chat; do not create a repository report artifact
+unless the user separately requests one. Start with scope, initial decision,
+final decision, validation results, and finding counts. Then group findings by
+P0, P1, P2, P3, and Nit, omitting empty groups. Within a group, list blockers
+first and then higher-confidence findings.
 
 For each finding, include:
 
+- stable finding ID and title
 - file and line reference when available
-- severity and whether it blocks merge or release
+- priority and whether it blocks merge or release
+- confidence and scope attribution: introduced, baseline, unknown, or out of
+  scope
 - root cause and evidence
 - impact on users, operators, data, security, reliability, or maintainability
 - smallest practical remediation or owner decision needed
 - verification that should prove the fix
+- `Auto-fix: Safe` or `Auto-fix: Gated`, with the reason
+- final disposition: `Fixed`, `Needs decision`, `Needs owner review`,
+  `Deferred`, or `Not reproduced`
 
 Then include:
 
-- review decision: approve, request changes, needs owner review, blocked by
-  missing context, or no blocking issue found with residual risks
-- brief summary of the changed surface reviewed
-- validation performed, reviewed, or recommended
+- safe changes made and validation performed
+- gated or deferred changes and why they were not made
+- the exact scope of focused validation and whether broader project alignment
+  was intentionally not performed
 - residual risks and open questions
 
 ## References

@@ -35,6 +35,9 @@ class CapacityResourceAdvice:
         return max(self.on_demand.available, self.reserved.available)
 
 
+CAPACITY_DATA_STATE_FRESH = "DATA_STATE_FRESH"
+
+
 def capacity_availability(value: object) -> CapacityAdviceAvailability:
     return CapacityAdviceAvailability(
         available=int(getattr(value, "available", 0) or 0),
@@ -66,11 +69,26 @@ def capacity_lane(
     return regular_capacity_lane(item)
 
 
-def capacity_mode_available(item: CapacityResourceAdvice, *, mode: str) -> tuple[str, int]:
+def capacity_mode_lanes(
+    item: CapacityResourceAdvice, *, mode: str
+) -> tuple[tuple[str, CapacityAdviceAvailability], ...]:
+    """Return every Capacity Advisor lane selected by one request mode."""
+
     normalized_mode = _as_text(mode).lower() or "regular"
     if normalized_mode in {"auto", "reservation-auto"}:
-        return "auto", item.reserved.available + item.on_demand.available
-    lane_name, lane = capacity_lane(item, mode=mode)
+        return (("reserved", item.reserved), ("on-demand", item.on_demand))
+    return (capacity_lane(item, mode=mode),)
+
+
+def capacity_lane_is_fresh(lane: CapacityAdviceAvailability) -> bool:
+    return _as_text(lane.data_state).upper() == CAPACITY_DATA_STATE_FRESH
+
+
+def capacity_mode_available(item: CapacityResourceAdvice, *, mode: str) -> tuple[str, int]:
+    lanes = capacity_mode_lanes(item, mode=mode)
+    if len(lanes) > 1:
+        return "auto", sum(lane.available for _lane_name, lane in lanes)
+    lane_name, lane = lanes[0]
     return lane_name, lane.available
 
 

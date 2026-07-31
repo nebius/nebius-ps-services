@@ -1,19 +1,22 @@
 ---
 name: sdlc-implement-plan
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-tdd` when a locked Agentic SDLC feature plan needs production implementation. Implements only the current feature plan and stays inside its boundaries."
+description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-tdd` to coordinate one feature's dependency waves, with one fresh agent, branch, and private worktree per implementation task, ordered integration, combined validation, and non-force worker cleanup."
 ---
 
 # Implement Plan
 
 ## Purpose
 
-Implement production code for one feature while staying inside the locked plan.
+Coordinate isolated task agents to implement one locked feature safely.
 
 ## When To Use
 
 - A feature has a locked plan and tests are red, ready, or already green.
 - The SDLC loop reaches implementation for the current feature.
-- A classified implementation defect needs repair within the same plan.
+- A proven implementation defect is still inside an active task's existing
+  attempt contract.
+- A post-wave implementation defect has an immutable corrective plan vN+1 with
+  diagnosis-bound tasks and appended waves.
 
 ## When Not To Use
 
@@ -28,40 +31,107 @@ Implement production code for one feature while staying inside the locked plan.
 - Feature design.
 - Context pack.
 - Existing codebase.
+- Prepared execution coordinator, logical waves, immutable assignments, and
+  integration worktree.
+- For corrective work, the exact `diagnosis-v1`, stable blocker key, original
+  regression oracle, affected-boundary check, and invalidation set.
 
 ## Required Reads
 
 - Locked plan.
 - Feature design and context pack.
 - Relevant source files, tests, and project conventions.
+- The execution-plane reference owned by `sdlc-prepare-execution` and every private wave,
+  task, assignment, and result record used in the current transition.
 
 ## Writes
 
-- Production code.
-- Required configuration changes from the plan.
-- Test fixture updates only when required.
-- Local implementation evidence.
+- Worker-owned production/configuration/test-fixture changes inside declared
+  write claims.
+- One worker result and one direct-child commit per task.
+- Ordered no-fast-forward merge commits, combined evidence, and cleanup state.
 
 ## Process
 
-- Re-read the locked plan and inspect current code before editing.
-- Make the smallest coherent implementation.
-- Preserve public behavior unrelated to the feature.
-- Keep style consistent with nearby code.
-- Run focused tests when useful and record changed files plus rationale.
+1. Reload the checkpoint and coordinator. Re-observe the integration Git root,
+   common directory, branch, recorded HEAD, and cleanliness.
+2. Run the private helper `seal-tdd` once. This creates the internal TDD-base
+   commit when needed; do not stage or commit it by hand.
+3. For the next logical wave, run `wave-prepare`. Dispatch only the current
+   capacity batch. Every `TASK-*` must use its own fresh agent operating from
+   its immutable worker cwd; never reuse one agent for multiple parallel tasks.
+   Prefer native isolated agents. When they are unavailable, use the private
+   sequential `codex exec` fallback: one fresh `--ephemeral` process per task,
+   exact `--cd <scope_cwd>`, `--sandbox workspace-write`, schema-bound output,
+   and no session resume or extra writable directories.
+   After the batch commits, invoke private `batch-advance`; it creates the next
+   batch's assignments and worktrees. Never start a task outside the active
+   batch or reuse a session hash from a completed or recovered task.
+4. Give each worker only its task record, assignment digest, digest-bound
+   incoming handoff from all earlier completed waves and batches, requirements,
+   design/context reminders, test target, write claims, and stop conditions.
+   The worker calls `task-start`, implements the smallest coherent change,
+   including its part of the vertical end-to-end slice without widening feature scope,
+   validates it, runs a task-scoped `code-review`, fixes blocking findings, and
+   returns an explicit summary, decisions, open risks, validation, and review
+   evidence; a commit subject is never substituted for handoff evidence. The coordinator calls
+   `task-finish` with that structured evidence to scan staged paths/content, create exactly one direct-child
+   commit with normal Git hooks, and persist the result.
+   Recovery passes the recorded current attempt with explicit stopped-worker
+   confirmation so only one fresh session can win an ownership transfer.
+   A corrective assignment also carries its exact diagnosis ID and original
+   regression oracle. The worker must implement only the diagnosis-bounded
+   repair, run that oracle first, then run the counterfactual or
+   affected-boundary check. `task-finish` must receive structured oracle,
+   `passed` outcome, and evidence-reference fields; it binds their digest to
+   the worker commit and rejects missing or mismatched proof. The worker must
+   not reinterpret any completed task.
+5. The coordinator does not edit product files while workers run. It verifies
+   every result, then runs `wave-integrate`; merges occur in stable task order
+   with retained worker commits and explicit merge commits.
+6. Run combined validation/tests at the exact integration tip. For corrective
+   work, run the original failed oracle, the counterfactual or affected-boundary
+   check, and then validation plus unit/integration tests. Pass evidence to
+   `wave-complete`, which removes only clean, reachable, registered worker
+   resources using non-force Git operations.
+7. Repeat for dependent waves. Route to downstream validation only after every
+   wave is integrated, validated, and cleaned.
+8. Rerun every failed or invalidated evaluation criterion at the new
+   integration commit. Continue to documentation, alignment, and commit only
+   when required evidence is bound to that commit and the current
+   requirements, design, and plan fingerprints.
 
 ## Idempotency
 
-- Reruns converge instead of duplicating code.
+- Reruns converge instead of duplicating resources, commits, or merges.
 - If implementation already exists, verify it against the plan instead of rewriting.
-- If source drift invalidates the plan, stop and route to `sdlc-create-plan`.
+- If source drift invalidates the plan, or if the vertical slice cannot be
+  implemented inside the locked boundaries, stop and route to
+  `sdlc-create-plan` or `sdlc-create-design` instead of broadening scope.
+- Resume from recorded task/wave/coordinator state. Do not infer a successful
+  Git mutation from an error; re-observe refs, worktree registration, ancestry,
+  and result digests first.
+- Transfer an interrupted running task only through `task-recover` after the
+  previous worker is explicitly confirmed stopped. Preserve its assignment,
+  branch, worktree, and claimed changes; never use a time-based or forced
+  takeover.
+- A failure while its task is active retries only through that task's recorded
+  attempt contract. A failure after completed waves requires an adjacent,
+  append-only corrective plan and `replan-future`; it never reopens or
+  reinterprets completed work.
 
 ## Failure Handling
 
-- If tests cannot pass due to code, fix implementation.
-- If tests are wrong, route to `sdlc-tdd`.
-- If design is wrong, route to `sdlc-create-design`.
-- If environment is blocked, mark `ENVIRONMENT_DEFECT`.
+- Return every new failure through `sdlc-classify-failure`. Do not infer a code,
+  test, design, or environment owner from the symptom alone.
+- If a first direct implementation repair fails with the same blocker, return
+  to the classifier; `troubleshoot` diagnosis is mandatory before another
+  repair dispatch.
+- A probable, incomplete, unresolved, or missing-evidence diagnosis cannot
+  authorize implementation.
+- Undeclared worker paths, incomplete ownership, or invalidated assignments map
+  to `REPLAN_REQUIRED`; merge conflicts map to `INTEGRATION_CONFLICT`; unsafe
+  cleanup maps to `CLEANUP_BLOCKED` with resources retained.
 
 ## Must Not
 
@@ -70,12 +140,27 @@ Implement production code for one feature while staying inside the locked plan.
 - Hide failures.
 - Remove tests to pass.
 - Expand scope without design update.
+- Reopen sealed, promoted, or completed execution. A post-promotion defect
+  starts a corrective run from the exact promoted commit.
+- Weaken acceptance criteria or change the regression oracle to make a repair
+  pass.
+- Let two active tasks share a worker agent, branch, worktree, write claim, or
+  conflict domain.
+- Let workers mutate coordinator/wave shared state except through the private
+  transition helper, or use force, reset, rebase, squash, cherry-pick, or prune.
 
 ## Completion Criteria
 
 - Planned code changes are implemented.
+- Planned vertical slice is implemented or a plan/design defect is recorded.
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
+- Each task has validation and review evidence plus one verified worker commit.
+- Every logical wave has ordered merge evidence and no unsafe retained worker
+  resource.
+- Corrective workers are bound to a complete localized implementation handoff,
+  and the original oracle plus every invalidated downstream gate passes at the
+  new integration commit.
 - State moves to `implemented`.
 
 ## SDLC Invariants
@@ -93,20 +178,12 @@ Implement production code for one feature while staying inside the locked plan.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
@@ -120,4 +197,5 @@ Return a concise result with:
 
 ## References
 
-- No skill-local references are required by default; use project files and current official documentation as needed.
+- Read the execution-plane reference owned by `sdlc-prepare-execution` before
+  worker dispatch, integration, cleanup, or recovery.

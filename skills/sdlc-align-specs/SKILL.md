@@ -1,6 +1,6 @@
 ---
 name: sdlc-align-specs
-description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, and evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
+description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
 ---
 
 # Align Specs
@@ -25,14 +25,16 @@ evidence tell one consistent story.
 
 ## Inputs
 
-- Requirements, design, current feature plan, changed files, tests,
-  documentation, steering, and evidence.
+- Requirements, design, current project-instruction decision, current feature
+  plan, changed files, tests, documentation, steering, and evidence.
 - Current feature ID or full-run scope.
 
 ## Required Reads
 
 - `docs/requirements.md`.
 - `docs/design.md`.
+- The verified private `project-agent-instructions` state and active
+  selected-project instruction file when present.
 - Locked plans.
 - Validation, test, evaluation, documentation, UAT, and commit evidence.
 - Changed implementation and tests.
@@ -45,10 +47,22 @@ evidence tell one consistent story.
 
 ## Process
 
+- Resolve the registered integration worktree and verify its branch, Git common
+  directory, and recorded HEAD before alignment. Review code, tests, and docs
+  from that checkout; do not use the stale project checkout as feature truth.
 - Map `REQ-*` to `FEAT-*`, plans, tests, implementation, documentation, and
   evidence.
+- For features with a vertical flow or layer map, check that `docs/design.md`,
+  the locked plan's End-To-End Slice, TDD/tests, implementation boundaries,
+  validation evidence, evaluation evidence, documentation updates, and UAT
+  evidence all describe the same slice or explicitly record why no slice
+  applies.
 - Check stable IDs and status fields.
 - Check that no manual spec edits bypassed owner skills.
+- Check that the conditional project-instruction decision matches current
+  requirements, design, inherited instructions, and target bytes. Validate a
+  generated file's provenance; preserve a human-owned file and report any
+  material gap or conflict.
 - Check that evidence supports claimed state transitions.
 - Check that project-facing docs do not describe behavior that implementation
   and evaluation evidence have not proven.
@@ -66,12 +80,20 @@ evidence tell one consistent story.
 - Missing evidence routes to the responsible phase.
 - Spec contradiction maps to `SPEC_GAP`.
 - Plan/design mismatch maps to `DESIGN_DEFECT` or `PLAN_DEFECT`.
+- Slice mismatch maps to the earliest owner: design for wrong layer map, plan
+  for wrong slice, TDD/tests for missing coverage, implementation for
+  out-of-scope files, evaluation for missing observation, or documentation for
+  unsupported wording.
 - Documentation mismatch maps to `DOCUMENTATION_DRIFT` and routes to
   `sdlc-update-documents`.
+- Stale, missing, or invalid project-instruction decision evidence routes to
+  `project-agent-instructions`; a human-owned conflict remains blocked there.
 
 ## Must Not
 
 - Free-edit requirements or design.
+- Edit any project instruction file; route it to
+  `project-agent-instructions`.
 - Modify locked plans.
 - Pretend unchecked evidence passed.
 - Replace the general `align` workflow.
@@ -80,13 +102,20 @@ evidence tell one consistent story.
 
 - Alignment report exists.
 - Each drift item has an owner skill or blocker.
+- Vertical flow, layer map, locked slice, and evidence agree when applicable.
 - No unresolved inconsistency remains before commit or PR readiness is claimed.
+- The project-instruction decision and any active file agree with current
+  committed specs and inherited policy.
 
 ## SDLC Invariants
 
-- Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
+- Treat `docs/requirements.md`, `docs/design.md`, and any
+  provenance-owned generated project-root `AGENTS.md` as committed project
+  truth.
 - Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+  writes `docs/design.md`; only `project-agent-instructions` creates or
+  refreshes its generated project-root `AGENTS.md`. Other skills route changes
+  to those owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
@@ -97,20 +126,12 @@ evidence tell one consistent story.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

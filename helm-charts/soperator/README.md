@@ -50,9 +50,11 @@ storage, Helm dependency, and cxcli wiring design.
 - Pinned OpenKruise dependency for Soperator-managed StatefulSets.
 - Optional MariaDB Operator dependency for Slurm accounting.
 - CPU-only, GPU-only, and mixed CPU+GPU Slurm worker layouts.
-- GPU worker NodeSets get a chart-owned host driver root mount and init guard
-  through `gpuDriverJail.enabled=true`, so Slurm jobs use real host
-  `libcuda.so.1` / `libnvidia-ml.so.1` from the shared jail.
+- GPU worker NodeSets get a chart-owned read-only host driver root mount and
+  host sysfs projection plus a validation-only init guard through
+  `gpuDriverJail.enabled=true`, so Slurm
+  jobs use cxcli-verified host `libcuda.so.1` / `libnvidia-ml.so.1` from the
+  shared jail without per-worker writes to that jail.
 - Slurm partitions and node features through chart values.
 - Production worker profiles follow a one-to-one worker contract: one Slurm
   worker pod equals one Kubernetes worker VM. The chart achieves this through
@@ -256,18 +258,25 @@ Common direct Helm settings:
   the chart expects the rendered `nodesets[]` contract and fails fast if helper
   inputs or the old `nodeGroupMapping` value are passed directly to Helm.
 - `gpuDriverJail.enabled`: defaults to `true` and applies only to GPU
-  NodeSets. The chart injects a `nvidia-driver-root` hostPath mount from host
-  `/` to `/run/nvidia/driver`, plus a `cxcli-gpu-driver-jail` init guard that
-  uses the same `slurmd` image. The guard removes stale zero-byte driver
-  artifacts from the shared jail, refreshes `libcuda.so.1` and
-  `libnvidia-ml.so.1` from the host driver root, runs `ldconfig`, and fails the
-  worker pod if the host driver root or driver libraries are unusable. The
-  guard checks that host `nvidia-smi` exists but does not execute GPU inventory
-  from the init container; GPU device visibility is validated later from the
-  GPU-requesting worker container or Slurm job root. GPU NodeSets that define a
-  custom mount named `nvidia-driver-root`, a mount at `/run/nvidia/driver`, or
-  a custom init container named `cxcli-gpu-driver-jail` fail fast at render.
-  CPU NodeSets are untouched.
+  NodeSets. The chart injects hostPath `/` read-only at
+  `/run/nvidia/driver`, hostPath `/sys` read-only at
+  `/mnt/jail/sys-host`, plus a one-GPU `cxcli-gpu-driver-jail` init guard that
+  uses the same `slurmd` image and mounts the shared jail read-only. cxcli is
+  the only writer: its passive-rootfs post-population Job atomically installs
+  the four NVIDIA linker symlinks and records driver, library, and
+  `nvidia-smi` hashes in `/etc/nebius-cxcli/gpu-driver-jail.env`. Every worker
+  guard validates that evidence against its host driver, the exact four
+  in-jail symlinks, the existing `ldconfig` cache, and jailed `nvidia-smi -L`.
+  The last check invokes the Jail's own dynamic loader and libraries from the
+  GPU-requesting init container instead of chrooting into the shared rootfs;
+  the shared rootfs intentionally has no persistent `/dev/nvidia*` device
+  nodes, while the container receives the live GPU devices from Kubernetes.
+  It never repairs or otherwise mutates the active shared jail. A missing,
+  stale, mixed-driver, broken-link, out-of-rootfs, or hash-mismatched contract
+  blocks `slurmd` startup. GPU NodeSets that define a custom mount named
+  `nvidia-driver-root` or `gpu-health-sysfs`, a mount at
+  `/run/nvidia/driver` or `/mnt/jail/sys-host`, or a custom init container
+  named `cxcli-gpu-driver-jail` fail fast at render. CPU NodeSets are untouched.
 - `partitionConfiguration`: Slurm partitions and their NodeSet mappings.
   Each partition supports a typed `policy` block (`priorityTier`,
   `preemptMode`, `default`, `hidden`, `state`, `maxTime`, `defaultTime`,
@@ -297,6 +306,13 @@ Common direct Helm settings:
   objects (typically through `qosConfiguration`) before enabling enforcement.
   Keep `PluginDir` unset unless the image-specific plugin directory is known:
   Slurm fails startup when any path in `PluginDir` is absent.
+- `slurmNodes.controller.openMetrics.enabled`: controls the SlurmCluster's
+  native OpenMetrics endpoint and its `MetricsType=metrics/openmetrics`
+  configuration. It defaults to `true` for the pinned Slurm 25.11 images.
+  External first-adoption Jail Upgrade may temporarily render it as `false`
+  while consumers still run an older legacy rootfs and through exact
+  target-slot consumer verification, then restores this chart value before
+  final pre-release checks.
 - `controllerManager.manager.kubeClient.{qps,burst}`: optional Kubernetes
   client tuning for the Soperator manager on large clusters (2k-5k nodes).
   Empty by default; non-empty values are emitted as `KUBE_API_QPS` /
@@ -312,8 +328,33 @@ Common direct Helm settings:
   `nodesets[]`.
 - `volume.*` and `storage.*`: jail, controller spool, optional accounting
   storage, and mount placement.
+- `jailRootfs.adoption.activeSource: legacy-rootfs`: first-adoption staging.
+  Set `jailRootfs.adoption.legacyPvcName` to the discovered legacy PVC. The
+  chart derives `volumeSources[name=jail]`, every configured service-role jail
+  reference, and every worker NodeSet jail claim from that value. While this
+  value is active, those consumers remain on the legacy PVC and generated
+  `jailPersistentMounts` submounts are not attached. Automatic external paths
+  can point at their existing legacy directories, so no copy is needed; an
+  explicitly relocated non-overlapping path may still use cxcli's guarded copy
+  workflow. Paths accept only shell-safe letters, digits, `.`, `_`, `-`, and
+  `/`, and persistent local paths must not overlap. After passive-slot
+  population and any required copy complete, cxcli changes `activeSource` to `slot`,
+  selects the refreshed slot, and the chart derives the canonical `jail`
+  alias, controller and login volume-source references, and every worker
+  NodeSet PVC from that one active-slot value before attaching the shared
+  submounts. SConfigController and REST consume the same active alias.
+  Accounting retains an alias-backed volume declaration, but the
+  current operator workload does not mount the jail. Retaining `rollbackSource:
+  legacy-rootfs` keeps the old PV/PVC only; it never pins the active alias. An
+  explicitly configured canonical `legacyPvcName: jail-pvc` keeps the
+  chart-owned legacy PV/PVC rendered; a different pre-existing claim name is
+  referenced without generating an unrelated default `jail-pv`/`jail-pvc`.
 - `slurmNodes.login.sshRootPublicKeys`: public keys for login SSH access.
   Prefer Helm `--set-file`.
+- `secrets.sshdKeysName`: existing Secret containing SSH server host keys.
+  Upgrade automation should preserve this Secret identity or copy verified key
+  data into a distinct target-owned Secret; do not rotate it implicitly during
+  chart takeover.
 - `certManager.enabled`: Soperator admission webhook certificates. Requires
   cert-manager CRDs when enabled. The chart defaults
   `certManager.privateKey.rotationPolicy` to `Always`, matching cert-manager
@@ -625,14 +666,22 @@ review-only hashes from that lock. Upstream sync sets the parent and
 Soperator-family child chart package versions to `<upstream>-ps.1`; follow-up
 parent-chart package respins may use `<upstream>-ps.N`.
 
-The lock describes upstream tracking in five groups:
+The lock describes upstream tracking in seven groups:
 
-- script imports, such as Slurm scripts and ActiveChecks scripts.
-- CRD imports, such as the core Soperator CRD bundle under `crds/`.
+- exact script imports, such as Slurm scripts and ActiveChecks scripts, plus
+  checks that every imported script is rendered or mounted by the chart.
+- exact CRD imports, such as the core Soperator CRD bundle under `crds/`.
 - chart `appVersion` tracking for the parent and Soperator-family child charts.
 - image values tracked against upstream chart values.
+- exact OCI references, image-index digests, per-required-platform digests,
+  and image-specific executable contracts for tracked upstream runtime images.
+  The pinned `login_sshd` image must contain every command used by cxcli's
+  fail-closed protected-session probe.
 - review-only upstream logic hashes for templates, dashboards, custom
   ConfigMaps, and storage classes.
+- the exact-sync target allowlist, local-owned write boundary, explicit
+  values/schema and rendered-resource paths, and forbidden controller
+  HA/replica fields that form cxcli's stable singleton chart interface.
 
 The verifier enforces that contract without writing files:
 
@@ -647,13 +696,40 @@ Use this flow when upstream Soperator publishes a newer Helm chart release:
 1. From any clean working tree, run the highest-release sync:
 
    ```bash
-   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report
+   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --accept-review-baseline --accept-image-baseline --live-upgrade-evidence /path/to/soperator-disposable-upgrade-evidence.json --report
    ```
 
    `--latest --sync` updates the lock pin to the highest non-draft,
    non-prerelease SemVer release published in GitHub releases and derives all
-   upstream-owned version, dependency, script, CRD, image, and review-hash
-   changes.
+   upstream-owned version, dependency, script, CRD, and image changes.
+   `--accept-review-baseline` is an explicit assertion that the upstream logic
+   diff was reviewed; sync never changes review-only hashes without it.
+   `--accept-image-baseline` independently asserts that every changed runtime
+   image reference, index digest, and required-platform digest was reviewed;
+   sync never changes those lock fields without it.
+   A real upstream pin promotion or either baseline-acceptance flag also
+   requires `--live-upgrade-evidence`. The JSON must be successful,
+   non-expired, bound to the proposed upstream release, exact resolved commit,
+   downstream chart version, and canonical full-tree candidate manifest,
+   and produced by a disposable external-upgrade campaign using the v4
+   journal. The locked source contract pins the required old-cluster upstream
+   and chart version, release-tarball digest, migration-profile fingerprint,
+   and Slurm runtime-image-set digest; evidence for any other source path is
+   rejected. After dependency build and every Helm/conformance check, the
+   target manifest hashes the content and executable bit of every file in the
+   parent chart, each local child chart, generated dependency archives, exact
+   script/CRD import trees, image/version targets, and the lock itself. It also
+   includes every runtime reference, image-index digest, required platform,
+   platform digest, and required-command contract. Helm dependency archives
+   are hashed as canonical
+   sorted entry trees, and `Chart.lock` is hashed without its non-runtime
+   `generated` timestamp, so independent dependency builds produce the same
+   identity while any dependency path, content, executable bit, version, or
+   digest change is still detected. The evidence records
+   running-job, TUI action, SSH/login, final singleton controller,
+   bridge-cleanup, Jail/GPU, report, and checkpoint proof. A baseline-free
+   `--ci-preview-no-branch` run may omit it because that preview cannot approve
+   or persist a promotion.
    Use plain `--sync` only when you want to refresh the release already pinned
    in the lock; it does not query GitHub releases.
    `--report` prints detailed per-import status and the changed-file list with
@@ -672,8 +748,8 @@ status check. It is not required before sync.
 
 Expected sync-owned changes can include:
 
-- `upstream-soperator.lock.yaml` `tag`, `commit`, image values, and review-only
-  hashes.
+- `upstream-soperator.lock.yaml` `tag`, `commit`, explicitly accepted OCI image
+  references, index/per-platform digests, and review-only hashes.
 - parent `Chart.yaml` package version, upstream annotations, upstream dependency
   versions, and child-chart dependency versions.
 - Soperator-family child chart `version` and `appVersion` fields.
@@ -685,12 +761,17 @@ Expected sync-owned changes can include:
 
 `--sync` refuses to write from a dirty working tree. When run from `main`,
 `master`, or the repository default branch, it creates a clean feature branch
-named `sync-soperator-<release>` before mutating files. It refreshes the lock
-`tag` and resolved `commit`, copies approved script and CRD imports, updates
-tracked image values, updates parent and child chart `appVersion` and
+named `sync-soperator-<release>`. It then performs the complete sync and Helm
+validation in an isolated clone. Only after every target, digest, platform,
+script-consumer, values/schema, dependency, lint, render-based cxcli contract,
+singleton-controller, and Helm unit-test check passes does
+it promote the allowlisted changes into the working tree. It refreshes the
+lock `tag` and resolved `commit`, copies approved script and CRD imports,
+updates tracked image values, updates parent and child chart `appVersion` and
 `<upstream>-ps.1` package versions, refreshes upstream parent dependency
 versions, regenerates dependency metadata when needed, runs Helm dependency,
-lint, and template validation under a temporary Helm repository config/cache,
+lint, template, stable cxcli render, final singleton-controller, and Helm unit
+validation under a temporary Helm repository config/cache,
 and leaves the resulting diff unstaged for local review and testing. The
 temporary Helm config is populated from the remote repositories declared in
 `Chart.yaml`, so local and CI sync runs do not require ambient `helm repo add`
@@ -699,31 +780,59 @@ Scoped `--scope scripts`, `--scope crds`, and `--scope images` runs are
 read-only checks only; write-mode sync always uses the full upstream release
 contract.
 
-Write mode requires `yq` v4 and Helm; read-only CI verification does not.
-Missing-tool errors include macOS and Linux install hints, but the sync script
-does not install packages automatically.
+Write mode requires `yq` v4. Full-contract read-only verification and write
+mode require Helm plus the pinned `helm-unittest` v1.1.1 plugin because the
+stable cxcli render and chart unit suite are mandatory gates. Image and
+full-contract verification also require Docker with Buildx because each
+reference is resolved to its index digest and required `linux/amd64` platform
+digest. For image-specific executable contracts, the verifier runs `/bin/sh`
+in that immutable platform image with no network, a read-only filesystem, no
+capabilities, `no-new-privileges`, and bounded CPU, memory, and process counts;
+the pinned `login_sshd` image must expose `sshd`, `ssh-keyscan`, `ssh-keygen`,
+and the core utilities used by cxcli's session probe. Script-only and CRD-only
+checks do not require Docker. Once a
+trusted evidence producer is configured, evidence-gated
+sync also requires an authenticated GitHub CLI with artifact-attestation
+support. Missing-tool
+errors include macOS and Linux install hints, but the sync script does not
+install packages automatically.
 
 The local chart templates, examples, docs, release tooling, and cxcli
 wiring are not overwritten by upstream sync. Those files are this chart's
 product layer, where we keep cxcli integration, Nebius infrastructure
 boundaries, production profiles, and chart-specific examples. Image sync is
 limited to explicit value paths listed in the lock, and the verifier refuses
-to write image values into files that are not declared in `local_owned_paths`.
-If this fork needs a temporary hotfix image, update the lock in the same PR so
-the intentional divergence is visible and reviewed.
+to write image values into files that are not exact `local_owned_paths`
+entries. A changed reference, image-index digest, or required-platform digest
+fails closed and requires the separate `--accept-image-baseline` review flag;
+the lock changes only after that explicit acceptance. If this fork needs a
+temporary hotfix image, update the lock in the same PR so the intentional
+divergence is visible and reviewed.
 
 The repository CI runs the same verifier on chart changes. A daily scheduled
 `soperator-upstream-verifier` workflow runs a read-only latest-release check and
 reports through GitHub Actions warnings and the workflow step summary when
 GitHub has a newer public Soperator SemVer release. When a newer release is
 available, the workflow generates a disposable runner-only `--latest --sync
---report` preview so the summary shows the expected changed files and diff stat,
-then intentionally marks the scheduled run failed so the Actions run is the
-GitHub-native notification marker. It does not create a branch, stage, commit,
-push, open a PR, configure email, or post to Slack. The operator remains
-responsible for creating a feature branch, running the sync locally, reviewing
-and testing the diff, committing, and opening the PR. Manual dispatch runs
-produce the same preview without using a failed run as the notification marker.
+--report` preview. Scheduled runs never accept changed review-only logic or
+runtime-image baselines; they stop at those boundaries, report the changes, and
+intentionally fail as the GitHub-native notification marker. After reviewing
+both upstream surfaces, an operator may manually dispatch the workflow with
+`accept_review_baseline=true`, `accept_image_baseline=true`, the successful
+evidence-producing workflow run ID, and its artifact name for a full disposable
+changed-file/diff-stat preview. The workflow downloads the artifact with
+read-only Actions access, proves that the source run succeeded in this
+repository, verifies its GitHub artifact attestation and locked workflow/ref,
+and binds the producer, exact locked source path, resolved upstream commit,
+and post-validation full-tree candidate manifest before passing it to the
+verifier. The verifier workflow cannot produce its
+own evidence. `producer_workflow` is deliberately `null` in the current lock;
+until a separate trusted disposable-campaign workflow publishes and attests the
+fixed artifact, pin promotion and baseline acceptance remain unavailable and
+fail closed. Neither path creates a branch,
+stages, commits, pushes, opens a PR, configures email, or posts to Slack. The
+operator remains responsible for the local reviewed sync, tests, commit, and
+PR.
 The scheduled verifier compares release versions before previewing files and
 fails early when the lock release is newer than every non-draft,
 non-prerelease SemVer GitHub release, which helps catch lock typos without

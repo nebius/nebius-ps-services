@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1.8
+# check=error=true
+
+FROM {{NODE_BUILD_IMAGE}} AS build
+WORKDIR /build
+
+COPY {{PACKAGE_MANIFEST_COPY_JSON}}
+RUN {{INSTALL_RECIPE}}
+
+COPY . .
+RUN {{BUILD_RECIPE}}
+
+FROM {{STATIC_RUNTIME_IMAGE}} AS runtime
+COPY --from=build /build/{{BUILD_OUTPUT_PATH}} {{STATIC_ROOT}}
+
+USER {{RUNTIME_UID}}
+EXPOSE {{RUNTIME_PORT}}
+CMD {{RUNTIME_COMMAND_JSON}}

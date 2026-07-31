@@ -42,18 +42,51 @@ def sdk_parse_message(wrapper_type: type[Any], payload: Mapping[str, Any]) -> An
     return wrapper_type(parsed)
 
 
+def nebius_operation_id(operation: object) -> str:
+    """Return the stable ID exposed by a Nebius SDK operation wrapper."""
+
+    direct_id = str(getattr(operation, "id", "") or "").strip()
+    if direct_id:
+        return direct_id
+    payload = sdk_message_to_mapping(operation)
+    payload_id = str(
+        payload.get("id", "")
+        or sdk_message_to_mapping(payload.get("metadata", {})).get("id", "")
+        or ""
+    ).strip()
+    if payload_id:
+        return payload_id
+    raw = getattr(operation, "raw", None)
+    if callable(raw):
+        raw_operation = raw()
+        if raw_operation is not operation:
+            return nebius_operation_id(raw_operation)
+    return ""
+
+
 def wait_nebius_operation(
     operation: object,
     *,
     timeout_seconds: int,
     action: str,
-) -> None:
-    """Wait for a Nebius operation when the SDK exposes sync_wait."""
+) -> object:
+    """Wait for a Nebius operation and require a successful terminal result."""
 
     sync_wait = getattr(operation, "sync_wait", None)
     if not callable(sync_wait):
-        return
+        raise RuntimeError(f"{action} did not return a waitable Nebius provider operation.")
     try:
         sync_wait(timeout=timeout_seconds)
     except TimeoutError as exc:
         raise subprocess.TimeoutExpired(action, timeout_seconds) from exc
+    successful = getattr(operation, "successful", None)
+    if not callable(successful):
+        raise RuntimeError(
+            f"{action} returned a provider operation without terminal success evidence."
+        )
+    if not successful():
+        status_getter = getattr(operation, "status", None)
+        status = status_getter() if callable(status_getter) else None
+        status_suffix = f" status={status}" if status is not None else ""
+        raise RuntimeError(f"{action} failed.{status_suffix}")
+    return operation

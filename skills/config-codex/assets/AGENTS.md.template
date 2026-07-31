@@ -7,8 +7,46 @@
 - Move repeatable workflows, detailed checklists, task-specific templates, and
   tool or project-specific scripts into skills or repo docs.
 
+## Nested project instructions
+
+- Before modifying files in a first-class project, resolve the exact project
+  root and read every applicable instruction file from the repository root
+  through that project directory. For work spanning projects, repeat this for
+  every affected project.
+- Root and ancestor instructions remain applicable. Treat nested instructions
+  as additive unless they are a legitimate directory-scoped refinement of
+  architecture, interfaces, commands, tests, documentation, or operations.
+- Nested instructions must not weaken higher-level security, privacy,
+  secret-handling, authorization, publication, or destructive-operation
+  safeguards.
+- If applicable instructions are irreconcilable, stop before mutation,
+  identify the conflicting files and rules, and request direction. Do not
+  silently choose or weaken a safeguard.
+- Do not assume instructions for sibling projects were loaded from the current
+  working directory. When a workflow creates or refreshes an `AGENTS.md`, read
+  it explicitly because instruction discovery occurs when a session starts.
+- Treat `AGENTS.override.md` as the active file for its directory. Do not create
+  an override automatically.
+
 ## Working Defaults
 
+- After one remediation fails against the same blocker, use `troubleshoot`
+  before another repair. Each blocker tranche has a hard maximum of five
+  remediation attempts or 120 active minutes, whichever comes first; a current
+  instruction may lower but never raise or disable the attempt maximum. Require
+  newly acquired evidence and a genuinely new evidence-derived hypothesis
+  before every retry. Report attempts 1 through 4 as progress; at exhaustion,
+  make only the exact private task-state update that records the stop, then call
+  no other tool and return the complete troubleshooting report. If the evidence
+  or hypothesis gate cannot be satisfied earlier, stop and return the structured
+  investigation report. Only a new explicit user instruction may start another
+  bounded tranche.
+- When evidence establishes a causally independent blocker, start its own fresh
+  budget at attempt 1. Use the five-attempt maximum and default 120-minute limit
+  unless the current instruction sets a lower attempt limit or another time limit
+  for the new blocker. Do not carry attempts, active time, tranche,
+  exhaustion status, or stop trigger from another blocker. Permission denials
+  and marker validation or repair consume no attempt.
 - Default policy for logic/API/CLI behavior changes is **no legacy
   compatibility layer** and **no backward-compatibility shims**.
 - When behavior changes, prefer fail-fast and a single canonical path instead
@@ -20,6 +58,11 @@
   in scope.
 - Preserve unrelated user changes. Make focused edits, inspect the diff, and
   verify with the narrowest relevant checks before broadening.
+- Agents may clean up temporary trees they created during the current task.
+  Resolve and validate the exact task-specific path under the system temporary
+  directory first, use a scoped non-forced deletion such as
+  `find "$task_temp_dir" -depth -delete`, and never target the temporary root or
+  an unresolved variable.
 
 ## Git Workflow
 
@@ -74,8 +117,12 @@
 
 - Read the durable task-state file injected by global hooks at task start,
   resume, or after compaction when prior context may matter. Update it with
-  concise checkpoints, and do not create repo-local task-state files unless
-  explicitly requested.
+  concise checkpoints. Hooks may create only an empty private scaffold at
+  compaction or the first complex prompt; the parent owns semantic content.
+  Do not create repo-local task-state files unless explicitly requested.
+- Preserve an active `codex-remediation-budget:v1` marker exactly while
+  rewriting task state. The `troubleshoot` skill owns its semantics; task state
+  owns only private continuity.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment

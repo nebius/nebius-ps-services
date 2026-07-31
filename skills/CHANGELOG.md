@@ -6,6 +6,601 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the explicit-only `scaffold-project` composition skill for approved
+  greenfield and additive brownfield repositories. It models logical
+  capabilities, materialization units, runtime units, external services, and
+  one content owner per path; gathers exact private specialist candidates;
+  finalizes a closed canonical JSON plan with content-addressed payloads and
+  target preconditions; and applies an approved digest through a guarded
+  POSIX executor with all-path preflight, no-follow writes, private backups,
+  crash-safe journaling, created-directory identity binding, internal-bundle
+  symlink rejection, graph-to-operation ownership enforcement, unresolved
+  placeholder rejection, positive owner artifact contracts, runtime-authority
+  Unicode normalization, additive suffix-only brownfield merges, drift
+  detection, target-root compare-and-swap checks, retained-descriptor
+  greenfield roots with platform-native atomic no-replace publication,
+  per-operation architecture-source revalidation, bundle-wide apply locking,
+  exact in-memory use of the approved manifest, finalized action/payload
+  relation checks, apply-time semantic-merge revalidation, case-folded VCS
+  control-path rejection, architecture-source/output separation, unique
+  semantic-merge marker identities, structured filesystem failures, and
+  idempotent resume. It never
+  deletes files, runs native generators, installs dependencies, initializes
+  Git, provisions, deploys, publishes, or enters Agentic SDLC.
+- Added the implicit `frontend-project` specialist for standalone or
+  coordinated-candidate React, TypeScript, and Vite scaffolding, with
+  deterministic repo-owned templates, strict TypeScript, Vitest/Testing
+  Library coverage, context-safe display-name rendering, explicit
+  compatible-version inputs, and no dependency installation or lockfile
+  fabrication.
+- Added the implicit `container` specialist for OCI image and runtime
+  engineering from repository source through a validated local artifact and
+  structured deployment handoff. It covers Dockerfile/Containerfile,
+  BuildKit/buildx, Compose including approved single-host production profiles,
+  non-root and read-only hardening, signals, health, storage, networking,
+  multi-platform and GPU evidence, troubleshooting, and SBOM/provenance/
+  vulnerability/signing requirements. Docker-first audit and smoke helpers are
+  offline or isolated by default, redact values, bound output and resources,
+  verify task ownership before cleanup, and require explicit opt-in for builds,
+  runtime tests, network access, and supply-chain tooling. The retained typed
+  Python and React/Vite renderer still rejects instruction injection, requires
+  deterministic dependency and setuptools-scm version identity, and keeps its
+  local Compose validator fail-closed. Registry publication and signing actions
+  remain with `publish-image`, workflow YAML with `github-workflows`, and
+  Kubernetes resources with `helmchart`.
+- Added the explicit-only shared `project-agent-instructions` skill. After
+  workflow-validated requirements and design, it uses deterministic
+  inspect/apply/verify state to decide whether the exact selected project needs
+  a concise root `AGENTS.md`. It preserves human-owned and override files,
+  exclusively creates missing files, refreshes only unchanged
+  provenance-owned content, records private evidence, and fails closed on
+  ownership, scope, conflict, safety, or concurrent-change ambiguity. Its
+  helper uses Python 3.9-compatible annotation syntax and reports a structured
+  prerequisite when an older runtime cannot parse Codex TOML configuration.
+  Final transition postconditions now prevent race-modified targets from being
+  attested, mixed workflow markers fail closed in either specification,
+  generated files cannot claim a human-owned disposition, refresh failures
+  restore verified prior content when safe, and private evidence shape and
+  mode are revalidated. The helper now computes the exact remaining generated
+  body capacity under Codex's cumulative project-document limit, caps generation
+  at 7 KiB, and rejects oversized bodies without truncation. It rejects
+  Git-ignored decision evidence while accepting tracked files that merely match
+  ignore patterns, and splits contracts, discovery, private state, target I/O,
+  and workflow transitions into focused modules behind the unchanged canonical
+  CLI. Generated-body safety validation now also rejects bracketed private IPv6
+  endpoints, including loopback, unique-local, link-local, and unspecified
+  addresses.
+- Added the explicit-only `nosleep4mac` skill with one no-argument,
+  idempotent workflow that atomically converges a public-safe per-user macOS
+  LaunchAgent running `/usr/bin/caffeinate -s`. It preserves display and
+  battery sleep, verifies the exact AC-only assertion, repairs stopped or
+  safely drifted managed state with rollback, and leaves healthy repeated runs
+  byte-for-byte and PID-stable.
+
+### Changed
+
+- Raised the global `troubleshoot` same-blocker remediation budget from three
+  attempts and 60 active minutes to five attempts and 120 active minutes. The
+  hook still requires new evidence and a new falsifiable hypothesis before
+  every retry and requires newly written state to use the canonical v3 schema.
+  It preserves historical exhausted v1 report delivery, makes previous v2 state
+  fail closed for exact marker repair instead of adding a dual-limits
+  compatibility path, and keeps fallback reports bounded while covering every
+  counted attempt.
+- Split complete application scaffolding into three explicit ownership layers:
+  `app-stack` now emits a closed logical-only technology handoff;
+  `scaffold-project` schema v2 owns repository topology, per-path routing,
+  digest-bound normalized candidate inputs, validation provenance, approval,
+  and guarded apply; and `frontend-project` deterministically materializes exact
+  React/TypeScript/Vite candidates inside its assigned root. The frontend
+  contract now includes an entrypoint and optional route shell, names-only
+  `.env.example`, typed public `VITE_*` validation, and opt-in component-local
+  Oxlint and Prettier profiles. App-stack-approved frontend package-manager,
+  version, profile, runtime, and capability decisions are rechecked against
+  candidate inputs, and unsupported required web UI profiles fail closed.
+  App-stack handoff schema v2 now carries a closed component class and
+  canonical technology name; scaffold finalization rejects omitted required
+  components, kind drift, application technology drift, mixed assigned-unit or
+  runtime contracts, unsupported non-frontend capability selections, unknown
+  frontend capability IDs, and external-service substitutions. Runtime units
+  now bind explicitly to their logical capability. Frontend requests accept
+  only npm, pnpm, Yarn, or Bun and reject separator-normalized public
+  API-key/access-key variable names.
+  Generated TypeScript includes Vite client types, while Markdown display names
+  are HTML-safe before Markdown escaping. Schema-v1 scaffold bundles are
+  rejected without a compatibility path.
+  External scaffold and frontend JSON documents now reject duplicate object
+  keys and non-standard numeric literals before structural or digest
+  validation.
+- Added coordinated-candidate scope to Python, Terraform, Helm, GitHub
+  Actions, `.gitignore`, and shell specialists so `scaffold-project` can
+  collect exact private candidates without overlapping target writes or
+  repository-root ownership. `app-stack` and `design` now emit one-way bounded
+  scaffold handoffs after architecture approval without calling back from the
+  scaffold workflow or starting Agentic SDLC.
+- Integrated `project-agent-instructions` into Task Implementer after managed
+  specifications and before contract commit or worker dispatch, and into
+  Agentic SDLC after design and before auto-steering or planning. Both
+  workflows now checkpoint the conditional decision, invalidate it when
+  specifications or inherited policy drift, preserve `workspace init` as
+  private-state-only, and allow only provenance-owned generated `AGENTS.md`
+  changes in their scoped contract commit. Added workflow, handoff, verifier,
+  steering, alignment, documentation, and source-installed parity coverage.
+- Added durable nested-project conflict and precedence rules to the global
+  Codex instruction template and live global instructions: read every
+  applicable ancestor/project instruction file, keep higher-level safeguards,
+  stop on irreconcilable conflicts, and explicitly reload newly generated
+  project instructions in the current session.
+- Redesigned the Agentic SDLC workflow image as a taller, readable task-to-skill
+  map with substantially larger typography, an explicit `sdlc-start`
+  coordinator, all 19 golden-path task owners, clearer conditional failure
+  routing, and readable stop-budget and private-evidence text. Arrow paths now
+  meet the base of each arrowhead and every arrowhead tip touches its
+  destination boundary. The design document now embeds the canonical SVG
+  directly, while the generated PNG remains synchronized as a fallback.
+- Changed `code-review` so a direct standalone `$code-review` invocation
+  completes the initial review, fixes only safe in-scope findings, validates
+  each fix with focused red-before/green-after repository-native proof, reviews
+  its touched diff, and returns the complete prioritized fixed and gated
+  ledger. Already-green or unrelated checks cannot authorize remediation. The
+  skill itself no longer resolves, loads, or invokes `align`; a caller or outer
+  orchestrator remains responsible for any separate repository policy
+  requiring alignment. Implicit, nested, and explicit no-write requests such
+  as review-only, audit-only, or report-only remain non-mutating, including
+  exact restoration of their initial worktree state. All modes use no-write or
+  no-cache validation settings where available and clean exact task-created
+  artifacts. P0-P3 priority remains independent of remediation safety. `align`
+  keeps its child `code-review` lane report-only and retains ownership of
+  cross-surface remediation, while its final gate also removes exact
+  task-created validation residue.
+- Added an evidence-guided Agentic SDLC repair loop with immutable
+  `failure-event-v1` and `diagnosis-v1` records, stable blocker identity,
+  deterministic classification, atomic `repair-control-v1`, an append-only
+  repair journal, and bounded blocker/feature dispatch budgets. Proven
+  mechanical causes now bypass diagnosis; ambiguous or persistent failures use
+  `troubleshoot` as a conditional, no-committed-fix diagnostic branch that
+  returns through classification. Inconclusive evidence stops instead of
+  becoming speculative redesign, while positive system-contract proof and
+  durable approval gate broader design changes. Post-wave implementation
+  repairs use immutable corrective plan vN+1, preserve full task definitions
+  and digests, append diagnosis/oracle-bound waves, require digest-protected
+  oracle proof in `worker-result-v4`, and rerun the original
+  evaluator oracle plus invalidated gates at the new integration commit. A
+  process-locked revalidation cursor prevents successful repairs from reaching
+  UAT or publication until immutable commit-bound evidence clears every
+  invalidated gate. Pre-commit evidence follows the live integration HEAD;
+  final commit evidence is accepted only after promotion, a clean matching
+  project HEAD on the recorded base branch, and verified integration worktree
+  and branch cleanup.
+  Added deterministic classifier, evaluator, corrective-plan, execution,
+  worker, Stop-hook, troubleshooting, and workflow-verifier coverage and
+  regenerated the workflow diagram around the bounded repair and design loops.
+- Replaced the dense text-only Agentic SDLC workflow diagram with a colorful,
+  accessible architecture image while retaining the precise searchable phase
+  order in the design document.
+- Bound every canonical remediation attempt to its marker's exact blocker key.
+  The optional `troubleshoot` guard now rejects missing, mixed, or carried
+  attempt identities as invalid marker state, so three repairs against one issue
+  cannot exhaust a causally independent issue. Added adversarial PreToolUse and
+  Stop regressions plus aligned skill, hook, eval, metadata, and catalog
+  contracts; semantic blocker classification remains parent-owned.
+- Aligned the Agentic SDLC PR handoff around one immutable promoted SHA.
+  Active-run `create-pr` is now publication-only after passing UAT and lease
+  release, while `review-pr` is findings-and-readiness-only; any branch-changing
+  fix returns through failure classification and the coordinator so affected
+  validation, documentation, alignment, commit, UAT, and publication gates
+  rerun. `sdlc-merge-pr` now accepts only an explicit, exact-command merge while
+  the remote head still equals the promoted and reviewed SHA. Updated the
+  design, state schema, failure taxonomy, skill metadata, catalog, and verifier
+  contracts to match the coordinator-v4 workflow, lifecycle `--resume`,
+  Computer Use GUI routing, session claims, and bounded observability
+  evaluation. The verifier now treats `nebius-grafana-query` as an installed
+  runtime dependency and includes its source digest in parity and verification
+  identity checks.
+- Integrated `nebius-grafana-query` as a narrowly gated structured evidence
+  provider for `troubleshoot` and `sdlc-evaluate`. The consumers now decide
+  relevance, authority, deployed scope, interpretation, and grading; the
+  provider performs one lazy readiness/discovery check per workflow run, skips
+  the path without repair or retry when unavailable, applies six-query fast
+  and four-query deep limits within one cumulative ten-query budget, round-trips
+  connectivity plus total and per-stage remaining budgets, rejects invalid
+  requests before tool use, redacts untrusted telemetry, and returns a fixed
+  facts envelope with data gaps and query cost without claiming root cause or
+  acceptance. Evaluation deep queries are limited to named attribution,
+  coverage, or dependency interpretations of predefined gates, and canonical
+  rejection reasons map deterministically to the SDLC failure taxonomy.
+  Troubleshooting retains causal proof and maps decisive missing telemetry to
+  `BLOCKED_MISSING_EVIDENCE`; SDLC evaluation limits live observability to
+  predefined operational gates, keeps production workloads prohibited, and
+  records pass, fail, or inconclusive criteria. Embedded troubleshooting now
+  requires a decision-changing question plus non-Grafana provenance for one
+  matching signal before readiness, passes that admission as a provider-checked
+  structured signal fit, starts with one cheapest matching query per provider
+  invocation, treats query allowances as ceilings rather than targets, and
+  forbids speculative datasource discovery or telemetry-family fan-out. SDLC
+  evaluation now applies the same zero-call signal-fit gate plus a
+  provider-checked criterion fit containing the exact measurement,
+  candidate/control attribution, coverage, and pass/fail/inconclusive rules;
+  it also admits only one grade-changing query per provider invocation instead
+  of batching generic telemetry families.
+- Hardened `nebius-grafana-query` with one pinned absolute query window,
+  explicit `any` versus broad-scope semantics, evidence-gated federation,
+  cardinality preflight, exact decomposition of recomposable backend failures,
+  and ranked signal-aware reports. Reports now sort problem-first on the
+  requested field, display a bounded top 20 with coverage disclosure, use
+  per-group minimum/average/maximum only where valid, derive counter
+  increase/rate instead of averaging raw counters, and separate access
+  evidence from query and tool health.
+- Made the config-owned default Nebius CLI profile's configured project the
+  automatic runtime authority when no explicit task selector exists. The auth
+  hook resolves it with sanitized `nebius profile current` plus
+  `nebius config get parent-id`, while explicit task selectors keep precedence
+  and raw-token helper children remain explicit-selector-only. Added
+  `nebius/references/project-selection.md` so other Nebius implementations can
+  reuse the same authority, validation, and fail-closed lookup contract without
+  parsing the CLI configuration YAML directly.
+- Refactored `install-grafana-mcp-for-nebius` to pin and revalidate one human
+  Nebius CLI profile, isolate private token state by server/profile, sanitize
+  agent and competing Grafana credentials, rotate token-file auth with bounded
+  failure handling and stale-lock recovery, require current token-file support,
+  pre-mint and reuse a fresh startup token, renew stale startup state before MCP
+  launch with foreground browser authentication when necessary, enforce a
+  bounded 300-second Codex startup timeout, compare exact structured Codex MCP
+  values while digest-binding and atomically changing only that timeout, use
+  separate 90-second background and 210-second foreground refresh-lock budgets,
+  validate the complete trusted wrapper path, and enforce read-only MCP
+  arguments. Expanded
+  `nebius-grafana-query` with
+  fail-closed one-or-many tenant/project/resource scoping, attributed
+  multi-datasource fan-out and aggregation provenance, bounded
+  metrics/logs/traces, proxied Tempo tools, and strict GET-only
+  datasource-proxy fallbacks.
+- Hardened `troubleshoot` retry admission so each blocker tranche has a
+  non-overridable three-attempt maximum, every retry requires newly acquired
+  evidence and a genuinely new evidence-derived hypothesis, repeated or
+  evidence-free retries fail closed, and all repeated-failure stops return a
+  structured investigation report before further work.
+- Routed system-contract-changing `troubleshoot` remediations through `design`
+  after causal proof and before implementation, while keeping even difficult
+  repairs inside one existing private boundary in `troubleshoot`, preserving
+  its verification and reporting ownership, and sending active Agentic SDLC
+  failures through classification and coordinator routing first.
+- Made `config-codex`'s create-only `config.toml` template an explicit
+  public-safe recovery baseline derived through a documented allowlist rather
+  than a live-config copy. Recovery now preserves portable Sol/xhigh/Fast,
+  agent, task-state, and public MCP settings while excluding personal project
+  lists, absolute paths, secret-bearing values, private/plugin-managed
+  integrations, desktop/generated state, notification commands, and
+  undocumented keys; executable MCP dependencies are version-pinned, missing
+  configs are created through an atomic no-clobber `0600` renderer, and
+  existing laptop configs remain patch-only.
+- Narrowed `install-grafana-mcp-for-nebius` to explicit installation,
+  configuration, authentication repair, external-Grafana setup, and
+  datasource-list readiness validation. Routine datasource, dashboard,
+  PromQL, LogQL, and trace-tool questions now hand off to the read-only
+  `nebius-grafana-query` skill without a legacy query path in the installer.
+- Aligned the public Codex config template, local preflight, global-context
+  setup guidance, fixture validation, and installed skill copies on
+  `agents.max_concurrent_threads_per_session = 16`, removing the legacy
+  `agents.max_threads` alias and undocumented `agents.max_depth` setting from
+  the reusable baseline.
+- Updated the public Codex config baseline to use `gpt-5.6-sol`, `xhigh`
+  reasoning for normal and Plan modes, and the Fast service tier by default.
+- Refactored the read-only `code-info` skill to accept explicit project-folder
+  paths and report concise project descriptions, documented features, CLI
+  command hierarchies through three levels, separated code/test/docs/config LOC,
+  project packages, direct and statically selected/resolved dependencies, and
+  approximate pinned Redis/SQLite size comparisons. Added temporary-fixture
+  unit coverage and kept project code, manifests, package managers, builds,
+  and tests unexecuted during inspection.
+
+### Fixed
+
+- Guarded active-run `gh pr create` and GitHub PR-creation MCP calls with
+  branch-, phase-, exact-HEAD-, UAT-, and expiry-bound authorization while
+  allowing read-only PR inspection without publication authorization. Guarded
+  pushes now allow only `origin` plus one exact current-branch refspec, and CLI
+  or MCP PR creation rejects another head. Added regression coverage for exact
+  authorized pushes, stale heads, missing expiry/UAT, extra refs, CLI PR
+  creation, MCP read-versus-create classification, and explicit
+  `--match-head-commit` merge authorization. The guarded merge command now
+  requires one explicit PR number or URL and one canonical single-action shape;
+  implicit PR selection, admin bypass, branch deletion, repository override,
+  unsupported flags, shell operators, appended actions, PR-scope mismatch, and
+  non-passing readiness evidence fail closed. Active Agentic SDLC GitHub merge
+  MCP writes now fail closed in favor of the race-safe CLI path. Sensitive
+  publication and merge actions must also be direct: wrappers, absolute
+  executable paths, prepended commands, nested shells, operators, and
+  redirections are denied, while quoted documentation searches remain allowed.
+  CLI PR creation now requires an explicit matching `--head`.
+- Made repeated `install-grafana-mcp-for-nebius` checks and applies explicitly
+  no-change on canonical state, including avoiding redundant directory-mode
+  writes, preserving private state and Codex registration bytes and metadata,
+  and refusing a mismatched pinned registration without an explicit migration
+  flag.
+  Documented and tested the Nebius-auth hook boundary so denied parent commands
+  are correctly treated as command-shape enforcement rather than setup failure.
+- Fixed `grafana-nebius` startup closing before `initialize` when its private
+  startup token was stale. The registered wrapper now runs the pinned,
+  identity-checked `nebius iam get-access-token --profile` flow before
+  launching `mcp-grafana`; only foreground startup may open browser
+  authentication, background refresh remains noninteractive, and the canonical
+  MCP registration provides the bounded startup time needed for that flow.
+- Fixed the Nebius auth selector-discovery loop where even
+  `nebius profile current` was denied for lacking the project selector it was
+  intended to help discover. Default-profile lookup now clears ambient auth,
+  validates bounded single-value output, and fails closed when the profile or
+  configured `parent-id` is absent or malformed.
+- Fixed `install-grafana-mcp-for-nebius` token-file capability detection on
+  macOS binaries where `strings` embeds
+  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` inside a larger record, preventing a
+  false unsupported-build result for compatible official releases. The runtime
+  wrapper now also preserves the client's stdin stream when it backgrounds the
+  stdio server instead of allowing non-interactive Bash to replace it with
+  `/dev/null`. Scheduled token rotation now closes stdio so the next process
+  loads the fresh credential, returns an explicit restart-required failure,
+  and does not assume same-chat recovery, working around the upstream
+  static-client behavior through `mcp-grafana` `v0.17.2`; unexpected
+  refresh-worker exits also stop MCP with failure. Parent-side supervision now
+  keeps the child unreaped, uses a process-start-bound STOP/KILL handshake
+  before confirming restart-required state, and preserves natural exit status
+  at the refresh boundary. Canonical registration post-write verification now
+  includes the exact wrapper command, replacement rejects concurrent changes
+  before removal, requires a typed simple stdio shape, and never replays prior
+  command, argument, or environment values through process arguments. A failed
+  canonical add now reports the recoverable missing-entry state without legacy
+  rollback. Post-write drift is left intact for inspection instead of being
+  deleted without ownership proof. Stopped-child supervision now KILLs the
+  unreaped direct child on every post-STOP inspection failure, timeout, and
+  parent-interrupt cleanup path so no suspended process can deadlock `wait`.
+- Hardened the `global-context-management` local template validator by parsing
+  Python templates without dynamic code compilation and by rejecting a
+  non-canonical SessionStart command before running its smoke test without a
+  shell.
+- Fixed `troubleshoot` Stop-hook handling for historical exhausted markers and
+  incomplete reports. Attempt labels now derive from ledger order, only
+  exhausted v1 data markers receive a report-only compatibility path, and
+  canonical v2 markers require new evidence in every state. Report validation
+  now requires substantive per-attempt remediation, verification, result, and
+  evidence fields bound to the guard's bounded redacted marker summaries and
+  rejects sensitive assistant-authored reports. The single correction prompt
+  contains a bounded redacted minimum report; if ignored, Stop terminates with
+  that fallback in a UI/event-stream warning instead of recursing indefinitely.
+  Fallback attempt fields escape report delimiters so the generated report
+  validates itself, and a user-lowered attempt limit now also bounds the ledger
+  length.
+  Fallback redaction covers secrets, URLs, private IPv4/IPv6 addresses,
+  internal hostnames and localhost, cloud access-key shapes, and Unix or
+  Windows personal paths.
+- Made remediation-marker result failures actionable by naming the two
+  canonical values and distinguishing counted same-blocker failures from
+  unverified progress and causally independent blocker transitions, preventing
+  repeated repair attempts that only guess unsupported enum spellings.
+- Reset remediation budgets per causally independent blocker instead of
+  carrying earlier attempts, active time, tranche, exhaustion state, or stop
+  trigger forward. The optional guard now rejects contradictory lifecycle
+  fields, reports a bounded public-safe marker-validation reason without
+  reflecting marker content or filesystem exception details, and treats exact
+  marker repair as non-counting coordination work rather than forcing a false
+  exhaustion report.
+- Scoped the optional SDLC PreToolUse policy to active SDLC runs and removed its
+  misleading static status message from the registration, so ordinary tasks no
+  longer receive SDLC decisions after the hook's active-run check. Documented a
+  validated, non-forced cleanup path for task-owned temporary trees because
+  Codex command safety handles forced removal separately from SDLC hooks, and
+  aligned the managed-instruction and hook-registration refresh contracts for
+  existing installations.
+- Hardened `agent-nebius-auth-diagnose` to carry one task-authoritative project
+  into every later Nebius-sensitive Bash payload, place exactly one selector at
+  the start of the entire outer payload, and retry shape-only hook denials once
+  without rediscovery, verification, or setup. Later explicit project choices
+  replace the carried selection, conflicting evidence still asks, and mixed
+  local/Nebius payloads are split so unrelated local commands remain outside
+  the injected auth context.
+- Fixed explicit Nebius agent-auth setup after operator deletion of the managed
+  service account. A canonical credential whose old account ID receives an
+  exact provider-classified `NotFound` now triggers one human-profile-authenticated
+  rebootstrap: create or reuse a distinct fixed account, reconcile the exact IAM
+  shape, generate and validate one authorized-key credential, make one
+  mode-`0600` backup, atomically replace the stale credential, and rebind the
+  profile. Permission, authentication, transient, parse, generic `not found`,
+  and unclassified failures remain fail-closed, and a failed replacement never
+  generates a second key.
+- Simplified Nebius agent auth setup to an explicit-only, single-pass workflow
+  with no second confirmation or plan digest. The canonical service account now
+  joins one tenant-parented group containing exactly project `admin` and tenant
+  `viewer`; missing permits are added, extra or duplicate permits fail closed,
+  extra or duplicate members also fail closed, and old groups remain separate
+  cleanup. The group name now depends only on the immutable project ID hash,
+  and the service-account name is fixed to `codex-agent-sa`; the unverifiable
+  custom-name option was removed. A broken matching credential may be backed up
+  and replaced once during the same explicit invocation only after a classified
+  authentication failure; profile-write and transient token errors do not
+  rotate keys. Runtime verification now binds both profile identity and the
+  project account lookup to the canonical credential, and a healthy setup uses
+  one profile token-and-identity probe instead of repeating it. Empty or
+  malformed membership IDs now fail closed.
+- Fixed Nebius auth reconciliation for newly created groups by accepting the
+  CLI's successful empty JSON object as an empty access-permit or membership
+  list, while retaining fail-closed handling for unsupported non-empty response
+  shapes.
+- Fixed Nebius auth quota readiness with fixed tenant `viewer`, which is
+  read-only but broader than quota alone, plus a real read-only tenant quota
+  list verification call. Tenant write roles stay forbidden.
+- Fixed Nebius auth group-membership reconciliation to parse the current CLI
+  `memberships` collection, preventing false absence and failed create-conflict
+  convergence when the service account is already in the group.
+- Refactored Nebius agent auth around one canonical credential parser and a
+  generic project-selector runtime contract. Every selected Bash, Python,
+  CLI, API, Terraform, or SDK command now receives renewable profile/project/
+  credential-file context without a hard-coded executable allowlist or a
+  universal bearer token. Added a child-scoped just-in-time token helper with
+  bounded idempotent retry, read-only runtime verification that needs no admin
+  profile, explicit `blocked-admin-auth` IAM-plan reporting, and true no-op
+  profile convergence. Legacy/ambiguous credential identities fail closed;
+  setup continues to preserve service accounts and credentials rather than
+  deleting or revoking them automatically. Cloud lookup failures now stop
+  instead of masquerading as missing resources, create conflicts require a
+  successful convergence read, credentials are validated in private
+  same-directory temporary files before atomic replacement. Profile-list failures
+  and unsupported output now fail closed, while membership reconciliation
+  follows every returned page token rather than assuming one page.
+
+- Hardened Nebius auth recovery so correctable selector/profile/environment and
+  token-exposure denials explicitly retry without running setup. Added a
+  protected one-refresh/one-retry helper for explicitly idempotent operations,
+  empty-token failure handling, recursive secret-output policy enforcement for
+  wrapped commands, exact helper-name matching, and denial of token-bearing
+  transport tracing. Repair-lease issuance now also requires verified basic
+  project access, and lease validation rejects noncanonical JSON field types
+  without leaking a traceback. Runtime credential validation now shares the
+  lease helper's bounded-file contract. Runtime command detection now follows
+  supported process wrappers structurally and ignores inert token text or
+  Nebius-looking test paths instead of over-injecting credentials, while
+  permitting non-output shell comparisons of injected token state.
+- Fixed the SDLC `PreToolUse` secret classifier so public Nebius profile,
+  project, and credential-file path assignments no longer trigger false
+  authentication-policy denials, while all other long Nebius assignments
+  remain fail-closed. The agent auth hook now directs ordinary commands through
+  its automatically selected profile and reserves direct token minting for the
+  exact `/dev/null` verification form.
+- Tightened `task-implementer-test` integration-task guidance to require
+  long-form service network object maps with empty option objects, matching the
+  pre-Compose ownership validator instead of allowing ambiguous list syntax.
+- Finalized successful cleanup reports with an accurate no-action result, and
+  made a later explicit destroy promote the cleanup stage to PASS instead of
+  leaving stale retained-run wording or a NOT_RUN cleanup row.
+- Fixed Task Implementer post-integration correction handling so a cleaned
+  final wave can append a new isolated correction tail before finalization,
+  and clarified that the replacement worker—not the coordinator—must invoke
+  `task-recover` so heartbeat and finish ownership bind to the right session.
+
+### Added (earlier entries)
+
+- Added the implicitly invokable `optimize-pytest` skill for safe pytest
+  performance measurement, cumulative fixture and collection-cost review,
+  focused optimization, like-for-like validation, and evidence-gated
+  parallelism, affected-test selection, CI sharding, and performance
+  governance.
+- Added the implicitly invokable `nebius-grafana-query` skill for bounded
+  read-only Nebius Grafana datasource, dashboard, metrics, logs, and available
+  trace-tool questions. Added reciprocal trigger evals and a static cross-skill
+  contract test that keep MCP setup and authentication repair explicit.
+- Added a global remediation-budget contract backed by `troubleshoot` and an
+  optional `PreToolUse`/`Stop` hook bundle. After the first failed repair, the
+  agent records a stable blocker and distinct remediation ledger in private
+  task state, reports failures 1 and 2, and stops after three failed repairs or
+  60 active minutes with a complete troubleshooting report. Only an explicit
+  user instruction starts another bounded tranche; raw command failures and
+  diagnostic experiments do not consume attempts.
+- Added project/account/credential-bound local-repair leases for
+  unattended Nebius tasks. Leases expire within 24 hours and authorize only
+  mode-`0600` correction and exact CLI-profile rebuilding; IAM, credential
+  generation or rotation, identity, and hook changes remain excluded from the
+  lease and require their separate explicit workflows.
+- Added `agent-nebius-auth-diagnose` as an implicitly selectable, read-only
+  current-session project discovery and authentication triage skill. It routes
+  hook failures without creating or repairing IAM, credentials, profiles,
+  selectors, or hooks.
+- Added a shared global-context task-state helper with collision-resistant
+  session paths, private empty-scaffold initialization, read-only nested
+  permission auditing, and an explicit content-preserving permission repair.
+  Added `install-skills.sh --refresh-hook-registrations` for targeted replacement
+  of a differing registration with the same event/script and identical handler
+  list while preserving unrelated `hooks.json` content.
+- Added the implicitly invokable `troubleshoot` skill for controlled causal
+  investigation and repair across application code, shell scripts, CI,
+  installed software, services, containers, networks, storage, and
+  infrastructure. The workflow preserves a stable failure contract, separates
+  incident stabilization from diagnosis, maintains competing hypotheses and
+  discriminating experiments, localizes the earliest divergence, requires
+  causal proof before closure, and applies the narrowest durable repair. It
+  permits bounded reversible live changes only in confirmed non-production,
+  keeps production and unconfirmed targets read-only without exact approval,
+  and requires action-specific authorization for destructive, credential,
+  IAM, data, public-exposure, deletion, material-cost, and
+  material-availability changes. Bundled Python helpers collect sanitized local
+  evidence, measure repeated-command behavior and signature clusters, and
+  compare known-good and known-bad snapshots with deterministic tests and
+  process/trigger evaluation cases.
+- Added the explicit-only `task-implementer-test` verifier with a no-flag
+  lightweight Task Implementer contract and temporary-fixture profile plus
+  opt-in `--create`, `--create --keep`, and idempotent `--destroy` modes for one
+  replace-on-create, exactly owned local frontend/API/PostgreSQL fixture. The
+  live contract isolates Task Implementer private state, generation-fences
+  mutations, digest-pins Compose input, validates exact dual-label runtime
+  ownership and loopback/database exposure, derives frontend/API/database and
+  restart evidence through fenced helpers, and gates PASS on canonical
+  dependency-wave, Git, unchanged-prompt, application, and lifecycle evidence.
+  It preserves sanitized reports and lifecycle history and fails closed rather
+  than creating a second instance. The deterministic gate also runs the
+  verifier's own helper suites, validates the exact folder/frontmatter identity
+  and two-command surface, and preserves distinct PARTIAL, FAIL, and
+  OWNERSHIP_BLOCKED lifecycle classifications. Live Compose inspection parses
+  Docker's documented JSON Lines output as well as single-document output, and
+  preserved reports are finalized from lifecycle-owned cleanup results. The
+  Docker boundary now rejects every non-allowlisted Compose/build key before
+  invoking Compose, locally built images require exact generation-plus-project
+  labels, collection holds one lifecycle lease through HTTP/database/restart
+  mutations, and an atomically moved deletion tombstone resumes exact cleanup
+  after partial filesystem deletion without re-adopting a damaged project.
+  Canonical Compose validation now accepts only Docker Compose's injected null
+  `command` and `entrypoint` plus empty network `ipam` defaults after strict
+  raw-source validation, while continuing to reject authored or non-empty
+  runtime/network overrides.
+  Reports now use a generation-fenced ordered stage ledger and show stage
+  totals, individual tier/wave/runtime outcomes, explicit bounded failure
+  analysis, downstream NOT_RUN stages, and the next action. Failure-path report
+  synthesis uses the same matrix instead of reducing the run to one overall
+  sentence.
+- Hardened `sdlc-workflow-test` live cleanup with canonical Docker identity
+  deduplication, cumulative idempotent retry reporting, and inspect-proven
+  already-absent handling. Replaced Edge/fallback browser reuse with one fresh
+  verifier-owned Chrome process group, isolated profile, verification marker,
+  marker-gated Computer Use, and exact identity-scoped close behavior.
+- Hardened `sdlc-workflow-test` with resumable retained failed/partial
+  lifecycles, v4 immutable phase-time Git identity and ancestry-bound canonical
+  phase results, structured Computer
+  Use readiness state, and a v3
+  seven-lane and exact 20-skill evidence contract with identity/head binding,
+  explicit lightweight/three-tier/deterministic/safety provenance, owner-local
+  assertion artifacts, profile source-schema artifacts, a fail-closed bounded
+  evidence collector, canonical phase/handoff assertions, and SHA-256
+  verification, plus verifier-derived deterministic and merge-safety profiles
+  that live manifests cannot self-assert and strict retained three-tier source
+  validation while lightweight claims remain fail-closed; preserved partial semantic
+  progress; explicit retained-resource reporting; and fail-closed rejection of
+  placeholder or self-attested PASS artifacts. The merge skill is verified by
+  explicit-authorization safety evidence only and never by a real merge.
+- Added an opt-in real-life profile to `sdlc-workflow-test`: `--create` builds,
+  locally ships, and semantically tests an owned task-board GUI,
+  Django/Gunicorn API server, and PostgreSQL database through the normal
+  Agentic SDLC phases; `--create --keep` retains the exact application; and
+  `--destroy` safely removes it. The unchanged no-flag verifier remains the
+  default. The new lifecycle includes two-container Compose ownership labels,
+  loopback-only dynamic web ports, internal-only PostgreSQL, computer-use GUI
+  UAT with API/database correlation and restart persistence, complete sanitized
+  reports, resumable fail-closed cleanup, and retained audit reports.
+- Completed the Agentic SDLC prompt and execution coordinator with private
+  editor-backed prompt creation/history, exact-rename repair, enforced
+  initialized-folder scope, hashed worker ownership and interrupted recovery,
+  resource-free future-wave replanning, staged secret/private-endpoint gates,
+  automatic sequential ephemeral `codex exec` fallback, and generic v2
+  Task Implementer/Agentic SDLC outer-worktree leases while preserving the
+  public two-command `$sdlc-start` interface.
+- Added the explicit-only `sdlc-prepare-execution` phase and private Agentic
+  SDLC execution engine for schema-v4 feature integration worktrees,
+  deterministic dependency waves, immutable task assignments/results, exact
+  Git identity checks, retained worker/merge commits, ff-only promotion,
+  non-force cleanup, and disposable real-Git lifecycle coverage.
+- Added the explicit-only `worktree` skill for project-scoped monorepo work in
+  sibling full-repository Git worktrees based on `origin/main`, with generated
+  collision-resistant branch names, preservation of unrelated primary-checkout
+  changes, `commit-push` and `create-pr` handoffs, exact merged-PR/head cleanup
+  proof, durable private ownership manifests, primary-checkout-only non-force
+  cleanup with immutable retry proof, bounded interrupted-setup recovery,
+  atomic expected-SHA local-ref deletion, exact-lease remote branch deletion,
+  and offline real-Git lifecycle tests.
 - Added hook file provenance to `install-skills.sh` hook payload sync so
   source and target hashes are recorded, and differing existing hook payloads
   are backed up before being refreshed under
@@ -21,7 +616,7 @@ All notable changes to the reusable Codex skills are tracked here.
   boundaries, MCP role, and skill-by-skill lifecycle.
 - Added the Agentic SDLC skill set: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
-  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-prepare-execution`, `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
   `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
   `sdlc-auto-steering`, `sdlc-gui-test`, `sdlc-tui-test`,
   `sdlc-update-documents`, `sdlc-commit`, `sdlc-uat-tests`,
@@ -49,6 +644,12 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the implicitly invokable `app-stack` skill for selecting, reviewing,
+  simplifying, modernizing, and coordinating implementation of application
+  technology stacks from application archetypes and quality attributes. It
+  includes an opinionated Python web profile, explicit required/conditional/
+  deferred/rejected decisions, specialist-skill routing, trigger evals, and
+  current official vendor references.
 - Added the `brainstorm` Codex skill for evidence-first, chat-only ideation
   before implementation, with source priority across the current project
   folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
@@ -81,8 +682,8 @@ All notable changes to the reusable Codex skills are tracked here.
   loops that order prompt-derived work as `task-1` through `task-n`, keep one
   write task active at a time, and hand off between fresh Codex sessions
   through private markdown checkpoints.
-- Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
-  SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
+- Added the `sdlc-workflow-test` Codex skill for safely verifying the Agentic
+  SDLC workflow from outside the workflow with required phase-skill discovery,
   hook configuration inspection, disposable PreToolUse and Stop hook fixture
   tests, disposable golden-path guidance, idempotency and failure-loop checks,
   and a report under `~/.codex/sdlc-verification/`.
@@ -140,10 +741,256 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Removed
 
+- Removed the legacy `agent-nebius-auth` skill name, `--project-name` setup
+  selector, global default-project writes, and runtime fallback to inherited
+  project environment/default files/single credential filenames.
 - Removed the `onboard-nebius-cxcli` and `release-generator` skills.
 
-### Changed
+### Changed (earlier entries)
 
+- Renamed setup to `agent-nebius-auth-setup` and made it explicit-only. Setup
+  now discovers the project from current-session evidence,
+  resolves authoritative project metadata before mutation, accepts only
+  `--project-id` with an optional tenant assertion, verifies existing
+  credential ownership, and supports an optional real dry-run mutation plan.
+  Runtime Nebius Bash calls now require exactly one leading
+  `CODEX_NEBIUS_PROJECT_ID=<project-id>` selector. Setup sanitizes inherited
+  auth variables and uses collision-resistant project-bound groups; the hook
+  rejects conflicting profiles, unsafe environment wrappers, indirect process
+  launchers, managed-auth unsets, and unsafe local credential files. Exact
+  token verification now requires the canonical credential to pass the same
+  local safety checks.
+- Changed global-context task-state lifecycle ownership: normal startup remains
+  lazy, compaction and the first complex prompt create only an empty `0600`
+  scaffold below `0700` directories, and the parent agent remains responsible
+  for the semantic rolling summary. Unsafe, overlong, dot, and dot-dot session
+  IDs now use collision-resistant derived segments, and managed symlink paths
+  fail closed.
+- Updated `design` to delegate undecided or reconsidered application-stack and
+  layer technology choices to `app-stack`, including frontend, API, backend,
+  data, asynchronous-work, deployment, and observability decisions, while
+  retaining ownership of the complete cross-layer design and `/plan` handoff.
+  Designs with an already approved stack now explicitly skip stack reselection,
+  and scoped `app-stack` handoffs return to the active design workflow without
+  recursive routing.
+- Changed Task Implementer worker assignments to the hard-cut v7 schema and
+  coordinator state to v4. Dependency-free `standard` workers receive
+  240/300-second read-only warning/timeout budgets, while dependent
+  `integration` workers receive 360/420-second budgets. Assignments now bind
+  implementation steps and end-to-end validation so the assignment plus
+  incoming handoff is complete worker context and full-prompt/coordinator-state
+  rereads are unnecessary. Assignments embed the exact helper and workspace
+  manifest paths needed for startup. Workers make `task-start` their first
+  private transition after immediate Git/cwd verification, passing the embedded
+  digest unchanged for the helper's authoritative canonical validation instead
+  of guessing JSON serialization,
+  before incoming-handoff reading or deeper preflight consumes the 60-second
+  start budget. The hard cut has no v3 coordinator or v6 assignment
+  compatibility path. Worker assignments retain
+  immutable default guardrails: workers stay inside their assigned worktree and
+  private state; required installed skill instructions/helpers and standard
+  local executables are read/execute-only. Workers cannot modify installed
+  files, intentionally write unrelated paths, or access network, credentials,
+  external services, or live runtimes unless the exact assignment explicitly
+  authorizes that action. Task decomposition must also repeat applicable prompt
+  and repository constraints in every task's stop context. Mutable task-plane
+  v5 now distinguishes queued assignments from explicitly armed worker slots,
+  records 30-second worker heartbeats, and exposes a coordinator watch check
+  that fails closed when fresh assignment-only workers miss a 60-second armed
+  start deadline, exceed their profile-specific read-only/no-file budget, a
+  240-second stale heartbeat, or the immutable total worker budget. The live
+  verifier stops a stalled disposable run and continues from successful
+  workspace validation directly into runtime evidence and report generation.
+  It now escalates the profile-specific read-only warning before the hard cutoff and
+  forbids background or autonomous heartbeat loops. `task-start` is single-use,
+  only in-claim mutations count as progress, and out-of-claim mutations stop as
+  `WORKER_SCOPE_VIOLATION` rather than extending worker budgets.
+- Changed Task Implementer planned-tail replanning to remove superseded waves
+  from the active coordinator index while preserving their blocked private
+  history. Final completion and semantic validation now see only completed
+  waves plus the replacement schedule, preventing duplicate task ownership
+  and impossible cleanup demands after safe pre-resource correction tasks.
+- Changed `task-implementer-test --create` planning to require four explicit,
+  self-contained verifier task contracts before dispatch, including frontend
+  port 80, API-owned idempotent schema setup without bind mounts, and the exact
+  strict Compose ownership/allowlist model. Workers no longer need forbidden
+  full-prompt rereads to discover runtime constraints.
+- Renamed the external workflow verifier skill to `sdlc-workflow-test` across
+  its folder, invocation, metadata, ownership markers and labels, Compose
+  prefix, reports, tests, and documentation. This is a hard cut: there is no
+  alias, compatibility reader, or migration path for retained old-format
+  verifier state.
+- Changed `sdlc-workflow-test --create`, including `--create --keep`, to
+  serialize lifecycle mutation and replace the previous active exactly owned
+  three-tier environment through fail-closed cleanup before creating a fresh
+  one. Cleanup combines recorded inventory with resources discovered by both
+  exact ownership labels; immutable verification-generation fencing covers
+  every later helper mutation and holds the lifecycle lock through each owned
+  Compose action. Ambiguity or stale generations block mutation so multiple
+  live stacks are not intentionally started; the no-flag invocation remains
+  lightweight and does not create or inspect a Docker/browser application.
+- Changed standalone `sdlc-workflow-test --destroy` to leave all browser tabs
+  untouched and treat recorded tab state as audit metadata only, while retaining
+  exact project, lifecycle, Git, verification-ID, Compose, and dual-label
+  ownership checks before deleting verifier-owned application resources.
+
+- Hardened `sdlc-workflow-test` Computer Use verification with just-in-time
+  capture gates before GUI evaluation and UAT, unlocked-session checks unless
+  locked Computer Use is explicitly enabled, visible foreground current-Space
+  window requirements, accurate pre-navigation
+  `ENVIRONMENT_DEFECT` reporting, actionable retained-runtime guidance, and a
+  hard stop on further Computer Use calls after a hang or shared-service
+  response loss. Default cleanup now fails closed as resumable
+  `CLEANUP_FAILED` when the unhealthy service prevents safe dedicated-tab
+  closure.
+
+- Tightened the Agentic SDLC three-tier verifier so keep mode rejects a recorded
+  closed browser tab, reports retain the exact custom verification root in the
+  destroy command, migration evidence is mandatory, GUI artifacts must be
+  recognizable PNG or JPEG files, the readiness matrix includes the harness,
+  PASS requires a non-empty all-passing validation set, and per-run reports
+  record validation commands, truthful retention state, and issue/fix guidance.
+  Validation records reject named secret arguments, authorization headers,
+  user-password flags, and credential-bearing URLs before persistence. Clean
+  baseline identity can be recorded before promotion so failed runs no longer
+  lose their known starting SHA in the report.
+- Hardened the opt-in Agentic SDLC three-tier harness after a real application
+  run: managed prompt rendering now preserves canonical starter identity and is
+  covered by real intake, public base-image pulls use a bounded owned Docker CLI
+  config, runtime inventory verifies explicit web/database Compose roles,
+  computer-use preflight requires a capturable browser state, and UAT failures
+  update the sanitized environment report. The SDLC PreToolUse hook now applies
+  dangerous-shell matching only to Bash payloads, with regression coverage for
+  harmless Dockerfile command text in patches.
+- Enforced one never-reused worker session per implementation task in both
+  Task Implementer and Agentic SDLC, added immutable digest-bound dependency
+  handoffs with structured prior-wave/prior-batch evidence, and made both
+  workflows' capacity batches authoritative. Agentic worker authorization now derives
+  identity from `CODEX_THREAD_ID` instead of caller-supplied session tokens;
+  every older execution schema fails with `WORKFLOW_UPGRADE_REQUIRED`; there
+  is no legacy read path or compatibility shim.
+- Aligned the `worktree` contract with its implementation and current official
+  docs: ownership state now explicitly follows fetch preflight but precedes
+  managed branch/worktree creation, the Unix/Python and authenticated GitHub
+  CLI prerequisites and cooperative-lock boundary are documented, and cleanup
+  references the `gh pr list` command it actually uses. New generated names use
+  a constant public-safe prefix instead of copying a potentially confidential
+  repository-relative project scope into local and remote branch identities.
+- Aligned `sdlc-workflow-test` with the completed coordinator: deterministic
+  capability-level prompt/execution/worktree/hook regressions, required
+  source-installed parity, a composed nested managed-outer lease test,
+  verifier self-tests, private v1 live-evidence ingestion, and fail-closed
+  PASS/PARTIAL/FAIL readiness reporting. Hardened the verifier against
+  symlinked, broad, or unowned verification roots; unowned or remote-backed
+  disposable repositories; malformed or wrong-path hook registration;
+  misclassification of Codex-managed hook-state metadata;
+  installed-root, hook-payload, and report-path redirects; invalid UTF-8;
+  synthetic no-change live PASS; lane-path/schema drift; skipped or colorized
+  test-output false passes; and private or out-of-scope paths deleted before
+  the final evidence head.
+
+- Refactored Agentic SDLC entry and steering around two explicit public
+  `sdlc-start` actions: idempotent `workspace init [project-folder]` and
+  prompt-bound `run <prompt-path-or-unique-filename>`. Private managed prompts,
+  immutable revisions, exact-once steering linkage, prompt-bound Stop
+  continuation, terminal rerun semantics, non-Git greenfield identity, and
+  fail-closed unfinished legacy handling now preserve user prompt history
+  without adding a public workflow CLI or coupling to `task-implementer` state.
+- Refactored Agentic SDLC end to end around task-level parallelism: locked plans
+  now define stable `TASK-*` dependencies, write claims, and conflict domains;
+  TDD and downstream evidence use a persistent integration checkout;
+  `sdlc-implement-plan` dispatches one fresh agent/branch/worktree per safe task
+  and integrates waves in stable order; `sdlc-commit` seals and exactly
+  fast-forwards the unchanged project branch. Registered external worktrees now
+  remain under hook policy, unsafe resources are retained, unfinished schema v1
+  fails closed without a migration shim, and the verifier covers scheduler,
+  real-Git, registered-worktree, recovery, and golden-path behavior.
+- Composed `worktree` and `task-implementer` with fail-closed private lifecycle
+  coordination: nested task workers now base on and promote only to the exact
+  managed outer worktree branch, declare and clean internal resources per wave,
+  retain the outer lease through final alignment, and block outer publication
+  or removal until release. `worktree` push and PR handoffs now use resumable
+  action-bound reservations to close check-to-mutation races. Added strict
+  scope containment, interruption recovery, malformed-state blocking, and
+  composed offline real-Git coverage without adding public commands or legacy
+  migration/force-clear paths.
+
+- Changed hook installation status output to render nonzero `updated` file
+  labels in bold green on interactive terminals, including the per-source and
+  summary lines; non-interactive and `NO_COLOR` output remains plain text.
+- Hardened `agent-nebius-auth` runtime policy so authenticated status and log
+  commands can use ordinary `echo`/`printf`, strict-mode setup, non-secret
+  exports, and scoped `env` wrappers without false disclosure denials, while
+  executable token minting, token-variable output, tracing, and full
+  environment dumps remain fail-closed. Generated wrappers no longer resemble
+  literal Nebius secret assignments to sibling policy hooks, manual token
+  verification is restricted to one agent-profile command whose sole stdout
+  destination is `/dev/null`, and troubleshooting now distinguishes local hook
+  policy failures from actual credential or project-access failures before any
+  repair or browser-auth decision.
+- Changed `agent-nebius-auth` to grant its custom Codex Agent group the
+  project-level Nebius `admin` role by default instead of `editor`; the
+  existing `--role` override remains available for explicitly narrower setups.
+
+- Refactored the explicit-only `task-implementer` from sequential
+  execution-plane v1 into a resumable coordinator/worker v3. One unchanged
+  `run <prompt-path-or-unique-filename>` now builds deterministic dependency
+  waves from locked write claims and conflict domains, dispatches isolated
+  full-repository worktrees in capacity-sized batches, verifies one reviewed
+  direct-child commit per worker, integrates task branches in stable order,
+  promotes only by verified fast-forward, and cleans reachable temporary
+  resources without force. Shared specs/docs remain coordinator-owned;
+  failures retain recovery state without mutating the project branch; and
+  unfinished v1 runs fail closed with `WORKFLOW_UPGRADE_REQUIRED` without a
+  compatibility path.
+
+- Refactored the explicit-only `task-implementer` to two public actions:
+  idempotent `workspace init [project-folder]` and retry-safe
+  `run <prompt-path-or-unique-filename>`. Initialization creates a starter only
+  when needed and preserves all prompt/run history; running privately creates,
+  continues, or reconciles immutable revisions while implementing one task per
+  fresh session. Stable prompt filenames are ordered in command output by
+  private `last_invoked_at`, and users never supply internal IDs.
+- Added a durable per-task execution plane to `task-implementer`: the Skill now
+  atomically claims one dependency-ready task in planning, requires and hashes a
+  complete plan and queue before authorizing product edits, requires a clean
+  claim-time Git baseline, validates exact changed-path and commit evidence,
+  rejects multiple task commits, retains all recovery-session participants,
+  preserves reconciliation-safe completed checkpoint digests, enforces a
+  bijection across completed tasks/checkpoints/stopped planes, and requires a
+  distinct runtime Codex session before every other task in the scope.
+- Extended `task-implementer` with same-prompt steering and incremental
+  specifications without adding a public command. Accepted edits are immutable
+  ordered revisions with private dispositions; implementation-time steering is
+  queued without changing the locked plane and is reconciled in the next fresh
+  session. The workflow now normalizes stable `TI-REQ-nnn` requirements before
+  task creation, records just-in-time `TI-DES-nnn` designs, and validates
+  byte-preserving managed regions in project `docs/requirements.md` and
+  `docs/design.md` inside the affected task's single commit. Agentic SDLC
+  ownership and unsafe paths, markers, mappings, or document-envelope drift
+  fail closed.
+- Lightened all repo-owned runtime `SKILL.md` files by replacing the repeated
+  long learning-loop section with a concise equivalent, and moved detailed
+  command, checklist, and standards material from `align`, `align-skill`,
+  `create-pr`, `review-pr`, and `terraform` into on-demand `references/`
+  files while preserving each skill workflow and validation contract.
+- Updated `brainstorm` to route unresolved recommendation-changing source
+  conflicts through a bounded `research` pass, and strengthened `design`,
+  `task-implementer`, and Agentic SDLC design/plan/implementation skills to
+  prefer vertical end-to-end slices for serial multi-layer application work,
+  with verifier coverage for the new SDLC template and phase contracts.
+- Aligned downstream Agentic SDLC skills with the vertical-slice architecture:
+  context packs now capture layer-boundary facts, TDD and unit-test phases
+  carry planned slice coverage, validation records locked-slice boundary
+  checks, evaluation records end-to-end slice observation, documentation
+  requires evaluated slice evidence for multi-layer behavior, and
+  `sdlc-align-specs` checks the slice across specs, plans, tests,
+  implementation, docs, and evidence.
+- Hardened `task-implementer` so complex sequential loops explicitly require
+  per-task context gathering, `design` routing for non-trivial choices, a short
+  implementation plan before edits, and handoff fields for context, design,
+  plan, validation, review, fixes, and `$commit` evidence; added a local static
+  smoke test for the workflow contract.
 - Deduped and shortened `global-context-management/SKILL.md` so the runtime
   skill load keeps one canonical task-state section and one canonical
   delegation/lifecycle section while preserving the existing validators and
@@ -176,6 +1023,14 @@ All notable changes to the reusable Codex skills are tracked here.
   updating the OpenAI metadata template. The repo standard preserves
   `agents/openai.yaml` for every source-owned skill so invocation policy and
   interface metadata stay reviewable.
+- Updated `align-skill` so every target skill alignment must apply
+  `code-review` in review-only mode and `apply-security` in advisory or scan
+  mode before claiming the target is aligned, with report templates recording
+  fixed, deferred, skipped, incomplete, or blocking review-lane findings.
+- Tightened `brainstorm` source gathering so source-ranked context must be
+  relevant to the exact topic, question, or problem statement and limited to
+  information that can answer the question, resolve the challenge, close a
+  named gap, or change the recommendation.
 - Hardened `config-codex` laptop setup so existing `AGENTS.md` and
   `config.toml` are treated as merge targets by default, exact template checks
   are explicit audit modes, default validation rejects empty or stale managed
@@ -307,7 +1162,7 @@ All notable changes to the reusable Codex skills are tracked here.
   cover wrong metadata paths plus explicit-only policy derived from `SKILL.md`.
 - Added explicit `agents/openai.yaml` invocation policies across all source
   skills: operational setup, commit, PR, merge, publish, security, code-info,
-  container, Grafana MCP, `agentic-sdlc-test`, and every `sdlc-*` workflow
+  container, Grafana MCP, `sdlc-workflow-test`, and every `sdlc-*` workflow
   skill now disable implicit invocation, while the remaining non-SDLC skills
   opt in to implicit matching. The Agentic SDLC Stop hook now emits explicit
   `$sdlc-start` continuation prompts, and the skill-structure validator checks
@@ -394,14 +1249,14 @@ All notable changes to the reusable Codex skills are tracked here.
 - Expanded `docs/agentic-sdlc-design.md` with an explicit SDLC workflow
   verification procedure, including quick preflight usage, full disposable
   golden-path testing, report status interpretation, and fix/rerun policy for
-  `agentic-sdlc-test`.
-- Hardened `agentic-sdlc-test` hook fixture execution so subprocesses disable
+  `sdlc-workflow-test`.
+- Hardened `sdlc-workflow-test` hook fixture execution so subprocesses disable
   Python bytecode writes and do not create `__pycache__` artifacts in skill
   source folders.
 - Aligned `global-context-management` and `config-codex` local setup guidance
   to syntax-check rendered hooks without bytecode writes, and clarified that
   installable global-context hook bundle sync is owned by `config-codex`.
-- Strengthened `agentic-sdlc-test` design-contract preflight so it verifies the
+- Strengthened `sdlc-workflow-test` design-contract preflight so it verifies the
   Agentic SDLC design document includes the workflow verification procedure and
   report path, not only the core SDLC lifecycle terms.
 - Updated `align` so alignment decisions first synthesize the active thread,
@@ -562,8 +1417,8 @@ All notable changes to the reusable Codex skills are tracked here.
   live allocations, existing-network out-of-parent CIDRs must extend an
   attached compatible private pool first, and new-network pool choices should
   hide assigned or empty private pools.
-- Aligned `global-context-management` subagent guidance around the conservative
-  `max_threads = 4` budget: use `repo_mapper` and `test_strategist` early only
+- Aligned `global-context-management` subagent guidance around the configured
+  `max_threads = 16` budget: use `repo_mapper` and `test_strategist` early only
   when useful, close helpers after consolidation, and reserve `risk_reviewer`
   for near-final review of non-trivial or risky changes.
 - Clarified `global-context-management` subagent fallback guidance so, when

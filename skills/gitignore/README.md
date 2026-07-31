@@ -3,6 +3,9 @@
 `gitignore` creates or updates project `.gitignore` files with a reusable
 baseline and detected stack-specific additions.
 
+In `coordinated-candidate` scope it returns a complete additive root candidate
+for `scaffold-project` and does not modify the target.
+
 ## What It Does
 
 - Adds safe macOS and VS Code defaults.

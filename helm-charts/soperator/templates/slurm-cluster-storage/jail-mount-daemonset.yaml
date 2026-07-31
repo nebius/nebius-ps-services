@@ -1,6 +1,7 @@
 {{- $type := include "slurm-cluster-storage.volume.jail.type" . }}
 {{- $activePassive := eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
 {{- $mountPath := include "slurm-cluster-storage.volume.jail.path" . }}
+{{- $mountPath = include "slurm-cluster-storage.safeAbsolutePath" (list "volume.jail.localPath" $mountPath) }}
 {{- $createDirList := list }}
 {{- if $activePassive }}
 {{- $mountPath = include "slurm-cluster-storage.jailRootfs.store.path" . }}

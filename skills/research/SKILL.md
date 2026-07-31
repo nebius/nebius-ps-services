@@ -33,7 +33,7 @@ to use it, and what tradeoffs matter for a real project.
 - Do not use for checklist-only review of an existing design; use
   `system-design-rules`.
 - Do not use for Agentic SDLC-owned context packs or committed design docs; use
-  the relevant `sdlc-*` skill through `$sdlc-start`.
+  the relevant `sdlc-*` skill through the bound `$sdlc-start run <prompt>` command.
 
 ## Inputs
 
@@ -177,20 +177,12 @@ limitations, and leads to verify. Never treat it as authoritative.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

@@ -1402,24 +1402,35 @@ def _local_chart_dependency_is_present(
     return metadata.get("name") == name and str(metadata.get("version") or "") == version
 
 
+def _local_chart_dependency_from_metadata_is_present(
+    chart_dir: Path,
+    dependency: Mapping[str, Any],
+) -> bool:
+    name = str(dependency.get("name") or "").strip()
+    version = str(dependency.get("version") or "").strip()
+    return _local_chart_dependency_is_present(chart_dir / "charts", name=name, version=version)
+
+
 def _local_chart_dependencies_are_packaged(chart_dir: Path) -> bool:
     dependencies = _local_chart_dependency_metadata(chart_dir)
     if not dependencies:
         return True
-    if any(
-        str(dependency.get("repository") or "").strip().startswith("file://")
-        for dependency in dependencies
-    ):
-        return False
-    charts_dir = chart_dir / "charts"
     return all(
-        _local_chart_dependency_is_present(
-            charts_dir,
-            name=str(dependency.get("name") or "").strip(),
-            version=str(dependency.get("version") or "").strip(),
-        )
+        _local_chart_dependency_from_metadata_is_present(chart_dir, dependency)
         for dependency in dependencies
     )
+
+
+def _local_chart_missing_packaged_dependency_labels(chart_dir: Path) -> tuple[str, ...]:
+    labels: list[str] = []
+    for dependency in _local_chart_dependency_metadata(chart_dir):
+        name = str(dependency.get("name") or "").strip()
+        version = str(dependency.get("version") or "").strip()
+        if not name or not version:
+            continue
+        if not _local_chart_dependency_from_metadata_is_present(chart_dir, dependency):
+            labels.append(f"{name}-{version}")
+    return tuple(labels)
 
 
 def _remove_staged_chart_dir(staged_chart_dir: Path) -> None:
@@ -1443,6 +1454,8 @@ def _stage_local_helm_chart(chart_path: str, staging_root: Path) -> str:
             continue
         repository = str(dependency.get("repository") or "").strip()
         if not repository.startswith("file://"):
+            continue
+        if _local_chart_dependency_from_metadata_is_present(source_chart_dir, dependency):
             continue
         relative_dependency_path = repository.removeprefix("file://")
         dependency_source = (source_chart_dir / relative_dependency_path).resolve()
@@ -1643,8 +1656,17 @@ def _run_local_helm_dependency_build(
         timeout=180,
     )
     if result.returncode != 0:
+        missing = _local_chart_missing_packaged_dependency_labels(chart_dir)
+        packaging_hint = (
+            " Missing packaged chart dependencies: "
+            + ", ".join(missing)
+            + ". Package the pinned archives under charts/ to avoid live repository downloads."
+            if missing
+            else ""
+        )
         raise ValueError(
-            f"local Helm chart dependency build failed for {chart_path}: {_helm_output(result)}"
+            f"local Helm chart dependency build failed for {chart_path}: "
+            f"{_helm_output(result)}{packaging_hint}"
         )
 
 

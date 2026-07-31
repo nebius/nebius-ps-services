@@ -16,11 +16,27 @@
 | Allowed Actions Used | <summary> |
 | Cleanup Completed | <yes, no, not-needed> |
 
+## GUI Harness
+
+| Field | Value |
+| --- | --- |
+| Required Harness | <computer-use, browser, playwright, none> |
+| Actual Harness | <computer-use, browser, playwright, none> |
+| Browser | <edge, chrome, other, none> |
+| Accessibility Refreshed After Each Action | <yes, no, not-applicable> |
+| Independent Oracle | <api, database, service, none> |
+
 ## Matrix
 
 | Requirement | Flow | Harness | Result | Evidence |
 | --- | --- | --- | --- | --- |
 | REQ-<id> | <journey> | <gui, tui, api, service> | <pass, fail> | <path> |
+
+## Ordered GUI Action Ledger
+
+| Step | Action | Fresh State | Observation | Oracle | Evidence |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | <action> | <yes, no> | <observation> | <correlated result> | <path> |
 
 ## Cross-Feature Findings
 

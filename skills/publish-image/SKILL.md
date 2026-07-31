@@ -1,6 +1,6 @@
 ---
 name: publish-image
-description: "Use to publish container images end to end from the current project: collect release inputs, optionally set up changelog/helper/workflow assets, prep the release branch, create and merge a PR, tag from the default branch, wait for the image publish workflow, verify pushed image tags/digest, and report the result. Also supports explicit setup-only guidance."
+description: "Use to publish container images end to end from the current project: collect release inputs, optionally set up changelog and release-helper assets, prep the release branch, create and merge a PR, tag from the default branch, wait for the image publish workflow, verify pushed image tags/digest, and report the result. Also supports explicit setup-only guidance; delegate GitHub Actions YAML to github-workflows."
 ---
 
 # Publish Image
@@ -42,6 +42,9 @@ Image inputs:
 - `--platforms`
 - `--publish-environment`
 - registry secret or variable names, never secret values
+- the approved `container` build and release contract: context, Dockerfile or
+  Bake target, supported platforms, expected OCI metadata, vulnerability
+  policy, SBOM/provenance requirements, and signing/verification policy
 
 If required values are missing and cannot be derived from the repository, ask
 the user before continuing.
@@ -49,11 +52,17 @@ the user before continuing.
 ## Workflow
 
 1. Inspect the current project folder and Git repository.
+   For an image release, verify that the container contract and required local
+   validation evidence exist. Do not silently redesign or waive the image,
+   runtime, platform, or supply-chain requirements.
 2. Parse the requested mode and tag. Normalize tags to
    `<tag-prefix>-vMAJOR.MINOR.PATCH`.
-3. For `setup`, create or update reusable release assets from `assets/`, using
-   user-provided registry names, secret names, and project inputs. Validate the
-   generated shell and workflow files, then stop with a setup report.
+3. For `setup`, create or update reusable changelog and release-helper assets
+   from `assets/`, using user-provided registry names, secret names, and project
+   inputs. Delegate creation or updates of `.github/workflows/*.yml` to
+   `$github-workflows`, passing it the approved `container` contract and release
+   inputs. Validate the generated shell and workflow files, then stop with a
+   setup report.
 4. For `prep`, require the current checkout to be the clean, synced default
    branch. If the user is on any other branch, or the tree is dirty, stop and
    ask them to merge their branch to the default branch, switch to it,
@@ -80,7 +89,9 @@ Use setup mode when the project does not already have a release flow:
 
 - `assets/CHANGELOG.md.template`
 - `assets/publish-image.sh.template`
-- `assets/project-name-image-publish.yml.template`
+
+The image-publish workflow template is owned only by `$github-workflows`; use
+that skill's canonical image-publish asset instead of keeping a duplicate here.
 
 The project-local helper script is optional, but it is a maintained runnable
 helper template, not a documentation stub. Keep it behaviorally aligned with
@@ -94,6 +105,9 @@ doer path.
 - Store only secret and variable names in workflow templates.
 - Do not print, request, or persist secret values.
 - Do not publish from mutable branch state; publish from a release tag.
+- Own tag creation, registry pushes, signing actions, workflow waits, and
+  published digest evidence. Do not take ownership of Dockerfile/runtime design
+  from `container` or workflow YAML from `github-workflows`.
 - Treat the default branch as the release source of truth. `prep` and
   `publish` must start from a clean, synced default branch.
 - If the user is on a feature branch or has local changes, fail fast before
@@ -108,20 +122,12 @@ doer path.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
@@ -139,4 +145,4 @@ Return:
 - `scripts/publish-image-doer.sh`
 - `assets/CHANGELOG.md.template`
 - `assets/publish-image.sh.template`
-- `assets/project-name-image-publish.yml.template`
+- `$github-workflows` for image-publish workflow YAML

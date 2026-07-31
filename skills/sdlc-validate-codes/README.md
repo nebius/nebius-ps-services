@@ -5,8 +5,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Answer whether the implemented feature can be built or run correctly and has
-passed review-only implementation-quality checks before deeper behavior tests.
+Answer whether the implemented feature can be built or run correctly, stayed
+inside the locked plan and end-to-end slice, and passed review-only
+implementation-quality checks before deeper behavior tests.
 It runs project-native mechanical validation first, then uses `code-review`
 for the current feature diff and records that review decision in validation
 evidence.
@@ -33,6 +34,7 @@ evidence.
 
 - Validation evidence exists.
 - Required checks pass or blocker is classified.
+- Slice boundary validation passes or the blocker is classified.
 - `code-review` decision is recorded.
 - State moves to `validated` only when mechanical validation passes and
   `code-review` runs without requesting changes or owner review.

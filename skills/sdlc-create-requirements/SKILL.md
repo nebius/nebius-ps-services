@@ -23,7 +23,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Inputs
 
-- User prompt or approved change request.
+- The exact immutable prompt revision accepted by `sdlc-start`, or an approved
+  change request routed from its steering disposition.
 - Existing `docs/requirements.md` when present.
 - Existing `docs/design.md` for impact awareness only.
 - Optional live experiment environment details, including safe connection and
@@ -36,6 +37,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Existing design file if present.
 - Project README or docs if available.
 - Active SDLC run state if the change happens during a run.
+- The bound run's `prompt.json` and accepted snapshot when prompt intake
+  initiated the change.
 
 ## Writes
 
@@ -61,9 +64,13 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Idempotency
 
-- Reapplying the same prompt must not duplicate requirements.
+- Reapplying the same prompt revision must not duplicate requirements.
 - If an existing requirement changes, update that `REQ-*` block and append a change-log entry.
 - If design must change, mark the affected requirements so `sdlc-create-design` can update related features.
+- When execution is already prepared, write product truth only in the registered
+  integration worktree, mark the active plan/execution `REPLAN_REQUIRED`, and
+  preserve every started assignment, commit, and worktree for coordinator-led
+  reconciliation. Do not reset execution history.
 
 ## Failure Handling
 
@@ -107,20 +114,12 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

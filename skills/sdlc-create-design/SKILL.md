@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-design
-description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, and implementation-ready validation boundaries."
+description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, vertical end-to-end feature flow, and implementation-ready validation boundaries."
 ---
 
 # Create Design
@@ -14,7 +14,8 @@ and feature designs in `docs/design.md`.
 
 - Requirements exist but design is missing.
 - Approved requirements or context changed and design must be updated.
-- An SDLC failure classification routes to a design defect or spec gap.
+- A failure classification with a validated design-admission record routes a
+  proven `DESIGN_DEFECT` here.
 
 ## When Not To Use
 
@@ -31,6 +32,10 @@ and feature designs in `docs/design.md`.
 - Existing `docs/design.md` when present.
 - Current codebase shape.
 - Technology, vendor, security, operational, and testing constraints.
+- For failure-driven reconsideration, the immutable failure event, validated
+  diagnosis and design-admission record, affected `FEAT-*` closure,
+  invalidation scope, estimated work, rollback path, and durable approval when
+  required.
 
 ## Required Reads
 
@@ -49,6 +54,20 @@ and feature designs in `docs/design.md`.
 ## Process
 
 - Use `assets/templates/design.md.template` when creating the file.
+- For failure-driven reconsideration, first verify that requirements and
+  acceptance criteria are stable, the evaluator and environment are valid,
+  the failure reproduces at the recorded integration commit, and the diagnosis
+  is `proven` or `high_confidence`.
+- Require a named violated design decision, boundary, or invariant and evidence
+  that a localized implementation, test, evaluator, environment, or plan
+  repair cannot satisfy the accepted requirement. The admitted change must
+  affect architecture topology, component/service responsibility, a public
+  API/CLI/config/integration contract, data ownership/lifecycle, migration
+  behavior, a security/trust boundary, or a cross-component workflow.
+- Reconsider an internal design automatically only when requirements, public
+  contracts, data lifecycle, security, permissions, deployment scope, and
+  external behavior stay unchanged. Otherwise require durable human approval
+  bound to the admission record before editing design.
 - Understand requirements first: summarize product behavior, non-goals,
   acceptance criteria, priorities, constraints, and open questions.
 - Understand the existing system before designing: inspect current components,
@@ -62,6 +81,12 @@ and feature designs in `docs/design.md`.
 - Define architecture, component boundaries, APIs or commands, data flow,
   control flow, state, error, security, observability, operations, rollout,
   rollback, and ownership models.
+- For serial multi-layer application features, define the vertical end-to-end
+  feature flow and layer map, such as UI -> API -> service -> database. Record
+  each layer's responsibility, boundary contract, persistence expectations,
+  and cross-layer validation path. Use foundation-only design boundaries only
+  for true prerequisites such as schema contracts, auth, migrations, shared
+  harnesses, or safety preflights.
 - For non-trivial or hard-to-reverse decisions, compare the baseline/current
   approach, the selected design, and one simpler or more conservative
   alternative when meaningful. Record the selected option, rejected
@@ -70,16 +95,32 @@ and feature designs in `docs/design.md`.
   criteria, rollback, and done definition per ready feature.
 - Mark features as ready, draft, blocked, or stale and update the decision log,
   change log, and design fingerprint.
+- If reconsideration reaffirms the current design, do not create a new design
+  loop or fingerprint. Return the reaffirmation evidence through
+  `sdlc-classify-failure` so it can route to the proven localized owner.
+- If design changes, preserve stable feature IDs, record the admitted contract
+  change and decision, create a new design fingerprint, identify the affected
+  feature closure and invalidations, and require immutable plan vN+1.
 
 ## Idempotency
 
 - Same requirements and context must not duplicate features.
 - Requirement changes update affected feature blocks only.
 - Existing feature IDs remain stable.
+- When execution is already prepared, update design only in the registered
+  integration worktree, supersede the old locked plan through coordinator
+  routing, and preserve started assignments/commits/resources. Never rewrite
+  or reset the active execution history.
+- Replaying the same design admission and approval against the same fingerprint
+  does not duplicate decision/change-log entries.
 
 ## Failure Handling
 
-- If design cannot satisfy requirements, mark `DESIGN_DEFECT` or `SPEC_GAP`.
+- If requirements are ambiguous or contradictory, return `SPEC_GAP` to
+  `sdlc-classify-failure`; only `sdlc-create-requirements` may resolve it.
+- If design admission lacks positive system-contract proof, valid
+  evaluator/environment evidence, reproducibility, confidence, scope,
+  rollback, or required approval, stop with `DESIGN_ADMISSION_DENIED`.
 - If context is missing, route to `sdlc-gather-context`.
 - If requirements are contradictory, route to `sdlc-create-requirements`.
 - If a feature is not implementable without a risky or irreversible choice,
@@ -92,15 +133,22 @@ and feature designs in `docs/design.md`.
 - Modify tests.
 - Delete feature blocks without explicit requirement removal.
 - Ignore acceptance criteria.
+- Treat implementation size or difficulty inside one existing private boundary
+  as a design defect.
+- Turn missing implementation evidence, probable causation, or “no
+  implementation bug found” into redesign.
 
 ## Completion Criteria
 
 - `docs/design.md` exists.
 - Every P0 requirement maps to at least one feature.
 - Every ready feature has selected and rejected options, implementation
-  boundaries, validation, test, evaluation, rollout, rollback, and done
-  criteria.
+  boundaries, vertical flow or layer map when applicable, validation, test,
+  evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.
+- Failure-driven redesign records admission evidence, approval mode, affected
+  feature closure, invalidations, rollback, decision/change log, and new design
+  fingerprint; reaffirmation returns without changing the fingerprint.
 
 ## SDLC Invariants
 
@@ -117,20 +165,12 @@ and feature designs in `docs/design.md`.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

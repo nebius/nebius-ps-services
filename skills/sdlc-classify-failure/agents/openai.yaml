@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Classify Failure"
-  short_description: "Route SDLC failures"
-  default_prompt: "Use $sdlc-classify-failure to classify Agentic SDLC failures and select the correct retry or stop route before any loop retry."
+  short_description: "Control evidence-backed SDLC repair routing"
+  default_prompt: "Use $sdlc-classify-failure to record the normalized Agentic SDLC failure, validate troubleshooting or broader-design approval evidence, enforce process-safe repair budgets, route the shortest proven owner, and advance every invalidated gate through the commit-bound revalidation cursor before resolution."
 policy:
   allow_implicit_invocation: false

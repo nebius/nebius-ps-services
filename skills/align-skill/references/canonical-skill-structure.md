@@ -140,8 +140,9 @@ description: Use this skill when...
 ## References
 ```
 
-For larger skills, keep only core routing and workflow instructions in
-`SKILL.md`; move long checklists and examples into `references/` or `assets/`.
+For larger skills, keep only trigger, scope, required workflow, guardrails,
+validation, and output contract in `SKILL.md`; move long checklists, examples,
+policy, troubleshooting, and templates into `references/` or `assets/`.
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
 
@@ -186,9 +187,15 @@ Set `allow_implicit_invocation` from the skill contract:
   prompt matches the front matter `description`.
 - `false`: skills that must be explicitly requested by the user or a workflow
   coordinator, including Git commit/push/PR/merge flows, release/publish flows,
-  auth or local setup, high-risk security mutation, container attachment,
-  external MCP installation, workflow verification harnesses, and all `sdlc-*`
-  Agentic SDLC phase skills.
+  ordinary auth or local setup, high-risk security mutation, container attachment,
+  external MCP installation, workflow verification harnesses, and all Agentic
+  SDLC phase skills.
+
+A narrow setup exception may use `true` when implicit selection is strictly
+read-only diagnosis/planning and `## Invocation Policy` requires a displayed
+mutation plan plus explicit current-turn confirmation before IAM, credential,
+profile, hook, or equivalent mutation. Validate both halves; do not generalize
+this exception to ordinary setup skills.
 
 If `SKILL.md` says the skill should run only after an explicit request, reflect
 that in `agents/openai.yaml`; do not rely on prose alone. If the policy is
@@ -252,6 +259,9 @@ For this profile:
 - SDLC-only skill descriptions must start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery makes the
   workflow boundary explicit.
+- `sdlc-workflow-test` is the explicit external-verifier exception to the
+  prefix convention: its description must state that it runs outside the
+  Agentic SDLC workflow.
 - Do not keep unprefixed aliases or compatibility wrapper folders for renamed
   SDLC-only skills unless the user explicitly requests a compatibility layer.
 

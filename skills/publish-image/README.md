@@ -13,6 +13,8 @@ release and return a completion report.
 - Tags only from a clean synced default branch.
 - Waits for the tag-triggered image workflow when requested.
 - Verifies pushed image tags and reports digest evidence.
+- Consumes the approved `container` build/platform/supply-chain contract and
+  the `github-workflows` publication workflow rather than redefining them.
 
 ## Architecture
 
@@ -51,10 +53,14 @@ Published image tags and digest
 - Secret values stay in GitHub secrets, local environment, or the registry
   login mechanism; skill sources store only secret or variable names.
 - Human-required approvals and failing checks are blockers.
+- `publish-image` owns release tags, pushes, signing actions, waits, and
+  published digest evidence; `container` owns image and runtime design.
 
 ## Files
 
 - `SKILL.md`: Runtime workflow, inputs, guardrails, and output contract.
 - `scripts/publish-image-doer.sh`: Local prep/publish/verify primitives.
-- `assets/`: Optional setup templates for changelog, helper, and workflow.
+- `assets/`: Optional setup templates for changelog and the release helper.
+- `github-workflows`: Canonical owner of image-publish workflow YAML and its
+  reusable template.
 - `agents/openai.yaml`: UI metadata.

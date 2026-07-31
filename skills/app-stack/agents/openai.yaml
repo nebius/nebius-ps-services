@@ -1,0 +1,6 @@
+interface:
+  display_name: "App Stack"
+  short_description: "Select application stacks and logical handoffs"
+  default_prompt: "Use $app-stack to select the smallest justified technology stack and return logical-only decisions for any scaffold handoff."
+policy:
+  allow_implicit_invocation: true

@@ -15,6 +15,19 @@ id_policy: "Feature IDs are stable. Never renumber existing IDs."
 
 # Design
 
+## Failure-Driven Reconsideration
+
+- Admission: none | `<classification and diagnosis IDs>`
+- Approval mode: not-applicable | automatic-internal | `human:<approval-id>`
+- Recorded integration commit: none | `<commit>`
+- Violated design contract: none | <decision, boundary, or invariant>
+- Localized repair insufficiency: none | `<evidence references>`
+- Affected feature closure: none | <FEAT-* IDs>
+- Invalidation scope: none | `<downstream surfaces>`
+- Disposition: initial-design | reaffirmed | changed
+- Previous design fingerprint: none | `sha256:<digest>`
+- Rollback path: TODO
+
 ## Design Summary
 
 ### Source Inputs
@@ -50,6 +63,14 @@ verified source basis, and unresolved technology questions.
 ### Data Flow
 
 TODO: Data movement.
+
+### End-To-End Feature Flow
+
+TODO: User-visible or system-visible vertical flow across connected layers.
+
+### Layer Map
+
+- TODO layer: TODO responsibility, owner, input/output contract, and state.
 
 ### Control Flow
 
@@ -95,6 +116,14 @@ conditions.
 
 TODO: Concrete design.
 
+#### Feature End-To-End Flow
+
+TODO: Vertical behavior flow across layers, for example UI -> API -> service -> database.
+
+#### Feature Layer Map
+
+- TODO layer: TODO responsibility, boundary contract, state, and validation.
+
 #### Selected Option
 
 TODO: Chosen design option and why it best satisfies the requirements.
@@ -108,6 +137,8 @@ TODO: Chosen design option and why it best satisfies the requirements.
 
 - Must change: TODO file/module/component
 - Must not change: TODO file/module/component
+- Vertical slice: TODO layers and behavior included
+- Foundation prerequisites: TODO schema/auth/migration/harness/safety blockers if any
 
 #### Test-First Success Criteria
 

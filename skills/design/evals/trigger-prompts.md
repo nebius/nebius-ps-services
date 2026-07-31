@@ -18,8 +18,9 @@ the auth boundary decision, compare options, and give me a /plan handoff.
 
 ```text
 There is no code yet. Use research for the stack and requirement due diligence,
-then use system-design-rules to check the API, data, reliability, security,
-observability, and rollout choices before the /plan handoff.
+use app-stack to select the frontend, API, backend, database, and deployment
+technologies, then use system-design-rules to check the API, data, reliability,
+security, observability, and rollout choices before the /plan handoff.
 ```
 
 ```text
@@ -30,6 +31,36 @@ for a new background job workflow.
 ```text
 Before coding, inspect README.md, design.md, and the relevant modules, then
 design the components and implementation plan for this feature.
+```
+
+```text
+Design this three-layer app feature before implementation. Show the vertical
+slice from frontend through API to database, then create the /plan handoff.
+```
+
+```text
+Design a new multi-tier application. Use app-stack for the technology choices
+across the web frontend, API, service runtime, and database, then return to the
+complete design and /plan handoff.
+```
+
+```text
+Design a feature for this established application using its approved React,
+FastAPI, and PostgreSQL stack. Do not reconsider the stack.
+```
+
+This should use `design` but skip `app-stack` because no stack decision remains.
+
+```text
+Design this modernization. Keep the approved frontend and API stack, but use
+app-stack to decide whether the data layer should remain on the current database
+or move to a different database technology.
+```
+
+```text
+Troubleshooting already proved the causal chain and identified the violated
+invariant. Design the required cross-service ownership change from that handoff
+and produce the /plan without reopening the diagnosis.
 ```
 
 ## Should Not Trigger
@@ -47,16 +78,48 @@ Review this ADR against our architecture checklist.
 Use `system-design-rules` for checklist-style design review.
 
 ```text
+Choose the smallest technology stack for this application and classify which
+components are required, conditional, deferred, or rejected.
+```
+
+Use `app-stack` directly because the user requested a stack decision, not a
+complete solution design and `/plan` handoff.
+
+```text
 Run the Agentic SDLC workflow and update docs/design.md for FEAT-123.
 ```
 
-Use the explicit Agentic SDLC workflow, normally starting with `$sdlc-start`.
+Use the explicit Agentic SDLC workflow through `$sdlc-start run <managed-prompt>`.
 
 ```text
 Implement the selected design now.
 ```
 
 Use `/plan` and the relevant implementation or project skill.
+
+```text
+Use $scaffold-project to apply this already approved component graph.
+```
+
+Use the explicit scaffold coordinator without re-entering design.
+
+```text
+This service fails intermittently and we do not know why. Find the root cause
+and repair it.
+```
+
+Use `troubleshoot`; route to `design` only if the proven durable remediation
+later changes a system contract such as a component boundary, public interface,
+data owner, migration, or cross-component workflow.
+
+```text
+The cause is proven and the fix is a difficult concurrency rewrite, but it
+stays inside one existing private component boundary and preserves every
+external contract. Design a new architecture before fixing it.
+```
+
+Keep this repair in `troubleshoot`; implementation difficulty without a
+system-contract change must not trigger `design`.
 
 ```text
 Create a PR for the design changes.
@@ -71,13 +134,16 @@ where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `design` or produce a response that
   follows its design workflow, routes substantial due diligence through
-  `research`, applies `system-design-rules` for non-trivial solution decisions,
-  and ends with a `/plan` handoff.
+  `research`, routes undecided application-stack or layer technology choices
+  through `app-stack`, applies `system-design-rules` for non-trivial solution
+  decisions, and ends with a `/plan` handoff.
+- Fixed-stack design prompts should remain in `design` without reopening the
+  technology decision through `app-stack`.
 - Should-not-trigger prompts should route to brainstorming, checklist review,
-  Agentic SDLC, implementation, or PR workflows.
+  stack selection, Agentic SDLC, implementation, or PR workflows.
 - If `design` steals open-ended ideation, SDLC-owned design artifacts,
-  implementation, or checklist-only reviews, narrow the front matter
-  `description` before changing the workflow body.
+  stack-selection-only prompts, implementation, or checklist-only reviews,
+  narrow the front matter `description` before changing the workflow body.
 
 Report runtime activation as observed only after this check. Otherwise report
 trigger readiness from metadata and static validation only.

@@ -6,12 +6,16 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 ## What It Does
 
 Control, observe, and evaluate browser UI behavior with durable local evidence.
+The evaluation plan may require human-like `computer-use`; Browser or
+Playwright is not a silent substitute for that contract.
 
 ## Main Boundaries
 
-- Use screenshots as the only interaction source when DOM or accessibility snapshots are available.
-- Store secrets in screenshots or reports.
-- Use production data without explicit permission.
+- Do not use screenshots as the only interaction source when DOM or
+  accessibility state is available.
+- Refresh accessibility state after every action when using `computer-use`.
+- Do not store secrets in screenshots or reports.
+- Do not use production data without explicit permission.
 
 ## Primary Inputs
 
@@ -19,6 +23,7 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 - App URL or startup method.
 - Test data or account instructions.
 - Feature design.
+- Required harness and browser, when constrained by the evaluation plan.
 
 ## Output
 

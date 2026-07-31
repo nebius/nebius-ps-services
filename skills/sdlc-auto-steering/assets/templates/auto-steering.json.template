@@ -18,11 +18,15 @@
     {
       "id": "STEER-001",
       "received_at": "<ISO-8601>",
+      "prompt_id": "<prompt-id>",
+      "prompt_revision": "<rNNNN>",
+      "prompt_sha256": "<digest>",
+      "prompt_snapshot": "<inputs/rNNNN/prompt.md>",
       "source_phase": "<phase>",
       "current_feature": "<FEAT-ID or null>",
-      "prompt_summary": "<raw prompt when safe, otherwise redacted summary>",
-      "disposition": "runtime-only|requirements-change|design-change|docs-update|resolved|superseded|rejected|needs-human",
-      "owner_skill": "sdlc-start|sdlc-create-requirements|sdlc-create-design|sdlc-update-documents|null",
+      "prompt_summary": "<compact redacted summary only; never raw prompt text>",
+      "disposition": "runtime-only|requirements-change|design-change|project-agent-instructions-change|docs-update|resolved|superseded|rejected|needs-human",
+      "owner_skill": "sdlc-start|sdlc-create-requirements|sdlc-create-design|project-agent-instructions|sdlc-update-documents|null",
       "status": "pending|active|resolved|blocked",
       "notes": "<short reason or blocker>"
     }

@@ -44,12 +44,15 @@ def _capacity_advice(
     on_demand_available: int = 0,
     on_demand_limit: int = 0,
     on_demand_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+    on_demand_data_state: str = "DATA_STATE_FRESH",
     reserved_available: int = 0,
     reserved_limit: int = 0,
     reserved_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+    reserved_data_state: str = "DATA_STATE_FRESH",
     preemptible_available: int = 0,
     preemptible_limit: int = 0,
     preemptible_level: str = "AVAILABILITY_LEVEL_UNKNOWN",
+    preemptible_data_state: str = "DATA_STATE_FRESH",
 ) -> CapacityResourceAdvice:
     return CapacityResourceAdvice(
         region=region,
@@ -60,19 +63,19 @@ def _capacity_advice(
             available=on_demand_available,
             limit=on_demand_limit,
             availability_level=on_demand_level,
-            data_state="DATA_STATE_FRESH",
+            data_state=on_demand_data_state,
         ),
         reserved=CapacityAdviceAvailability(
             available=reserved_available,
             limit=reserved_limit,
             availability_level=reserved_level,
-            data_state="DATA_STATE_FRESH",
+            data_state=reserved_data_state,
         ),
         preemptible=CapacityAdviceAvailability(
             available=preemptible_available,
             limit=preemptible_limit,
             availability_level=preemptible_level,
-            data_state="DATA_STATE_FRESH",
+            data_state=preemptible_data_state,
         ),
     )
 
@@ -703,6 +706,150 @@ def test_evaluate_requirement_forbid_reservation_policy_checks_common_pool_only(
         "(FORBID reservation policy: regular-vm slots, fabric fabric-6, "
         "converted to GPU units)"
     )
+
+
+@pytest.mark.parametrize(
+    (
+        "mode",
+        "on_demand_data_state",
+        "reserved_data_state",
+        "expected_scope",
+        "expected_state_detail",
+    ),
+    (
+        (
+            "auto",
+            "DATA_STATE_FRESH",
+            "DATA_STATE_STALE",
+            "capacity-dashboard/auto",
+            "reserved=DATA_STATE_STALE, on-demand=DATA_STATE_FRESH",
+        ),
+        (
+            "reserved",
+            "DATA_STATE_FRESH",
+            "DATA_STATE_UNKNOWN",
+            "capacity-dashboard/reserved",
+            "reserved=DATA_STATE_UNKNOWN",
+        ),
+        (
+            "on-demand",
+            "",
+            "DATA_STATE_FRESH",
+            "capacity-dashboard/on-demand",
+            "on-demand=DATA_STATE_UNSPECIFIED",
+        ),
+    ),
+)
+def test_evaluate_requirement_marks_non_fresh_selected_capacity_policy_lane_unknown(
+    mode: str,
+    on_demand_data_state: str,
+    reserved_data_state: str,
+    expected_scope: str,
+    expected_state_detail: str,
+) -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=8,
+        reason="GPU capacity freshness check",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-6",
+            mode=mode,
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                on_demand_available=2,
+                on_demand_data_state=on_demand_data_state,
+                reserved_available=2,
+                reserved_data_state=reserved_data_state,
+            ),
+        ),
+    )
+
+    assert check.available is None
+    assert check.sufficient is None
+    assert check.source_scope == expected_scope
+    assert "Capacity Dashboard GPU availability is unknown" in check.description
+    assert expected_state_detail in check.description
+
+
+@pytest.mark.parametrize(
+    ("mode", "on_demand_data_state", "reserved_data_state", "expected_scope"),
+    (
+        (
+            "reserved",
+            "DATA_STATE_STALE",
+            "DATA_STATE_FRESH",
+            "capacity-dashboard/reserved",
+        ),
+        (
+            "on-demand",
+            "DATA_STATE_FRESH",
+            "DATA_STATE_STALE",
+            "capacity-dashboard/on-demand",
+        ),
+    ),
+)
+def test_evaluate_requirement_ignores_non_selected_capacity_policy_lane_freshness(
+    mode: str,
+    on_demand_data_state: str,
+    reserved_data_state: str,
+    expected_scope: str,
+) -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=8,
+        reason="GPU capacity freshness check",
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-6",
+            mode=mode,
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                on_demand_available=1,
+                on_demand_data_state=on_demand_data_state,
+                reserved_available=1,
+                reserved_data_state=reserved_data_state,
+            ),
+        ),
+    )
+
+    assert check.available == 8
+    assert check.sufficient is True
+    assert check.source_scope == expected_scope
 
 
 def test_evaluate_requirement_requires_exact_selected_gpu_fabric() -> None:

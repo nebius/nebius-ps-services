@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather source-ranked context from the current project folder, sibling projects in the repo, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
+description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather only source-ranked context relevant to the topic, question, or problem from the current project folder, sibling projects, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; resolve recommendation-changing source conflicts with bounded `research` when source priority is insufficient; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
 ---
 
 # Brainstorm
@@ -8,7 +8,8 @@ description: "Use for exploratory, chat-only brainstorming about an idea, propos
 ## Purpose
 
 Use this skill to hold an evidence-first brainstorming conversation. Gather the
-right context for the topic, separate facts from hypotheses, challenge weak
+context that is most likely to answer the topic, resolve the stated challenge,
+or change the recommendation. Separate facts from hypotheses, challenge weak
 assumptions, and discuss options in chat before any implementation workflow
 starts.
 
@@ -50,9 +51,15 @@ starts.
 Start with the most local source that can answer the question. Escalate only
 when the earlier source leaves an important gap.
 
+Source priority is a relevance filter, not a collection quota. Gather a source
+only when it can plausibly answer the exact question, resolve the stated
+problem, close a named uncertainty, or expose a recommendation-changing risk.
+Skip broad background, adjacent files, and interesting but non-decisive context.
+
 1. Current project folder: code, tests, `AGENTS.md`, `README.md`, docs,
    requirements, design notes, changelog, examples, configs, generated
-   artifacts, and local command output when read-only checks are useful.
+   artifacts, and local command output when read-only checks are directly
+   relevant.
 2. Sibling project folders in the same repository: similar modules, shared
    libraries, existing patterns, deployment surfaces, and repo-wide docs.
 3. Related skills: installed or repo-owned skills such as `$nebius`; load only
@@ -63,18 +70,23 @@ when the earlier source leaves an important gap.
    clouds, APIs, SDKs, CLIs, package managers, frameworks, and standards.
 
 Read `references/source-priority.md` when the topic needs more than one source
-class, source conflicts appear, or the user asks for deeper research.
+class, source conflicts appear, or the user asks for deeper research. Use
+`research` only for a bounded follow-up when a recommendation-changing conflict
+remains unresolved after applying the source-priority rules.
 
 ## Process
 
 1. Restate the topic in one or two sentences, including the concrete keywords,
    systems, paths, products, or skills that will guide the search.
-2. Build a small source plan from the source priority list. Keep it focused on
-   answering the user's current question, not collecting everything available.
+2. Build a small source plan from the source priority list. For each planned
+   source, state what question it can answer or what gap it can close. Skip
+   sources without a clear relevance reason.
 3. Gather local context first with targeted reads such as `rg --files`, `rg -n`,
-   and small file ranges. Prefer current project evidence over memory.
-4. If repo-local context is incomplete, inspect sibling project folders for
-   similar names, conventions, docs, tests, or examples.
+   and small file ranges. Use keywords from the problem statement and read the
+   smallest snippet that can settle the point. Prefer current project evidence
+   over memory.
+4. If repo-local context leaves a named gap, inspect sibling project folders
+   for similar names, conventions, docs, tests, or examples.
 5. If a related skill is relevant, read its `SKILL.md` and only the references
    needed for the current topic. Treat skills as context sources and workflow
    boundaries, not automatic permission to execute their mutating steps.
@@ -87,14 +99,21 @@ class, source conflicts appear, or the user asks for deeper research.
    either skill is unavailable, skip it and say so briefly. Stay under
    `brainstorm` unless the user explicitly asks to switch to design, checklist
    review, planning, documentation, or implementation.
-7. If internal sources are needed, use available connectors before generic MCP
-   search. Search with the user's keywords plus project terms, summarize
-   findings, and avoid copying sensitive or broad raw material into chat.
+7. If internal sources are needed to answer a specific unresolved question, use
+   available connectors before generic MCP search. Search with the user's
+   keywords plus project terms, summarize findings, and avoid copying
+   sensitive or broad raw material into chat.
 8. If vendor behavior matters, verify it against current official vendor docs.
    If official docs are unavailable or inconclusive, mark that fact as
    unverified instead of guessing.
-9. Answer in the conversation with concise evidence, tradeoffs, assumptions,
-   challenges, and open questions. Keep source notes close to claims.
+9. After relevant context has been gathered, resolve source conflicts through
+   the source-priority rubric first. If a conflict materially affects the
+   recommendation and still cannot be resolved, use `research` for a bounded
+   deep-research pass on the exact conflict, then return to `brainstorm` for
+   chat-only synthesis.
+10. Answer in the conversation with concise evidence, tradeoffs, assumptions,
+   challenges, and open questions. Keep source notes close to claims and omit
+   context that did not affect the answer.
 
 ## Conversation Contract
 
@@ -114,6 +133,9 @@ class, source conflicts appear, or the user asks for deeper research.
 ## Guardrails
 
 - Do not guess when a source can reasonably be checked.
+- Do not escalate every brainstorm into `research`; use it only for unresolved
+  recommendation-changing conflicts or deeper due diligence explicitly needed
+  by the current topic.
 - Do not treat memory, prior conversation, or unofficial web content as current
   fact when repo evidence, internal sources, or official docs are available.
 - Do not expose secrets, tokens, private endpoints, customer data, internal
@@ -128,29 +150,24 @@ class, source conflicts appear, or the user asks for deeper research.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
 Return whichever shape best fits the conversation, but include enough trace for
 the user to judge the answer:
 
-- Topic summary and source plan when starting a new brainstorm.
+- Topic summary and source plan, including why each planned source is relevant,
+  when starting a new brainstorm.
 - Source-backed facts, with local file paths, internal source names, or vendor
   doc links when available and safe.
+- Source conflicts that changed the answer, including whether bounded
+  `research` was used, skipped, or unavailable.
 - Assumptions and hypotheses clearly labeled.
 - Tradeoffs, options, risks, and challenges to weak assumptions.
 - Open questions that would change the recommendation.

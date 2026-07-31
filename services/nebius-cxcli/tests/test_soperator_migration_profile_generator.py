@@ -13,11 +13,11 @@ import yaml
 
 def _load_generator() -> ModuleType:
     script_path = (
-        Path(__file__).resolve().parents[1]
-        / "scripts"
-        / "generate_soperator_migration_profiles.py"
+        Path(__file__).resolve().parents[1] / "scripts" / "generate_soperator_migration_profiles.py"
     )
-    spec = importlib.util.spec_from_file_location("generate_soperator_migration_profiles", script_path)
+    spec = importlib.util.spec_from_file_location(
+        "generate_soperator_migration_profiles", script_path
+    )
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -87,10 +87,7 @@ def _chart_tarball(files: list[tuple[str, str]] | None = None) -> bytes:
     chart_files = [
         (
             "nebius-soperator-test/helm/soperator/Chart.yaml",
-            "apiVersion: v2\n"
-            "name: helm-soperator\n"
-            "version: 3.0.5\n"
-            "appVersion: \"3.0.5\"\n",
+            'apiVersion: v2\nname: helm-soperator\nversion: 3.0.5\nappVersion: "3.0.5"\n',
         ),
         (
             "nebius-soperator-test/helm/soperator/values.yaml",
@@ -101,9 +98,7 @@ def _chart_tarball(files: list[tuple[str, str]] | None = None) -> bytes:
         ),
         (
             "nebius-soperator-test/helm/soperator/crds/slurmcluster.yaml",
-            "kind: CustomResourceDefinition\n"
-            "metadata:\n"
-            "  name: slurmclusters.slurm.nebius.ai\n",
+            "kind: CustomResourceDefinition\nmetadata:\n  name: slurmclusters.slurm.nebius.ai\n",
         ),
         (
             "nebius-soperator-test/helm/soperator/templates/slurm-cluster.yaml",
@@ -113,10 +108,7 @@ def _chart_tarball(files: list[tuple[str, str]] | None = None) -> bytes:
         ),
         (
             "nebius-soperator-test/helm/soperator-activechecks/Chart.yaml",
-            "apiVersion: v2\n"
-            "name: soperator-activechecks\n"
-            "version: 3.0.5\n"
-            "appVersion: \"3.0.5\"\n",
+            'apiVersion: v2\nname: soperator-activechecks\nversion: 3.0.5\nappVersion: "3.0.5"\n',
         ),
         (
             "nebius-soperator-test/helm/soperator-activechecks/templates/check.yaml",
@@ -139,20 +131,18 @@ def test_generator_extracts_chart_contract_fingerprints_from_tarball() -> None:
     assert contract["main_chart"]["chart_name"] == "helm-soperator"
     assert contract["main_chart"]["chart_version"] == "3.0.5"
     assert contract["main_chart"]["app_version"] == "3.0.5"
-    components = {component["chart_path"]: component for component in contract["component_contracts"]}
+    components = {
+        component["chart_path"]: component for component in contract["component_contracts"]
+    }
     soperator = components["helm/soperator"]
     assert soperator["id"] == "soperator"
     assert soperator["crds"]["file_count"] == 1
     assert soperator["templates"]["file_count"] == 1
     assert soperator["slurm_contract"]["file_count"] == 2
     assert (
-        "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.5"
-        in soperator["images"]["values"]
+        "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.5" in soperator["images"]["values"]
     )
-    assert (
-        "cr.eu-north1.nebius.cloud/soperator/controller:3.0.5"
-        in soperator["images"]["values"]
-    )
+    assert "cr.eu-north1.nebius.cloud/soperator/controller:3.0.5" in soperator["images"]["values"]
     assert components["helm/soperator-activechecks"]["slurm_contract"]["file_count"] == 2
 
 
@@ -161,7 +151,7 @@ def test_generator_contract_fingerprint_is_deterministic_across_tar_order() -> N
     files = [
         (
             "nebius-soperator-test/helm/soperator/Chart.yaml",
-            "apiVersion: v2\nname: helm-soperator\nversion: 4.0.1\nappVersion: \"4.0.1\"\n",
+            'apiVersion: v2\nname: helm-soperator\nversion: 4.0.1\nappVersion: "4.0.1"\n',
         ),
         (
             "nebius-soperator-test/helm/soperator/templates/slurm.yaml",
@@ -200,17 +190,15 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         payload["generator_scope"]
         == "chart-tarball-crd-template-image-and-slurm-contract-fingerprints"
     )
+    assert payload["host_driver_jail_cuda_policy"] == (generator._host_driver_jail_cuda_policy())
     support_rules = {rule["id"]: rule for rule in payload["support_rules"]}
     assert payload["support_rules"][0]["id"] == "k8s-1-33-requires-soperator-1-23"
     assert support_rules["legacy-before-1-22-not-validated"]["status"] == "not_validated"
     assert (
-        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["target_k8s_max"]
-        == "1.33"
+        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["target_k8s_max"] == "1.33"
     )
     assert (
-        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"][
-            "target_version_range"
-        ]
+        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["target_version_range"]
         == "=4.0.2"
     )
     assert (
@@ -219,17 +207,12 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         ]
         == "cxcli_pin"
     )
-    assert support_rules["k8s-before-1-33-soperator-1-22-plus-supported"][
-        "recommended_order"
-    ] == {"soperator_after_k8s_min": "1.32"}
+    assert support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
+    assert support_rules["k8s-1-33-requires-soperator-1-23"]["target_version_range"] == "<1.23.0"
     assert (
-        support_rules["k8s-1-33-requires-soperator-1-23"]["target_version_range"]
-        == "<1.23.0"
-    )
-    assert (
-        support_rules["soperator-target-same-app-non-cxcli-pin-not-validated"][
-            "status"
-        ]
+        support_rules["soperator-target-same-app-non-cxcli-pin-not-validated"]["status"]
         == "not_validated"
     )
     assert (
@@ -249,26 +232,17 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         == "not_validated"
     )
     assert (
-        support_rules["soperator-target-before-cxcli-pin-not-validated"][
-            "target_version_range"
-        ]
+        support_rules["soperator-target-before-cxcli-pin-not-validated"]["target_version_range"]
         == ">=1.23.0,<4.0.2"
     )
     assert (
-        support_rules["soperator-target-newer-than-cxcli-pin-not-validated"][
-            "target_version_range"
-        ]
+        support_rules["soperator-target-newer-than-cxcli-pin-not-validated"]["target_version_range"]
         == ">4.0.2,<5.0.0"
     )
     assert support_rules["k8s-1-33-soperator-4-supported"]["status"] == "supported"
+    assert support_rules["k8s-1-33-soperator-4-supported"]["target_version_range"] == "=4.0.2"
     assert (
-        support_rules["k8s-1-33-soperator-4-supported"]["target_version_range"]
-        == "=4.0.2"
-    )
-    assert (
-        support_rules["k8s-1-33-soperator-4-supported"][
-            "target_chart_version_policy"
-        ]
+        support_rules["k8s-1-33-soperator-4-supported"]["target_chart_version_policy"]
         == "cxcli_pin"
     )
     assert support_rules["k8s-1-33-soperator-4-supported"]["recommended_order"] == {
@@ -286,12 +260,9 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["compute_layout"]
         == "replace-and-roll"
     )
-    assert (
-        payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["node_label_layout"][
-            "source_role_label_keys"
-        ]
-        == ["slurm.nebius.ai/nodeset", "slurm.nebius.ai/nodeset-name"]
-    )
+    assert payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["node_label_layout"][
+        "source_role_label_keys"
+    ] == ["slurm.nebius.ai/nodeset", "slurm.nebius.ai/nodeset-name"]
     assert (
         payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["node_label_layout"][
             "target_role_label_key"
@@ -302,67 +273,64 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["storage_layout"]
         == "adopt-existing-or-create-if-missing"
     )
-    assert (
-        payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["node_label_layout"][
-            "source_role_label_keys"
-        ]
-        == ["slurm.nebius.ai/nodeset-name"]
-    )
-    v1_quiesce = payload["profile_groups"]["legacy-v1-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    assert payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["node_label_layout"][
+        "source_role_label_keys"
+    ] == ["slurm.nebius.ai/nodeset-name"]
+    v1_pause = payload["profile_groups"]["legacy-v1-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v1_quiesce["required_before_target_compute_reconcile"] is True
+    assert v1_pause["required_before_target_compute_reconcile"] is True
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "soperator-controller-mutating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "soperator-controller-validating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "slurm-operator-mutating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "slurm-operator-validating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "namespace": "soperator-system",
         "name": "soperator-controller-manager",
         "release_name": "soperator-controller",
         "chart_prefix": "helm-soperator",
-    } in v1_quiesce["deployments"]
+    } in v1_pause["deployments"]
     assert {
         "namespace": "soperator",
         "release_name": "slurm-operator",
         "chart_prefix": "slurm-operator",
-    } in v1_quiesce["deployments"]
-    v2_quiesce = payload["profile_groups"]["v2-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    } in v1_pause["deployments"]
+    v2_pause = payload["profile_groups"]["v2-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v2_quiesce["required_before_target_compute_reconcile"] is True
+    assert v2_pause["required_before_target_compute_reconcile"] is True
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "soperator-controller-mutating-webhook-configuration",
-    } in v2_quiesce["admission_webhooks"]
+    } in v2_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "soperator-controller-validating-webhook-configuration",
-    } in v2_quiesce["admission_webhooks"]
+    } in v2_pause["admission_webhooks"]
     assert all(
         webhook["name"] != "slurm-operator-mutating-webhook-configuration"
-        for webhook in v2_quiesce["admission_webhooks"]
+        for webhook in v2_pause["admission_webhooks"]
     )
     assert all(
         deployment.get("release_name") != "slurm-operator"
-        for deployment in v2_quiesce["deployments"]
+        for deployment in v2_pause["deployments"]
     )
-    v3_quiesce = payload["profile_groups"]["v3-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    v3_pause = payload["profile_groups"]["v3-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v3_quiesce == v2_quiesce
+    assert v3_pause == v2_pause
     release = payload["releases"][1]
     assert release["chart_path"] == "helm/soperator"
     assert release["chart_name"] == "helm-soperator"
@@ -377,3 +345,10 @@ def test_committed_support_rules_match_generator_policy() -> None:
     payload = _committed_profile_payload()
 
     assert payload["support_rules"] == generator._support_rules()
+
+
+def test_committed_host_driver_jail_cuda_policy_matches_generator_policy() -> None:
+    generator = _load_generator()
+    payload = _committed_profile_payload()
+
+    assert payload["host_driver_jail_cuda_policy"] == (generator._host_driver_jail_cuda_policy())

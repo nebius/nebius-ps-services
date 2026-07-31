@@ -11,20 +11,12 @@ from tempfile import TemporaryDirectory
 
 LEARNING_LOOP = """## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 """
 
 
@@ -326,6 +318,27 @@ def test_sdlc_only_name_and_description_contract() -> None:
         )
 
 
+def test_sdlc_workflow_test_external_verifier_exception() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "sdlc-workflow-test",
+            "sdlc-workflow-test",
+            description=(
+                "Use only when explicitly asked, outside the Agentic SDLC "
+                "workflow, to verify the workflow."
+            ),
+            allow_implicit_invocation="false",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
 def test_missing_openai_metadata_policy_fails() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -455,6 +468,20 @@ def test_ordinary_skill_policy_must_be_true() -> None:
         )
 
 
+def test_agent_nebius_auth_setup_is_explicit_only() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "agent-nebius-auth-setup",
+            "agent-nebius-auth-setup",
+            "## Invocation Policy\n\nExplicit invocation required.\n",
+            allow_implicit_invocation="false",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
 def test_apply_security_policy_can_be_implicit() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -533,12 +560,14 @@ def main() -> int:
         test_stateful_workflow_profile_passes_complete_sections,
         test_stateful_workflow_profile_missing_heading_fails,
         test_sdlc_only_name_and_description_contract,
+        test_sdlc_workflow_test_external_verifier_exception,
         test_missing_openai_metadata_policy_fails,
         test_wrong_openai_metadata_path_fails,
         test_invocation_policy_contract_fails_for_wrong_value,
         test_description_declared_explicit_policy_must_be_false,
         test_invocation_policy_section_can_require_explicit_only,
         test_ordinary_skill_policy_must_be_true,
+        test_agent_nebius_auth_setup_is_explicit_only,
         test_apply_security_policy_can_be_implicit,
         test_guardrail_text_does_not_make_whole_skill_explicit_only,
         test_sdlc_invocation_policy_must_be_explicit_only,

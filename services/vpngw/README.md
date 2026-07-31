@@ -76,6 +76,8 @@ This generates a full schema-aligned YAML template (including defaults, BGP/stat
 
 Before peer tunnel setup, prepare the Nebius side and reserve public IPs for the gateway.
 
+`prep-network` creates or reuses a dedicated explicit-CIDR gateway subnet (`vpngw-subnet` by default), using `gateway_group.subnet.cidr` or the first free `/24` (or configured `prefix_length`) from the network's private pool. For an explicit CIDR outside the pool, it can extend the pool when the network has exactly one private pool; it fails on overlaps or an incompatible existing subnet. If the subnet has no accessible route table, it attempts to create and attach `<subnet-name>-routing-table` (`vpngw-subnet-routing-table` by default) with a `0.0.0.0/0` default-egress route; route-table errors are reported as warnings.
+
 Workflow:
 
 1. Fill minimal fields in `my-vpn.config.yaml`: `tenant_id`, `project_id`, `region_id`, `gateway_group` (leave `connections` for later).
@@ -100,6 +102,8 @@ Generated template notes:
 - `inner_cidr` must be APIPA `/30` (`169.254.0.0/16`)
 - For multi-tunnel HA, use explicit roles (`ha_role: "active"` / `ha_role: "passive"`)
 - Keep secrets as `${VAR}` placeholders and export env vars before `apply`
+
+For shorter starting points, see the [static routing example](examples/static-example.config.yaml) and [BGP routing example](examples/bgp-example.config.yaml).
 
 ### 5. Apply the configuration
 

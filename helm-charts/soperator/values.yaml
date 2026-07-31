@@ -731,6 +731,13 @@ slurmNodes:
     priorityClass: ""
     # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
+    # Slurm 25.11 native OpenMetrics support. External Jail Upgrade temporarily
+    # overrides this to false while login and worker consumers still execute
+    # Slurm 24.x clients from the legacy rootfs and through exact target-slot
+    # consumer verification, then restores this configured value before final
+    # pre-release checks.
+    openMetrics:
+      enabled: true
     # RBAC for slurm-controller ephemeral node power-state management. The
     # power-manager binary runs inside slurmctld and is called by Slurm
     # ResumeProgram/SuspendProgram.
@@ -757,6 +764,10 @@ slurmNodes:
         periodSeconds: 60
         successThreshold: 1
         failureThreshold: 5
+      # Optional Jail Upgrade gate. cxcli sets this together with command/args
+      # while the target controller is staged, then restores the configured
+      # controller process and probes for ownership handoff.
+      readinessProbe: null
       port: 6817
       resources:
         cpu: "1000m"
@@ -795,8 +806,6 @@ slurmNodes:
     volumes:
       spool:
         volumeSourceName: "controller-spool"
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
       customMounts: []
   login:
     size: 2
@@ -867,8 +876,6 @@ slurmNodes:
         ephemeralStorage: "5Gi"
     customInitContainers: []
     volumes:
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
       jailSubMounts: []
       # jailSubMounts:
       #   - name: "mlcommons-sd-bench-data"
@@ -941,9 +948,6 @@ slurmNodes:
         memory: "1Gi"
         ephemeralStorage: "5Gi"
     customInitContainers: []
-    volumes:
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
   rest:
     enabled: true
     size: 1
@@ -1298,6 +1302,14 @@ jailRootfs:
   strategy: activePassive
   activeSlot: slot-a
   passiveSlot: slot-b
+  adoption:
+    # slot selects activeSlot for normal operation. legacy-rootfs makes every
+    # rendered controller/login/worker consumer use legacyPvcName and withholds
+    # jailPersistentMounts until the one-time copy and slot switch complete.
+    activeSource: slot
+    # Existing legacy claim used during first adoption and retained when
+    # rollbackSource is set to legacy-rootfs by the upgrade workflow.
+    legacyPvcName: jail-pvc
   store:
     mountPath: /mnt/jail-store
     rootfsPath: /mnt/jail-store/rootfs
@@ -1314,9 +1326,9 @@ jailRootfs:
 jailPersistentMounts:
   # Writable customer-owned paths that stay outside rootfs generation slots and
   # are mounted back into every active rootfs. cxcli-managed clusters default
-  # /home to /mnt/jail-store/shared/home; external single-SFS adoption defaults
-  # /home to /mnt/jail/shared/home and accepts explicit additional mounts under
-  # the same physical jail SFS shared area.
+  # /home to /mnt/jail-store/shared/home. Automatic external single-SFS
+  # adoption keeps /home, /data, /scripts, and /models in place under
+  # /mnt/jail; only an explicit relocation uses another non-overlapping path.
   - mountPath: /home
     localPath: /mnt/jail-store/shared/home
 volume:
@@ -1486,8 +1498,9 @@ priorityClasses:
 # /run/nvidia/driver so Soperator tools and the shared Slurm jail can resolve
 # libcuda.so.1, libnvidia-ml.so.1, and the host nvidia-smi binary
 # consistently. When this is enabled, GPU NodeSets receive the chart-owned
-# nvidia-driver-root hostPath mount plus an init guard that rejects stale or
-# corrupt shared-jail driver library state before slurmd starts.
+# read-only nvidia-driver-root hostPath mount plus a validation-only init guard
+# that requires cxcli's passive-rootfs evidence marker and rejects stale,
+# mixed-driver, or corrupt shared-jail state before slurmd starts.
 gpuDriverJail:
   enabled: true
 
@@ -1538,9 +1551,6 @@ nodesets:
       volumes:
         spool:
           emptyDir: {}
-        jail:
-          persistentVolumeClaim:
-            claimName: jail-rootfs-slot-a-pvc
         jailSubMounts: []
         sharedMemorySize: 64Gi
         # Optional additional worker mounts. The chart injects and owns the

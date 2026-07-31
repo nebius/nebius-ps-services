@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Evaluate"
-  short_description: "Evaluate acceptance behavior"
-  default_prompt: "Use $sdlc-evaluate to evaluate observed Agentic SDLC product behavior against real-world acceptance criteria, using the requirements Live Experiment Environment only when it is safe and allowed."
+  short_description: "Evaluate acceptance and operational behavior"
+  default_prompt: "Use $sdlc-evaluate to evaluate observed Agentic SDLC behavior and any planned end-to-end slice, emit one commit- and fingerprint-bound failure-event-v1 for every failed criterion, distinguish proven owners from diagnosis-required failures, and use live or observability evidence only through the existing safety gates."
 policy:
   allow_implicit_invocation: false

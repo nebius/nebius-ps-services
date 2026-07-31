@@ -48,10 +48,16 @@ this reference:
 - Prefix skills that are strictly internal to the Agentic SDLC workflow with
   `sdlc-`; use `sdlc-start` for the coordinator. Their descriptions must start
   with `Use only as part of the Agentic SDLC workflow;`.
+- Treat `sdlc-workflow-test` as the deliberate external-verifier exception: it
+  uses the requested `sdlc-` name but must say that it runs outside the workflow.
 - Set `policy.allow_implicit_invocation: false` for `sdlc-*` skills and other
   skills that must be explicitly requested, such as Git commit/push/PR/merge,
-  publish/release, auth/setup, high-risk security mutation, container
+  publish/release, ordinary auth/setup, high-risk security mutation, container
   attachment, MCP installation, or workflow-verification harnesses.
+- Permit `true` for a narrowly identified setup skill only when implicit use is
+  read-only diagnosis/planning and a machine-checkable invocation section
+  requires a displayed plan and explicit current-turn confirmation before all
+  IAM, credential, profile, hook, or equivalent mutations.
 - Set `policy.allow_implicit_invocation: true` for ordinary reusable skills
   that Codex may safely choose from the `description`. This is OpenAI Codex's
   default, but this repository still records it explicitly for validation.
@@ -76,8 +82,11 @@ this reference:
 - Keep each skill focused on one coherent job.
 - Treat `SKILL.md` as the only required portable runtime file. It should carry
   the core workflow that must be available after trigger.
-- Keep `SKILL.md` lean; move long checklists, examples, vendor notes, and
-  detailed policy into `references/`.
+- Keep `SKILL.md` lean and specific. It should contain trigger, scope,
+  required workflow, guardrails, validation, and output contract, not broad
+  methodology or background prose.
+- Move long checklists, examples, vendor notes, troubleshooting, detailed
+  policy, and reusable templates into `references/` or `assets/`.
 - Tell the agent exactly when to load each reference. Avoid vague "see
   references/" instructions.
 - Keep references one level deep from `SKILL.md` and focused by task, provider,
@@ -179,5 +188,9 @@ For these skills:
   ```
 
 - Use Markdown linting for changed docs when available.
+- Before claiming a target skill is aligned, run or apply `code-review` in
+  review-only mode and `apply-security` in advisory or scan mode against the
+  target skill scope. Record fixed, deferred, skipped, incomplete, or blocking
+  findings.
 - Report runtime trigger readiness from metadata inspection only unless you
   actually observe the target Codex surface loading the skill.

@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentic-sdlc/three-tier-results-v2",
+  "title": "Agentic SDLC three-tier semantic results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scenario",
+    "verification_id",
+    "git",
+    "layers",
+    "tests",
+    "sdlc_phases",
+    "gui_uat"
+  ],
+  "properties": {
+    "schema": {
+      "const": "agentic-sdlc/three-tier-results-v2"
+    },
+    "scenario": {
+      "const": "three-tier-task-board-v1"
+    },
+    "verification_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline_sha", "promoted_sha", "clean"],
+      "properties": {
+        "baseline_sha": {
+          "anyOf": [
+            {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+            {"type": "null"}
+          ]
+        },
+        "promoted_sha": {
+          "anyOf": [
+            {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+            {"type": "null"}
+          ]
+        },
+        "clean": {
+          "type": "boolean"
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontend", "web", "database"],
+      "properties": {
+        "frontend": {"enum": ["PASS", "PARTIAL", "FAIL", "NOT_RUN"]},
+        "web": {"enum": ["PASS", "PARTIAL", "FAIL", "NOT_RUN"]},
+        "database": {"enum": ["PASS", "PARTIAL", "FAIL", "NOT_RUN"]}
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "api", "database", "migration", "vertical", "gui"],
+      "properties": {
+        "unit": {"$ref": "#/$defs/testResult"},
+        "api": {"$ref": "#/$defs/testResult"},
+        "database": {"$ref": "#/$defs/testResult"},
+        "migration": {"$ref": "#/$defs/testResult"},
+        "vertical": {"$ref": "#/$defs/testResult"},
+        "gui": {"$ref": "#/$defs/testResult"}
+      }
+    },
+    "sdlc_phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sdlc-create-requirements",
+        "sdlc-start",
+        "sdlc-gather-context",
+        "sdlc-create-design",
+        "sdlc-auto-steering",
+        "sdlc-create-plan",
+        "sdlc-prepare-execution",
+        "sdlc-tdd",
+        "sdlc-implement-plan",
+        "sdlc-validate-codes",
+        "sdlc-unit-tests",
+        "sdlc-evaluate",
+        "sdlc-update-documents",
+        "sdlc-align-specs",
+        "sdlc-commit",
+        "local-ship",
+        "sdlc-uat-tests",
+        "post-uat-documents"
+      ],
+      "properties": {
+        "sdlc-create-requirements": {"$ref": "#/$defs/status"},
+        "sdlc-start": {"$ref": "#/$defs/status"},
+        "sdlc-gather-context": {"$ref": "#/$defs/status"},
+        "sdlc-create-design": {"$ref": "#/$defs/status"},
+        "sdlc-auto-steering": {"$ref": "#/$defs/status"},
+        "sdlc-create-plan": {"$ref": "#/$defs/status"},
+        "sdlc-prepare-execution": {"$ref": "#/$defs/status"},
+        "sdlc-tdd": {"$ref": "#/$defs/status"},
+        "sdlc-implement-plan": {"$ref": "#/$defs/status"},
+        "sdlc-validate-codes": {"$ref": "#/$defs/status"},
+        "sdlc-unit-tests": {"$ref": "#/$defs/status"},
+        "sdlc-evaluate": {"$ref": "#/$defs/status"},
+        "sdlc-update-documents": {"$ref": "#/$defs/status"},
+        "sdlc-align-specs": {"$ref": "#/$defs/status"},
+        "sdlc-commit": {"$ref": "#/$defs/status"},
+        "local-ship": {"$ref": "#/$defs/status"},
+        "sdlc-uat-tests": {"$ref": "#/$defs/status"},
+        "post-uat-documents": {"$ref": "#/$defs/status"}
+      }
+    },
+    "gui_uat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "harness",
+        "browser",
+        "steps",
+        "api_db_correlated",
+        "restart_persistence",
+        "screenshots"
+      ],
+      "properties": {
+        "harness": {"const": "computer-use"},
+        "browser": {"const": "chrome"},
+        "steps": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "api_db_correlated": {"type": "boolean"},
+        "restart_persistence": {"type": "boolean"},
+        "screenshots": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^evidence/gui-uat/(?!\\.{1,2}(?:/|$))[^/]+(?:/(?!\\.{1,2}(?:/|$))[^/]+)*\\.(?:png|jpe?g)$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": ["PASS", "PARTIAL", "FAIL", "NOT_RUN"]
+    },
+    "testResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "assertions", "evidence"],
+      "properties": {
+        "status": {"$ref": "#/$defs/status"},
+        "assertions": {"type": "integer", "minimum": 0},
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

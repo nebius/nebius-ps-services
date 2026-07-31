@@ -29,7 +29,7 @@ def _gpu_driver_jail_result(
     stderr: str = "",
 ) -> SoperatorValidationCommandResult:
     match = re.search(r"--nodelist=([^ \n']+)", script)
-    hosts = (match.group(1).split(",") if match else ["worker-gpu-0"])
+    hosts = match.group(1).split(",") if match else ["worker-gpu-0"]
     stdout = "".join(
         (
             "cxcli-soperator-gpu-driver-jail-ok "
@@ -57,7 +57,7 @@ def _standard_gpu_nodeset_payload() -> dict[str, object]:
                                 {
                                     "name": "nvidia-driver-root",
                                     "mountPath": "/run/nvidia/driver",
-                                    "readOnly": False,
+                                    "readOnly": True,
                                     "volumeSource": {
                                         "hostPath": {
                                             "path": "/",
@@ -210,6 +210,46 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
             ],
         }
     ]
+
+
+def test_manager_validation_accepts_exact_checkpointed_bridge_pause() -> None:
+    checks: list[dict[str, object]] = []
+
+    def _runner(args, **_kwargs):
+        command = tuple(str(item) for item in args)
+        return SoperatorValidationCommandResult(
+            command,
+            0,
+            json.dumps(
+                {
+                    "metadata": {
+                        "uid": "manager-uid",
+                        "generation": 7,
+                    },
+                    "spec": {"replicas": 0},
+                    "status": {"observedGeneration": 7},
+                }
+            ),
+            "",
+        )
+
+    soperator_validation._check_soperator_manager_deployment(
+        _runner,
+        {
+            "namespace": "soperator",
+            "checkpointed_manager_pause": {
+                "schema": "nebius-cxcli/checkpointed-manager-pause-v1",
+                "status": "verified",
+                "deployment_uid": "manager-uid",
+                "original_replicas": 1,
+                "bridge_stage": "source-ha-active",
+            },
+        },
+        checks,
+    )
+
+    assert checks[0]["status"] == "passed"
+    assert checks[0]["checkpointed_pause"] is True
 
 
 def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_chart() -> None:
@@ -479,7 +519,7 @@ def test_nccl_script_honors_node_cap_and_optional_timeout() -> None:
     assert "--time=00:20:00 --immediate=60" in capped
     assert "requested_max_nodes=0" in uncapped
     assert "--time=00:30:00" not in uncapped
-    assert "--cpus-per-task=\"$cpus_per_task\" --immediate=60" in uncapped
+    assert '--cpus-per-task="$cpus_per_task" --immediate=60' in uncapped
     assert "if (( gpus_per_node == 1 )); then" in capped
     assert "nccl_max_bytes=2G" in capped
     assert "nccl_max_bytes=8G" in capped
@@ -1135,7 +1175,9 @@ def test_soperator_cluster_validation_recovers_stuck_populate_jail_job(
     assert deleted_pods == ["training-populate-jail-abc"]
     report = json.loads(written[0].read_text(encoding="utf-8"))
     assert report["passed"] is True
-    recovery = next(check for check in report["checks"] if check["name"] == "Populate jail recovery")
+    recovery = next(
+        check for check in report["checks"] if check["name"] == "Populate jail recovery"
+    )
     assert recovery["status"] == "passed"
     assert recovery["pod_name"] == "training-populate-jail-abc"
     assert recovery["jail_mount_pod"] == "jail-mount-xyz"
@@ -1918,18 +1960,14 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         "Slurm NCCL benchmark",
     ]
     contract_check = next(
-        check
-        for check in report["checks"]
-        if check["name"] == "GPU driver jail NodeSet contract"
+        check for check in report["checks"] if check["name"] == "GPU driver jail NodeSet contract"
     )
     assert contract_check["summary"] == (
-        "GPU worker NodeSets include the chart-owned host driver root mount "
+        "GPU worker NodeSets include the chart-owned read-only host driver root mount "
         "and GPU driver jail init guard."
     )
     partition_check = next(
-        check
-        for check in report["checks"]
-        if check["name"] == "Slurm all-node hostname acceptance"
+        check for check in report["checks"] if check["name"] == "Slurm all-node hostname acceptance"
     )
     assert partition_check["summary"] == (
         "hostname acceptance jobs passed on 2/2 Slurm node(s) across 2 partition(s)."
@@ -1967,9 +2005,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         },
     ]
     driver_jail_check = next(
-        check
-        for check in report["checks"]
-        if check["name"] == "Slurm GPU driver jail acceptance"
+        check for check in report["checks"] if check["name"] == "Slurm GPU driver jail acceptance"
     )
     assert driver_jail_check["summary"] == (
         "GPU driver jail checks passed on 1/1 Slurm GPU node(s); libcuda.so.1, "
@@ -1986,9 +2022,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
             "batch_size": 128,
             "batch_count": 1,
             "status": "passed",
-            "nodes": [
-                {"node_name": "worker-gpu-0", "status": "passed", "reported": True}
-            ],
+            "nodes": [{"node_name": "worker-gpu-0", "status": "passed", "reported": True}],
         }
     ]
     gpu_check = next(
@@ -2197,7 +2231,9 @@ def test_soperator_acceptance_benchmark_fails_without_gpu_partition(
     report = json.loads(
         (tmp_path / "acceptance-benchmark-report-training.json").read_text(encoding="utf-8")
     )
-    nccl_check = next(check for check in report["checks"] if check["name"] == "Slurm NCCL benchmark")
+    nccl_check = next(
+        check for check in report["checks"] if check["name"] == "Slurm NCCL benchmark"
+    )
     assert report["test_purpose"] == "acceptance-benchmark"
     assert report["scope"] == "slurm-nccl"
     assert report["passed"] is False
@@ -4063,9 +4099,7 @@ def test_soperator_cluster_validation_allows_cloud_node_resume_for_smoke(
     )
     assert "partition cpu" in smoke_check["summary"]
     driver_jail_check = next(
-        check
-        for check in report["checks"]
-        if check["name"] == "Slurm GPU driver jail acceptance"
+        check for check in report["checks"] if check["name"] == "Slurm GPU driver jail acceptance"
     )
     assert driver_jail_check["status"] == "skipped"
 
@@ -4664,8 +4698,7 @@ def test_soperator_acceptance_gpu_allocation_batches_all_large_partition_nodes()
                     [
                         "GPU 0: NVIDIA H100",
                         *[
-                            f"cxcli-soperator-gpu-allocation-ok host={host} "
-                            "evidence=nvidia-smi"
+                            f"cxcli-soperator-gpu-allocation-ok host={host} evidence=nvidia-smi"
                             for host in batch_nodes
                         ],
                     ]
@@ -4770,7 +4803,7 @@ def test_soperator_acceptance_gpu_allocation_accepts_proc_driver_device_evidence
     gpu_check = checks[0]
     assert gpu_check["status"] == "passed"
     assert "nvidia-smi-unusable" in "\n".join(gpu_check["stdout"])
-    assert "grep -h \"^Model:\"" in gpu_scripts[0]
+    assert 'grep -h "^Model:"' in gpu_scripts[0]
     allocation_report = gpu_check["gpu_allocations"][0]
     assert allocation_report["passed_node_count"] == 1
     assert allocation_report["nodes"] == [

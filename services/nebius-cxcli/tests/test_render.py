@@ -35,7 +35,11 @@ from nebius_cxcli.mk8s_gpu import ensure_mk8s_gpu_app_rows, materialize_mk8s_gpu
 from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
-from nebius_cxcli.render import render_project
+from nebius_cxcli.render import (
+    promote_staged_generated_paths,
+    render_project,
+    staged_generated_paths,
+)
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 from nebius_cxcli.terraform_provider import build_provider_module_name
 
@@ -1685,11 +1689,8 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         group = mk8s_inputs["node_groups"][group_name]
         assert group["platform"] == "cpu-d3"
         assert group["preset"] == "32vcpu-128gb"
-    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 4,
-    }
-    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 3
+    assert "autoscaling" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 1
@@ -1701,9 +1702,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         }
     ]
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
-    assert "autoscaling = {" in main_tf
-    assert "min_node_count = 1" in main_tf
-    assert "max_node_count = 4" in main_tf
+    assert "node_count = 3" in main_tf
 
 
 def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Path) -> None:
@@ -1978,7 +1977,12 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
                         "name": "child",
                         "version": "1.2.3",
                         "repository": "https://example.invalid/charts",
-                    }
+                    },
+                    {
+                        "name": "local-child",
+                        "version": "4.5.6",
+                        "repository": "file://../local-child",
+                    },
                 ],
             },
             sort_keys=False,
@@ -1993,7 +1997,12 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
                         "name": "child",
                         "version": "1.2.3",
                         "repository": "https://example.invalid/charts",
-                    }
+                    },
+                    {
+                        "name": "local-child",
+                        "version": "4.5.6",
+                        "repository": "file://../local-child",
+                    },
                 ],
                 "digest": "sha256:test",
                 "generated": "2026-01-01T00:00:00Z",
@@ -2003,6 +2012,7 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
         encoding="utf-8",
     )
     (charts_dir / "child-1.2.3.tgz").write_bytes(b"packaged")
+    (charts_dir / "local-child-4.5.6.tgz").write_bytes(b"packaged")
 
     def fail_run(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("helm dependency build should not run when archives are packaged")
@@ -2012,7 +2022,78 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
     _build_local_helm_chart_dependencies(str(chart_dir))
 
 
-def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
+def test_render_local_helm_chart_reuses_packaged_file_dependency_without_source_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    charts_dir = chart_dir / "charts"
+    charts_dir.mkdir(parents=True)
+    dependency = {
+        "name": "local-child",
+        "version": "4.5.6",
+        "repository": "file://../local-child",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (charts_dir / "local-child-4.5.6.tgz").write_bytes(b"packaged")
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = """---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rendered
+data:
+  key: value
+"""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        if command[:3] == ["helm", "dependency", "build"]:
+            raise AssertionError(
+                "helm dependency build should not run for packaged file dependency"
+            )
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    rendered = flux_render_module._render_local_helm_chart(
+        release_name="release",
+        namespace="soperator",
+        chart_path=str(chart_dir),
+        values={},
+    )
+
+    assert "name: rendered" in rendered
+    assert [command[:2] for command in calls] == [["helm", "template"]]
+
+
+def test_build_local_helm_chart_dependencies_rebuilds_missing_file_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2054,7 +2135,6 @@ def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
         ),
         encoding="utf-8",
     )
-    (charts_dir / "child-1.2.3.tgz").write_bytes(b"stale")
     calls: list[list[str]] = []
 
     class Result:
@@ -2071,6 +2151,59 @@ def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
     _build_local_helm_chart_dependencies(str(parent_dir))
 
     assert calls == [["helm", "dependency", "build", "--skip-refresh", str(parent_dir)]]
+
+
+def test_build_local_helm_chart_dependencies_reports_missing_packaged_dependency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    dependency = {
+        "name": "child",
+        "version": "1.2.3",
+        "repository": "file://../child",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "failed to build file dependency"
+
+    def fake_run(_command: list[str], **_kwargs: object) -> Result:
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    with pytest.raises(ValueError) as excinfo:
+        _build_local_helm_chart_dependencies(str(chart_dir))
+
+    message = str(excinfo.value)
+    assert "Missing packaged chart dependencies: child-1.2.3" in message
+    assert "Package the pinned archives under charts/" in message
 
 
 def test_build_local_helm_chart_dependencies_adds_remote_repositories(
@@ -3857,13 +3990,16 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
-    onboard_report = paths.reports_dir / "soperator-discovery" / "external-cluster"
-    migrate_report = paths.reports_dir / "ext-soperator-upgrade-report.md"
-    migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
+    soperator_cluster_report_dir = paths.reports_dir / "soperator-clusters" / "external-context"
+    onboard_report = soperator_cluster_report_dir / "discovery"
+    migrate_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
+    migration_detail_report = (
+        soperator_cluster_report_dir / "ext-soperator-upgrade" / "deploy-smoke-report-external.json"
+    )
     segment_report_dir = (
-        paths.reports_dir
-        / "ext-soperator-upgrades"
-        / "external-cluster"
+        soperator_cluster_report_dir
+        / "ext-soperator-upgrade"
+        / "segments"
         / "segment-1-kubernetes-1-31-1-32-soperator"
     )
     segment_report = segment_report_dir / "report.md"
@@ -3873,8 +4009,8 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
     node_group_report_json = paths.reports_dir / "upgrade-node-group-report.json"
-    upgrade_report = paths.reports_dir / "soperator-upgrade-report.md"
-    upgrade_report_json = paths.reports_dir / "soperator-upgrade-report.json"
+    upgrade_report = soperator_cluster_report_dir / "soperator-upgrade" / "report.md"
+    upgrade_report_json = soperator_cluster_report_dir / "soperator-upgrade" / "report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3895,6 +4031,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
+    migrate_report.parent.mkdir(parents=True)
     migrate_report.write_text(
         "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
@@ -3908,6 +4045,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
     node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
+    upgrade_report.parent.mkdir(parents=True)
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
@@ -3922,7 +4060,9 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert migrate_report.read_text(encoding="utf-8").startswith("# External Soperator Upgrade Report")
+    assert migrate_report.read_text(encoding="utf-8").startswith(
+        "# External Soperator Upgrade Report"
+    )
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert segment_report.read_text(encoding="utf-8") == "# Segment Report\n"
     assert segment_json_report.read_text(encoding="utf-8") == '{"segment": "segment-1"}\n'
@@ -3949,6 +4089,45 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     assert "./flux-system" not in kustomization_doc["resources"]
     assert (paths.reports_dir / "deploy-report.md").exists()
+
+
+def test_promote_staged_generated_paths_merges_cluster_lifecycle_reports(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "deployments" / "tenant" / "project" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("client_info: {}\n", encoding="utf-8")
+    paths = resolve_project_paths(config_path)
+    staged_paths = staged_generated_paths(paths)
+
+    cluster_reports = paths.reports_dir / "soperator-clusters" / "mk8scluster-existing"
+    staged_cluster_reports = (
+        staged_paths.reports_dir / "soperator-clusters" / "mk8scluster-existing"
+    )
+    existing_discovery = cluster_reports / "discovery" / "manifest.json"
+    existing_upgrade = cluster_reports / "ext-soperator-upgrade" / "report.md"
+    existing_onboarding = cluster_reports / "onboarding" / "report.json"
+    staged_onboarding = staged_cluster_reports / "onboarding" / "report.json"
+    staged_render_file = staged_paths.infra_dir / "main.tf"
+
+    existing_discovery.parent.mkdir(parents=True)
+    existing_upgrade.parent.mkdir(parents=True)
+    existing_onboarding.parent.mkdir(parents=True)
+    staged_onboarding.parent.mkdir(parents=True)
+    staged_render_file.parent.mkdir(parents=True)
+    existing_discovery.write_text('{"schema": "discovery"}\n', encoding="utf-8")
+    existing_upgrade.write_text("# Existing Upgrade Report\n", encoding="utf-8")
+    existing_onboarding.write_text('{"source": "existing"}\n', encoding="utf-8")
+    staged_onboarding.write_text('{"source": "staged"}\n', encoding="utf-8")
+    staged_render_file.write_text('resource "null_resource" "main" {}\n', encoding="utf-8")
+
+    promote_staged_generated_paths(staged_paths, paths)
+
+    assert existing_discovery.read_text(encoding="utf-8") == '{"schema": "discovery"}\n'
+    assert existing_upgrade.read_text(encoding="utf-8") == "# Existing Upgrade Report\n"
+    assert existing_onboarding.read_text(encoding="utf-8") == '{"source": "staged"}\n'
+    assert (paths.infra_dir / "main.tf").read_text(encoding="utf-8").startswith("resource")
+    assert not staged_paths.generated_dir.exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(

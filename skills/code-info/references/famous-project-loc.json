@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "method": "code-info-code-loc-v1",
+  "benchmarks": [
+    {
+      "name": "Redis",
+      "version": "7.2.14",
+      "repository": "https://github.com/redis/redis",
+      "ref": "f2262eccb855eadd1afb0c457ea583ef9d5400b5",
+      "code_loc": 208161,
+      "scope": "Complete release source tree, including tests; documentation and configuration/data languages excluded",
+      "measured_at": "2026-07-22",
+      "source_url": "https://github.com/redis/redis/releases/tag/7.2.14"
+    },
+    {
+      "name": "SQLite",
+      "version": "3.46.0",
+      "repository": "https://github.com/sqlite/sqlite",
+      "ref": "bebe2d8be8acfd02592c4972f4ba32c3b4e4a33f",
+      "code_loc": 323262,
+      "scope": "Complete release source tree, including tests; documentation and configuration/data languages excluded",
+      "measured_at": "2026-07-22",
+      "source_url": "https://www.sqlite.org/releaselog/3_46_0.html"
+    }
+  ]
+}

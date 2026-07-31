@@ -2,6 +2,15 @@ suite: slurmScripts built-in file overrides
 templates:
   - templates/slurm-cluster/slurm-scripts-cm.yaml
 tests:
+  - it: renders the upstream Pyxis importer consumed by worker nodes
+    asserts:
+      - matchRegex:
+          path: data["pyxis_caching_importer.sh"]
+          pattern: "ENROOT_CONTAINER_IMAGES_CACHE_DIR"
+      - matchRegex:
+          path: data["pyxis_caching_importer.sh"]
+          pattern: "enroot import --output"
+
   - it: renders built-in script content from customContentFile
     set:
       slurmScripts:

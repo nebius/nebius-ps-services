@@ -78,6 +78,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Ensure tag commit belongs to main history
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          git fetch origin "__MAIN_BRANCH__:refs/remotes/origin/__MAIN_BRANCH__" --prune
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/__MAIN_BRANCH__"; then
+            echo "::error::Tag commit ${GITHUB_SHA} is not in origin/__MAIN_BRANCH__ history"
+            exit 1
+          fi
 
       - name: Authorize workflow_dispatch actor
         if: github.event_name == 'workflow_dispatch'
@@ -206,7 +217,8 @@ jobs:
           context: ${{ env.APP_DIR }}
           file: ${{ env.APP_DIR }}/Dockerfile
           push: true
-          provenance: false
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.image_tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

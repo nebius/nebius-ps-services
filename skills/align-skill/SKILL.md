@@ -33,6 +33,8 @@ alignment.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
 - Adding or hardening safety guardrails before validation or live tests.
+- Applying `code-review` and `apply-security` review lanes to every target
+  skill before claiming the target is aligned.
 - Applying the optional stateful-workflow skill profile for skills that manage
   local state, locked plans, evidence, continuation, retries, or failure
   routing.
@@ -59,49 +61,18 @@ alignment.
 
 ## Triggering This Skill
 
-Official OpenAI documentation confirms that Codex Skills are available in the
-Codex CLI, IDE extension, and Codex app. It also confirms progressive
-disclosure: Codex starts with each skill's `name`, `description`, and file path,
-then loads the full `SKILL.md` only when it decides the skill is relevant.
-In large skill sets, OpenAI docs state that Codex may shorten descriptions or
-omit some skills from the initial skills list, so front-load the key trigger
-terms and boundaries in the front matter `description`.
+Codex uses progressive disclosure: it sees skill metadata first, then loads
+the full `SKILL.md` only when the skill is selected. Front-load target type,
+authoring intent, and boundaries in the front matter `description`.
 
-Confirmed explicit invocation in CLI/IDE: run `/skills` or type `$` to mention a
-skill. Implicit invocation depends on the front matter `description`.
-
-For reliable activation in CLI, IDE extension, or the Codex app, mention
-`align-skill` and the target path, skill name, folder, GitHub repository URL, or
-GitHub tree URL. Do not claim support for manual `@skill` syntax or any other
-explicit invocation syntax unless current official OpenAI documentation
+For deterministic activation, mention `align-skill` plus the target path,
+skill name, folder, GitHub repository URL, or GitHub tree URL. In CLI/IDE,
+confirmed explicit mechanisms include `/skills` and `$` skill mention. Do not
+document `@skill` or other syntax unless current official OpenAI documentation
 confirms it.
 
-Practical prompts:
-
-```text
-Use align-skill to review and align `skills/foo`.
-Use align-skill as a helper after skill-creator scaffolded a release-triage skill.
-Align these skills against the canonical structure and official vendor docs.
-Review all skills under this folder and produce an alignment report.
-Validate this GitHub skills repo and propose safe changes.
-Fix the `SKILL.md` for this skill so it follows Codex Skill best practices.
-Help me harden this draft `SKILL.md` into a safe, secure, fast Codex skill.
-Add the standard learning-loop rule to every skill under `skills/`.
-Check whether this skill has safe guardrails before live validation.
-Standardize this multi-skill folder and add missing references, assets, or scripts.
-Review this skill's vendor-specific commands against official documentation.
-Align `skills/foo` and `skills/bar`, but do not run live tests unless the environment is confirmed as non-production.
-```
-
-VS Code-compatible IDE example: open the repository in VS Code, Cursor, or
-Windsurf, then ask: "Use align-skill to align `skills/foo`."
-
-Codex app or desktop local example: open the local project that contains the
-skills, choose the local workflow, then ask: "Use align-skill to review all
-skills under `skills/`."
-
-For expanded CLI, VS Code-compatible IDE, and Codex app guidance, read
-`references/triggering-guide.md`.
+Read `references/triggering-guide.md` when reviewing trigger behavior, surface
+support, or prompt examples.
 
 ## Alignment Principles
 
@@ -120,6 +91,9 @@ For expanded CLI, VS Code-compatible IDE, and Codex app guidance, read
   progressive disclosure.
 - Move large checklists, templates, policies, and long examples into
   `references/` or `assets/`.
+- Keep target `SKILL.md` content limited to trigger, scope, required workflow,
+  guardrails, validation, and output contract. Put detailed rubrics, examples,
+  policy, troubleshooting, and templates in supporting files.
 - Scripts should be self-contained where possible, have helpful errors, avoid
   network calls unless explicitly needed, and fail safely.
 - Do not persist secrets, private URLs, customer data, raw logs, or one-off
@@ -166,8 +140,9 @@ newly scaffolded skill folder:
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-9. Validate locally with the narrowest relevant checks, then broaden only when
-   the contract or shared validator changed.
+9. Run the mandatory review lanes for the target skill scope, then validate
+   locally with the narrowest relevant checks. Broaden only when the contract or
+   shared validator changed.
 
 ## Learning Loop Enforcement
 
@@ -191,20 +166,36 @@ as unverified instead of presenting it as fact. Read
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
+## Mandatory Review Lanes
 
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+Before reporting a target skill as aligned, apply these lanes to every target
+skill selected by a single-skill path, multi-skill parent folder, GitHub
+repository URL, or GitHub tree URL:
+
+- `code-review` in review-only mode for instruction quality, support scripts,
+  validation gaps, maintainability, over-complexity, and bloated `SKILL.md`
+  content.
+- `apply-security` in advisory or scan mode for secrets, private URLs, unsafe
+  live actions, credential handling, external writes, dangerous scripts, and
+  supply-chain risk.
+
+These lanes do not broaden `align-skill` into project-wide `align`. Keep them
+scoped to the target skill folders and their directly referenced resources. In
+report-only mode, both lanes stay report-only. If edits are allowed, apply only
+focused, low-risk fixes already permitted by the active task and by each child
+skill's stricter safety rules.
+
+If either lane cannot be resolved, loaded, or completed, report the lane as
+incomplete with the paths or skills checked. Do not claim full alignment until
+blocking `code-review` or `apply-security` findings are fixed, explicitly
+deferred by the user, or reported as owner-review required.
 
 ## Safety Guardrails
 
@@ -220,47 +211,17 @@ effects.
 
 ## Canonical Skill Structure
 
-OpenAI portable minimum:
+Read `references/canonical-skill-structure.md` when checking structure,
+metadata, naming, section placement, optional resources, or stateful-workflow
+profile requirements. Keep the core distinction loaded here:
 
-```text
-skill-name/
-`-- SKILL.md
-```
-
-Portable skill with common optional resources:
-
-```text
-skill-name/
-|-- SKILL.md
-|-- agents/
-|   `-- openai.yaml
-|-- references/
-|-- scripts/
-`-- assets/
-```
-
-This repository's source-owned standard:
-
-```text
-skill-name/
-|-- SKILL.md
-|-- agents/
-|   `-- openai.yaml
-|-- assets/
-|-- evals/
-|-- references/
-`-- scripts/
-```
-
-For this repository, keep `agents/openai.yaml` for every source-owned skill;
-do not remove it as an "optional" upstream file. Only add the other optional
-folders when they serve the skill. Follow existing repository conventions when
-they are clearer or stricter than the generic OpenAI baseline.
-OpenAI Codex treats `agents/openai.yaml` as optional metadata for UI metadata,
-invocation policy, and tool dependencies. This repository requires it for
-source-owned skills so UI metadata, default prompts, dependencies, and
-invocation policy can be validated. In this repository, `evals/` is an optional
-surface for reusable trigger or quality evaluation prompts.
+- OpenAI portable minimum: a skill folder with `SKILL.md` containing front
+  matter `name` and `description`.
+- OpenAI optional resources: `agents/openai.yaml`, `references/`, `scripts/`,
+  and `assets/` when they serve the skill.
+- This repository's source-owned standard: every repo-owned skill keeps
+  `agents/openai.yaml`; `assets/`, `evals/`, `references/`, and `scripts/` are
+  added only when useful.
 
 ## Invocation Policy Selection
 
@@ -272,12 +233,18 @@ contract:
   prompt matches their `description`.
 - Use `false` when the skill must be explicitly invoked by the user or
   coordinator, such as Git commit/push/PR/merge flows, release/publish flows,
-  auth or local setup, high-risk security mutation, container attachment,
+  ordinary auth or local setup, high-risk security mutation, container attachment,
   external MCP installation, workflow test harnesses, or any `sdlc-*` Agentic
   SDLC phase.
-- For `sdlc-*` skills, keep the description prefix
+- A narrowly scoped setup skill may use `true` only when implicit selection is
+  read-only diagnosis/planning and a machine-checkable `## Invocation Policy`
+  requires a displayed plan plus explicit current-turn confirmation before
+  every IAM, credential, profile, hook, or equivalent mutation.
+- For Agentic SDLC phase skills, keep the description prefix
   `Use only as part of the Agentic SDLC workflow;` and set
-  `allow_implicit_invocation: false`.
+  `allow_implicit_invocation: false`. The explicit external
+  `sdlc-workflow-test` verifier keeps an outside-workflow description and also
+  sets `allow_implicit_invocation: false`.
 - If a skill's front matter, Non-Goals, Guardrails, or workflow says it should
   run only after an explicit request, encode that requirement in
   `agents/openai.yaml` instead of relying on prose alone.
@@ -303,13 +270,17 @@ not be forced onto simple instruction-only skills.
 7. Apply focused, evidence-backed improvements across `SKILL.md`, references,
    assets, scripts, metadata, README entries, and changelog entries when those
    surfaces exist and are in scope.
-8. Capture newly learned durable knowledge back into the target skill's local
-   source materials. Prefer the narrowest appropriate surface: `SKILL.md` for
-   runtime rules, `references/` for detailed guidance, `assets/` for reusable
-   templates, `scripts/` for deterministic checks, and README or changelog
-   entries for human-facing or release-note updates.
-9. Re-run relevant static validation after source-material updates, then report
-   what was changed, captured, skipped, or remains uncertain.
+8. Run the mandatory `code-review` and `apply-security` lanes against the
+   target skill scope. Resolve safe blocking findings when edits are allowed;
+   otherwise report them as blockers, explicit deferrals, or owner-review needs.
+9. Capture newly learned durable knowledge, including reusable review-lane
+   findings, back into the target skill's local source materials. Prefer the
+   narrowest appropriate surface: `SKILL.md` for runtime rules, `references/`
+   for detailed guidance, `assets/` for reusable templates, `scripts/` for
+   deterministic checks, and README or changelog entries for human-facing or
+   release-note updates.
+10. Re-run relevant static validation after source-material updates, then report
+    what was changed, captured, skipped, or remains uncertain.
 
 ## Live Validation Workflow
 
@@ -341,6 +312,9 @@ Return:
 - Changes made.
 - Evidence used and vendor docs checked.
 - Validation run.
+- `code-review` lane result.
+- `apply-security` lane result.
+- Review-lane findings fixed, deferred, skipped, incomplete, or blocking.
 - Live tests run or skipped.
 - Safety decisions.
 - Learning-loop coverage for target skills.
@@ -365,6 +339,10 @@ Stop before writing learned material into reusable skill sources when the
 learning is confidential, environment-specific, not evidence-backed, outside
 the target skill's scope, or the user requested report-only work. In that case,
 report the skipped source update and the reason.
+
+Stop before claiming full alignment when mandatory `code-review` or
+`apply-security` evidence is missing or incomplete. Report the incomplete lane
+and remaining blocker instead.
 
 ## Remaining Uncertainty
 

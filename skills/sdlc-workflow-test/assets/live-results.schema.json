@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentic-sdlc/verification-live-results-v3",
+  "title": "Agentic SDLC private live verification results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "verification_id", "project_root", "baseline_head", "final_head", "profiles", "lanes", "skills"],
+  "properties": {
+    "schema": {"const": "agentic-sdlc/verification-live-results-v3"},
+    "verification_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "project_root": {"type": "string", "minLength": 1},
+    "baseline_head": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "final_head": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "lightweight": {"$ref": "#/$defs/profile"},
+        "three-tier": {"$ref": "#/$defs/profile"}
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["golden-path", "idempotency", "change-request", "failure-routing", "auto-steering", "documentation-update", "steering-continuation"],
+      "properties": {
+        "golden-path": {"$ref": "#/$defs/lane"},
+        "idempotency": {"$ref": "#/$defs/lane"},
+        "change-request": {"$ref": "#/$defs/lane"},
+        "failure-routing": {"$ref": "#/$defs/lane"},
+        "auto-steering": {"$ref": "#/$defs/lane"},
+        "documentation-update": {"$ref": "#/$defs/lane"},
+        "steering-continuation": {"$ref": "#/$defs/lane"}
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sdlc-align-specs", "sdlc-auto-steering", "sdlc-classify-failure", "sdlc-commit",
+        "sdlc-create-design", "sdlc-create-plan", "sdlc-create-requirements", "sdlc-evaluate",
+        "sdlc-gather-context", "sdlc-gui-test", "sdlc-implement-plan", "sdlc-merge-pr",
+        "sdlc-prepare-execution", "sdlc-start", "sdlc-tdd", "sdlc-tui-test",
+        "sdlc-update-documents", "sdlc-uat-tests", "sdlc-unit-tests", "sdlc-validate-codes",
+        "project-agent-instructions"
+      ],
+      "properties": {
+        "sdlc-align-specs": {"$ref": "#/$defs/skill"},
+        "sdlc-auto-steering": {"$ref": "#/$defs/skill"},
+        "sdlc-classify-failure": {"$ref": "#/$defs/skill"},
+        "sdlc-commit": {"$ref": "#/$defs/skill"},
+        "sdlc-create-design": {"$ref": "#/$defs/skill"},
+        "sdlc-create-plan": {"$ref": "#/$defs/skill"},
+        "sdlc-create-requirements": {"$ref": "#/$defs/skill"},
+        "sdlc-evaluate": {"$ref": "#/$defs/skill"},
+        "sdlc-gather-context": {"$ref": "#/$defs/skill"},
+        "sdlc-gui-test": {"$ref": "#/$defs/skill"},
+        "sdlc-implement-plan": {"$ref": "#/$defs/skill"},
+        "sdlc-merge-pr": {"$ref": "#/$defs/skill"},
+        "sdlc-prepare-execution": {"$ref": "#/$defs/skill"},
+        "sdlc-start": {"$ref": "#/$defs/skill"},
+        "sdlc-tdd": {"$ref": "#/$defs/skill"},
+        "sdlc-tui-test": {"$ref": "#/$defs/skill"},
+        "sdlc-update-documents": {"$ref": "#/$defs/skill"},
+        "sdlc-uat-tests": {"$ref": "#/$defs/skill"},
+        "sdlc-unit-tests": {"$ref": "#/$defs/skill"},
+        "sdlc-validate-codes": {"$ref": "#/$defs/skill"},
+        "project-agent-instructions": {"$ref": "#/$defs/skill"}
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidence"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "PARTIAL"]},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidence"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "PARTIAL"]},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "basis", "evidence"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "PARTIAL"]},
+        "basis": {"enum": ["deterministic", "live", "safety-only"]},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+      }
+    }
+  }
+}

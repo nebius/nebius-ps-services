@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import nebius.api.nebius.iam.v1 as iam_v1
 import pytest
 
 import nebius_cxcli.cli as cli
 from nebius_cxcli.component_sources import StatusWatcher
 from nebius_cxcli.components import ComponentEntry
-from nebius_cxcli.provider_options import TenantProjectValidationResult
+from nebius_cxcli.provider_options import ProviderOptionLookup, TenantProjectValidationResult
 
 
 class _FakeLookup:
@@ -23,6 +26,71 @@ class _FakeLookup:
         if self._results:
             return self._results.pop(0)
         return TenantProjectValidationResult(valid=True)
+
+
+class _CompletedRequest:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def wait(self) -> object:
+        return self._value
+
+
+def test_provider_scope_validation_uses_project_parent_with_project_scoped_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ProjectServiceClient:
+        def __init__(self, _sdk: object) -> None:
+            pass
+
+        def get(self, request: object, **_kwargs: object) -> _CompletedRequest:
+            assert getattr(request, "id", "") == "project-1"
+            project = SimpleNamespace(
+                metadata=SimpleNamespace(id="project-1", parent_id="tenant-1")
+            )
+            return _CompletedRequest(project)
+
+    class _TenantServiceClient:
+        def __init__(self, _sdk: object) -> None:
+            raise AssertionError("tenant-level access must not be required")
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
+    monkeypatch.setattr(iam_v1, "TenantServiceClient", _TenantServiceClient)
+
+    result = lookup.validate_tenant_project_scope(
+        tenant_id="tenant-1",
+        project_id="project-1",
+    )
+
+    assert result == TenantProjectValidationResult(valid=True)
+
+
+def test_provider_scope_validation_rejects_project_parent_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ProjectServiceClient:
+        def __init__(self, _sdk: object) -> None:
+            pass
+
+        def get(self, _request: object, **_kwargs: object) -> _CompletedRequest:
+            project = SimpleNamespace(
+                metadata=SimpleNamespace(id="project-1", parent_id="tenant-other")
+            )
+            return _CompletedRequest(project)
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
+
+    result = lookup.validate_tenant_project_scope(
+        tenant_id="tenant-1",
+        project_id="project-1",
+    )
+
+    assert result.valid is False
+    assert "belongs to tenant 'tenant-other'" in result.message
 
 
 def test_validate_tenant_project_ids_non_interactive_fails() -> None:

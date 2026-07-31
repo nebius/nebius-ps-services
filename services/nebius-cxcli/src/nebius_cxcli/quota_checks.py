@@ -13,7 +13,9 @@ from typing import Any, cast
 
 from .capacity_dashboard import (
     CapacityResourceAdvice,
+    capacity_lane_is_fresh,
     capacity_mode_available,
+    capacity_mode_lanes,
     capacity_mode_sort_key,
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
@@ -1217,7 +1219,6 @@ def _gpu_capacity_availability(
         )
 
     lane_name, available_vm_slots = capacity_mode_available(selected, mode=shape.mode)
-    available = available_vm_slots * shape.gpu_count_per_instance
     fabric_detail = f", fabric {selected.fabric}" if selected.fabric else ""
     if lane_name == "auto":
         lane_detail = "AUTO reservation policy: reserved + regular-vm slots"
@@ -1229,6 +1230,19 @@ def _gpu_capacity_availability(
         lane_detail = "regular-vm slots"
     else:
         lane_detail = f"{lane_name} VM slots"
+    selected_lanes = capacity_mode_lanes(selected, mode=shape.mode)
+    if any(not capacity_lane_is_fresh(lane) for _name, lane in selected_lanes):
+        data_states = ", ".join(
+            f"{name}={lane.data_state or 'DATA_STATE_UNSPECIFIED'}" for name, lane in selected_lanes
+        )
+        return (
+            None,
+            None,
+            f"capacity-dashboard/{lane_name}",
+            "Capacity Dashboard GPU availability is unknown "
+            f"({lane_detail}{fabric_detail}; selected lane data states: {data_states})",
+        )
+    available = available_vm_slots * shape.gpu_count_per_instance
     description = f"Capacity Dashboard GPU availability ({lane_detail}{fabric_detail}, converted to GPU units)"
     return (
         available,

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Nebius Grafana Query"
+  short_description: "Query or provide bounded observability facts"
+  default_prompt: "Use $nebius-grafana-query to query explicit tenant, project, or resource scopes and return either a bounded ranked report for a direct request or a redacted structured facts envelope when troubleshoot or sdlc-evaluate supplies one fully admitted signal and, for evaluation, one exact criterion fit."
+policy:
+  allow_implicit_invocation: true

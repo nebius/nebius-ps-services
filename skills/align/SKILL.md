@@ -98,14 +98,18 @@ Mandatory lanes for the changed scope:
 - Cross-code validation: verify wiring, imports and exports, entry points,
   config flow, CLI/help behavior, docs, tests, and dependent consumers stay
   compatible with the actual contract.
-- Code review: load `code-review`, read its quality rubric for meaningful code
-  changes, and review every changed file or diff for correctness,
-  maintainability, modularity, performance, and structural regressions.
+- Code review: load `code-review` in nested report-only mode, read its quality
+  rubric for meaningful code changes, and review every changed file or diff
+  for correctness, maintainability, modularity, performance, and structural
+  regressions. `align` owns any safe remediation. The child review must not
+  edit files, invoke `align`, or interpret its nested use as a direct
+  `$code-review` invocation.
 - Lint and syntax: load `linter` for Shell, Markdown, and Python surfaces.
   Prefer check-only scoped validation first. When using the bundled linter
   script as a validation gate, start with `--no-fix --no-config-fallback`; use
   fix mode only when the current `align` task is already allowed to patch safe
-  issues.
+  issues. Prefer repository-native no-cache settings and remove only exact
+  task-created validation artifacts before completion.
 - Security: load `apply-security` and run a changed-scope security review for
   infrastructure, deployment, workflow, shell, and application surfaces. Apply
   only the low-risk fixes allowed by `apply-security`'s safe auto-fix policy.
@@ -119,7 +123,9 @@ Mandatory lanes for the changed scope:
 
 A request to use `align` authorizes it to coordinate `code-review`, `linter`,
 and `apply-security` as validation lanes inside `align`'s current changed
-scope. Keep each child skill's stricter safety and no-auto-fix rules.
+scope. Keep each child skill's stricter safety and no-auto-fix rules. Use the
+nested report-only `code-review` lane defined above; only `align` may apply its
+resulting safe findings.
 
 `apply-security` may be selected implicitly outside `align`; inside `align`, it
 is mandatory. If it is not visible in the initial skills list because of
@@ -141,6 +147,17 @@ complete.
 Default remediation policy is safe-only: fix clear, low-risk issues inside the
 current changed scope; report blockers and request explicit approval for risky,
 ambiguous, public-contract, architecture, or security-sensitive changes.
+
+When a parent workflow supplies a finding ledger, preserve its IDs,
+classifications, and dispositions as handoff constraints. Do not remediate or
+reclassify parent-gated, owner-review, decision-required, or deferred findings
+unless the user separately authorizes them. `align` may repair only other
+clear low-risk findings inside the changed scope; its own safe-only policy must
+not weaken the parent's stricter exclusion.
+
+For the detailed changed-surface checklist, review focus, wiring checks, and
+modularity guidance, read `references/quality-gate.md` while mapping or
+validating the affected scope.
 
 ## Safety Rules
 
@@ -177,77 +194,6 @@ ambiguous, public-contract, architecture, or security-sensitive changes.
 
 When uncertain, report the uncertainty instead of changing behavior.
 
-## Scope Checklist
-
-Review and align the relevant surfaces:
-
-- source code, module boundaries, imports, exports, and package structure
-- entry points, dependency wiring, service registration, routing, jobs, and
-  workers
-- CLI commands, flags, defaults, config loading, environment variables,
-  schemas, validation, examples, and help output
-- tests, fixtures, snapshots, mocks, and test utilities
-- CI workflows, build scripts, Makefiles, task runners, Dockerfiles, compose
-  files, and deployment automation
-- dependency manifests, lockfiles, type definitions, migrations, API
-  contracts, and generated interfaces
-- generated code or artifacts, either by regenerating them correctly or
-  leaving them untouched with an explanation
-- README files, design documents, architecture notes, templates, changelogs,
-  and developer-facing docs
-- linting, formatting, and type-check configuration that affects correctness or
-  maintainability
-
-## Review Focus
-
-Look for issues that affect:
-
-- correctness and reliability: obvious bugs, dead ends, unreachable code,
-  unsafe assumptions, weak error handling, edge cases, and race conditions
-- security and safety: secret exposure, unsafe defaults, auth or permission
-  drift, and unvalidated external inputs
-- performance: inefficient hot paths or avoidable work, without speculative
-  optimization or added complexity
-- maintainability: duplicated logic, dead code, unclear ownership boundaries,
-  weak abstractions, inconsistent naming, and style drift from nearby code
-- test coverage: missing tests for important flows, regressions, edge cases,
-  and error paths
-
-## Wiring Checks
-
-Verify important paths end to end:
-
-- entry points call the intended modules
-- public APIs are exported from expected locations
-- imports resolve to the canonical implementation
-- duplicate implementation paths do not compete
-- CLI commands reach the correct handlers
-- flags map to the correct config fields
-- defaults are applied in one predictable place
-- config schemas match actual config usage
-- environment variables are documented and consumed consistently
-- constructors and dependency injection receive required dependencies
-- routers, handlers, controllers, jobs, and workers are registered
-- workflows and docs call commands and scripts that exist
-- tests exercise the same paths production code uses where practical
-- errors surface clearly instead of being swallowed
-
-If wiring is incomplete, fix the smallest responsible layer and update affected
-references.
-
-## Modularity Guidance
-
-Improve modularity only when it reduces real inconsistency, duplication,
-coupling, or wiring risk.
-
-Prefer clear ownership, one canonical implementation per behavior, explicit
-subsystem boundaries, small focused functions, stable shared helpers, and tests
-close to the behavior they protect.
-
-Avoid premature abstraction, aesthetic file moves, broad unrelated refactors,
-new local frameworks, patterns that conflict with nearby code, or splitting
-code so aggressively that wiring becomes harder to trace.
-
 ## Workflow
 
 1. Consolidate current and durable context.
@@ -272,7 +218,8 @@ code so aggressively that wiring becomes harder to trace.
    `SKILL.md`; use the direct `apply-security` resolution path above when the
    security lane is not visible in the initial skill list. Keep scope narrow,
    and do not let another skill override these safety rules unless the user
-   explicitly asked for that behavior.
+   explicitly asked for that behavior. Invoke `code-review` through the nested
+   report-only lane defined above.
 4. Establish the actual contract.
    Compare implementation against tests, CLI help, examples, workflows, and
    documentation. Treat mismatches as evidence to resolve, not as proof that
@@ -301,7 +248,10 @@ code so aggressively that wiring becomes harder to trace.
    repo has a `CHANGELOG.md`, update the active unreleased section when
    behavior, commands, workflows, or user-facing docs changed. Check the final
    diff for unrelated files, secrets, credentials, private endpoints, and
-   environment-specific values.
+   environment-specific values. Run the nested report-only `code-review` lane
+   against the final diff after any align-owned safe repairs. Remove only exact
+   task-created validation caches, reports, or generated artifacts, then
+   confirm repository status contains no new validation residue.
 8. Report remaining uncertainty clearly.
    If something cannot be verified from the codebase or local tooling, say
    exactly what could not be confirmed and why. Do not guess.
@@ -320,6 +270,10 @@ code so aggressively that wiring becomes harder to trace.
 - Apply relevant available skills for concrete subtasks, and always apply
   `code-review`, `linter`, and `apply-security` as changed-scope validation
   lanes before considering post-change alignment complete.
+- Keep remediation ownership in `align`; the nested `code-review` lane returns
+  findings only.
+- Prefer no-write and no-cache validation settings; do not leave task-created
+  validation artifacts in the repository.
 - Base alignment decisions on the current thread, relevant Agent Memory, and
   related state files only after checking them against current repository or
   runtime evidence.
@@ -353,20 +307,12 @@ Do not:
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 

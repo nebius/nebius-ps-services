@@ -58,7 +58,7 @@ def test_soperator_gpu_driver_jail_strips_adopted_canonical_raw_mount() -> None:
                             {
                                 "name": "nvidia-driver-root",
                                 "mountPath": "/run/nvidia/driver",
-                                "readOnly": False,
+                                "readOnly": True,
                                 "volumeSource": {"hostPath": {"path": "/"}},
                             },
                             {

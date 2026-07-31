@@ -3,6 +3,9 @@
 `terraform` generates and hardens Terraform modules and infrastructure
 repositories.
 
+In `coordinated-candidate` scope it emits exact private candidates under an
+assigned Terraform root and does not claim shared repository-root artifacts.
+
 ## What It Does
 
 - Scaffolds module and multi-environment Terraform layouts.
@@ -45,3 +48,5 @@ Validation, docs, and CI alignment
 
 - `SKILL.md`: Terraform structure, workflow, and guardrails.
 - `agents/openai.yaml`: UI metadata.
+- `references/terraform-standards.md`: layout profiles, implementation
+  standards, documentation requirements, generation rules, and quality gates.

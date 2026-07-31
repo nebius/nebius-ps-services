@@ -6,7 +6,7 @@ This file is private Agentic SDLC run state. Do not commit it.
 
 - Current feature: `<FEAT-ID>`
 - Current phase: `<phase>`
-- Routing request: `<none | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | HUMAN_INPUT_REQUIRED>`
+- Routing request: `<none | sdlc-create-requirements | sdlc-create-design | project-agent-instructions | sdlc-update-documents | HUMAN_INPUT_REQUIRED>`
 - Updated at: `<ISO-8601>`
 
 ## Auto-Steering Reminders
@@ -18,18 +18,22 @@ SDLC phase.
 
 ## User Steering Inbox
 
-Append one entry per user prompt submitted during the active SDLC run. Redact
-unsafe values instead of storing raw secrets, credentials, private endpoints,
-customer data, or noisy logs.
+Append one entry per accepted managed prompt revision during the active SDLC
+run. Store only a compact redacted summary; never store raw prompts, secrets,
+credentials, private endpoints, customer data, or noisy logs.
 
 ### `<entry-id>`
 
 - Received at: `<ISO-8601>`
+- Prompt ID: `<prompt-id>`
+- Prompt revision: `<rNNNN>`
+- Prompt SHA-256: `<digest>`
+- Prompt snapshot: `<inputs/rNNNN/prompt.md>`
 - Source phase: `<phase>`
 - Current feature: `<FEAT-ID or none>`
-- Prompt summary: `<raw prompt when safe, otherwise redacted summary>`
-- Disposition: `<runtime-only | requirements-change | design-change | docs-update | resolved | superseded | rejected | needs-human>`
-- Owner skill: `<sdlc-start | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | none>`
+- Prompt summary: `<compact redacted summary only; never raw prompt text>`
+- Disposition: `<runtime-only | requirements-change | design-change | project-agent-instructions-change | docs-update | resolved | superseded | rejected | needs-human>`
+- Owner skill: `<sdlc-start | sdlc-create-requirements | sdlc-create-design | project-agent-instructions | sdlc-update-documents | none>`
 - Status: `<pending | active | resolved | blocked>`
 - Notes: `<short reason or blocker>`
 

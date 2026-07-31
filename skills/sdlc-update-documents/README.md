@@ -8,7 +8,8 @@ is run.
 
 Updates project-facing documentation after implementation evidence, feature
 evaluation, resolved steering, UAT, or final run review shows docs need to
-match implemented behavior.
+match implemented behavior. Multi-layer behavior docs must be backed by
+evaluated end-to-end slice evidence when applicable.
 
 ## Main Boundaries
 
@@ -28,5 +29,6 @@ match implemented behavior.
 ## Output
 
 - In-scope project-facing docs match implemented behavior.
+- Multi-layer behavior docs cite evaluated slice evidence or remain blocked.
 - Changelog is updated when user-facing behavior changed.
 - Documentation evidence is recorded in private SDLC run state.

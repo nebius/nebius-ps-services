@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assignment_digest": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "decisions": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+    "open_risks": {"items": {"minLength": 1, "type": "string"}, "type": "array"},
+    "review": {"minLength": 1, "type": "string"},
+    "status": {"const": "implemented"},
+    "summary": {"minLength": 1, "type": "string"},
+    "task_id": {"pattern": "^TASK-[0-9]{3,}$", "type": "string"},
+    "validation": {"minLength": 1, "type": "string"}
+  },
+  "required": [
+    "task_id",
+    "assignment_digest",
+    "status",
+    "summary",
+    "decisions",
+    "open_risks",
+    "validation",
+    "review"
+  ],
+  "type": "object"
+}

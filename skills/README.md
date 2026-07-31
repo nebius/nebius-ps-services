@@ -6,8 +6,10 @@ of `SKILL.md`.
 
 This root README is the concise catalog and install guide. Most skill folders
 also have a local `README.md` that explains architecture, core concepts,
-workflow, and important files. `SKILL.md` remains the runtime instruction file
-Codex loads when the skill is used.
+workflow, and important files. `SKILL.md` remains the concise runtime
+instruction file Codex loads when the skill is used; longer command cookbooks,
+rubrics, standards, and templates live under `references/` or `assets/` and
+are loaded on demand.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a
@@ -37,10 +39,10 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
+| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, report-only child code review, lint/syntax, and security. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
-| `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
-| `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
+| `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
+| `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer technical due diligence with internal Slack/Confluence context first where relevant, MCP fallback for internal systems, vendor verification, alternatives, and recommendations. |
@@ -49,12 +51,14 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
-| `agentic-sdlc-test` | Explicit only | Verify the Agentic SDLC system from outside the workflow with disposable hook fixture tests, golden-path guidance, and a safe local report. |
+| `agent-nebius-auth-diagnose` | Implicit allowed | Resolve an explicit or config-owned default-profile Nebius project and diagnose agent-auth or hook failures without mutation. |
+| `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
+| `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
-| `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
+| `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
-| `install-grafana-mcp-for-nebius` | Explicit only | Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana observability data. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
+| `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
 ### Git, Pull Requests, and Publishing
 
@@ -62,57 +66,74 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `commit` | Explicit only | Create one fast local Git commit on the current branch after repo-root `git add -A` and lightweight staged validation; never pushes. |
 | `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
-| `create-pr` | Explicit only | Create or reuse GitHub pull requests from local work or named branches, with branch-safe preparation, validation, and readiness reporting. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests with branch-safe generic preparation or exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
-| `review-pr` | Explicit only | Review a GitHub pull request by number, URL, or current branch, fix safe issues when possible, and report merge readiness or blockers. |
+| `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
+| `worktree` | Explicit only | Create and manage one project-scoped full-repository worktree from `origin/main`, with serialized publication, nested task ownership, and proof-gated cleanup. |
 
 ### Project Engineering
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
+| `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
-| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
+| `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
+| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, and `system-design-rules` before `/plan`. |
+| `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
+| `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
+| `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
+| `project-agent-instructions` | Explicit only | Decide after validated requirements and design whether the exact selected project needs a concise root `AGENTS.md`, preserving human-owned files and safely refreshing only provenance-owned guidance. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
+| `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Break brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
+| `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
+| `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
+| `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
 
 ### Agentic SDLC Workflow
 
-All `sdlc-*` skills are explicit-only and should run through the Agentic SDLC
-workflow, normally starting with `$sdlc-start`.
+All `sdlc-*` skills are explicit-only. The phase skills run through the
+Agentic SDLC workflow, starting with
+`$sdlc-start workspace init [project-folder]` and then
+`$sdlc-start run <prompt-path-or-unique-filename>`; the external
+`sdlc-workflow-test` verifier is not a phase. `project-agent-instructions` is
+shared explicit-only runtime support and a golden-path step after design;
+`troubleshoot` is required runtime support for ambiguous failure diagnosis but
+remains absent from the golden phase sequence.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, and evidence for consistency. |
+| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence for consistency. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
-| `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
-| `sdlc-commit` | Explicit only | Create a local feature-scoped SDLC commit after validation, tests, and evaluation pass; never pushes. |
-| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs and implementation-ready design boundaries. |
-| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation. |
+| `sdlc-classify-failure` | Explicit only | Validate normalized failure/diagnosis records, enforce repair budgets and design admission, and route proven causes or conditional troubleshooting. |
+| `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
+| `sdlc-create-design` | Explicit only | Create initial design or perform evidence-gated failure redesign with positive system-contract proof, stable feature IDs, and required approval. |
+| `sdlc-create-plan` | Explicit only | Create a locked task graph or append-only corrective plan vN+1 that preserves completed definitions/digests and binds the diagnosis/oracle. |
 | `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
-| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature solves the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
-| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, and test sources. |
-| `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
-| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries. |
-| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
-| `sdlc-start` | Explicit only | Start, resume, or continue the Agentic SDLC workflow, encourage safe live environment capture when useful, and choose the next phase from local run state. |
-| `sdlc-tdd` | Explicit only | Convert acceptance criteria and design success criteria into failing or already-green tests before implementation. |
+| `sdlc-evaluate` | Explicit only | Evaluate acceptance criteria and emit normalized, commit-bound failure events; use Grafana only for a predefined evidenced operational gate. |
+| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
+| `sdlc-gui-test` | Explicit only | Control and evaluate GUI behavior through Computer Use, Browser, or Playwright as required, with screenshots or accessibility snapshots. |
+| `sdlc-implement-plan` | Explicit only | Coordinate immutable dependency/corrective waves, preserve diagnosis/oracle bindings, integrate in order, rerun invalidated evidence, and clean without force. |
+| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request, final readiness checks, and exact promoted/reviewed head verification. |
+| `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
+| `sdlc-start` | Explicit only | Coordinate prompt-bound state, authoritative repair-control pointers, conditional diagnosis, and exactly one next phase. |
+| `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
-| `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented SDLC evidence without editing requirements or design. |
+| `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
 | `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before PR creation. |
-| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature. |
-| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, and configuration validation for the current feature, then use `code-review` as a review-only quality gate. |
+| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature and planned slice. |
+| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation for the current feature, then use `code-review` as a review-only quality gate. |
 
 ## Using Skills in Codex Chat
 
@@ -131,6 +152,10 @@ reviewed and validated. Skills marked `Explicit only` in the catalog use
 `$skill-name`. Skills marked `Implicit allowed` use
 `allow_implicit_invocation: true` so Codex may select them when the task
 matches their metadata.
+`agent-nebius-auth-setup` is explicit-only. Direct invocation authorizes its
+bounded canonical convergence, so it does not add a second confirmation prompt
+or require a plan digest. Read-only implicit triage belongs to
+`agent-nebius-auth-diagnose`.
 
 For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
 containing front matter `name` and `description`. This repository uses a
@@ -149,6 +174,12 @@ $create-pr Create a PR for the current local work, using a new prep branch if I 
 
 $create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
 
+$worktree Create an isolated worktree from origin/main for the current monorepo project to fix trigger validation.
+
+$worktree create-pr Open or reuse the PR for this managed worktree, then leave cleanup for a separate remove action after merge.
+
+$worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact PR head was merged.
+
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
@@ -157,7 +188,17 @@ $merge-pr Merge PR #110 with squash after verifying checks, reviews, mergeabilit
 
 $publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/example-app prep, PR, merge, tag, wait for CI, verify the image digest, and report the published artifact.
 
-$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+$sdlc-workflow-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+
+$sdlc-workflow-test --create --keep
+
+$sdlc-workflow-test --resume
+
+$sdlc-workflow-test --destroy
+
+$sdlc-start workspace init services/example-app
+
+$sdlc-start run <prompt-path-or-unique-filename>
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
@@ -169,17 +210,33 @@ $create-learning-course Create a public-safe course workspace for engineers lear
 
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
-$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for any undecided application-layer technology choices, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
 
-$code-review Review the current local branch for bugs, regressions, test gaps, reliability risks, maintainability blockers, and missed structural simplifications.
+$app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
+
+$scaffold-project Plan a multi-component repository from this approved architecture, show every owner and brownfield merge, and do not apply it until I approve the exact digest.
+
+$frontend-project Create a React, TypeScript, and Vite component with strict type checking and tests, but do not install dependencies.
+
+$container Review this repository's image and runtime contract, harden the production path, validate what can be proven locally, and report untested platforms and sibling-skill handoffs.
+
+$code-review Review the current local branch, fix only safe in-scope findings, validate each fix with focused repository-native checks, and report the prioritized fixed and gated findings.
 
 $system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
 
-$task-implementer Break this brownfield change into ordered task-1..task-n work items, implement them sequentially with validation, code-review, fixes, a $commit checkpoint, and a markdown handoff, then use a fresh Codex session for each task.
+$task-implementer workspace init services/nebius-cxcli
+
+$task-implementer run <prompt-path-or-unique-filename>
+
+$task-implementer-test
+
+$task-implementer-test --create --keep
+
+$task-implementer-test --destroy
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
-$code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
+$code-info Gather read-only project info from this folder or a GitHub repo with a concise description, documented features, three-level CLI hierarchy, LOC, packages, dependencies, size comparisons, repo size, tests, artifacts, and coverage.
 ```
 
 You can also be more specific when needed:
@@ -194,16 +251,17 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 
 These prompts should work when the skill is installed and the local environment
 matches the task. For Git-backed flows such as `commit`, `commit-push`,
-`create-pr`, `merge-pr`, and `review-pr`, that means the current directory is
-inside a Git repository. For remote-backed flows such as `commit-push`,
-`create-pr`, `merge-pr`, `review-pr`, and the `publish-*` complete flows, that
+`create-pr`, `merge-pr`, `review-pr`, and `worktree`, that means the current
+directory is inside a Git repository. For remote-backed flows such as
+`commit-push`, `create-pr`, `merge-pr`, `review-pr`, `worktree`, and the
+`publish-*` complete flows, that
 also means:
 
 - the repository has an `origin` remote
 - the branch state allows the requested operation
 
-For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`, and
-the `publish-*` complete flows, that also means:
+For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`,
+`worktree remove`, and the `publish-*` complete flows, that also means:
 
 - `gh` is authenticated for the target repository
 
@@ -232,10 +290,12 @@ pass. It synthesizes the current thread, relevant Agent Memory, and durable
 task-state context, separates active scope from unrelated dirty files, and
 verifies that context against current repository or runtime evidence before
 making safe fixes. Before completion, it runs mandatory changed-scope lanes for
-cross-code validation, `code-review`, `linter`, `apply-security`, and focused
-repository-native tests or builds. It uses safe-only remediation, reports risky
-blockers for explicit approval, and resolves `apply-security/SKILL.md` directly
-when the mandatory security lane is not visible in the initial skills list.
+cross-code validation, report-only `code-review`, `linter`,
+`apply-security`, and focused repository-native tests or builds. `align` owns
+safe remediation from its child review, reports risky blockers for explicit
+approval, and resolves `apply-security/SKILL.md` directly when the mandatory
+security lane is not visible in the initial skills list. Its final gate prefers
+no-write/no-cache settings and removes exact task-created validation artifacts.
 
 ### `align-skill`
 
@@ -245,19 +305,25 @@ multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 `SKILL.md`, trigger metadata, references, assets, scripts, safety guardrails,
 official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
-learning capture in local skill source materials need to be aligned.
+learning capture in local skill source materials need to be aligned. Before it
+claims a target skill is aligned, it applies `code-review` in review-only mode
+and `apply-security` in advisory or scan mode to the target skill scope, and it
+reports fixed, deferred, skipped, incomplete, or blocking findings.
 
 ### `brainstorm`
 
 `brainstorm` supports evidence-first, chat-only ideation before implementation.
-It restates the topic, builds a compact source plan, gathers context from the
-current project folder first, then sibling repo folders, related skills,
-internal Confluence/Slack/Jira sources when available, and official vendor
-docs. It separates facts from hypotheses, challenges weak assumptions, compares
-options, consults `design` and `system-design-rules` for major decisions when
-those skills are installed and accessible, and stops short of editing files,
-creating tickets, sending messages, or mutating external systems. If the user
-pivots to execution, it should
+It restates the topic, builds a compact source plan with a relevance reason for
+each source, gathers context from the current project folder first, then
+sibling repo folders, related skills, internal Confluence/Slack/Jira sources
+when available, and official vendor docs only when those sources can answer the
+question, resolve the challenge, close a named gap, or change the
+recommendation. It separates facts from hypotheses, challenges weak
+assumptions, compares options, consults `design` and `system-design-rules` for
+major decisions when those skills are installed and accessible, uses bounded
+`research` only for unresolved recommendation-changing source conflicts, and
+stops short of editing files, creating tickets, sending messages, or mutating
+external systems. If the user pivots to execution, it should
 summarize the brainstorm and hand off to the appropriate implementation,
 alignment, SDLC, or communication skill.
 
@@ -297,14 +363,113 @@ ideation, `design` for solution design and `/plan` handoff, and
 topic, requirement, and technology due diligence into a concrete software
 design before implementation. It follows a phased workflow: understand
 requirements, understand the existing system or greenfield context, route
-missing knowledge through `research` when available, design the solution, apply
-`system-design-rules` to non-trivial solution decisions, evaluate alternatives,
-and create a Codex `/plan` handoff. Use it for new features,
+missing knowledge through `research` when available, route undecided
+application-stack or layer technology choices through `app-stack`, design the
+solution, apply `system-design-rules` to non-trivial solution decisions,
+evaluate alternatives, define vertical end-to-end slices for serial multi-layer
+applications, and create a Codex `/plan` handoff. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
-checklist review of an existing proposal, and `sdlc-create-design` for
-Agentic SDLC-owned `docs/design.md`.
+checklist review of an existing proposal, `app-stack` directly for a
+stack-selection-only request, and `sdlc-create-design` for Agentic SDLC-owned
+`docs/design.md`. It also accepts a proven causal handoff from `troubleshoot`
+when the durable remediation changes a system contract such as a component
+boundary, public interface, data owner, migration, or cross-component workflow.
+Unknown causes and complex repairs inside one existing private boundary remain
+in `troubleshoot`.
+
+### `app-stack`
+
+`app-stack` selects, reviews, simplifies, modernizes, and coordinates
+implementation of application technology stacks. It starts from the product
+journey, application archetype, quality attributes, team skills, deployment
+constraints, data ownership, and operational capacity before choosing
+products. Every component is classified as required, conditional, deferred, or
+rejected, with a rationale and revisit trigger, so queues, caches, workflow
+engines, event streams, Kubernetes, and service boundaries are added only for
+concrete requirements.
+
+The skill is universal in selection scope while keeping Python, FastAPI,
+PostgreSQL, SQLAlchemy, and Alembic as one opinionated general-web profile. It
+remains read-only for advisory requests. When implementation is requested, it
+owns cross-layer sequencing and coordinates the narrow installed specialist
+skills that match the selected stack instead of duplicating their workflows.
+Use `research` for deep technology due diligence, `design` for a complete
+solution design, and stack-specific skills directly when the stack is already
+fixed and no selection decision remains. When `design` delegates a scoped stack
+decision, `app-stack` returns it to the active design workflow instead of
+starting a recursive handoff.
+
+For a complete scaffold, its schema-v2 handoff is logical only: closed
+component class, component status, canonical technology name,
+technology/profile/version decisions, selected capabilities, constraints,
+validation expectations, and revisit triggers. It never assigns repository
+paths, materialization units, runtime units, candidate sets, file owners, or
+apply authority.
+
+### `scaffold-project`
+
+`scaffold-project` is the explicit-only composition layer between an approved
+design or stack and specialist-owned project artifacts. It separates logical
+capabilities, physical materialization units, and runtime units; materializes
+only required items; assigns one owner to every normalized path; and gathers
+exact candidates that satisfy positive owner artifact contracts from Python,
+frontend, container, Terraform, Helm, GitHub Actions, `.gitignore`, and shell
+specialists.
+
+Planning and candidate generation use a private bundle. A closed canonical JSON
+manifest binds architecture inputs, target identity, before/after hashes, file
+type and mode, payloads, candidate-set identity, normalized inputs and their
+digests, manifest digests, validation binding, and deterministic operation
+order. Each operation is bound to one candidate set and materialization unit;
+every app-stack-backed capability must retain its approved kind and exact
+technology; all of its assigned units retain the canonical technology and
+language, and runtime units bind back to the capability so shared source roots
+cannot mix runtime contracts. External services cannot substitute another
+technology under the same ID. Frontend
+candidates must additionally remain below a frontend-owned React/Vite root and
+match the app-stack-approved package manager, versions, runtime, and declared
+frontend capability selections. Unsupported required frontend profiles fail
+closed. Brownfield merges are exact additive suffixes on approved integration
+files only. The guarded executor is the only target writer. Known conflicts
+block all writes,
+interrupted applies retain a private journal with created-directory identities,
+and reruns classify each path as before, after, or conflict without automatic
+rollback. Schema-v1 bundles are rejected rather than translated. It never
+deletes files, runs native generators, installs dependencies, initializes Git,
+provisions, deploys, publishes, commits, pushes, opens a PR, or starts Agentic
+SDLC.
+
+### `frontend-project`
+
+`frontend-project` owns React, TypeScript, and Vite package metadata,
+configuration, entrypoint and route shells, tests, public environment schema,
+explicitly assigned component-local lint/format tooling, and component
+documentation. Its React/TypeScript/Vite producer validates a closed assigned
+path set and emits exact deterministic candidates with input, file, and
+validation provenance. `.env.example` contains names only and `src/env.ts`
+enforces the allowlisted public `VITE_*` contract. Standalone scope owns the
+selected frontend root; coordinated-candidate scope writes only to the private
+bundle for `scaffold-project`. Root CI, ignore rules, Docker, infrastructure,
+deployment, and agent instructions remain with their specialist owners.
+The deterministic renderer accepts only npm, pnpm, Yarn, or Bun and rejects
+secret-like public names, including compact API-key and access-key markers.
+
+### `container`
+
+`container` owns container engineering from repository source through a
+validated OCI image and documented runtime contract. It covers Dockerfile and
+Containerfile design, build contexts, BuildKit/buildx, local Docker execution,
+Compose development/test and approved single-host production profiles,
+non-root and read-only hardening, signals, health, storage, networking,
+multi-platform evidence, GPU requirements, and supply-chain policy. The
+retained typed Python and React/Vite renderer blocks instruction injection and
+keeps its local Compose schema fail-closed; broader Compose review uses a
+separate audit path. Builds, pulls, runs, and networked scans remain explicit
+local opt-ins. `github-workflows` owns CI YAML, `publish-image` owns registry
+publication and signing actions, and `helmchart` owns Kubernetes resources
+derived from the container runtime handoff.
 
 ### `code-review`
 
@@ -313,10 +478,21 @@ branch, local diff, changed files, module, repository area, or provided patch.
 Use it when the user wants findings-first feedback on bugs, regressions, test
 gaps, reliability risks, security-adjacent issues, maintainability,
 abstraction quality, modularity, type boundaries, file-size growth, spaghetti
-branches, and missed structural simplifications. It is review-first and should
-not edit code unless the user explicitly asks for fixes. `review-pr` remains
-the GitHub PR review, readiness, and branch-update workflow, while `align`
-remains the broader project consistency and repair workflow. Use
+branches, and missed structural simplifications. A direct standalone
+`$code-review` invocation completes the review first, fixes only safe in-scope
+findings, validates each fix with declared red-before/green-after focused proof
+plus the narrowest affected repository-native checks, reviews only its touched
+diff, and returns the prioritized fixed and gated ledger. An already-green or
+unrelated check cannot authorize remediation. The skill itself never resolves,
+loads, or invokes `align`, and it does not suppress a separate
+outer-orchestrator policy requiring alignment after changes. Implicit
+selection, nested use, and explicit no-write requests such as review-only,
+audit-only, or report-only remain non-mutating and must not leave validation
+artifacts behind. Priority is independent of auto-fix safety: P0 is Critical
+and highest, followed by P1 High, P2 Medium, P3 Low, and Nit. `review-pr`
+remains the GitHub PR review, readiness, and branch-update workflow, while
+`align` remains the separate project consistency and repair workflow with a
+report-only child review lane. Use
 `apply-security` for security-specific scans, threat modeling, and remediation,
 and `system-design-rules` for design-phase architecture decisions.
 
@@ -332,42 +508,298 @@ needs, and open questions instead of treating principles as universal laws.
 
 ### `task-implementer`
 
-`task-implementer` coordinates small and medium brownfield implementation
-requests that need ordered execution across fresh Codex contexts. It inspects
-the target code before ordering work, records a `task-1` through `task-n` queue
-in a private markdown handoff under `$CODEX_HOME/task-implementer/`, implements
-one task at a time, runs focused validation, uses `code-review`, fixes scoped
-findings, commits the completed task through `$commit`, and updates the handoff
-with changed files, validation, review result, fixes, commit evidence,
-blockers, and the next-session prompt. Because it mutates code, invokes local
-commit checkpoints, and may launch follow-on implementation sessions, it is
-explicit-only. Use `$sdlc-start` for Agentic SDLC and `align` for final
-changed-surface alignment.
+`task-implementer` coordinates complex brownfield requests through deterministic dependency waves.
+It keeps durable prompts and orchestration evidence under
+`${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/`, outside Git, with one
+editable Markdown file per independent ask. A generated VS Code workspace puts
+`CODE` first and `PROMPTS` second so source and historical asks are visible
+together without making Codex depend on multi-root behavior.
 
-### `agentic-sdlc-test`
+`workspace init [project-folder]` defaults to the exact current directory. It
+creates or verifies the private workspace, creates one starter prompt only when
+none exists, opens VS Code when available, and is safe to repeat without
+changing prompts or history. One `run <prompt-path-or-unique-filename>` validates
+and snapshots exact prompt bytes, creates or reconciles the internal task queue,
+locks dependencies, exact/prefix write claims, conflict domains, validation,
+and done criteria, then coordinates every wave until completion or a blocker.
 
-`agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
-workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
-discovery, explicit-only SDLC invocation policy, hook configuration,
-disposable PreToolUse and Stop hook fixture behavior, idempotency, failure
-routing, steering, and disposable golden-path execution. It writes the report
-under `~/.codex/sdlc-verification/` and must not change real projects,
-installed skills, hooks, hook trust, or agent configuration.
+Users steer the workflow by editing the same prompt—preferably appending to its
+optional `## Steering` section—and running the same command. There is no public
+`steer` command or user-supplied ID. Steering may safely recompute a merely
+planned wave. Once worktrees or assignments exist, it queues without changing
+the immutable active wave and is reconciled before promotion or at the next
+wave boundary.
 
-### `agent-nebius-auth`
+Requirements are normalized before tasks into stable `TI-REQ-nnn` records, and
+each selected task receives a `TI-DES-nnn` design. The coordinator creates or
+updates only marked regions in project
+`docs/requirements.md` and `docs/design.md`, byte-preserving generic content
+outside them. Agentic SDLC ownership or malformed/unsafe managed state fails
+closed. Workers never edit these shared specifications concurrently.
 
-`agent-nebius-auth` is a setup-only skill for bootstrapping or repairing local
-Codex Agent Nebius authentication. It uses a service account, tenant group,
-project-level access permit, authorized-key credential file, CLI profile, and a
-Codex `PreToolUse` hook that injects short-lived Nebius token environment
-variables into matching Bash commands without returning token material as model
-context. The hook also exports the agent credential file path and wires a Bash
-`nebius_refresh_token` helper through a restricted temporary `BASH_ENV` file
-for long-running raw API scripts. Install or refresh the hook through the root
-installer, for example
-`./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
-the setup script does not patch `$CODEX_HOME/config.toml` and instead records
-the selected project under `~/.nebius` for the hook to read locally.
+After both managed specifications validate, the coordinator explicitly routes
+to `project-agent-instructions`. It creates the exact selected-project
+`AGENTS.md` only when current specs and repository evidence establish durable
+rules beyond inherited instructions. Human-owned files are preserved and only
+an unchanged provenance-owned file may refresh. Its private decision receipt
+and any tracked file change are resolved before the contract commit and worker
+dispatch; `workspace init` remains private-state-only.
+
+Parallel-capable tasks receive unique branches and full-repository linked
+worktrees under the private task-implementer root. For monorepo scopes, workers
+operate from the scope path inside those full checkouts. Native workers dispatch
+up to capacity; fresh sequential `codex exec` workers provide the same isolation
+when native subagents are unavailable. Each worker implements one locked task,
+validates, runs `code-review`, and creates exactly one direct-child `$commit`.
+Worker-assignment v7 also carries immutable default guardrails plus exact
+helper/workspace-manifest paths for the first transition: unless the exact
+assignment authorizes it, a worker stays inside its worktree/private
+state; required installed skill instructions/helpers and standard executables
+are read/execute-only. It does not modify installed files, intentionally write
+unrelated paths, or access network, credentials, external services, or live
+runtimes. Applicable prompt and repository constraints, implementation steps,
+and end-to-end validation are repeated in each self-contained assignment.
+Workers heartbeat every 30 seconds. Dependency-free `standard` tasks warn/stop
+at 240/300 seconds without claimed-file progress; dependent `integration` tasks
+warn/stop at 360/420 seconds. Heartbeats become hard-stale at 240 seconds;
+workers that exceed their
+immutable total budget are interrupted independently.
+Workers receive fresh assignment-only context and must reach `task-start`
+within 60 seconds after the coordinator arms an available worker slot. Queued
+assignments remain unarmed and do not consume the deadline.
+The worker makes `task-start` its first private transition after immediate
+Git/cwd verification, passing the embedded digest unchanged through the exact
+embedded paths. The helper performs authoritative canonical digest validation,
+so the worker never guesses JSON serialization. It then reads the incoming
+handoff and performs deeper preflight.
+At the profile warning, the coordinator demands an edit or blocker; background
+and autonomous heartbeat loops are forbidden. Workers rely on the assignment
+and incoming handoff instead of rereading the full prompt or coordinator state.
+Worker start is single-use, and only in-claim mutations count as liveness
+progress.
+
+The coordinator verifies worker commits and changed paths, merges task branches
+into a temporary integration branch in stable task-ID order, runs combined
+validation and review, reconciles steering, and advances the unchanged primary
+branch only with `git merge --ff-only`. Tasks become done after promotion.
+Clean reachable worktrees and branches are removed without force; any failure
+retains exact recovery resources and leaves the project branch unchanged.
+
+When the project checkout is itself managed by `worktree`, the exact outer
+branch `HEAD` is the task base and sole promotion target. A private lease keeps
+all worker and integration branches internal, blocks outer push/PR/removal,
+and remains through per-wave cleanup plus final changed-surface `align`. Only a
+clean final promoted head with no internal resources can release it.
+
+The helper uses only the Python standard library, applies private POSIX modes,
+rejects path and symlink escapes, journals Git mutations, and never prints
+prompt bodies. Every v1 execution record fails with
+`WORKFLOW_UPGRADE_REQUIRED`; no legacy execution schema is readable. The Skill
+is explicit-only. Use `global-context-management` for general context hygiene,
+`$sdlc-start run <prompt-path-or-unique-filename>` for Agentic SDLC, and
+`align` for final alignment.
+
+### `task-implementer-test`
+
+`task-implementer-test` verifies Task Implementer without using a real user
+project. With no flags it runs the current explicit-only and exact two-command
+contract checks plus the local temporary-fixture workspace, specification,
+scheduler, Git-wave, outer-worktree, verifier-helper, lifecycle, reporting, and
+semantic suites. It never starts Docker, dispatches implementation workers, or
+creates a persistent application.
+
+The opt-in `--create` mode first replaces any prior exactly owned verifier
+generation, then exercises the real Task Implementer public interface on a
+seeded remote-free brownfield task board. The target is a browser frontend,
+HTTP API, and PostgreSQL stack with disjoint first-wave tier ownership and a
+dependent integration/runtime task. The verifier checks worker isolation,
+reviewed commits, ordered integration, ff-only promotion, final alignment,
+frontend/API/database semantics, and restart persistence before writing a
+sanitized report and cleaning the fixture. PASS is gated by a generation-bound
+semantic transition over canonical Task Implementer state, Git identity, the
+helper-collected application artifact, and an unchanged post-completion prompt
+invocation.
+The live verifier checks worker liveness every 30 seconds, stops rather than
+recovering a stalled disposable worker, and proceeds directly from a validated,
+cleaned Task Implementer workspace to runtime evidence and reporting.
+Its generation-fenced stage ledger records deterministic checks, individual
+tier workers, wave integration, finalization, runtime, semantic validation,
+reporting, and cleanup as PASS/PARTIAL/FAIL/NOT_RUN. The preserved report shows
+the complete stage matrix, exact bounded failure analysis, downstream stages
+that did not run, and a minimum next action even when normal report creation
+fails.
+
+Before Docker sees generated configuration, the verifier accepts only the
+fixture's narrow Compose subset and rejects external includes, extends, label
+files, privileged build options, and external build/cache inputs. Runtime
+service networks use the verifier's long-form object-map syntax rather than
+Compose list shorthand. Runtime
+collection stays under one generation lock, and built-image cleanup requires
+both exact generation and verifier project labels.
+
+`--create --keep` retains the one current exact generation for inspection.
+`--destroy` later removes only its ownership-checked project, isolated Task
+Implementer state, raw evidence, and runtime resources while preserving reports
+and lifecycle history. Every create is replace-on-create. Symlink, marker,
+remote, external-worktree, generation, or Docker ambiguity blocks replacement
+rather than creating a second instance. Explicit destroy or replacement also
+removes inspection edits inside the exact disposable owned run.
+
+### `sdlc-workflow-test`
+
+`sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
+workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
+skill parity, explicit-only invocation policy, prompt/execution/worktree/
+steering regressions, composed managed-outer lease behavior, and disposable
+hook fixtures. It also checks normalized repair-control, conditional
+troubleshooting, positive design admission, and corrective-plan/wave
+contracts. Optional private live-results evidence covers the golden path,
+idempotency, change requests, failure routing, auto-steering, documentation,
+and continuation, plus one explicit evidence row for each of the 20 Agentic
+SDLC skills. Live PASS requires a real selected-scope commit, lane-specific
+private evidence, the exact complete skill matrix, and clean in-scope paths
+across every commit in the supplied history. It writes under
+`~/.codex/sdlc-verification/` and must not change real projects, installed
+skills, hooks, hook trust, or agent configuration.
+
+The rename is an intentional ownership hard cut. Destroy retained live
+verifier environments before installing it; the renamed skill does not read or
+clean old-format ownership markers, labels, or Compose names.
+
+The no-flag invocation remains the lightweight resource-validator verifier and
+does not touch Docker or a browser. Every explicit `--create` first safely
+destroys the previous active exactly owned environment, then builds and tests a
+fresh browser GUI, Django/Gunicorn web/API server, and PostgreSQL database
+through the normal two-command Agentic SDLC workflow. It launches one fresh
+verifier-owned Chrome process group with a private profile and exact marker,
+never an existing Chrome instance. It uses two owned Docker Compose
+containers, a dynamically assigned loopback web port, an internal-only database
+endpoint, semantic cross-layer evidence, and computer-use GUI UAT correlated
+with API and database observations. By default it writes a complete report and
+then removes every exact owned live resource, even after failure. Browser
+cleanup revalidates and signals only the recorded process group; identity
+ambiguity fails closed as `CLEANUP_FAILED` before Docker mutation.
+
+Initial Computer Use capture proves capability discovery only. The live profile
+repeats a fresh capture immediately before GUI evaluation and UAT with an
+unlocked host unless locked Computer Use is explicitly enabled for the session,
+and a visible foreground current-Space browser window. A
+pre-navigation visibility failure is reported as `ENVIRONMENT_DEFECT`; a hung
+or non-responsive shared Computer Use service stops further calls and requires
+separately authorized recovery while the owned application is preserved.
+
+`--create --keep` performs the same replacement and then retains the new owned
+project, private state/evidence, running services, database volume, built image,
+and dedicated Chrome instance/profile. A later
+`--resume` revalidates and continues that application only after a failed or
+partial kept run. A later `--destroy` closes only that exact verifier-owned
+Chrome process group and removes resources whose canonical identities and two
+ownership labels match the private lifecycle, while retaining sanitized reports
+and lifecycle history. Existing Chrome processes are never targets. One
+active application is allowed per verification root; cleanup ambiguity blocks
+replacement rather than starting a second stack. Cleanup includes resources
+discovered by the exact verification-ID and Compose-project labels even when a
+prior interruption prevented inventory capture. Name/ID aliases are
+canonicalized and deduplicated, and cleanup retries preserve their cumulative
+removed/already-absent ledger. Later helper mutations and
+Compose actions are generation-fenced so a superseded invocation cannot
+continue against the replacement. Repeated destroy returns `ALREADY_DESTROYED`.
+
+### `agent-nebius-auth-diagnose` and `agent-nebius-auth-setup`
+
+`agent-nebius-auth-diagnose` is the implicit, read-only runtime entry point. It
+discovers the project from current-session evidence and treats persistent
+memory only as a corroborated hint. When no explicit task project exists, the
+runtime hook clears ambient Nebius auth state, resolves the config-owned
+default with `nebius profile current`, and reads only that profile's configured
+`parent-id`. It never infers authority from ambient profiles, credential
+filenames, cwd, legacy default selectors, or unrelated task state.
+
+Project selection is task execution context, not a typed skill argument.
+Implicit skill selection and hook feedback do not persist the project ID. Once
+an explicit task project is selected, the agent carries it for the current task
+into every Nebius-sensitive Bash payload. Without one, the hook repeats its
+sanitized default-profile lookup. A later explicit project replaces that
+fallback, while unresolved conflicting task evidence must ask rather than
+guess.
+
+Correctable command-policy denials are fixed and retried by the agent without
+running setup: add exactly one explicit task selector as the first raw token of
+the entire outer Bash payload, repair a missing default-profile `parent-id`,
+remove a conflicting explicit profile or managed-auth assignment, or replace a
+token-printing command with the normal operation or redirected verification
+form. Raw-token helpers always require the explicit outer selector.
+Mixed local/Nebius payloads are split into separate Bash calls so local-only
+commands remain unprefixed and receive no injected credential context. When
+the project is already authoritative, the agent retries the corrected payload
+once without rediscovery or `verify`.
+
+`agent-nebius-auth-setup` is explicit-only. Invoking it directly authorizes one
+bounded convergence, without a second prompt or confirmation digest. It locks
+first, validates the current non-agent administrative profile by minting a
+human-user token to discarded stdout, resolves authoritative project metadata
+once, and performs one convergence pass. Human-profile authentication owns IAM
+bootstrap and authorized-key creation until the agent account is ready; the
+token is never printed or persisted. `--dry-run` remains available for an
+explicitly requested read-only preview.
+
+The selected project owns the `codex-agent-sa` service account. One
+deterministic group is parented by the authoritative tenant and contains
+exactly two permits: `admin` on the selected project and `viewer` on that
+tenant. Its name depends only on the project ID hash, so project renames cannot
+create another canonical group. A tenant-created group can hold both scopes, so
+setup no longer creates a separate quota-specific group. Tenant `viewer` enables read-only quota
+allowance listing but is broader than quota access alone. Setup rejects extra
+or duplicate permits on its managed group, rejects extra or duplicate members,
+never grants tenant write access, and does not automatically delete old groups
+or external grants.
+
+Existing credentials normally must resolve to the expected account and project
+before mutation. If the credential's service-account ID instead returns the
+provider-classified RPC/API `NotFound`, explicit setup may bootstrap or reuse a
+distinct fixed account through the human profile, reconcile the exact IAM shape,
+generate one checked authorized-key credential, create one mode-`0600` backup,
+atomically replace the stale file, and rebind the profile. Permission,
+authentication, transient, parse, generic "not found", and unclassified lookup
+failures remain non-recoverable. If a matching current credential cannot mint a
+token, setup backs it up and replaces it at most once in the same explicit
+invocation only after a classified credential-authentication failure. Profile
+write errors and transient or unclassified token failures do not rotate keys. A
+second failure stops without another key, revocation, or prompt. Runtime
+verification also binds the profile-reported service-account identity and the
+project lookup for the fixed `codex-agent-sa` to the canonical credential.
+
+When explicitly requested after setup and basic project-access verification
+succeed, a 12-hour repair lease (24-hour maximum) may authorize only fd-safe
+mode-`0600` correction of the exact fingerprinted credential and rebuilding
+its exact local profile. No extra confirmation digest is required. The
+lease is private same-user workflow state, not an unforgeable security token.
+It never authorizes key generation/rotation, IAM, identity, or hook changes and
+fails closed on path, owner, schema, fingerprint, identity, action, or expiry
+drift.
+
+At runtime, every Nebius-sensitive Bash command starts with
+`CODEX_NEBIUS_PROJECT_ID=<project-id> <command>`. The hook strips and validates
+that one leading selector and injects the matching renewable profile,
+project, credential-file, and token-helper context for any selected executable.
+It never falls back to inherited auth, a global default file, or a single
+credential filename, and it clears ambient bearer variables instead of
+injecting a universal expiring token. Install or refresh it only when the user
+explicitly requests that separate action. Use
+`./install-skills.sh --install-hooks agent-nebius-auth-setup/assets/hooks --register-hooks`.
+Normal CLI/profile and supported SDK credential paths own renewal. Raw Bash,
+Python, or API children use
+`python3 "$CODEX_NEBIUS_TOKEN_HELPER" exec-token -- <command>`; an explicitly
+idempotent adapter may use `retry-idempotent` for one refresh and retry only
+after a real 401/`UNAUTHENTICATED` mapped to status `77`. Already-running
+processes need provider-native renewal, bounded helper calls, or restart.
+
+Read-only runtime diagnosis uses `agent-nebius-auth-setup.sh verify` and never
+requires a human/admin profile. It verifies token mint, project access,
+authoritative project-to-tenant ancestry, and one tenant quota-allowance list
+call. Exact IAM planning remains separate and returns `blocked-admin-auth` when
+the required non-agent administrative profile cannot authenticate
+non-interactively.
 
 ### Agentic SDLC Skills
 
@@ -378,31 +810,63 @@ and explicit final merge.
 Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 `sdlc-start`, so tool discovery does not confuse workflow phases such as
 `sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
-All `sdlc-*` skills set `allow_implicit_invocation: false`; start or resume the
-workflow explicitly with `$sdlc-start`, then let the coordinator record the next
-recommended phase in local run state.
-The committed product truth is `docs/requirements.md` and `docs/design.md`;
-private run state, plans, evidence, screenshots, transcripts, and steering live
+All `sdlc-*` skills set `allow_implicit_invocation: false`. Except for the
+external `sdlc-workflow-test` verifier, initialize and run the workflow through
+exactly `$sdlc-start workspace init [project-folder]` and
+`$sdlc-start run <prompt-path-or-unique-filename>`, then let the coordinator
+record the next recommended phase in local run state. Editing the same managed
+prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a
+resume interface.
+The committed project truth is `docs/requirements.md`, `docs/design.md`, and,
+only when the evidence gate requires it, a provenance-owned project-root
+`AGENTS.md`. The shared `project-agent-instructions` skill makes that
+conditional decision after design and before auto-steering or planning.
+Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-`STEERING.md` is the active-run inbox and steering ledger for mid-run user
-prompts, while `steering/auto-steering.json` stores machine-readable
-dispositions and compact reminders. Requirements or design changes captured in
-steering still route through the owning product-truth skills before
-implementation treats them as true.
+Each active feature also has schema-v4 execution state and private worktrees
+there. After plan lock, `sdlc-prepare-execution` creates a persistent
+integration branch/worktree and enforces the initialized monorepo folder as the
+claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in enforced
+capacity batches inside dependency waves, using one fresh native agent or
+sequential ephemeral `codex exec` fallback per task and immutable direct-
+predecessor handoffs, retains worker and ordered
+merge commits, and cleans only proven reachable resources without force. The
+project branch stays unchanged until `sdlc-commit` seals the final integration
+tip and promotes it with `git merge --ff-only`.
+Project-level managed prompts and immutable run revisions also remain under
+`~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
+steering ledger for accepted prompt revisions, while
+`steering/auto-steering.json` stores machine-readable
+dispositions and compact reminders. Requirements, design, or generated
+project-instruction changes captured in steering still route through their
+owning skills before implementation treats them as true.
 `docs/requirements.md` may also record an optional Live Experiment Environment
 so later evaluation and UAT can use a confirmed non-production or disposable
 target with safe connection, allowed-action, reset, and evidence rules.
 Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
-local state. The Stop hook routes continuation through explicit `$sdlc-start`
-invocation rather than directly into phase skills. Sensitive Git actions use
+local state. The Stop hook repeats the prompt-bound `sdlc-start run` command
+rather than routing directly into phase skills. The PreToolUse registration is
+matched by tool name, but it immediately allows calls outside an active SDLC
+run and omits a static SDLC status message so ordinary tasks are not presented
+as SDLC work.
+Sensitive Git actions use
 short-lived local authorization files under the active run's `permissions/`
 directory; the skills create those files only immediately before the guarded
-action.
+action. Registered integration and worker worktrees remain inside hook policy
+even outside the original checkout, with exact Git identity and action-scoped
+authorization checks for sensitive raw Git operations.
+PR publication authorization binds the `create-pr` phase, branch, clean exact
+promoted HEAD, passing UAT status, and expiry. It guards active-run pushes and
+PR creation without blocking read-only PR inspection.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
-bundles deliberately with `./install-skills.sh --install-all-hooks`; installed
-copies under `$CODEX_HOME/hooks` are runtime artifacts.
+bundles deliberately with `./install-skills.sh --install-all-hooks
+--register-hooks --refresh-hook-registrations`; installed copies under
+`$CODEX_HOME/hooks` are runtime artifacts. The refresh option replaces only a
+differing same-event, same-script registration with the same handlers,
+allowing only `statusMessage` metadata to differ, and preserves unrelated
+entries.
 Keep these SDLC hooks separate from the non-SDLC global-context hooks:
 `SessionStart` is for stable global context and task-state location, and
 `UserPromptSubmit` is only for lightweight prompt-time context, safety, or
@@ -413,57 +877,94 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
   prompts, tickets, approved change requests, and optional safe live experiment
   environment details while preserving stable `REQ-*` IDs.
-- `sdlc-start`: coordinates the active SDLC run, reads steering and local
-  checkpoints, selects the highest-priority incomplete feature, and chooses one
-  next skill without duplicating history on unchanged resumes. At run start, it
-  encourages safe live experiment environment capture through requirements.
+- `sdlc-start`: initializes the private prompt workspace, accepts immutable
+  prompt revisions, coordinates the active SDLC run, reads steering and local
+  checkpoints plus authoritative repair pointers, and chooses one next skill
+  without duplicating history. It keeps troubleshooting conditional and routes
+  every diagnosis back through classification. At run start, it encourages
+  safe live experiment environment capture through requirements.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
-  internal sources, code, and tests.
+  internal sources, code, tests, and layer-boundary evidence when a vertical
+  slice may apply.
 - `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
   stable `FEAT-*` blocks, records selected and rejected design options, and
-  defines implementation, validation, test, evaluation, rollout, and rollback
-  boundaries.
+  defines vertical feature flow, layer map, implementation, validation, test,
+  evaluation, rollout, and rollback boundaries. Failure-driven redesign
+  additionally requires positive system-contract proof, valid
+  evaluator/environment, reproducibility, high confidence, affected-feature
+  closure, rollback, and durable approval for broader changes.
+- `project-agent-instructions`: after validated requirements and design,
+  decides whether durable selected-project rules add to inherited instructions;
+  creates or safely refreshes only a provenance-owned project-root `AGENTS.md`
+  and preserves human-owned instruction files. Its manifest advertises the
+  exact remaining generated-body capacity under Codex's cumulative project-doc
+  limit with a 7 KiB ceiling, and its decision gate rejects Git-ignored
+  evidence.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
-  and routes requirements, design, docs, or human-input changes back through
-  `sdlc-start`.
-- `sdlc-create-plan`: creates locked private local execution plans for one feature.
-- `sdlc-tdd`: writes or maps tests before implementation.
-- `sdlc-implement-plan`: implements production code for the current locked feature
-  plan only.
-- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency, and
-  build checks where configured, then uses `code-review` in review-only mode to
-  catch blocking implementation-quality issues before behavior tests.
+  and routes requirements, design, project-instruction, docs, or human-input
+  changes back through `sdlc-start`.
+- `sdlc-create-plan`: creates locked private local execution plans for one feature,
+  preserving the end-to-end slice and defining stable dependency-safe task
+  records. Post-wave correction creates immutable adjacent plan vN+1,
+  preserves full prior task definitions/digests, and appends
+  diagnosis/oracle-bound tasks and waves.
+- `sdlc-prepare-execution`: validates the task graph and prepares the persistent
+  feature integration worktree and deterministic waves before TDD.
+- `sdlc-tdd`: writes or maps tests in the integration worktree before
+  implementation, including planned slice contracts and cross-layer validation
+  targets when present.
+- `sdlc-implement-plan`: dispatches one fresh task agent per safe task, verifies
+  scoped worker commits, integrates in stable order, runs combined evidence,
+  and non-force-cleans worker resources. Corrective work runs the original
+  oracle first, then the affected boundary and every invalidated downstream
+  gate at the new integration commit.
+- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency,
+  build, and locked-slice boundary checks where configured, then uses
+  `code-review` in review-only mode to catch blocking implementation-quality
+  issues before behavior tests.
 - `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
-  contract, or mock-based tests.
-- `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
-  to GUI, TUI, API, service, or manual evaluation, using a confirmed safe live
-  experiment environment only within recorded allowed actions.
+  contract, or mock-based tests, including slice coverage when present.
+- `sdlc-evaluate`: observes feature behavior against acceptance criteria and
+  routes to GUI, TUI, API, service, observability, or manual evaluation. It uses
+  a confirmed safe live experiment environment only within recorded allowed
+  actions, uses passive production telemetry only for predefined operational
+  gates with one exact grading rule, evidenced matching signal, and complete
+  candidate/control attribution and coverage, admits only one query before
+  updating its criterion ledger, and records planned slice observation when
+  applicable.
 - `sdlc-update-documents`: updates project-facing README, changelog, examples,
   usage docs, docs indexes, or generated docs after evaluated implementation or
   UAT evidence, while routing requirements and design drift to their owner
-  skills.
+  skills. Multi-layer behavior docs require evaluated slice evidence.
 - `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
-  implementation, docs, and evidence for consistency before commit or PR
-  readiness.
-- `sdlc-classify-failure`: classifies failed phases before retrying and routes to
-  the earliest responsible SDLC phase.
-- `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or
-  accessibility snapshots when available.
+  implementation, docs, end-to-end slice evidence, and other evidence for
+  consistency before commit or PR readiness.
+- `sdlc-classify-failure`: validates commit-bound failure events and optional
+  diagnoses, enforces stable-blocker and feature budgets, and either routes a
+  proven cause to its owner, conditionally requests troubleshooting, or stops.
+- `sdlc-gui-test`: controls and evaluates GUI flows through Computer Use when
+  desktop state matters, or Browser/Playwright when suitable, with screenshots
+  or accessibility snapshots.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
-- `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
-  and evaluation pass; it never pushes and does not replace the general
-  `commit` or `commit-push` skills.
+- `sdlc-commit`: seals final integration changes, ff-only promotes the exact
+  verified tip, non-force-cleans integration resources, and never pushes or
+  replaces the general `commit` or `commit-push` skills.
 - `sdlc-uat-tests`: runs product-level user acceptance testing before PR
   creation, using a confirmed safe live experiment environment only within
   recorded allowed operations and reset rules.
-- `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
-  it opens or reuses the PR and summarizes SDLC evidence.
-- `review-pr`: existing PR review skill reused for SDLC merge-readiness review
-  against specs, checks, reviews, and local evidence.
+- `create-pr`: existing PR skill reused in publication-only mode after UAT
+  passes; it requires the clean exact promoted SHA, never changes it, and routes
+  any repair back through failure classification and the coordinator. Push and
+  CLI PR creation use one direct action with an explicit ref/head.
+- `review-pr`: existing PR review skill reused in findings-and-readiness-only
+  mode; it verifies the exact promoted PR head against specs, checks, reviews,
+  and local evidence without mutating the branch.
 - `sdlc-merge-pr`: merges a specific PR only after an explicit user request and
-  final readiness checks.
+  final readiness checks, using one canonical single-action command with an
+  explicit PR number or URL and exact head guard only while the PR head still
+  equals the promoted and reviewed SHA.
 
 ### `apply-security`
 
@@ -511,6 +1012,28 @@ branch before PR creation without rewriting history, reuse the current
 non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
+When a matching active Agentic SDLC run exists, that generic preparation path
+is disabled: `create-pr` requires passing UAT and publishes only the clean exact
+promoted SHA. A conflict, failed check, remote-head mismatch, or required
+change returns through `sdlc-classify-failure` and `sdlc-start`.
+
+### `worktree`
+
+`worktree` isolates one selected monorepo project in a sibling
+`<repo-name>-worktrees/` directory while retaining a full-repository checkout.
+`add` is the default action and always starts a generated `worktree/<name>`
+branch at the freshly fetched `origin/main`; dirty or branch-divergent work in
+the selected project blocks creation, while unrelated primary-checkout changes
+are preserved. `push` and `create-pr` acquire action-bound private publication
+reservations, verify managed identity and project-scope containment, then reuse
+`commit-push` and `create-pr`. Nested `task-implementer` and Agentic SDLC runs
+use owner-bound v2 leases on the outer branch until internal cleanup and final
+alignment. `remove` runs from the
+primary checkout with an exact generated name and requires durable ownership
+state plus a clean worktree and exact merged-PR/head proof, or an unused
+never-published branch. It never force-removes a worktree, atomically deletes
+the local ref only at its verified SHA, and deletes a surviving remote branch
+only when an exact expected-SHA lease still matches.
 
 ### `merge-pr`
 
@@ -525,23 +1048,36 @@ checks still block the PR.
 
 ### `code-info`
 
-`code-info` summarizes a local project folder or a GitHub repository with
-read-only, copy/paste-friendly Markdown metrics, including LOC per language,
-LOC per top-level component, tracked repo size, repo link, test file counts,
-CLI command definitions, package/module counts, build artifact sizes, and
-already-available coverage artifacts. For not-yet-cloned GitHub repositories,
-it reads a temporary archive using `GH_TOKEN`, `GITHUB_TOKEN`, or
-`gh auth token` when needed. It does not edit, format, build, test, install,
-generate coverage, or stage files.
+`code-info` summarizes a local project folder or GitHub repository with a
+read-only, copy/paste-friendly Markdown report. It includes a concise project
+description, documented feature count, CLI command paths through three levels,
+comparable and per-language LOC, project packages, declared and statically
+selected/resolved dependencies, approximate pinned Redis/SQLite size
+comparisons, repo size and link, tests, artifacts, and already-available
+coverage. For not-yet-cloned
+GitHub repositories, it reads a temporary archive using `GH_TOKEN`,
+`GITHUB_TOKEN`, or `gh auth token` when needed. It never executes project code,
+manifests, package managers, builds, tests, or generators and does not change
+project files.
 
 ### `config-codex`
 
-`config-codex` bootstraps or aligns a user's local Codex runtime setup from
-public-safe templates. Use it for `$CODEX_HOME` layout, global `AGENTS.md`
-policy, `config.toml` features and MCP servers, hooks, task-state directories,
-custom read-only agents, and validation without copying personal paths or
-secrets into a public repository. Existing laptop `AGENTS.md` and
-`config.toml` files are merge targets, not template replacement targets.
+`config-codex` bootstraps, recovers, or aligns a user's local Codex runtime
+setup from public-safe templates. Use it for `$CODEX_HOME` layout, global
+`AGENTS.md` policy, recovery of a missing `config.toml`, features and MCP
+servers, hooks, task-state directories, custom read-only agents, and validation
+without copying personal paths, private state, or secrets into a public
+repository. The create-only config recovery baseline keeps documented portable
+preferences and placeholders while excluding personal project lists, private
+or plugin-managed integrations, desktop/generated state, and secret-bearing
+values. Existing laptop `AGENTS.md` and `config.toml` files are merge targets,
+not template replacement targets.
+Private prompt-workspace access is opt-in: it can create a `0700`
+`$CODEX_HOME/task-implementer` root and add only that exact root to an existing
+`workspace-write` configuration without changing sandbox or approval policy.
+Its read-only preflight validates this contract with
+`--require-task-implementer-workspace`; when persistent access is unavailable,
+it reports the per-session `codex --add-dir` remediation.
 
 ### `github-workflows`
 
@@ -563,8 +1099,9 @@ finalizing when close controls are available, reporting any unavailable or
 failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
-`$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
-without creating missing state files and may suggest bounded same-workspace
+`$CODEX_HOME`. Normal startup advertises session-scoped task-state paths
+without creating missing state files; compaction and the first complex prompt
+create only an empty private scaffold. Prompt hooks may suggest bounded same-workspace
 prior task-state candidate paths for complex prompts without injecting their
 contents; an existing file is meant to be read at task start, resume, or after
 compaction when prior context may matter, then updated with concise decisions,
@@ -586,11 +1123,25 @@ templates, schema, and validation.
 ### `install-grafana-mcp-for-nebius`
 
 `install-grafana-mcp-for-nebius` installs and configures the official Grafana
-MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
-external Grafana service-account/static-key setup out of the default path, and
-guides agents through idempotent Codex MCP registration, datasource discovery,
-PromQL-compatible monitoring, Loki, trace-tool checks, and read-only
-validation.
+MCP server for Codex. It pins and validates one human Nebius CLI profile,
+stores a private profile/user binding, isolates rotating token state per
+server/profile, renews stale startup credentials before MCP launch under a
+bounded Codex timeout, clears agent and competing Grafana credentials, and
+always enforces read-only MCP arguments. External Grafana
+service-account/static-key setup remains separate. Routine observability
+questions are handed to `nebius-grafana-query`; the installer retains no second
+query path.
+
+### `nosleep4mac`
+
+`nosleep4mac` is an explicit-only, no-argument setup workflow for one per-user
+macOS LaunchAgent running `/usr/bin/caffeinate -s`. Its canonical helper
+creates missing state, repairs stopped or safely drifted managed state, and
+leaves a healthy plist, PID, and launchd job exactly unchanged on repeated
+runs. The assertion is effective only on AC power, continues through screen
+lock while the user remains logged in, preserves normal display and battery
+sleep, and does not change `pmset` or install a system daemon. The helper's
+`--check` mode is reserved for internal verification and tests.
 
 ### `linter`
 
@@ -610,6 +1161,61 @@ checks, observability, and MK8s GPU/operator decisions.
 Plane Audit Logs queries. It resolves tenant, region, time window, resource or
 current subject filters, keeps page size bounded by default, and sanitizes
 output unless raw output is explicitly requested.
+
+### `nebius-grafana-query`
+
+`nebius-grafana-query` is the implicitly selectable, read-only operational
+workflow for an already-configured `grafana-nebius` MCP server. It discovers
+datasource UIDs and scope dimensions, resolves one absolute query window, and
+proves federation before running bounded PromQL, LogQL, or Tempo queries as the
+pinned human user. Requests can name one or many tenants, projects, and
+resources; absent scope dimensions fail closed, and bare “any” does not grant
+fleet-wide enumeration.
+
+Results use a ranked, signal-aware Markdown report: explicit user grouping and
+ordering win, otherwise the requested field is sorted problem-first with
+stable scope attribution. The default table displays up to 20 rows with total,
+omitted, and global-completeness notes. Gauges use per-group window minimum,
+average, and maximum; counters use increase or rate; logs use counts and
+exact first/last occurrence when a supported bounded method provides it;
+traces use count/error, exact full-window duration minimum/average/maximum only
+when supported, and supported full-window quantiles with approximation
+disclosed. Coverage/access is separate from query and tool health.
+
+Traces prefer proxied Tempo tools and use only a fixed GET-only
+datasource-proxy fallback when those tools are unavailable. Missing server,
+configuration, or authentication routes back to the explicit installer skill.
+
+The same skill is the structured evidence provider for `troubleshoot` and
+`sdlc-evaluate`. Those callers decide whether telemetry can change a named
+hypothesis or operational criterion and supply explicit authority, deployed
+selectors, absolute windows, one evidenced matching signal, and a query budget.
+Evaluation also supplies one exact criterion fit with candidate/control
+attribution and predefined pass, fail, and inconclusive rules. Invalid or
+missing fits cause zero calls; datasource readiness is never signal discovery.
+One lazy datasource listing is reused as readiness for the workflow run;
+failure disables observability without installer handoff or retry. Each
+embedded provider call attempts at most one admitted query, then returns for a
+caller ledger update; the cumulative six-query fast and four-query deep
+allowances are ceilings, not batch targets. The provider returns redacted facts
+and data gaps without claiming root cause or an evaluation grade. Every
+response returns updated connectivity and total, fast, and deep remaining
+budgets;
+pre-query validation gaps return `rejected` with zero calls and unchanged
+state.
+
+### `optimize-pytest`
+
+`optimize-pytest` measures and improves pytest feedback time without weakening
+test selection, outcomes, isolation, or the complete correctness gate. It
+separates startup, collection, setup, call, and teardown costs, then ranks
+cumulative contributors across fixtures, imports, parametrization, plugins,
+coverage, reporting, and test boundaries.
+
+The skill keeps review and diagnosis report-only, permits focused changes only
+for explicit optimization requests, and evidence-gates xdist, testmon,
+duration-balanced sharding, persistent artifacts, dependency changes, and
+build-system escalation.
 
 ### `publish-helm`
 
@@ -652,6 +1258,10 @@ Typer, and Pydantic.
 PR by number, URL, or current branch against its base branch, inspect GitHub
 checks and review state, fix safe issues when the branch can be updated safely,
 resolve straightforward conflicts when possible, and report remaining blockers.
+For a matching active Agentic SDLC run it instead becomes
+findings-and-readiness-only: the PR head must equal the clean exact promoted
+SHA, and every required branch change returns to the coordinator before review
+resumes.
 
 ### `shell-scripting`
 
@@ -663,6 +1273,81 @@ hardening `.sh` automation.
 `terraform` generates and improves Terraform modules and infrastructure
 repositories with reusable structure, state guidance, validation, security
 controls, examples, and CI expectations.
+
+### `troubleshoot`
+
+`troubleshoot` causally investigates difficult code, shell, CI, installed
+software, service, container, network, storage, and infrastructure failures.
+It preserves evidence, maintains competing hypotheses, runs discriminating
+experiments, proves the earliest causal divergence, applies the smallest
+durable repair, and verifies the original failure plus affected boundaries.
+Live mutations are bounded to confirmed non-production unless the user
+authorizes an exact production action; destructive and high-impact changes
+always require action-specific approval.
+
+Runtime observability is a gated experiment rather than a default discovery
+step. When a deployed-runtime hypothesis needs scoped facts,
+`troubleshoot` invokes `nebius-grafana-query` in evidence-provider mode after
+one matching signal has non-Grafana provenance and authority, deployed
+selector, and absolute window are proven. It reuses one readiness result,
+admits one cheapest decision-changing query per provider call, enters deep
+queries only when fast evidence leaves named hypotheses indistinguishable, and
+retains all causal interpretation. Unavailable optional telemetry is skipped;
+decisive missing telemetry becomes `BLOCKED_MISSING_EVIDENCE`.
+
+After causal proof, `troubleshoot` keeps localized invariant-restoring repairs
+inside its own workflow. Outside Agentic SDLC, a durable remedy that changes
+architecture topology, component or service responsibilities or boundaries, a
+public interface, data ownership or lifecycle, a migration, or a
+cross-component workflow is routed through `design` before implementation.
+Implementation size, algorithmic complexity, concurrency difficulty, or a
+large rewrite inside one existing private boundary does not trigger `design`.
+That handoff receives the proven causal chain, violated invariant,
+requirements, constraints, non-goals, fixed technologies, and regression
+oracle. `design` owns solution design and the `/plan` handoff;
+`troubleshoot` retains post-implementation verification and final causal
+reporting. Active Agentic SDLC work sends the causal handoff first to
+`sdlc-classify-failure`; after it records the failure class, retry accounting,
+and `next_recommended_skill`, the coordinator routes to the recorded owner.
+In that diagnostic mode, `troubleshoot` preserves the failed integration commit
+and accepted criteria, may use only reversible uncommitted instrumentation in
+the private integration worktree, removes it before handoff, commits no product
+repair, invokes no design phase, and returns one `diagnosis-v1` to
+classification. A known mechanical owner bypasses this branch. Missing
+decisive evidence, competing hypotheses, and “no implementation bug found”
+stop without speculative redesign.
+
+Agentic SDLC uses its own authoritative `repair-control-v1`: two localized
+attempts, one design-scale attempt, three total attempts and 60 active minutes
+per stable blocker tranche, plus four repair dispatches per feature. A failed
+first direct repair requires troubleshooting before attempt two. Each retry
+requires new evidence and a new falsifiable hypothesis; duplicates, permission
+denials, and crash replay do not consume attempts.
+
+After one remediation fails against the same blocker, `troubleshoot` starts a
+bounded tranche before another repair. Each tranche has a hard maximum of five
+remediation attempts or 120 active minutes, whichever comes first; the attempt
+maximum cannot be raised or disabled. Every retry requires newly acquired logs,
+stack traces, code inspection, runtime-state evidence, or an equivalent
+observation plus a genuinely new falsifiable hypothesis. If that gate cannot be
+satisfied, no retry runs and a structured investigation report identifies the
+missing evidence and next action. Failures 1 through 4 are reported as progress;
+after the exact private state update records exhaustion, all other tool use
+stops and a complete user-visible report is returned. The Stop hook requests
+one correction containing a bounded, redacted minimum report for an incomplete
+response. If that correction is ignored, it stops and emits the fallback as a
+UI/event-stream warning instead of looping. Historical exhausted v1 data
+markers remain report-only without requiring invented evidence or authored
+attempt IDs. Previous v2 state fails closed for exact marker repair rather than
+continuing under a dual-limits compatibility path, while all newly authored
+state uses the canonical v3 data schema. A new explicit user instruction is
+required for another bounded tranche. The optional
+`troubleshoot/assets/hooks` bundle enforces the
+recorded private task-state budget at supported `PreToolUse` and `Stop`
+boundaries. Every canonical attempt is bound to the marker's exact blocker key,
+so an old ledger copied onto an independent issue is rejected as invalid rather
+than exhausting that issue. The hook does not infer causal identity or attempts
+from raw command failures.
 
 ## Skills Installer
 
@@ -691,8 +1376,8 @@ be removed with `--remove-skill` when they are not same-source managed.
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
-./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
+./install-skills.sh --install-all-hooks [--register-hooks] [--refresh-hook-registrations|--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
@@ -712,9 +1397,12 @@ The `--install-all-hooks` option is also explicit, but discovers every reviewed
 hook-only `*/assets/hooks` directory under this source skills folder and syncs
 those payload files in one pass. It does not scan mixed `assets/` directories.
 With `--register-hooks`, it also merges each discovered bundle's registration
-manifest while preserving existing hook entries. Add `--replace-hooks-json`
-only when you intentionally want to back up and replace `hooks.json` with a
-clean file built from the selected source manifests. Hook install modes are
+manifest while preserving existing hook entries. Add
+`--refresh-hook-registrations` to replace only differing registrations with the
+same event/script and handlers, allowing only `statusMessage` metadata to
+differ. Add `--replace-hooks-json` only when you intentionally want to back up
+and replace `hooks.json` with a clean file built from the selected source
+manifests. Hook install modes are
 idempotent: unchanged files are not recopied, hook file provenance is recorded,
 differing existing hook files are backed up before being refreshed,
 registration appends only missing source entries by default, refuses duplicate
@@ -765,14 +1453,17 @@ automatically.
 # Remove from a custom destination
 ./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
 
-# Copy optional Agentic SDLC hooks into the default local Codex home
-./install-skills.sh --install-hooks sdlc-start/assets/hooks
+# Copy and refresh optional Agentic SDLC hooks in the default local Codex home
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks --refresh-hook-registrations
 
 # Copy and register global context-management hooks
 ./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 
-# Copy and register every reviewed hook-only bundle
-./install-skills.sh --install-all-hooks --register-hooks
+# Copy and register the remediation-budget guard hooks
+./install-skills.sh --install-hooks troubleshoot/assets/hooks --register-hooks
+
+# Copy and refresh every reviewed hook-only bundle
+./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
 
 # Copy all reviewed hook bundles and replace hooks.json with only those entries
 ./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
@@ -814,7 +1505,8 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   source.
 - `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
   guardrails, not skills. Use a hook-only source directory such as
-  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
+  `sdlc-start/assets/hooks`, `config-codex/assets/hooks`, or
+  `troubleshoot/assets/hooks`. Without
   `--register-hooks`, this only syncs files under
   `${CODEX_HOME:-$HOME/.codex}/hooks`. It records hook file provenance hashes
   and backs up differing existing hook files before refreshing them from source.
@@ -831,10 +1523,10 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   refuses to create or preserve multiple registrations for the same hook event
   and Python hook filename, such as two `Stop` entries pointing at
   `stop_sdlc_continue.py`.
-- `agent-nebius-auth` keeps hook installation canonical: setup writes the
-  project selector under `~/.nebius`, while the root installer syncs hook files
+- `agent-nebius-auth-setup` keeps hook installation canonical: setup never
+  writes a global project selector, while the root installer syncs hook files
   and `hooks.json` only. It does not migrate inline `config.toml` hook entries;
-  it rejects stale inline agent-nebius-auth entries before copying hooks or
+  it rejects stale legacy agent-nebius-auth entries before copying hooks or
   writing `hooks.json`.
 - `--replace-hooks-json` can be combined with `--register-hooks` to replace
   `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the

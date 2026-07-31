@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added concise static and BGP example configurations and clarified the subnet
+  and route-table resources created by `prep-network`.
+
 ## [nebius-vpngw-v0.5.9] - 2026-07-07
 
 - Added an ESP4 readiness preflight for new gateway VMs and a

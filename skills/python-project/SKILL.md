@@ -7,6 +7,24 @@ description: "Use for Python repo scaffolding and hardening: pyproject/setuptool
 
 Scaffold production-grade Python repositories with conservative, reusable defaults.
 
+## Invocation Scope
+
+Determine scope before generating files:
+
+- `standalone`: own a complete Python repository root and retain the normal
+  output contract below.
+- `coordinated-candidate`: receive an assigned Python component path, exact
+  owned paths, root exclusions, and private bundle from `scaffold-project`.
+  Generate exact candidate bytes only in that bundle and never write the
+  target.
+
+In coordinated-candidate scope, do not create or modify repository-root
+`.gitignore`, README, Makefile, `.github/`, `infra/`, Helm charts, Dockerfiles,
+Compose, standalone frontend code, or agent instructions. Return root
+integration requirements to the coordinator. A component-local README,
+Makefile, tests, and Python configuration are allowed only when explicitly
+assigned.
+
 ## Use This Skill For
 
 - Creating a new Python project from scratch.
@@ -70,7 +88,7 @@ Scaffold production-grade Python repositories with conservative, reusable defaul
 
 ## Output Contract
 
-Always include:
+In standalone scope, always include:
 
 - `pyproject.toml`
 - `.gitignore`
@@ -95,22 +113,18 @@ Add these when selected:
   - CI should keep PR validation fast and move integration/coverage to release or manual runs.
 - `ai-ml`: `src/<package>/ml/` split for train/eval/infer pipelines.
 
+In coordinated-candidate scope, limit this list to paths explicitly assigned
+inside the component. Return candidate path, mode, provenance, and validation
+requirements rather than writing the target.
+
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Non-Negotiable Guardrails
 
@@ -126,6 +140,8 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 - Integration tests must be explicitly marked and isolated from the fast unit lane.
 - Prefer patching external clients with `unittest.mock.patch` in unit tests.
 - Keep fixtures small and deterministic; avoid large datasets in default scaffolds.
+- Route public standalone React/TypeScript/Vite source to `frontend-project`
+  and container artifacts to `container`.
 
 ## Versioning and Release Pattern
 

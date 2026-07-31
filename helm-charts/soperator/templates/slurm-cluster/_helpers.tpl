@@ -88,25 +88,47 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if eq $activeSlot $passiveSlot -}}
   {{- fail "jailRootfs.activeSlot and jailRootfs.passiveSlot must be different." -}}
 {{- end -}}
+	{{- $adoption := default dict $cfg.adoption -}}
+	{{- $activeSource := default "slot" $adoption.activeSource -}}
+	{{- if not (has $activeSource (list "slot" "legacy-rootfs")) -}}
+	  {{- fail (printf "jailRootfs.adoption.activeSource must be slot or legacy-rootfs; got %q." $activeSource) -}}
+	{{- end -}}
+	{{- $rollbackSource := default "" $adoption.rollbackSource -}}
+	{{- if not (has $rollbackSource (list "" "legacy-rootfs")) -}}
+	  {{- fail (printf "jailRootfs.adoption.rollbackSource must be legacy-rootfs when set; got %q." $rollbackSource) -}}
+	{{- end -}}
+	{{- if or (eq $activeSource "legacy-rootfs") (eq $rollbackSource "legacy-rootfs") -}}
+	  {{- $_ := required "jailRootfs.adoption.legacyPvcName must not be empty when legacy-rootfs is active or retained for rollback." (include "slurm-cluster-storage.jailRootfs.legacyPvc" .) -}}
+	{{- end -}}
 	{{- $store := default dict $cfg.store -}}
 	{{- $storePath := default "/mnt/jail-store" $store.mountPath -}}
 	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $storePath) -}}
 	  {{- fail (printf "jailRootfs.store.mountPath must be an absolute normalized path; got %q." $storePath) -}}
 	{{- end -}}
-	{{- if contains ".." $storePath -}}
-	  {{- fail (printf "jailRootfs.store.mountPath must not contain '..'; got %q." $storePath) -}}
+	{{- if or (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $storePath) (contains "//" $storePath) -}}
+	  {{- fail (printf "jailRootfs.store.mountPath must not contain '.' or '..' path components; got %q." $storePath) -}}
 	{{- end -}}
 	{{- $rootfsPath := default (printf "%s/rootfs" $storePath) $store.rootfsPath -}}
 	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $rootfsPath) -}}
 	  {{- fail (printf "jailRootfs.store.rootfsPath must be an absolute normalized path; got %q." $rootfsPath) -}}
 	{{- end -}}
-	{{- if contains ".." $rootfsPath -}}
-	  {{- fail (printf "jailRootfs.store.rootfsPath must not contain '..'; got %q." $rootfsPath) -}}
+	{{- if or (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $rootfsPath) (contains "//" $rootfsPath) -}}
+	  {{- fail (printf "jailRootfs.store.rootfsPath must not contain '.' or '..' path components; got %q." $rootfsPath) -}}
 	{{- end -}}
 	{{- if not (hasPrefix (printf "%s/" $storePath) $rootfsPath) -}}
 	  {{- fail (printf "jailRootfs.store.rootfsPath must be below jailRootfs.store.mountPath %s; got %q." $storePath $rootfsPath) -}}
 	{{- end -}}
 	{{- $slots := default dict $cfg.slots -}}
+	{{- $seenSlotVolumeSources := dict -}}
+	{{- $seenSlotPvcs := dict -}}
+	{{- $legacyRootfsReferenced := eq (include "slurm-cluster-storage.jailRootfs.legacyReferenced" .) "true" -}}
+	{{- $legacyPvcName := include "slurm-cluster-storage.jailRootfs.legacyPvc" . -}}
+	{{- if or (gt (len $legacyPvcName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $legacyPvcName)) -}}
+	  {{- fail (printf "jailRootfs.adoption.legacyPvcName must be a DNS-1123 subdomain with labels of at most 63 characters; got %q." $legacyPvcName) -}}
+	{{- end -}}
+	{{- $managedLegacyPvc := include "slurm-cluster-storage.volume.jail.pvc" . | trimAll "\"" -}}
+	{{- $managedLegacyVolumeName := include "slurm-cluster-storage.volume.jail.name" . -}}
+	{{- $chartOwnsLegacy := and $legacyRootfsReferenced (eq $legacyPvcName $managedLegacyPvc) -}}
 	{{- range $slotName := list "slot-a" "slot-b" -}}
 	  {{- $slot := get $slots $slotName | default dict -}}
 	  {{- $managedDefault := printf "/mnt/jail-store/rootfs/%s" $slotName -}}
@@ -118,27 +140,59 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
   {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $path) -}}
     {{- fail (printf "jailRootfs.slots.%s.localPath must be an absolute normalized path; got %q." $slotName $path) -}}
   {{- end -}}
-  {{- if contains ".." $path -}}
-    {{- fail (printf "jailRootfs.slots.%s.localPath must not contain '..'; got %q." $slotName $path) -}}
+  {{- if regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $path -}}
+    {{- fail (printf "jailRootfs.slots.%s.localPath must not contain '.' or '..' components; got %q." $slotName $path) -}}
   {{- end -}}
-	  {{- $_ := required (printf "jailRootfs.slots.%s.volumeSourceName is required." $slotName) (default (printf "jail-rootfs-%s" $slotName) $slot.volumeSourceName) -}}
-	  {{- $_ := required (printf "jailRootfs.slots.%s.pvcName is required." $slotName) (default (printf "jail-rootfs-%s-pvc" $slotName) $slot.pvcName) -}}
+	  {{- $volumeSourceName := required (printf "jailRootfs.slots.%s.volumeSourceName is required." $slotName) (default (printf "jail-rootfs-%s" $slotName) $slot.volumeSourceName) -}}
+	  {{- if or (gt (len $volumeSourceName) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $volumeSourceName)) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.volumeSourceName must be a DNS-1123 label of at most 63 characters; got %q." $slotName $volumeSourceName) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenSlotVolumeSources $volumeSourceName -}}
+	    {{- fail (printf "jailRootfs slot volumeSourceName values must be distinct; %q is duplicated." $volumeSourceName) -}}
+	  {{- end -}}
+	  {{- if and $legacyRootfsReferenced (eq $volumeSourceName "jail") -}}
+	    {{- fail (printf "jailRootfs.slots.%s.volumeSourceName must not use reserved legacy source name %q." $slotName $volumeSourceName) -}}
+	  {{- end -}}
+	  {{- if and $chartOwnsLegacy (eq $volumeSourceName $managedLegacyVolumeName) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.volumeSourceName %q collides with the chart-owned legacy jail PV name." $slotName $volumeSourceName) -}}
+	  {{- end -}}
+	  {{- $_ := set $seenSlotVolumeSources $volumeSourceName true -}}
+	  {{- $pvcName := required (printf "jailRootfs.slots.%s.pvcName is required." $slotName) (default (printf "jail-rootfs-%s-pvc" $slotName) $slot.pvcName) -}}
+	  {{- if or (gt (len $pvcName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $pvcName)) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.pvcName must be a DNS-1123 subdomain with labels of at most 63 characters; got %q." $slotName $pvcName) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenSlotPvcs $pvcName -}}
+	    {{- fail (printf "jailRootfs slot pvcName values must be distinct; %q is duplicated." $pvcName) -}}
+	  {{- end -}}
+	  {{- if and $legacyRootfsReferenced (eq $pvcName $legacyPvcName) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.pvcName must differ from legacyPvcName %q." $slotName $legacyPvcName) -}}
+	  {{- end -}}
+	  {{- $_ := set $seenSlotPvcs $pvcName true -}}
 	{{- end -}}
 	{{- $seenPersistentMounts := dict -}}
+	{{- $seenPersistentLocalPaths := dict -}}
+	{{- $seenPersistentVolumeSources := dict -}}
+	{{- $seenPersistentPvcs := dict -}}
 	{{- range $index, $mount := default list .Values.jailPersistentMounts -}}
 	  {{- $mountPath := required (printf "jailPersistentMounts[%d].mountPath is required." $index) $mount.mountPath -}}
 	  {{- $localPath := required (printf "jailPersistentMounts[%d].localPath is required." $index) $mount.localPath -}}
 	  {{- $normalizedMountPath := trimSuffix "/" $mountPath -}}
 	  {{- $normalizedLocalPath := trimSuffix "/" $localPath -}}
-	  {{- if or (eq $normalizedMountPath "") (eq $normalizedMountPath "/") (not (hasPrefix "/" $normalizedMountPath)) (contains ".." $normalizedMountPath) (contains "//" $normalizedMountPath) -}}
-	    {{- fail (printf "jailPersistentMounts[%d].mountPath must be an absolute normalized non-root path without '..'; got %q." $index $mountPath) -}}
+	  {{- if or (eq $normalizedMountPath "") (eq $normalizedMountPath "/") (not (hasPrefix "/" $normalizedMountPath)) (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $normalizedMountPath) (contains "//" $normalizedMountPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].mountPath must be an absolute normalized non-root path without '.' or '..' components; got %q." $index $mountPath) -}}
+	  {{- end -}}
+	  {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $normalizedMountPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].mountPath must contain only shell-safe path characters; got %q." $index $mountPath) -}}
 	  {{- end -}}
 	  {{- if hasKey $seenPersistentMounts $normalizedMountPath -}}
 	    {{- fail (printf "duplicate jailPersistentMounts mountPath %q." $normalizedMountPath) -}}
 	  {{- end -}}
 	  {{- $_ := set $seenPersistentMounts $normalizedMountPath true -}}
-	  {{- if or (eq $normalizedLocalPath "") (eq $normalizedLocalPath "/") (not (hasPrefix "/" $normalizedLocalPath)) (contains ".." $normalizedLocalPath) (contains "//" $normalizedLocalPath) -}}
-	    {{- fail (printf "jailPersistentMounts[%d].localPath must be an absolute normalized non-root path without '..'; got %q." $index $localPath) -}}
+	  {{- if or (eq $normalizedLocalPath "") (eq $normalizedLocalPath "/") (not (hasPrefix "/" $normalizedLocalPath)) (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $normalizedLocalPath) (contains "//" $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must be an absolute normalized non-root path without '.' or '..' components; got %q." $index $localPath) -}}
+	  {{- end -}}
+	  {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must contain only shell-safe path characters; got %q." $index $localPath) -}}
 	  {{- end -}}
 	  {{- if not (hasPrefix (printf "%s/" $storePath) $normalizedLocalPath) -}}
 	    {{- fail (printf "jailPersistentMounts[%d].localPath must be below jailRootfs.store.mountPath %s; got %q." $index $storePath $localPath) -}}
@@ -148,12 +202,63 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	      {{- fail (printf "jailPersistentMounts[%d].localPath must not overlap rootfs or cxcli system path %s; got %q." $index $systemPath $localPath) -}}
 	    {{- end -}}
 	  {{- end -}}
+	  {{- range $seenLocalPath, $_ := $seenPersistentLocalPaths -}}
+	    {{- if or (eq $normalizedLocalPath $seenLocalPath) (hasPrefix (printf "%s/" $seenLocalPath) $normalizedLocalPath) (hasPrefix (printf "%s/" $normalizedLocalPath) $seenLocalPath) -}}
+	      {{- fail (printf "jailPersistentMounts[%d].localPath %q overlaps another persistent localPath %q." $index $localPath $seenLocalPath) -}}
+	    {{- end -}}
+	  {{- end -}}
+	  {{- $_ := set $seenPersistentLocalPaths $normalizedLocalPath true -}}
+	  {{- $persistentName := include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) -}}
+	  {{- $persistentPvc := include "slurm-cluster-storage.jailPersistentMount.pvc" (list $ $mount) | trimAll "\"" -}}
+	  {{- if hasKey $seenSlotVolumeSources $persistentName -}}
+	    {{- fail (printf "jailPersistentMounts[%d] generated volume source %q collides with a jailRootfs slot volumeSourceName." $index $persistentName) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenSlotPvcs $persistentPvc -}}
+	    {{- fail (printf "jailPersistentMounts[%d] generated PVC %q collides with a jailRootfs slot pvcName." $index $persistentPvc) -}}
+	  {{- end -}}
+	  {{- if and $legacyRootfsReferenced (eq $persistentPvc $legacyPvcName) -}}
+	    {{- fail (printf "jailPersistentMounts[%d] generated PVC %q collides with jailRootfs.adoption.legacyPvcName." $index $persistentPvc) -}}
+	  {{- end -}}
+	  {{- if and $chartOwnsLegacy (eq $persistentName $managedLegacyVolumeName) -}}
+	    {{- fail (printf "jailPersistentMounts[%d] generated volume source %q collides with the chart-owned legacy jail PV name." $index $persistentName) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenPersistentVolumeSources $persistentName -}}
+	    {{- fail (printf "jailPersistentMounts paths must generate distinct volume source names; %q is duplicated." $persistentName) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenPersistentPvcs $persistentPvc -}}
+	    {{- fail (printf "jailPersistentMounts paths must generate distinct PVC names; %q is duplicated." $persistentPvc) -}}
+	  {{- end -}}
+	  {{- $_ := set $seenPersistentVolumeSources $persistentName true -}}
+	  {{- $_ := set $seenPersistentPvcs $persistentPvc true -}}
+	{{- end -}}
+	{{- $seenUserVolumeSources := dict -}}
+	{{- range $index, $source := default list .Values.volumeSources -}}
+	  {{- $sourceName := required (printf "volumeSources[%d].name is required." $index) $source.name -}}
+	  {{- if hasKey $seenUserVolumeSources $sourceName -}}
+	    {{- fail (printf "volumeSources[].name values must be distinct; %q is duplicated." $sourceName) -}}
+	  {{- end -}}
+	  {{- $_ := set $seenUserVolumeSources $sourceName true -}}
+	  {{- if or (hasKey $seenSlotVolumeSources $sourceName) (hasKey $seenPersistentVolumeSources $sourceName) (eq $sourceName "slurm-scripts") -}}
+	    {{- fail (printf "volumeSources[%d].name %q collides with a chart-generated volume source." $index $sourceName) -}}
+	  {{- end -}}
+	  {{- if and $.Values.externalNfs.enabled (eq $sourceName "external-home") -}}
+	    {{- fail (printf "volumeSources[%d].name %q collides with the chart-generated external-home source." $index $sourceName) -}}
+	  {{- end -}}
 	{{- end -}}
 	{{- end -}}
 
 {{- define "validateCxcliRenderedConfig" -}}
 {{- if hasKey .Values "nodeGroupMapping" -}}
   {{- fail "values.nodeGroupMapping is not supported. Use chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs; cxcli must materialize worker groups before Helm." -}}
+{{- end -}}
+{{- $slurmNodes := get .Values "slurmNodes" | default dict -}}
+{{- $controller := get $slurmNodes "controller" | default dict -}}
+{{- if kindIs "map" $controller -}}
+  {{- range $key := list "ha" "highAvailability" "replicas" "replicaCount" "size" -}}
+    {{- if hasKey $controller $key -}}
+      {{- fail (printf "slurmNodes.controller.%s is not supported; the downstream chart keeps the upstream-compatible singleton controller surface." $key) -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- $inputs := get .Values "inputs" | default dict -}}
 {{- if kindIs "map" $inputs -}}

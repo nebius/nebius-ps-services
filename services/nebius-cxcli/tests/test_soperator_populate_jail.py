@@ -12,6 +12,7 @@ from nebius_cxcli.soperator_populate_jail import (
     active_passive_jail_rootfs_slots,
     active_passive_populate_jail_job_manifest,
     active_passive_populate_jail_job_scheduling,
+    inspect_active_passive_populate_jail_progress,
     login_service_ready_endpoint_count,
     plan_populate_jail_refresh,
     populate_jail_refresh_values,
@@ -164,6 +165,128 @@ class _PopulateJailRunner:
         return _CommandResult(1, "", "not found")
 
 
+class _ProgressRunner:
+    def __init__(
+        self,
+        *,
+        complete_after: int = 1,
+        job_uid: str = "new-job",
+        log_error: bool = False,
+        incomplete_summary: bool = False,
+        pod_uid: str = "pod-uid",
+    ) -> None:
+        self.complete_after = complete_after
+        self.job_uid = job_uid
+        self.log_error = log_error
+        self.incomplete_summary = incomplete_summary
+        self.pod_uid = pod_uid
+        self.job_reads = 0
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> _CommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        self.calls.append(command)
+        if command[-4:] == ("job", "populate-slot-b", "-o", "json"):
+            self.job_reads += 1
+            complete = self.job_reads >= self.complete_after
+            return _CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "metadata": {
+                            "name": "populate-slot-b",
+                            "uid": self.job_uid,
+                            "creationTimestamp": "2099-01-01T00:00:00Z",
+                        },
+                        "spec": {
+                            "backoffLimit": 0,
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "populate-jail",
+                                            "image": "repo/populate-jail:target",
+                                        }
+                                    ]
+                                }
+                            },
+                        },
+                        "status": (
+                            {
+                                "succeeded": 1,
+                                "startTime": "2099-01-01T00:00:00Z",
+                                "conditions": [{"type": "Complete", "status": "True"}],
+                            }
+                            if complete
+                            else {"active": 1, "startTime": "2099-01-01T00:00:00Z"}
+                        ),
+                    }
+                ),
+            )
+        if "job-name=populate-slot-b" in command:
+            return _CommandResult(
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "populate-slot-b-pod",
+                                    "uid": self.pod_uid,
+                                    "ownerReferences": [
+                                        {
+                                            "kind": "Job",
+                                            "uid": self.job_uid,
+                                            "controller": True,
+                                        }
+                                    ],
+                                },
+                                "spec": {"nodeName": "system-0"},
+                                "status": {
+                                    "phase": "Running",
+                                    "containerStatuses": [
+                                        {
+                                            "name": "populate-jail",
+                                            "restartCount": 0,
+                                            "state": {"running": {}},
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        if command[-1:] == ("json",) and "events" in command:
+            return _CommandResult(0, json.dumps({"items": []}))
+        if "logs" in command:
+            if self.log_error:
+                return _CommandResult(1, "", "temporary log stream failure")
+            return _CommandResult(
+                0,
+                "\n".join(
+                    (
+                        '{"message_type":"status","percent_done":1,'
+                        '"total_files":20,"files_restored":10,'
+                        '"total_bytes":100,"bytes_restored":50}',
+                        '{"message_type":"summary","percent_done":1,'
+                        f'"total_files":20,"files_restored":{19 if self.incomplete_summary else 20},'
+                        '"total_bytes":100,"bytes_restored":100}',
+                        "sensitive raw line that must not enter the checkpoint payload",
+                    )
+                ),
+            )
+        return _CommandResult(1, "", "not found")
+
+
 def _snapshot(image: str = "repo/populate-jail:old") -> PopulateJailSnapshot:
     return PopulateJailSnapshot(
         slurmcluster_name="cluster",
@@ -223,6 +346,9 @@ def test_populate_jail_force_and_manual_modes() -> None:
     assert forced.required is True
     assert manual.required is True
     assert "passive active/passive slot" in manual.manual_instruction
+    assert "canonical jail volume-source alias" in manual.manual_instruction
+    assert "SConfigController" in manual.manual_instruction
+    assert "every enabled alias consumer" in manual.manual_instruction
 
 
 def test_populate_jail_refresh_values_set_temporary_and_steady_state_modes() -> None:
@@ -265,7 +391,10 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
         "slurmNodes": {
             "controller": {
                 "volumes": {
-                    "jail": {"volumeSourceName": "jail-rootfs-slot-a"},
+                    "jail": {
+                        "volumeSourceName": "jail-rootfs-slot-a",
+                        "persistentVolumeClaim": {"claimName": "stale-controller-pvc"},
+                    },
                     "spool": {"volumeSourceName": "controller-spool"},
                 }
             },
@@ -277,7 +406,10 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
                 "name": "worker",
                 "slurmd": {
                     "volumes": {
-                        "jail": {"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"}}
+                        "jail": {
+                            "volumeSourceName": "jail-rootfs-slot-a",
+                            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"},
+                        }
                     }
                 },
             }
@@ -300,13 +432,14 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert slots.passive_slot == "slot-b"
     assert switched["jailRootfs"]["activeSlot"] == "slot-b"
     assert switched["jailRootfs"]["passiveSlot"] == "slot-a"
-    assert switched["slurmNodes"]["login"]["volumes"]["jail"]["volumeSourceName"] == (
-        "jail-rootfs-slot-b"
-    )
-    assert (
-        switched["nodesets"][0]["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"]["claimName"]
-        == "jail-rootfs-slot-b-pvc"
-    )
+    for role in ("controller", "login"):
+        assert switched["slurmNodes"][role]["volumes"]["jail"] == {
+            "volumeSourceName": "jail-rootfs-slot-b"
+        }
+    assert "volumes" not in switched["slurmNodes"]["rest"]
+    assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
+        "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
+    }
     volume_sources = {item["name"]: item for item in switched["volumeSources"]}
     assert set(volume_sources) == {"controller-spool", "jail"}
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
@@ -359,11 +492,35 @@ def test_active_passive_populate_job_scheduling_uses_populate_jail_filter() -> N
     assert scheduling["nodeSelector"] == {"slurm.nebius.ai/nodeset-name": "system"}
     assert scheduling["affinity"]["nodeAffinity"]
     assert scheduling["tolerations"][0]["value"] == "system"
-    assert scheduling["priorityClassName"] == "prod-slurm-populate-jail"
+    assert "priorityClassName" not in scheduling
+    assert (
+        active_passive_populate_jail_job_scheduling(
+            {"populateJail": {"k8sNodeFilterName": "missing"}},
+        )
+        == {}
+    )
+
+
+def test_active_passive_populate_job_scheduling_does_not_invent_priority_class() -> None:
+    assert (
+        active_passive_populate_jail_job_scheduling(
+            {
+                "clusterName": "target-cluster",
+                "populateJail": {"k8sNodeFilterName": "missing"},
+            }
+        )
+        == {}
+    )
+
     assert active_passive_populate_jail_job_scheduling(
-        {"populateJail": {"k8sNodeFilterName": "missing"}},
-        target_ref="external-target",
-    ) == {"priorityClassName": "soperator-slurm-populate-jail"}
+        {
+            "clusterName": "target-cluster",
+            "populateJail": {
+                "k8sNodeFilterName": "missing",
+                "priorityClass": "accepted-populate-jail",
+            },
+        }
+    ) == {"priorityClassName": "accepted-populate-jail"}
 
 
 def test_active_passive_populate_job_mounts_passive_slot_pvc() -> None:
@@ -388,6 +545,7 @@ def test_active_passive_populate_job_mounts_passive_slot_pvc() -> None:
     )
 
     assert manifest["metadata"]["name"] == "cluster-populate-jail-passive-slotb"
+    assert manifest["spec"]["activeDeadlineSeconds"] == 2700
     pod_spec = manifest["spec"]["template"]["spec"]
     assert pod_spec["automountServiceAccountToken"] is False
     assert pod_spec["nodeSelector"] == {"slurm.nebius.ai/nodeset-name": "system"}
@@ -417,6 +575,160 @@ def test_wait_for_active_passive_populate_job_records_completed_image() -> None:
     assert snapshot.job_complete is True
     assert snapshot.job_name == "cluster-populate-jail-passive-slotb"
     assert snapshot.job_image == "repo/populate-jail:target"
+
+
+def test_active_passive_monitor_reads_owner_bound_pod_and_structured_logs() -> None:
+    progress = inspect_active_passive_populate_jail_progress(
+        _ProgressRunner(),
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_image="repo/populate-jail:target",
+    )
+
+    payload = progress.as_payload()
+    assert progress.status == "completed"
+    assert progress.pod_uid == "pod-uid"
+    assert progress.summary_complete is True
+    assert progress.summary_seen is True
+    assert progress.files_restored == progress.total_files == 20
+    assert progress.bytes_restored == progress.total_bytes == 100
+    assert progress.log_line_count == 3
+    assert progress.log_sha256
+    assert "percent_done" not in payload["progress"]
+    assert "sensitive raw line" not in json.dumps(payload)
+
+
+def test_active_passive_monitor_rejects_job_uid_replacement() -> None:
+    runner = _ProgressRunner(job_uid="replacement-job")
+    progress = inspect_active_passive_populate_jail_progress(
+        runner,
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_image="repo/populate-jail:target",
+    )
+
+    assert progress.status == "identity-drift"
+    assert "expected Job UID new-job" in progress.reason
+    assert not any("logs" in call for call in runner.calls)
+
+
+def test_active_passive_monitor_rejects_checkpointed_pod_uid_replacement() -> None:
+    progress = inspect_active_passive_populate_jail_progress(
+        _ProgressRunner(pod_uid="replacement-pod"),
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_pod_uid="checkpointed-pod",
+        expected_image="repo/populate-jail:target",
+    )
+
+    assert progress.status == "identity-drift"
+    assert "expected Pod UID checkpointed-pod" in progress.reason
+
+
+def test_active_passive_monitor_treats_log_read_failure_as_nonfatal() -> None:
+    progress = inspect_active_passive_populate_jail_progress(
+        _ProgressRunner(log_error=True),
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_image="repo/populate-jail:target",
+    )
+
+    assert progress.status == "completed"
+    assert progress.log_status == "unavailable"
+
+
+def test_active_passive_monitor_fails_incomplete_structured_summary() -> None:
+    progress = inspect_active_passive_populate_jail_progress(
+        _ProgressRunner(incomplete_summary=True),
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_image="repo/populate-jail:target",
+    )
+
+    assert progress.status == "failed"
+    assert progress.summary_seen is True
+    assert progress.summary_complete is False
+    assert "incomplete file or byte restoration" in progress.reason
+
+
+def test_active_passive_wait_reports_running_then_complete_without_replacing_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_populate_jail.time.sleep",
+        lambda _seconds: None,
+    )
+    runner = _ProgressRunner(complete_after=2)
+    observations = []
+
+    snapshot = wait_for_active_passive_populate_jail_job(
+        runner,
+        namespace="soperator",
+        job_name="populate-slot-b",
+        expected_job_uid="new-job",
+        expected_image="repo/populate-jail:target",
+        timeout_seconds=30,
+        poll_interval_seconds=1,
+        progress_emit_interval_seconds=30,
+        on_progress=observations.append,
+    )
+
+    assert snapshot.job_complete is True
+    assert [item.status for item in observations] == ["running", "completed"]
+    assert not any("delete" in call or "apply" in call for call in runner.calls)
+
+
+def test_active_passive_wait_reuses_checkpointed_absolute_deadline() -> None:
+    observations = []
+
+    with pytest.raises(RuntimeError, match="exact Job was left untouched"):
+        wait_for_active_passive_populate_jail_job(
+            lambda _args, **_kwargs: _CommandResult(1, "", "temporary API failure"),
+            namespace="soperator",
+            job_name="populate-slot-b",
+            expected_job_uid="new-job",
+            expected_image="repo/populate-jail:target",
+            timeout_seconds=2700,
+            absolute_deadline_at="2000-01-01T00:00:00+00:00",
+            on_progress=observations.append,
+        )
+
+    assert [item.status for item in observations] == ["unavailable", "timed-out"]
+
+
+def test_active_passive_wait_marks_non_progressing_exact_job_stalled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter((0.0, 0.0, 0.0, 301.0, 301.0))
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_populate_jail.time.monotonic",
+        lambda: next(ticks),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_populate_jail.time.sleep",
+        lambda _seconds: None,
+    )
+    observations = []
+
+    with pytest.raises(RuntimeError, match="stalled.*left untouched"):
+        wait_for_active_passive_populate_jail_job(
+            _ProgressRunner(complete_after=999),
+            namespace="soperator",
+            job_name="populate-slot-b",
+            expected_job_uid="new-job",
+            expected_image="repo/populate-jail:target",
+            timeout_seconds=2700,
+            poll_interval_seconds=1,
+            stall_timeout_seconds=300,
+            on_progress=observations.append,
+        )
+
+    assert observations[-1].status == "stalled"
 
 
 def test_login_service_ready_endpoint_guard_counts_endpoint_slices() -> None:

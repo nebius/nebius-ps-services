@@ -15,6 +15,12 @@ from typing import Any
 
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
+from .soperator_artifacts import (
+    SoperatorClusterArtifactIdentity,
+    soperator_cluster_artifact_identity,
+    soperator_cluster_artifact_identity_from_snapshot,
+    soperator_cluster_report_dir,
+)
 
 SOPERATOR_DISCOVERY_SCHEMA = "nebius-cxcli-soperator-discovery/v1"
 SOPERATOR_DISCOVERY_DIR_NAME = "soperator-discovery"
@@ -224,6 +230,53 @@ def _metadata_labels(resource: Mapping[str, Any]) -> Mapping[str, Any]:
     return labels if isinstance(labels, Mapping) else {}
 
 
+def _source_slurmcluster_ref(
+    snapshot: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> dict[str, Any]:
+    candidates: list[dict[str, str]] = []
+    for item in _sequence_of_mappings(snapshot.get("soperator_resources")):
+        if _text(item.get("kind")).lower() != "slurmcluster":
+            continue
+        metadata = _metadata(item)
+        name = _text(metadata.get("name"))
+        if not name:
+            continue
+        spec = item.get("spec", {})
+        raw_secrets = spec.get("secrets", {}) if isinstance(spec, Mapping) else {}
+        secrets = raw_secrets if isinstance(raw_secrets, Mapping) else {}
+        sshd_keys_name = _text(secrets.get("sshdKeysName"))
+        if not sshd_keys_name and raw_secrets != "[redacted]":
+            sshd_keys_name = f"{name}-sshd-keys"
+        candidates.append(
+            {
+                "namespace": _text(metadata.get("namespace")) or "soperator",
+                "name": name,
+                "uid": _text(metadata.get("uid")),
+                "sshd_host_key_secret_name": sshd_keys_name,
+            }
+        )
+    normalized_target = _normalized_token(target_ref)
+    non_target = [
+        item for item in candidates if _normalized_token(item["name"]) != normalized_target
+    ]
+    selected = non_target if non_target else candidates
+    if len(selected) == 1:
+        return {"status": "resolved", **selected[0]}
+    return {
+        "status": "ambiguous" if selected else "missing",
+        "candidates": [
+            {
+                "namespace": item["namespace"],
+                "name": item["name"],
+                "uid": item["uid"],
+            }
+            for item in selected
+        ],
+    }
+
+
 def _soperator_resource_release(
     snapshot: Mapping[str, Any],
     *,
@@ -279,7 +332,9 @@ def _soperator_resource_release(
     )[0]
 
 
-def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", release_name: str = "") -> Mapping[str, Any]:
+def _soperator_release(
+    snapshot: Mapping[str, Any], *, namespace: str = "", release_name: str = ""
+) -> Mapping[str, Any]:
     releases = _sequence_of_mappings(snapshot.get("helm_releases"))
     requested_namespace = str(namespace or "").strip().lower()
     requested_release = str(release_name or "").strip().lower()
@@ -295,7 +350,11 @@ def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", rele
     for release in releases:
         chart = str(release.get("chart", "") or release.get("chart_name", "") or "").lower()
         name = str(release.get("name", "") or "").strip().lower()
-        if "soperator" in chart or "slurm-operator" in chart or name in {"soperator", "slurm-operator"}:
+        if (
+            "soperator" in chart
+            or "slurm-operator" in chart
+            or name in {"soperator", "slurm-operator"}
+        ):
             return release
     return {}
 
@@ -308,8 +367,11 @@ def _soperator_status(identity: Mapping[str, Any]) -> str:
     chart_version = str(identity.get("chart_version", "") or "").strip()
     app_version = str(identity.get("app_version", "") or "").strip()
     release = identity.get("helm_release")
-    if source_version or chart_version or app_version or (
-        isinstance(release, Mapping) and bool(release)
+    if (
+        source_version
+        or chart_version
+        or app_version
+        or (isinstance(release, Mapping) and bool(release))
     ):
         return "installed"
     if state.startswith("existing-soperator"):
@@ -341,7 +403,9 @@ def _container_image_version(image: Any) -> str:
 def _pod_template_container_image(resource: Mapping[str, Any]) -> str:
     containers = resource.get("containers")
     if not isinstance(containers, Sequence) or isinstance(containers, (str, bytes, bytearray)):
-        containers = _nested_container_sequence(resource, ("spec", "template", "spec", "containers"))
+        containers = _nested_container_sequence(
+            resource, ("spec", "template", "spec", "containers")
+        )
     for container in containers:
         if not isinstance(container, Mapping):
             continue
@@ -384,18 +448,267 @@ def _job_is_complete(resource: Mapping[str, Any]) -> bool:
     for condition in conditions:
         if not isinstance(condition, Mapping):
             continue
-        if _text(condition.get("type")).lower() == "complete" and _text(
-            condition.get("status")
-        ).lower() == "true":
+        if (
+            _text(condition.get("type")).lower() == "complete"
+            and _text(condition.get("status")).lower() == "true"
+        ):
             return True
     return False
 
 
-def _populate_jail_completed_job_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
-    candidates: list[tuple[str, str, str]] = []
+def _job_is_failed(resource: Mapping[str, Any]) -> bool:
+    status = resource.get("status")
+    if not isinstance(status, Mapping):
+        return False
+    failed = status.get("failed")
+    if (isinstance(failed, int) and not isinstance(failed, bool) and failed > 0) or (
+        isinstance(failed, str) and failed.isdigit() and int(failed) > 0
+    ):
+        return True
+    conditions = status.get("conditions")
+    if not isinstance(conditions, Sequence) or isinstance(conditions, (str, bytes, bytearray)):
+        return False
+    return any(
+        isinstance(condition, Mapping)
+        and _text(condition.get("type")).lower() == "failed"
+        and _text(condition.get("status")).lower() == "true"
+        for condition in conditions
+    )
+
+
+def _pvc_claim_name(reference: Any) -> str:
+    if not isinstance(reference, Mapping):
+        return ""
+    persistent_volume_claim = reference.get("persistentVolumeClaim")
+    if not isinstance(persistent_volume_claim, Mapping):
+        return ""
+    return _text(persistent_volume_claim.get("claimName"))
+
+
+def _jail_volume_source_claims(spec: Mapping[str, Any]) -> tuple[dict[str, str], str]:
+    raw_sources = spec.get("volumeSources")
+    if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, (str, bytes, bytearray)):
+        return {}, "SlurmCluster spec.volumeSources is unavailable"
+    claims: dict[str, str] = {}
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, Mapping):
+            continue
+        name = _text(raw_source.get("name"))
+        claim_name = _pvc_claim_name(raw_source)
+        if not name or not claim_name:
+            continue
+        if name in claims and claims[name] != claim_name:
+            return {}, f"SlurmCluster volume source {name!r} resolves to multiple PVCs"
+        claims[name] = claim_name
+    if not claims.get("jail"):
+        return claims, "canonical SlurmCluster volume source 'jail' has no PVC binding"
+    return claims, ""
+
+
+def _jail_consumer_claim_name(
+    jail: Any,
+    *,
+    volume_source_claims: Mapping[str, str],
+) -> str:
+    if not isinstance(jail, Mapping):
+        return ""
+    direct_claim = _pvc_claim_name(jail)
+    if direct_claim:
+        return direct_claim
+    source_name = _text(jail.get("volumeSourceName"))
+    return _text(volume_source_claims.get(source_name)) if source_name else ""
+
+
+def _active_jail_pvc_binding(snapshot: Mapping[str, Any]) -> dict[str, str]:
+    evidence = {
+        "status": "unverified",
+        "reason": "active Jail rootfs binding is unavailable",
+        "slurmcluster_name": "",
+        "namespace": "",
+        "pvc_name": "",
+        "pvc_uid": "",
+        "jail_filesystem_id": "",
+    }
+    identity_snapshot = snapshot
+    identity_resources = snapshot.get("identity_soperator_resources")
+    if isinstance(identity_resources, Sequence) and not isinstance(
+        identity_resources, (str, bytes, bytearray)
+    ):
+        identity_snapshot = {**snapshot, "soperator_resources": identity_resources}
+    slurmclusters = _resource_items(identity_snapshot, "slurmclusters")
+    resume_identity = snapshot.get("resume_slurmcluster_identity")
+    if isinstance(resume_identity, Mapping):
+        selected_key = _text(resume_identity.get("identity_role"))
+        if selected_key not in {"source", "target"}:
+            selected_key = "source"
+        selected_ref = resume_identity.get(selected_key)
+        selected_ref = selected_ref if isinstance(selected_ref, Mapping) else {}
+        expected_namespace = _text(selected_ref.get("namespace")) or "soperator"
+        expected_name = _text(selected_ref.get("name"))
+        expected_uid = _text(selected_ref.get("uid"))
+        slurmclusters = [
+            item
+            for item in slurmclusters
+            if _text(_metadata(item).get("namespace")) in {"", expected_namespace}
+            and _text(_metadata(item).get("name")) == expected_name
+            and _text(_metadata(item).get("uid")) == expected_uid
+        ]
+    if len(slurmclusters) != 1:
+        evidence["reason"] = (
+            "active Jail rootfs evidence requires exactly one live SlurmCluster; "
+            f"observed {len(slurmclusters)}"
+        )
+        return evidence
+    slurmcluster = slurmclusters[0]
+    metadata = slurmcluster.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    evidence["slurmcluster_name"] = _text(metadata.get("name"))
+    namespace = _text(metadata.get("namespace")) or "soperator"
+    evidence["namespace"] = namespace
+    spec = slurmcluster.get("spec")
+    spec = spec if isinstance(spec, Mapping) else {}
+    volume_source_claims, binding_error = _jail_volume_source_claims(spec)
+    active_pvc = _text(volume_source_claims.get("jail"))
+    evidence["pvc_name"] = active_pvc
+    if binding_error:
+        evidence["reason"] = binding_error
+        return evidence
+
+    consumer_claims: list[tuple[str, str]] = []
+    unresolved_consumers: list[str] = []
+    slurm_nodes = spec.get("slurmNodes")
+    if isinstance(slurm_nodes, Mapping):
+        for role_name, raw_role in sorted(slurm_nodes.items(), key=lambda item: str(item[0])):
+            if not isinstance(raw_role, Mapping):
+                continue
+            volumes = raw_role.get("volumes")
+            volumes = volumes if isinstance(volumes, Mapping) else {}
+            if "jail" not in volumes:
+                continue
+            consumer = f"SlurmCluster role {role_name}"
+            claim_name = _jail_consumer_claim_name(
+                volumes.get("jail"),
+                volume_source_claims=volume_source_claims,
+            )
+            if claim_name:
+                consumer_claims.append((consumer, claim_name))
+            else:
+                unresolved_consumers.append(consumer)
+    for nodeset in _resource_items(snapshot, "nodesets"):
+        nodeset_metadata = nodeset.get("metadata")
+        nodeset_metadata = nodeset_metadata if isinstance(nodeset_metadata, Mapping) else {}
+        nodeset_name = _text(nodeset_metadata.get("name")) or "<unnamed>"
+        nodeset_spec = nodeset.get("spec")
+        nodeset_spec = nodeset_spec if isinstance(nodeset_spec, Mapping) else {}
+        slurmd = nodeset_spec.get("slurmd")
+        slurmd = slurmd if isinstance(slurmd, Mapping) else {}
+        volumes = slurmd.get("volumes")
+        volumes = volumes if isinstance(volumes, Mapping) else {}
+        if "jail" not in volumes:
+            continue
+        consumer = f"NodeSet {nodeset_name}"
+        claim_name = _jail_consumer_claim_name(
+            volumes.get("jail"),
+            volume_source_claims=volume_source_claims,
+        )
+        if claim_name:
+            consumer_claims.append((consumer, claim_name))
+        else:
+            unresolved_consumers.append(consumer)
+    if unresolved_consumers:
+        evidence["reason"] = "Jail rootfs consumers have unresolved PVC bindings: " + ", ".join(
+            unresolved_consumers
+        )
+        return evidence
+    if not consumer_claims:
+        evidence["reason"] = "no live SlurmCluster or NodeSet Jail rootfs consumers were found"
+        return evidence
+    drifted_consumers = [
+        f"{consumer}={claim_name}"
+        for consumer, claim_name in consumer_claims
+        if claim_name != active_pvc
+    ]
+    if drifted_consumers:
+        evidence["reason"] = (
+            f"canonical Jail PVC {active_pvc!r} is not used by all live consumers: "
+            + ", ".join(drifted_consumers)
+        )
+        return evidence
+
+    pvc_matches: list[Mapping[str, Any]] = []
+    raw_pvcs = snapshot.get("pvcs")
+    if isinstance(raw_pvcs, Sequence) and not isinstance(raw_pvcs, (str, bytes, bytearray)):
+        for pvc in raw_pvcs:
+            if not isinstance(pvc, Mapping):
+                continue
+            pvc_metadata = pvc.get("metadata")
+            pvc_metadata = pvc_metadata if isinstance(pvc_metadata, Mapping) else {}
+            if (
+                _text(pvc_metadata.get("name")) == active_pvc
+                and (_text(pvc_metadata.get("namespace")) or "default") == namespace
+            ):
+                pvc_matches.append(pvc)
+    if len(pvc_matches) != 1:
+        evidence["reason"] = (
+            f"canonical Jail PVC {namespace}/{active_pvc} resolved to "
+            f"{len(pvc_matches)} live PVC objects"
+        )
+        return evidence
+    pvc = pvc_matches[0]
+    pvc_metadata = pvc.get("metadata")
+    pvc_metadata = pvc_metadata if isinstance(pvc_metadata, Mapping) else {}
+    pvc_status = pvc.get("status")
+    pvc_status = pvc_status if isinstance(pvc_status, Mapping) else {}
+    pvc_uid = _text(pvc_metadata.get("uid"))
+    evidence["pvc_uid"] = pvc_uid
+    if not pvc_uid or _text(pvc_status.get("phase")) != "Bound":
+        evidence["reason"] = (
+            f"canonical Jail PVC {namespace}/{active_pvc} is not Bound with an immutable UID"
+        )
+        return evidence
+    cluster_identity = snapshot.get("cluster_identity")
+    cluster_identity = cluster_identity if isinstance(cluster_identity, Mapping) else {}
+    jail_filesystem_id = _text(cluster_identity.get("jail_filesystem_id"))
+    evidence["jail_filesystem_id"] = jail_filesystem_id
+    if not jail_filesystem_id:
+        evidence["reason"] = "immutable Jail filesystem identity is unavailable"
+        return evidence
+    evidence["status"] = "bound"
+    evidence["reason"] = "canonical alias and all discovered Jail consumers use the same PVC"
+    return evidence
+
+
+def _job_pvc_claim_names(resource: Mapping[str, Any]) -> tuple[str, ...]:
+    sanitized = resource.get("pvc_claim_names")
+    if isinstance(sanitized, Sequence) and not isinstance(sanitized, (str, bytes, bytearray)):
+        return tuple(sorted({_text(item) for item in sanitized if _text(item)}))
+    volumes = _nested_container_sequence(resource, ("spec", "template", "spec", "volumes"))
+    return tuple(sorted({_pvc_claim_name(volume) for volume in volumes if _pvc_claim_name(volume)}))
+
+
+def _populate_jail_active_job_evidence(snapshot: Mapping[str, Any]) -> dict[str, str]:
+    active_binding = _active_jail_pvc_binding(snapshot)
+    evidence = {
+        "status": "unverified",
+        "reason": active_binding["reason"],
+        "job_name": "",
+        "job_uid": "",
+        "slot": "",
+        "image": "",
+        "pvc_name": active_binding["pvc_name"],
+        "pvc_uid": active_binding["pvc_uid"],
+        "jail_filesystem_id": active_binding["jail_filesystem_id"],
+        "slurmcluster_name": active_binding["slurmcluster_name"],
+    }
+    if active_binding["status"] != "bound":
+        return evidence
+
+    candidates: list[tuple[str, str, str, str, str]] = []
+    wrong_pvc_jobs: list[str] = []
     resources = snapshot.get("soperator_namespace_resources")
     if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
-        return "", ""
+        evidence["reason"] = "Soperator namespace Job discovery is unavailable"
+        return evidence
     for resource in resources:
         if not isinstance(resource, Mapping):
             continue
@@ -404,18 +717,56 @@ def _populate_jail_completed_job_image(snapshot: Mapping[str, Any]) -> tuple[str
         name = _object_name(resource)
         if "populate-jail" not in name:
             continue
-        if not _job_is_complete(resource):
+        metadata = resource.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        labels = metadata.get("labels")
+        labels = labels if isinstance(labels, Mapping) else {}
+        if _text(labels.get("slurm.nebius.ai/jail-rootfs-refresh")) != "active-passive":
+            continue
+        slot = _text(labels.get("slurm.nebius.ai/jail-rootfs-slot"))
+        if slot not in {"slot-a", "slot-b"}:
+            continue
+        if not _job_is_complete(resource) or _job_is_failed(resource):
             continue
         image = _pod_template_container_image(resource)
         if not image:
             continue
+        job_uid = _text(metadata.get("uid"))
+        if not job_uid:
+            continue
+        pvc_claim_names = _job_pvc_claim_names(resource)
+        if active_binding["pvc_name"] not in pvc_claim_names:
+            wrong_pvc_jobs.append(name)
+            continue
         completed_at = _nested_text(resource, ("status", "completionTime"))
         created_at = _nested_text(resource, ("metadata", "creationTimestamp"))
-        candidates.append((completed_at or created_at, name, image))
+        candidates.append((completed_at or created_at, name, job_uid, slot, image))
     if not candidates:
-        return "", ""
-    _timestamp, name, image = sorted(candidates, key=lambda item: item[0], reverse=True)[0]
-    return name, image
+        evidence["reason"] = (
+            "completed active/passive populate Jobs do not target the canonical active PVC"
+            if wrong_pvc_jobs
+            else "no completed active/passive populate Job is bound to the canonical active PVC"
+        )
+        return evidence
+    _timestamp, name, job_uid, slot, image = sorted(
+        candidates,
+        key=lambda item: item[0],
+        reverse=True,
+    )[0]
+    evidence.update(
+        {
+            "status": "active-slot-verified",
+            "reason": (
+                "completed populate Job, canonical alias, immutable PVC, and all discovered "
+                "Jail consumers agree on the active slot"
+            ),
+            "job_name": name,
+            "job_uid": job_uid,
+            "slot": slot,
+            "image": image,
+        }
+    )
+    return evidence
 
 
 def _live_populate_jail_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
@@ -460,7 +811,9 @@ def _jail_rootfs_record(
     report: Mapping[str, Any],
     target_versions: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    job_name, job_image = _populate_jail_completed_job_image(snapshot)
+    active_evidence = _populate_jail_active_job_evidence(snapshot)
+    job_name = active_evidence["job_name"]
+    job_image = active_evidence["image"]
     slurmcluster_name, live_desired_image = _live_populate_jail_image(snapshot)
     current_image = job_image or live_desired_image
     current_source = (
@@ -471,11 +824,24 @@ def _jail_rootfs_record(
         else "not-detected"
     )
     target_image, target_source = _target_jail_rootfs_image(target_versions)
+    target_jail_rootfs = (
+        target_versions.get("jail_rootfs")
+        if isinstance(target_versions, Mapping)
+        and isinstance(target_versions.get("jail_rootfs"), Mapping)
+        else {}
+    )
     action_ids = _report_selected_action_ids(report)
     chart_upgrade_selected = "upgrade-soperator" in action_ids
     if current_image and target_image and current_image != target_image:
         refresh_required = True
         reason = "target populate-jail image differs from current jail rootfs image"
+    elif current_source != "completed-populate-jail-job" and target_image:
+        refresh_required = True
+        reason = (
+            "active Jail rootfs evidence is incomplete: "
+            f"{active_evidence['reason']}; the SlurmCluster desired image does not prove "
+            "a completed active-slot population"
+        )
     elif chart_upgrade_selected:
         refresh_required = True
         reason = "Soperator chart upgrade is selected; jail rootfs compatibility is unproven"
@@ -490,6 +856,13 @@ def _jail_rootfs_record(
         "current_version": _container_image_version(current_image),
         "current_source": current_source,
         "current_job_name": job_name,
+        "current_job_uid": active_evidence["job_uid"],
+        "current_slot": active_evidence["slot"],
+        "current_pvc_name": active_evidence["pvc_name"],
+        "current_pvc_uid": active_evidence["pvc_uid"],
+        "current_jail_filesystem_id": active_evidence["jail_filesystem_id"],
+        "current_evidence_status": active_evidence["status"],
+        "current_evidence_reason": active_evidence["reason"],
         "live_desired_image": live_desired_image,
         "live_desired_version": _container_image_version(live_desired_image),
         "live_desired_source": "slurmcluster.spec.populateJail.image" if live_desired_image else "",
@@ -497,6 +870,9 @@ def _jail_rootfs_record(
         "target_image": target_image,
         "target_version": _container_image_version(target_image),
         "target_source": target_source,
+        "target_cuda_version": _text(target_jail_rootfs.get("target_cuda_version")),
+        "target_digest": _text(target_jail_rootfs.get("target_digest")),
+        "target_identity_warning": _text(target_jail_rootfs.get("target_identity_warning")),
         "refresh_required": refresh_required,
         "reason": reason,
     }
@@ -616,6 +992,10 @@ def _identity_section(
         "fingerprint": str(report.get("fingerprint", "") or "").strip(),
         "helm_release": _redact(release),
         "crd_versions": _redact(snapshot.get("crds", [])),
+        "source_slurmcluster_ref": _source_slurmcluster_ref(
+            snapshot,
+            target_ref=target_ref,
+        ),
     }
     jail_rootfs = report.get("jail_rootfs")
     if isinstance(jail_rootfs, Mapping):
@@ -645,9 +1025,12 @@ def _kubernetes_section(snapshot: Mapping[str, Any], *, redaction: str) -> dict[
     return {
         "snapshot": sanitized_snapshot,
         "resource_counts": resource_counts,
-        "nodesets": [_redact(item, redaction=redaction) for item in _resource_items(snapshot, "nodesets")],
+        "nodesets": [
+            _redact(item, redaction=redaction) for item in _resource_items(snapshot, "nodesets")
+        ],
         "slurmclusters": [
-            _redact(item, redaction=redaction) for item in _resource_items(snapshot, "slurmclusters")
+            _redact(item, redaction=redaction)
+            for item in _resource_items(snapshot, "slurmclusters")
         ],
         "activechecks": [
             _redact(item, redaction=redaction) for item in _resource_items(snapshot, "activechecks")
@@ -681,7 +1064,9 @@ def _accounting_section(
 ) -> dict[str, Any]:
     values = chart_values if isinstance(chart_values, Mapping) else {}
     external_db = _nested_bool(values, ("slurmNodes", "accounting", "externalDB", "enabled"))
-    managed_mariadb = _nested_bool(values, ("slurmNodes", "accounting", "mariadbOperator", "enabled"))
+    managed_mariadb = _nested_bool(
+        values, ("slurmNodes", "accounting", "mariadbOperator", "enabled")
+    )
     section: dict[str, Any] = {
         "external_db_enabled": external_db,
         "chart_managed_mariadb": bool(managed_mariadb and not external_db),
@@ -749,7 +1134,9 @@ def _configmap_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     for namespace, resources in namespace_resources.items():
         if not isinstance(resources, Mapping):
             continue
-        for item in resources.get("configmaps", []) if isinstance(resources.get("configmaps"), list) else []:
+        for item in (
+            resources.get("configmaps", []) if isinstance(resources.get("configmaps"), list) else []
+        ):
             if not isinstance(item, Mapping):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
@@ -771,7 +1158,9 @@ def _secret_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     for namespace, resources in namespace_resources.items():
         if not isinstance(resources, Mapping):
             continue
-        for item in resources.get("secrets", []) if isinstance(resources.get("secrets"), list) else []:
+        for item in (
+            resources.get("secrets", []) if isinstance(resources.get("secrets"), list) else []
+        ):
             if not isinstance(item, Mapping):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
@@ -832,7 +1221,9 @@ def _finding_classification(severity: str) -> str:
     return "info"
 
 
-def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], accounting: Mapping[str, Any]) -> dict[str, Any]:
+def _findings_section(
+    report: Mapping[str, Any], *, slurm: Mapping[str, Any], accounting: Mapping[str, Any]
+) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     for item in report.get("findings", []) if isinstance(report.get("findings"), list) else []:
         if not isinstance(item, Mapping):
@@ -856,7 +1247,9 @@ def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], ac
                     "status": "partial-discovery",
                     "severity": severity,
                     "classification": _finding_classification(severity),
-                    "message": str(error.get("message", "") or "Optional discovery collector failed."),
+                    "message": str(
+                        error.get("message", "") or "Optional discovery collector failed."
+                    ),
                     "requires_customer_approval": False,
                     "evidence": _redact(error),
                 }
@@ -871,9 +1264,7 @@ def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], ac
         )
         actions.append(action)
     remediation = [
-        dict(item)
-        for item in report.get("remediation", [])
-        if isinstance(item, Mapping)
+        dict(item) for item in report.get("remediation", []) if isinstance(item, Mapping)
     ]
     return {
         "onboarding_report": copy.deepcopy(dict(report)),
@@ -1042,10 +1433,19 @@ def soperator_discovery_bundle_dir(
     target_ref: str,
     *,
     output_dir: Path | None = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
 ) -> Path:
-    normalized = _normalized_token(target_ref, "mk8s")
     root = output_dir if output_dir is not None else project_dir
-    return root / "generated" / "reports" / SOPERATOR_DISCOVERY_DIR_NAME / normalized
+    identity = artifact_identity or soperator_cluster_artifact_identity(
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    return soperator_cluster_report_dir(root, identity, "discovery")
 
 
 def soperator_discovery_manifest_path(
@@ -1053,12 +1453,23 @@ def soperator_discovery_manifest_path(
     target_ref: str,
     *,
     output_dir: Path | None = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
 ) -> Path:
-    return soperator_discovery_bundle_dir(
-        project_dir,
-        target_ref,
-        output_dir=output_dir,
-    ) / SOPERATOR_DISCOVERY_MANIFEST_NAME
+    return (
+        soperator_discovery_bundle_dir(
+            project_dir,
+            target_ref,
+            output_dir=output_dir,
+            cluster_id=cluster_id,
+            cluster_name=cluster_name,
+            kube_context=kube_context,
+            artifact_identity=artifact_identity,
+        )
+        / SOPERATOR_DISCOVERY_MANIFEST_NAME
+    )
 
 
 def write_soperator_discovery_bundle(
@@ -1071,6 +1482,7 @@ def write_soperator_discovery_bundle(
     command: Sequence[str] | None = None,
     cluster_id: str = "",
     cluster_name: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
     namespace: str = "",
     release_name: str = "",
     kube_context: str = "",
@@ -1083,10 +1495,18 @@ def write_soperator_discovery_bundle(
     redaction: str = "support",
 ) -> Path:
     normalized_target = _normalized_token(target_ref, "mk8s")
+    cluster_identity = artifact_identity or soperator_cluster_artifact_identity_from_snapshot(
+        target_ref=normalized_target,
+        snapshot=snapshot,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+    )
     bundle_dir = soperator_discovery_bundle_dir(
         project_dir,
         normalized_target,
         output_dir=output_dir,
+        artifact_identity=cluster_identity,
     )
     bundle_dir.mkdir(parents=True, exist_ok=True)
     report_payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
@@ -1159,6 +1579,7 @@ def write_soperator_discovery_bundle(
         "schema": SOPERATOR_DISCOVERY_SCHEMA,
         "generated_at": _now_z(),
         "target_ref": normalized_target,
+        **cluster_identity.as_metadata(),
         "source_kind": source_kind,
         "command": [str(item) for item in command or ()],
         "redaction": redaction,
@@ -1224,6 +1645,7 @@ def load_soperator_discovery_bundle(path: Path) -> dict[str, Any]:
             "state",
             "soperator_status",
             "jail_rootfs",
+            "source_slurmcluster_ref",
         ):
             payload[key] = identity.get(key, "")
     payload.update(

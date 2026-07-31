@@ -1,6 +1,6 @@
 interface:
   display_name: "Review PR"
-  short_description: "Review and safely repair any GitHub PR"
-  default_prompt: "Use $review-pr to review a GitHub pull request by number, URL, or current branch against its base branch, route to the smallest relevant sibling skills for the changed surface, fix safe issues only when the PR branch is writable, resolve straightforward conflicts with the base branch when safe, and report whether it is ready to merge."
+  short_description: "Review PR readiness without SDLC head drift"
+  default_prompt: "Use $review-pr to review a GitHub pull request by number, URL, or current branch against its base branch. When it maps to an active Agentic SDLC run, use findings-and-readiness-only mode: require the PR head to equal the clean exact promoted SHA, never change the branch or PR head, and route every required fix through sdlc-classify-failure and sdlc-start before the gates rerun. Otherwise route to the smallest relevant sibling skills, fix safe issues only on writable branches, resolve straightforward conflicts when safe, and report merge readiness."
 policy:
   allow_implicit_invocation: false

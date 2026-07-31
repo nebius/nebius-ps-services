@@ -4,6 +4,76 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Require cxcli's v6 external-upgrade campaign schema in disposable live
+  upgrade evidence; retired v5 evidence is rejected without conversion.
+- Fixed the validation-only GPU worker init guard so jailed `nvidia-smi -L`
+  uses the Jail dynamic loader and libraries while retaining the
+  GPU-requesting init container's live `/dev/nvidia*` devices. The shared
+  rootfs intentionally has no persistent GPU device nodes, so chrooting into
+  it caused every otherwise-valid target worker to crash-loop before `slurmd`.
+- Bound cxcli's protected-login capture dependency to the exact pinned
+  `login_sshd` platform image. The upstream verifier now runs a restricted,
+  read-only command-presence probe against the immutable `linux/amd64` digest
+  and requires `sshd`, `ssh-keyscan`, `ssh-keygen`, and every core utility used
+  by the fail-closed session probe before chart promotion.
+- Made upstream pin promotion and review/image baseline acceptance fail closed
+  without non-expired, target-bound disposable upgrade-campaign evidence. The
+  verifier and manual workflow now validate v4 job/TUI/SSH/Jail/final-singleton
+  proof, the exact locked old-cluster source identity, resolved target commit,
+  and the post-validation full chart/dependency/import tree, as well as GitHub
+  artifact-attested source-run provenance. Dependency archive entries and the
+  Helm lock are canonicalized so build timestamps cannot invalidate otherwise
+  identical campaign evidence. The production lock deliberately
+  leaves the trusted producer unconfigured, while chart validation renders the
+  stable cxcli values contract, rejects controller HA/replica fields, and runs
+  the pinned Helm unit-test suite.
+- Made the chart-owned GPU driver Jail init guard validation-only. cxcli now
+  performs the one atomic passive-rootfs repair, while every GPU worker mounts
+  both the active Jail and host root read-only and verifies the strict cxcli
+  marker, host driver/version/hashes, four NVIDIA linker symlinks, linker
+  cache, and jailed `nvidia-smi` before `slurmd` starts.
+- Hardened upstream Soperator synchronization around a resolved commit and an
+  isolated validate-before-promote checkout. The verifier now fail-closes on
+  unallowlisted or overlapping exact-sync targets, orphaned imported scripts,
+  cxcli values/schema drift, changed runtime-image references, image-index or
+  required-platform digests, missing `linux/amd64` manifests, and unreviewed
+  logic-hash changes. Runtime-image and logic baselines now require separate
+  explicit acceptance flags. It also renders the imported
+  Pyxis caching importer into the Slurm scripts ConfigMap, and scheduled CI no
+  longer accepts review-only baselines without explicit manual authorization.
+- Fixed the active/passive rootfs switch contract so changing only
+  `jailRootfs.activeSlot`/`passiveSlot` moves the canonical `jail` alias,
+  controller and login volume-source references, and every worker NodeSet PVC
+  to the same slot. REST and SConfigController follow that canonical alias;
+  accounting remains outside rootfs convergence because its SlurmDBD and MUNGE
+  containers do not mount the operator-generated Jail volume. Stale per-role
+  or per-NodeSet defaults can no longer split Slurm consumers across slot-a and
+  slot-b during Jail Upgrade.
+- Exposed `slurmNodes.controller.openMetrics` as an explicit chart value and
+  rendered it into the SlurmCluster. This lets an external Jail Upgrade keep
+  `MetricsType` disabled through rootfs switch-over and exact target-slot
+  consumer verification, then restore the configured Slurm 25.11 setting
+  before final pre-release checks.
+- Hardened active/passive jail path rendering. `jailPersistentMounts` mount and
+  local paths reject shell metacharacters and whitespace before reaching the
+  privileged mount DaemonSet, and persistent local paths may not overlap.
+- Fixed first-adoption switch-over so retaining the legacy jail PV/PVC for
+  rollback does not keep the active `jail` volume source pointed at that legacy
+  claim. Once `activeSource=slot`, the alias follows the populated active slot,
+  allowing SConfigController and other alias consumers to complete handoff.
+- Direct Helm first adoption now derives the legacy jail volume source and all
+  controller, login, and worker consumer references from
+  `jailRootfs.adoption.legacyPvcName` while `activeSource=legacy-rootfs`.
+  Adoption enums and persistent-mount shapes are schema/template validated, so
+  typos fail closed instead of silently leaving consumers on a rootfs slot.
+- Fixed first-adoption active/passive jail rendering. While
+  `jailRootfs.adoption.activeSource=legacy-rootfs`, service roles and worker
+  NodeSets remain on the configured legacy jail PVC and chart-generated shared
+  persistent submounts stay detached; they are attached only after cxcli
+  selects a populated rootfs slot. Explicitly selecting the canonical
+  `jail-pvc` keeps its chart-owned PV/PVC rendered, while a different
+  pre-existing legacy claim avoids an unrelated generated duplicate.
+
 ## [soperator-chart-v4.0.2-ps.4] - 2026-07-07
 
 - Added the active/passive jail rootfs storage contract. The chart now renders
@@ -29,6 +99,10 @@ All notable changes to this chart are tracked here.
   `libcuda.so.1` / `libnvidia-ml.so.1` into the shared jail, and fails fast on
   conflicting GPU worker mounts or init-container names while leaving CPU
   NodeSets unchanged.
+- Added the chart-owned read-only `/sys` projection at
+  `/mnt/jail/sys-host` for GPU NodeSets so activated-Jail health checks can
+  validate the host PCI and InfiniBand topology instead of failing on a
+  missing `/sys-host/bus/pci` path.
 - Made the `cxcli-gpu-driver-jail` init guard avoid GPU inventory before the
   GPU-requesting worker container starts. The guard still requires the host
   driver root, `nvidia-smi` binary, and real driver libraries, but GPU

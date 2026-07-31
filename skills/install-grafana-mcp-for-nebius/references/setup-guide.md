@@ -11,15 +11,19 @@ need exact commands, endpoint values, or troubleshooting details.
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/authentication/>
 - Grafana MCP upstream repository, including token-file rotation behavior:
   <https://github.com/grafana/mcp-grafana>
+- Grafana MCP stdio token-file reload limitation:
+  <https://github.com/grafana/mcp-grafana/issues/987>
 - Grafana MCP Codex client:
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/clients/codex/>
+- Codex MCP configuration:
+  <https://learn.chatgpt.com/docs/extend/mcp>
+- Codex `config.toml` reference:
+  <https://learn.chatgpt.com/docs/config-file/config-reference>
 - Grafana MCP tool controls:
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/enable-and-disable-tools/>
-- Grafana MCP Prometheus and Loki guides:
-  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/guides/query-metrics-with-prometheus/>
+- Grafana MCP command-line flags and proxied Tempo tools:
+  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/command-line-flags/>
   and
-  <https://grafana.com/docs/grafana/latest/developer-resources/mcp/guides/query-logs-with-loki/>
-- Grafana MCP proxied tools:
   <https://grafana.com/docs/grafana/latest/developer-resources/mcp/configure/proxied-tools/>
 - Optional external Grafana data source provisioning and custom HTTP headers:
   <https://grafana.com/docs/grafana/latest/administration/provisioning/>
@@ -31,6 +35,10 @@ need exact commands, endpoint values, or troubleshooting details.
   <https://docs.nebius.com/iam/authorization/access-tokens>
   and
   <https://docs.nebius.com/grpc-api/auth>
+- Nebius CLI profiles and IAM identity inspection:
+  <https://docs.nebius.com/cli/reference/profile>,
+  <https://docs.nebius.com/cli/reference/profile/active>, and
+  <https://docs.nebius.com/cli/reference/iam>
 - Optional external Grafana connection to Nebius metrics:
   <https://docs.nebius.com/observability/metrics/grafana>
 - Optional external Grafana connection to Nebius logs:
@@ -52,17 +60,20 @@ Collect these values for the default Nebius-managed Grafana MCP path:
 ```bash
 export MCP_SERVER_NAME="grafana-nebius"
 export GRAFANA_URL="https://grafana.nebius.dev/"
-export GRAFANA_TOKEN_FILE="$HOME/.config/grafana-mcp/token"
-export NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS="36000"
+export NEBIUS_GRAFANA_USER_PROFILE="<human_profile>"
 ```
 
 Use placeholders in docs and examples. Never write real values into a repo.
 
-Ask for `PROJECT_ID` when the user wants project-scoped metric/log/trace query
-help, label filtering, or resource-specific prompts. Do not ask for
-`TENANT_ID` in the default path. A basic Nebius-managed Grafana API login check
-does not need tenant or project values when the local Nebius CLI identity
-already has access.
+When `NEBIUS_GRAFANA_USER_PROFILE` is omitted, the setup helper uses the
+config-owned profile reported by `nebius profile active`. It then requires
+`nebius iam whoami --format json` to expose a human `.user_profile.id`. It does
+not use `nebius profile current`, ambient `NEBIUS_PROFILE`, or an agent
+credential.
+
+Do not ask for `TENANT_ID` or `PROJECT_ID` in the default path. Managed Grafana
+authorization comes from the pinned human user. `$nebius-grafana-query`
+collects explicit tenant, project, and resource scopes for operational queries.
 
 Collect these only for the optional external-Grafana data-source path:
 
@@ -79,7 +90,7 @@ Choose one MCP authentication path before editing config:
 
 | Target Grafana | Token source for MCP | Refresh behavior |
 | --- | --- | --- |
-| Nebius-managed Grafana at `https://grafana.nebius.dev/` | Nebius IAM access token from `nebius iam get-access-token`, written to `GRAFANA_TOKEN_FILE`. The wrapper exposes it as `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` when the installed binary supports token-file auth, otherwise as startup-only `GRAFANA_SERVICE_ACCOUNT_TOKEN`. | Token-file-capable builds refresh before the 12-hour Nebius token lifetime ends. Inline-only released builds require a Codex restart before token expiry. |
+| Nebius-managed Grafana at `https://grafana.nebius.dev/` | Nebius IAM access token minted only through a pinned human profile whose user ID matches a private binding. The wrapper requires a profile-scoped token file and clears ambient agent/Grafana credentials. | Setup pre-mints a startup token. The wrapper reuses it for at most one hour, then renews it before MCP launch; foreground renewal may open browser authentication. After ten hours, noninteractive background renewal refreshes the file, closes stdio, and returns a restart-required failure. Start a new chat or restart Codex to load that background-rotated token. Older binaries without token-file support must be updated. |
 | Generic self-hosted Grafana or Grafana Cloud | Grafana service-account token, preferably stored in `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` when the installed binary supports token-file auth. Use `GRAFANA_SERVICE_ACCOUNT_TOKEN` for released binaries that lack token-file support. | Rotate by creating a new Grafana service-account token; existing token values cannot be read back |
 | External Grafana data source calling Nebius read endpoints | Nebius Observability static key in the data source HTTP header | Static key lifecycle is separate from the MCP token and is not used by MCP |
 
@@ -102,52 +113,81 @@ Treat local setup as an ensure workflow:
 Use the helper in check mode before making changes:
 
 ```bash
-./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh --check
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --check \
+  --user-profile "<human_profile>"
 ```
 
 When the user has explicitly approved local config changes, apply the same
 ensure logic:
 
 ```bash
-./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh --apply
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --apply \
+  --user-profile "<human_profile>"
 ```
 
 The helper is intentionally conservative:
 
 - It does not install `mcp-grafana`; it reports whether the binary is already
   present.
-- It updates only a managed shell-startup block and exact matching legacy
-  `GRAFANA_URL` or `GRAFANA_TOKEN_FILE` exports.
+- It validates the selected profile as a human and creates a mode-`0600`
+  profile/user binding below a profile-scoped mode-`0700` state directory.
+- It derives the token path from the MCP server name and pinned profile; two
+  profiles never share a token file.
 - It adds the Codex MCP server only when `codex mcp get "$MCP_SERVER_NAME"`
   cannot find it.
+- It uses `codex mcp get "$MCP_SERVER_NAME" --json` to compare the exact URL,
+  profile, identity path, token path, args, and command without printing those
+  values. Masked human-readable output is not sufficient. For timeout-only
+  repair, it digest-binds that structured read to the exact config bytes and
+  rechecks the bytes immediately before atomic replacement.
 - It accepts an existing Codex MCP server whose command points at a
   byte-identical wrapper file, for example a repo source checkout instead of
-  the installed `~/.agents` copy.
-- It does not remove or replace an existing Codex MCP server. If an existing
-  server uses the wrong command or environment, inspect it and replace it only
-  after the user confirms.
+  the installed `~/.agents` copy, only when every component from `HOME` is
+  owned, non-symlinked, and not group/world writable.
+- It reports an old shared-token or ambient-profile registration as migration
+  drift. After the exact server name, wrapper, profile, and paths are reviewed,
+  `--apply --replace-existing` removes and re-adds only that named entry. The
+  helper first verifies that the prior entry has a typed simple stdio shape,
+  then re-reads it to reject concurrent changes. Replacement discards the old
+  command, arguments, and environment values instead of replaying them through
+  process arguments. If the canonical add does not verify, inspect the named
+  entry and rerun apply after correcting the add failure; there is no legacy
+  rollback. If structured post-write verification sees drift, the helper
+  leaves that entry intact for inspection rather than deleting potentially
+  concurrent state.
 
-## Shell Defaults
+### Hook-Safe Invocation Boundary
 
-When the user asks to persist local shell defaults, write only non-secret
-values to `~/.zshrc` and keep them in this managed block:
+Invoke `ensure-local-config.sh` directly as its own Bash command. Do not copy
+the helper's internal `env -u` or `unset` operations into the parent command,
+and do not combine those operations with a direct Nebius CLI probe. The
+Nebius-auth `PreToolUse` guard is expected to deny such a parent command before
+it executes. The denial changes no installer state and is a command-shape
+coordination event, not an installer or credential failure.
 
-```bash
-# >>> grafana-mcp-for-nebius >>>
-export GRAFANA_URL="https://grafana.nebius.dev/"
-export GRAFANA_TOKEN_FILE="$HOME/.config/grafana-mcp/token"
-# <<< grafana-mcp-for-nebius <<<
+If profile discovery is needed, run `nebius profile active` separately without
+assigning or unsetting managed authentication variables, then pass the
+resolved profile to the standalone helper. The helper owns cleaning inherited
+auth variables for its audited child CLI calls.
+
+## Private Human Identity State
+
+The managed path does not depend on `.zshrc`. The setup helper writes only a
+private binding and non-secret Codex MCP environment values:
+
+```text
+$HOME/.config/grafana-mcp/nebius/<server>/<profile>/
+  identity  # mode 0600; profile plus expected human user ID
+  token     # mode 0600; renewable access token
 ```
 
-If the block already exists, replace the block instead of appending another
-one. If old standalone exports already exist with the same desired values,
-normalize them into the managed block. If standalone exports exist with
-different values, stop and ask whether the user wants to preserve a custom
-setup or replace it.
-
-Do not put `GRAFANA_SERVICE_ACCOUNT_TOKEN`, Nebius access tokens, or Nebius
-static keys in `.zshrc`. The wrapper maps `GRAFANA_TOKEN_FILE` to the
-authentication environment supported by the installed `mcp-grafana` binary.
+The wrapper requires both files to share the same owned, non-symlinked,
+mode-`0700` leaf directory below `HOME`. It compares the binding with
+`iam whoami` before and after every token mint. If the named profile resolves to
+another human, a service account, or anonymous auth, it fails without replacing
+the binding. Create and select a distinct human profile instead.
 
 ## Install `mcp-grafana`
 
@@ -185,8 +225,10 @@ mcp-grafana --help
 For `https://grafana.nebius.dev/`, prefer the bundled wrapper:
 
 ```bash
-./install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh --print-config
-./install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh --refresh-token-only
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --check \
+  --user-profile "<human_profile>"
+codex mcp get grafana-nebius
 ```
 
 The wrapper:
@@ -194,107 +236,58 @@ The wrapper:
 - requires `nebius` and `mcp-grafana` on `PATH`;
 - refuses any `GRAFANA_URL` other than `https://grafana.nebius.dev/`, because
   the wrapper authenticates with a Nebius IAM token;
-- refreshes `nebius iam get-access-token` into `GRAFANA_TOKEN_FILE`;
-- writes the token file with mode `0600` and does not print the token;
-- prefers `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE="$GRAFANA_TOKEN_FILE"` when the
-  installed `mcp-grafana` binary advertises token-file support;
-- falls back to `GRAFANA_SERVICE_ACCOUNT_TOKEN` for released binaries that only
-  support inline tokens, replacing any inherited inline token with the
-  refreshed Nebius token;
-- refreshes periodically while `mcp-grafana` runs only when token-file support
-  is available; inline fallback users must restart Codex before the Nebius
-  token expires; and
-- starts `mcp-grafana --disable-write` by default.
+- requires `NEBIUS_GRAFANA_USER_PROFILE`,
+  `NEBIUS_GRAFANA_IDENTITY_FILE`, and the profile-scoped
+  `GRAFANA_TOKEN_FILE` registered by the setup helper;
+- clears project selectors, ambient Nebius tokens/profiles/credentials,
+  impersonation state, and competing Grafana credentials for every validation
+  and mint;
+- validates `.user_profile.id` against the binding before and after
+  `nebius iam get-access-token`;
+- serializes refreshes per token path, waits up to 90 seconds in the background
+  or 210 seconds during foreground startup for a live owner, binds lock
+  metadata to both PID and process start time, recovers dead, PID-reused, and
+  old incomplete locks, writes atomically, and fails if ownership or mode
+  `0600` cannot be enforced;
+- requires the installed `mcp-grafana` binary to advertise
+  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, reuses a valid startup token for at
+  most one hour without a network call, renews it before launching MCP when it
+  is missing or older, permits browser authentication only for that foreground
+  renewal's initial identity check, then mints and revalidates noninteractively
+  against the authenticated session, and rejects older inline-only builds;
+- refreshes the token file after 10 hours, retries failures after 60, 300, and
+  900 seconds, then stops stdio after success with a restart-required nonzero
+  result; it also stops MCP with failure if retries exhaust or the worker exits
+  unexpectedly, and never assumes same-chat automatic recovery;
+- terminates refresh timers and removes its exact temporary token and owned
+  lock when MCP exits during a refresh;
+- always enforces `--disable-write --max-loki-log-limit 20`, rejects every
+  noncanonical caller argument, and keeps proxied Tempo tools enabled.
 
-If a non-default Nebius CLI profile is needed:
+Pin a specific human profile through the setup helper:
 
 ```bash
-export NEBIUS_PROFILE="<profile_name>"
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --apply \
+  --user-profile "<human_profile>"
 ```
 
-Because Nebius access tokens are valid for 12 hours, keep the refresh interval
-below that lifetime. The default is 10 hours.
+Do not set `NEBIUS_PROFILE` for this workflow. The wrapper intentionally removes
+it and passes the pinned profile explicitly.
 
-## Query Through Nebius-Managed Grafana
+## Post-Setup Readiness
 
-After Codex is restarted with the `grafana-nebius` MCP server enabled, the
-first runtime step is datasource discovery:
+After Codex is restarted with the `grafana-nebius` MCP server enabled, validate
+setup by listing Grafana datasources:
 
 ```text
-Use grafana-nebius to list Grafana datasources and identify PromQL-compatible
-monitoring, Loki logging, and Tempo tracing datasources available for my
-Nebius project.
+Use the grafana-nebius MCP server to list Grafana datasources.
 ```
 
-Nebius-managed Grafana may expose monitoring as a Prometheus datasource or as a
-PromQL-compatible datasource such as `victoriametrics-datasource`. Use the UID
-returned by datasource discovery instead of assuming a fixed datasource name.
-
-For project-scoped metric exploration, discover labels before running a metric
-query:
-
-```text
-Use grafana-nebius to list label names for the discovered monitoring datasource
-UID <monitoring_datasource_uid> over the last 30 minutes. Identify labels that
-look like project, resource, cluster, instance, namespace, or node identifiers.
-Do not return raw series data.
-```
-
-Then discover bounded values for the project and resource labels:
-
-```text
-Use grafana-nebius to list up to 20 values for label <project_label> in
-datasource <monitoring_datasource_uid> over the last 30 minutes, filtered only
-as needed to find project <project_ID>.
-```
-
-```text
-Use grafana-nebius to list up to 20 values for label <resource_label> in
-datasource <monitoring_datasource_uid> over the last 30 minutes, filtered by
-<project_label>="<project_ID>" and, if known, a narrow resource name or
-resource type.
-```
-
-After labels and metric names are known, run a short, resource-filtered query:
-
-```text
-Use grafana-nebius to run an instant PromQL query in datasource
-<monitoring_datasource_uid> for metric <metric_name>, filtered by
-<project_label>="<project_ID>" and <resource_label>="<resource_ID>". Limit the
-result to the matching resource and summarize only the latest value.
-```
-
-For a short range query, keep the window and step bounded:
-
-```text
-Use grafana-nebius to run a PromQL range query in datasource
-<monitoring_datasource_uid> over the last 15 minutes with a 60 second step:
-<metric_name>{<project_label>="<project_ID>", <resource_label>="<resource_ID>"}.
-Return a compact summary, not every sample.
-```
-
-For logs, query only through a discovered Loki datasource and start with label
-discovery:
-
-```text
-Use grafana-nebius to list Loki label names in datasource <loki_datasource_uid>
-over the last 30 minutes. Identify the project/workspace/bucket and resource
-labels needed for project <project_ID>.
-```
-
-Then run bounded LogQL, such as a count or a very small log limit:
-
-```text
-Use grafana-nebius to run a LogQL count_over_time query in datasource
-<loki_datasource_uid> over the last 15 minutes, filtered by the discovered
-project/workspace label for <project_ID> and the resource label for
-<resource_ID>. Do not return raw log lines unless I ask for them.
-```
-
-Grafana MCP has documented Prometheus and Loki query tools. For traces, first
-list available MCP tools and inspect the discovered Tempo datasource. Do not
-promise direct TraceQL or `tempo_*` tools unless the configured server actually
-exposes them.
+Successful datasource listing completes the installer readiness check. Routine
+datasource exploration, PromQL, LogQL, dashboard panel-query inspection, and
+trace-tool availability belong to `$nebius-grafana-query`. Do not keep a
+second operational query cookbook in this setup guide.
 
 ## External Grafana Only: Nebius Service Account Flow
 
@@ -472,48 +465,25 @@ the repo.
 docs support both `GRAFANA_SERVICE_ACCOUNT_TOKEN` and
 `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, and prefer the file form because the
 server can read the file fresh on every request and pick up rotations without
-restart. The latest released/Homebrew `mcp-grafana` may lag those docs; when an
-installed binary does not advertise token-file support, use inline
-`GRAFANA_SERVICE_ACCOUNT_TOKEN` and restart Codex before the 12-hour Nebius
-token expires.
+restart. The Nebius-managed path capability-checks the binary and rejects an
+older build without token-file support. Upstream issue
+[`#987`](https://github.com/grafana/mcp-grafana/issues/987) records that stdio
+builds through `v0.17.2` construct the Grafana client once at startup despite
+that general documentation. The wrapper therefore closes stdio after a
+scheduled refresh and reports that a new chat or Codex restart is required;
+the next process then reads the new token. Generic Grafana may still use its
+separate service-account inline-token configuration.
 
 ### Nebius-Managed Grafana
 
-For `https://grafana.nebius.dev/`, use the wrapper to put a refreshed Nebius
-IAM access token in `GRAFANA_TOKEN_FILE`. Do not try to recover an existing
-Grafana service-account token value. Nebius access tokens are renewable through
-the local Nebius CLI and expire after 12 hours. Run `--print-config` to see
-whether the local binary will use token-file mode or inline-env fallback.
+For `https://grafana.nebius.dev/`, use the wrapper and private binding created
+by the setup helper. Do not call `nebius iam get-access-token` through ambient
+auth or register a raw token directly. Nebius access tokens expire after
+12 hours; `--print-config` reports whether the installed MCP build will use
+rotating token-file mode or is unsupported, without printing credentials.
 
-Read-only API probe shape:
-
-```bash
-python3 - <<'PY'
-import subprocess
-import urllib.request
-
-token = subprocess.check_output(
-    ["nebius", "iam", "get-access-token"], text=True
-).strip()
-request = urllib.request.Request(
-    "https://grafana.nebius.dev/api/health",
-    headers={"Authorization": f"Bearer {token}"},
-)
-with urllib.request.urlopen(request, timeout=20) as response:
-    print(response.status)
-PY
-```
-
-Never print the token. Use a throwaway token file for wrapper tests when you do
-not want to touch the default user token file:
-
-```bash
-tmp_token_file="$(mktemp)"
-GRAFANA_TOKEN_FILE="$tmp_token_file" \
-  ./install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh \
-  --refresh-token-only
-rm -f "$tmp_token_file"
-```
+Use `scripts/test-run-nebius-grafana-mcp.sh` for local wrapper validation. It
+uses fake commands and private temporary state rather than a live user token.
 
 ### Generic or External Grafana
 
@@ -546,37 +516,54 @@ server command. First inspect existing state:
 
 ```bash
 export MCP_SERVER_NAME="grafana-nebius"
-codex mcp get "$MCP_SERVER_NAME"
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --check \
+  --user-profile "<human_profile>"
 ```
 
-If the server exists and points to the desired wrapper command, leave it in
-place. A byte-identical wrapper is accepted only from the installed skill roots
-or from the same skill-relative path inside a Git source checkout under the
-current user's home directory, and only when the file and nearby parent
-directories are not group- or world-writable. If it exists but points to a
-different command, an untrusted byte-identical copy, a different URL, or a
-token source, do not add a second server with the same purpose. Ask before
-replacing it:
+If the server exists and uses the desired wrapper, pinned profile, binding,
+token path, URL, and exact read-only arguments, leave it in place. A
+byte-identical wrapper is accepted only from installed skill roots or the same
+skill-relative path in a trusted Git checkout below the current user's home.
+If an older entry lacks the profile/binding or uses another command, inspect the
+reported migration and replace only after explicit approval:
 
 ```bash
-codex mcp remove "$MCP_SERVER_NAME"
+./install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
+  --apply \
+  --replace-existing \
+  --user-profile "<human_profile>"
 ```
 
-Then re-add it with the desired wrapper command.
-
-If the server is missing, resolve the script path from the installed skill
-folder and add it:
+If the server is missing, use the helper. For inspection only, the registration
+fields it gives to `codex mcp add` are equivalent to:
 
 ```bash
 export GRAFANA_URL="https://grafana.nebius.dev/"
-export GRAFANA_TOKEN_FILE="$HOME/.config/grafana-mcp/token"
+export NEBIUS_GRAFANA_USER_PROFILE="<human_profile>"
+export NEBIUS_GRAFANA_IDENTITY_FILE="$HOME/.config/grafana-mcp/nebius/grafana-nebius/<human_profile>/identity"
+export GRAFANA_TOKEN_FILE="$HOME/.config/grafana-mcp/nebius/grafana-nebius/<human_profile>/token"
 export WRAPPER_PATH="<path_to_skill>/scripts/run-nebius-grafana-mcp.sh"
 
 codex mcp add "$MCP_SERVER_NAME" \
   --env GRAFANA_URL="$GRAFANA_URL" \
   --env GRAFANA_TOKEN_FILE="$GRAFANA_TOKEN_FILE" \
-  -- "$WRAPPER_PATH" --disable-write
+  --env NEBIUS_GRAFANA_IDENTITY_FILE="$NEBIUS_GRAFANA_IDENTITY_FILE" \
+  --env NEBIUS_GRAFANA_USER_PROFILE="$NEBIUS_GRAFANA_USER_PROFILE" \
+  -- "$WRAPPER_PATH" --disable-write --max-loki-log-limit 20
 ```
+
+Do not use that standalone command as the complete setup: it cannot persist the
+required startup timeout. The setup helper uses `codex mcp add` for registration
+fields and then verifies every structured field through
+`codex mcp get --json`. Codex does not expose a pre-start command or a
+`codex mcp add` startup-timeout option. The registered wrapper is therefore the
+prelaunch renewal boundary, and the helper atomically sets only
+`startup_timeout_sec = 300.0` in the exact simple server table. It preserves
+unrelated `config.toml` content, digest-binds its structured check to the
+inspected bytes, rechecks those bytes immediately before replacement, and
+refuses symlinks, wrong ownership, duplicate tables/settings, or an observed
+concurrent file change.
 
 Generic Grafana read-only registration for token-file-capable builds:
 
@@ -603,34 +590,25 @@ Manual TOML shape:
 ```toml
 [mcp_servers.grafana-nebius]
 command = "<path_to_skill>/scripts/run-nebius-grafana-mcp.sh"
-args = ["--disable-write"]
-env = { GRAFANA_URL = "https://grafana.nebius.dev/", GRAFANA_TOKEN_FILE = "/path/to/token" }
-startup_timeout_ms = 20000
-tool_timeout_ms = 120000
+args = ["--disable-write", "--max-loki-log-limit", "20"]
+startup_timeout_sec = 300.0
+env = { GRAFANA_URL = "https://grafana.nebius.dev/", GRAFANA_TOKEN_FILE = "/private/profile/token", NEBIUS_GRAFANA_IDENTITY_FILE = "/private/profile/identity", NEBIUS_GRAFANA_USER_PROFILE = "<human_profile>" }
 ```
 
 Codex uses `mcp_servers` with an underscore. Restart Codex after changing the
 config.
 
-## Validation Prompts
+## Validation Prompt
 
-After local checks pass and Codex is restarted, ask for safe read-only checks:
+After local checks pass and Codex is restarted, ask for one safe readiness
+check:
 
 ```text
 Use the grafana-nebius MCP server to list Grafana data sources.
 ```
 
-```text
-Use the Grafana MCP server to run a small PromQL query against a discovered Nebius monitoring datasource.
-```
-
-```text
-Use the Grafana MCP server to run a small LogQL query against a discovered Nebius Loki datasource.
-```
-
-For traces, first list available MCP tools. Do not promise `tempo_*` tools
-unless they appear. Grafana MCP loads Tempo-specific tools only when proxied
-Tempo MCP support is available through the configured Tempo data source.
+After readiness succeeds, use `$nebius-grafana-query` for operational
+observability questions.
 
 ## Common Failure Modes
 
@@ -639,19 +617,28 @@ Tempo MCP support is available through the configured Tempo data source.
   with Codex; run `codex mcp add` or add `[mcp_servers.<name>]` manually.
 - Codex config ignored: verify `~/.codex/config.toml` TOML syntax and the
   `mcp_servers` key.
-- Nebius-managed Grafana auth failure: refresh the local Nebius CLI login,
-  rerun the wrapper, and verify `GRAFANA_TOKEN_FILE` is readable by the Codex
-  process.
+- `connection closed: initialize response` with an old or missing startup
+  token: ensure the server table has `startup_timeout_sec = 300.0`, restart
+  Codex, and complete the pinned profile's browser login if it opens. The
+  wrapper captures `nebius iam get-access-token --profile <human_profile>` into
+  the private token file before starting `mcp-grafana`; never put command
+  substitution or a token value in TOML.
+- Nebius-managed Grafana auth failure: rerun the helper in check mode, verify
+  the pinned profile is still a human user, and confirm the binding and token
+  paths remain private. Never fall back to an agent token.
+- Identity binding mismatch: create or reauthenticate a distinct human profile;
+  do not overwrite the existing binding to accept a changed principal.
+- Old shared-token registration: review and run
+  `--apply --replace-existing --user-profile <human_profile>`, then restart
+  Codex.
 - Generic Grafana auth failure: verify `GRAFANA_URL` is the Grafana base URL
   and the token file contains a Grafana service-account token, not a Nebius
   static key.
-- Missing Nebius project data: verify the local Nebius identity has access to
-  the project and that the target Grafana datasource actually contains the
-  requested project's data.
 - External Grafana data source auth failure: validate the Nebius service
   account group membership, static-key service `OBSERVABILITY`, and whether the
   data source expects `Bearer <static_token>` or the raw static key.
-- Prometheus/Loki tools missing: verify those categories were not disabled.
-- Write tools exposed unexpectedly: add `--disable-write` and restart Codex.
-- Trace tools missing: treat as expected until the Tempo datasource exposes
-  proxied Tempo MCP tools.
+- Write tools exposed unexpectedly: repair the wrapper/registration. The
+  canonical wrapper rejects attempts to disable read-only enforcement.
+- Missing project data, Prometheus/Loki query tools, or trace tools: hand the
+  operational diagnosis to `$nebius-grafana-query`; keep setup repair here only
+  when the server configuration or authentication is the cause.

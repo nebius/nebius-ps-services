@@ -200,6 +200,7 @@ def test_probe_active_passive_jail_capacity_mounts_shared_legacy_pvc_once() -> N
     pod_spec = applied["items"][0]["spec"]["template"]["spec"]
     container = pod_spec["containers"][0]
     probe_script = container["command"][2]
+    assert "priorityClassName" not in pod_spec
     assert pod_spec["volumes"] == [
         {
             "name": "active-rootfs",

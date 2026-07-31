@@ -5,8 +5,8 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Verify that SDLC specs, plans, implementation, documentation, tests, and
-evidence tell one consistent story.
+Verify that SDLC specs, plans, implementation, documentation, tests,
+end-to-end slice evidence, and other evidence tell one consistent story.
 
 ## Main Boundaries
 
@@ -25,4 +25,5 @@ evidence tell one consistent story.
 
 - Alignment report exists.
 - Each drift item has an owner skill or blocker.
+- Vertical flow, layer map, locked slice, and evidence agree when applicable.
 - No unresolved inconsistency remains before commit or PR readiness is claimed.

@@ -679,23 +679,22 @@ components:
                     placement_name: system
                     workload: system
                     node_count: 3
-                    node_count_input: soperator.system_node_count
-                    autoscaling_input: soperator.system_autoscaling
-                    autoscaling:
-                      min_node_count: 3
-                      max_node_count: 5
-                    gpu: false
-                    jail: true
-                  controller:
-                    placement_name: controller
-                    workload: controller
-                    node_count: 2
-                    node_count_input: soperator.controller_node_count
-                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
                       - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: system
+                  controller:
+                    placement_name: controller
+                    workload: controller
+                    node_count: 2
+                    gpu: false
+                    jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: controller
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller
@@ -1212,23 +1211,22 @@ components:
                     placement_name: system
                     workload: system
                     node_count: 3
-                    node_count_input: soperator.system_node_count
-                    autoscaling_input: soperator.system_autoscaling
-                    autoscaling:
-                      min_node_count: 3
-                      max_node_count: 5
-                    gpu: false
-                    jail: true
-                  controller:
-                    placement_name: controller
-                    workload: controller
-                    node_count: 2
-                    node_count_input: soperator.controller_node_count
-                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
                       - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: system
+                  controller:
+                    placement_name: controller
+                    workload: controller
+                    node_count: 2
+                    gpu: false
+                    jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: controller
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller
@@ -1878,23 +1876,22 @@ components:
                     placement_name: system
                     workload: system
                     node_count: 3
-                    node_count_input: soperator.system_node_count
-                    autoscaling_input: soperator.system_autoscaling
-                    autoscaling:
-                      min_node_count: 3
-                      max_node_count: 5
-                    gpu: false
-                    jail: true
-                  controller:
-                    placement_name: controller
-                    workload: controller
-                    node_count: 2
-                    node_count_input: soperator.controller_node_count
-                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
                       - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: system
+                  controller:
+                    placement_name: controller
+                    workload: controller
+                    node_count: 2
+                    gpu: false
+                    jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
+                    node_labels:
+                      nebius.ai/soperator-bridge-domain: controller
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller

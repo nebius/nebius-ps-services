@@ -10,6 +10,18 @@ description: Create, refactor, or review Bash shell scripts with strict mode, sa
 Write scripts that are safe by default, easy to read, and predictable across repeated runs.
 For new scripts, start from `assets/script-template.sh`.
 
+## Invocation Scope
+
+- `standalone`: create, refactor, or review the selected target script.
+- `coordinated-candidate`: receive exact `.sh` paths, runtime assumptions,
+  exclusions, and private bundle from `scaffold-project`; emit exact candidates
+  only in that bundle and never write the target.
+
+In coordinated-candidate scope, do not create a root Makefile, CI workflow,
+application source, infrastructure, container, deployment, or agent
+instruction file. Return candidate path, executable mode, provenance, and
+shell validation requirements.
+
 ## Workflow
 
 1. Confirm scope and runtime assumptions (bash version, OS expectations, required tools).
@@ -53,20 +65,12 @@ Keep usage output readable:
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Resources
 

@@ -4,6 +4,9 @@ Use this reference when applying `config-codex` to a real machine. Public repo
 files must stay generic; rendered local files belong under that user's
 `$CODEX_HOME`.
 
+Read `config-recovery.md` before creating a missing `config.toml` or refreshing
+the public recovery baseline from a reviewed local setup.
+
 ## Inputs
 
 Collect these values first:
@@ -38,6 +41,10 @@ template/install-copy audits, and use `--require-template-mcp-servers` only
 when the user explicitly wants the public MCP baseline audited against
 `assets/config.toml.template`. These audit flags must not be used as
 justification to replace existing laptop `AGENTS.md` or `config.toml` files.
+
+Use `--require-task-implementer-workspace` only after the user explicitly
+opts in to private prompt-workspace access. The default preflight must remain
+independent of that optional directory.
 
 When local policy blocks an otherwise safe patch, do not work around the
 guard. Report the blocked file, the smallest intended edit, and the manual
@@ -75,6 +82,61 @@ mkdir -p "$CODEX_HOME/hooks" "$CODEX_HOME/agents" "$CODEX_HOME/task-state"
 chmod 700 "$CODEX_HOME/task-state"
 ```
 
+## Optional Task Implementer Prompt Workspace
+
+This integration is opt-in. When requested, create the private storage root
+outside every Git worktree and Git metadata directory, and restrict it before
+any prompt is stored:
+
+```bash
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+
+if [ -L "$CODEX_HOME/task-implementer" ]; then
+  echo "Refusing symlinked task-implementer storage" >&2
+  exit 1
+fi
+
+mkdir -p "$CODEX_HOME/task-implementer"
+chmod 700 "$CODEX_HOME/task-implementer"
+```
+
+Do not accept a symlink at that path. Do not print prompt bodies while
+inspecting or validating it.
+
+If the existing `sandbox_mode` is `workspace-write`, append the rendered
+absolute path to the existing root list without deleting or reordering other
+entries:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["<existing-root>", "{{CODEX_HOME}}/task-implementer"]
+```
+
+Replace `{{CODEX_HOME}}` only in the user's local file. Do not add this root
+when the user did not request the integration. When the current sandbox is
+`danger-full-access`, no writable-root patch is needed. When the current
+sandbox is stricter, the config patch is blocked, or a one-session grant is
+preferred, leave `sandbox_mode` and `approval_policy` unchanged and report
+this exact generic invocation:
+
+```bash
+codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
+```
+
+Validate the opt-in contract without exposing the resolved home path:
+
+```bash
+python3 config-codex/scripts/check-local-idempotency.py \
+  --codex-home "$CODEX_HOME" \
+  --require-task-implementer-workspace
+```
+
+The validator checks that the directory is real, is not a symlink, is outside
+every Git worktree and Git metadata directory, and has mode `0700`. Under `workspace-write`, it also
+requires the canonical directory in
+`sandbox_workspace_write.writable_roots`. The validator never modifies local
+files or policy.
+
 ## Create Or Patch From Templates
 
 Use the files in `assets/` as source templates. The arrows below describe the
@@ -85,6 +147,8 @@ replace-if-unmodified rules after the list.
 assets/AGENTS.md.template              -> $CODEX_HOME/AGENTS.md
 assets/config.toml.template            -> $CODEX_HOME/config.toml
 assets/hooks.json.template             -> $CODEX_HOME/hooks.json
+assets/hooks/global_context_state.py.template
+  -> $CODEX_HOME/hooks/global_context_state.py
 assets/hooks/session_start_context.py.template
   -> $CODEX_HOME/hooks/session_start_context.py
 assets/hooks/user_prompt_context.py.template
@@ -113,7 +177,6 @@ replace-if-unmodified behavior:
 Replace placeholders:
 
 - `{{CODEX_HOME}}` with the user's Codex home.
-- `{{SKILLS_HOME}}` with the user's installed skills directory.
 - `{{PROJECT_ROOT}}` with the user's trusted project root.
 
 The `hooks.json` template intentionally uses
@@ -135,6 +198,10 @@ file installation copies missing files, leaves matching files unchanged, and
 records hook file provenance hashes. It backs up differing existing hook files,
 then refreshes them from the selected source. It still does not trust hooks or
 patch `config.toml`. Add
+`--refresh-hook-registrations` when differing registrations for the same
+event/script and handlers, allowing only `statusMessage` metadata to differ,
+should be replaced while unrelated entries remain.
+Add
 `--replace-hooks-json` only when the operator intentionally wants to back up
 and replace `hooks.json` with a clean file built from the selected source
 manifests. Hook install modes are idempotent and report extra installed hook
@@ -148,6 +215,38 @@ small managed section for `config-codex`/`global-context-management` guidance
 and leave unrelated user rules untouched. Marker presence alone is not enough:
 empty or stale managed blocks must be updated in place.
 
+The managed section must include the global remediation default: after one
+failed repair against the same blocker, use `troubleshoot`, cap the blocker
+tranche at five remediation attempts or 120 active minutes, and allow a current
+instruction to lower but never raise or disable the attempt maximum. Require
+newly acquired evidence and a genuinely new evidence-derived hypothesis before
+every retry. Report failures 1 through 4 as progress; at exhaustion make only
+the exact private state update before stopping all other tools and returning the
+complete report. If the evidence or hypothesis gate cannot be satisfied
+earlier, stop and return the structured investigation report. Another bounded
+tranche requires a new explicit user instruction for the same blocker. A
+causally independent blocker starts its own fresh budget at attempt 1. Use the
+five-attempt maximum and default 120-minute limit unless the current instruction
+sets a lower attempt limit or another time limit for the new blocker. Do not
+carry attempts, active time, tranche, exhaustion status, or stop trigger from
+the earlier blocker. Permission denials and marker validation or repair consume
+no attempt. Preserve the active
+`codex-remediation-budget:v1` marker while rewriting private task state.
+
+The managed section must also permit agents to clean up temporary trees they
+created during the current task. Require the exact task-specific path to be
+resolved and validated under the system temporary directory first, use scoped
+non-forced deletion such as `find "$task_temp_dir" -depth -delete`, and never
+target the temporary root or an unresolved variable.
+
+The managed section must include the nested-project instruction contract from
+`assets/AGENTS.md.template`: resolve the selected project, read every
+applicable instruction file from repository root through that project, retain
+root and ancestor rules, never weaken higher-level security or destructive
+operation safeguards, stop on irreconcilable conflicts, explicitly read a
+newly generated `AGENTS.md` in the current session, and treat
+`AGENTS.override.md` as active without creating one automatically.
+
 Recommended managed block markers:
 
 ```markdown
@@ -156,9 +255,24 @@ Recommended managed block markers:
 <!-- END config-codex managed context -->
 ```
 
-If `$CODEX_HOME/config.toml` is missing, create it from
-`assets/config.toml.template` after replacing placeholders. If it exists, do not
-replace it. Parse it first, then add only missing settings required by the
+If `$CODEX_HOME/config.toml` is missing, create it through the public-safe
+no-clobber renderer:
+
+```bash
+python3 config-codex/scripts/create-recovery-config.py \
+  --codex-home "$CODEX_HOME" \
+  --project-root <PROJECT_ROOT>
+```
+
+The renderer uses `assets/config.toml.template`, rejects a symlink or
+concurrent target, validates the rendered TOML, and creates the file with mode
+`0600`. Do not create a backup for a file that did not exist. Run the required
+read-only `codex exec` runtime probe with `--strict-config` after rendering.
+If the target appears before the exclusive write, stop and follow the
+existing-file patch-only contract. If it exists from the start, do not replace
+it. A post-publication durability or cleanup warning means the complete file
+already exists; do not retry creation, and run the read-only preflight. Parse
+an existing file first, then add only missing settings required by the
 requested setup:
 
 - `[features]` entries such as `hooks` and `multi_agent`.
@@ -177,12 +291,24 @@ Do not add template-only model defaults, app/plugin settings, MCP servers,
 project entries, skill entries, or writable roots to an existing config merely
 because they appear in `assets/config.toml.template`.
 
+The private task-implementer root is the exception only after explicit opt-in;
+follow the dedicated contract above and preserve the existing policy.
+
 For a missing config, the public-safe MCP baseline in the template restores the
-reusable MCP servers that can be expressed without private values. Existing
-configs may also contain plugin-managed or machine-specific MCP servers with
-absolute commands or private environment values. Preserve those entries during
+reusable MCP servers that can be expressed without private values. Executable
+package and container references are pinned to reviewed upstream releases;
+never replace them with `@latest` or an untagged image. Existing configs may
+also contain plugin-managed or machine-specific MCP servers with absolute
+commands or private environment values. Preserve those entries during
 patching, but restore them through their owning plugin or setup skill rather
 than copying local values into public templates.
+
+The recovery baseline also omits personal project lists, secret-bearing shell
+values, notification commands, desktop preferences, plugin and marketplace
+state, generated notice/TUI state, inline hook state already owned by
+`hooks.json`, and undocumented keys. Re-approve project roots and restore each
+private layer through its owning local workflow. Do not claim byte-for-byte
+recovery from the public template.
 
 ## Optional Hook-Assisted Subagent Policy
 
@@ -298,6 +424,11 @@ print("config.toml is valid TOML")
 PY
 ```
 
+After creating a missing config from the recovery baseline, put
+`--strict-config` on the read-only runtime probe below. Keep
+`codex features list` as the separate feature-status check; the `features`
+subcommand rejects the runtime strict-config flag in the installed CLI.
+
 Parse hooks JSON:
 
 ```bash
@@ -369,7 +500,7 @@ expected scripts under `$CODEX_HOME/hooks/`.
 After trusting hooks, run a non-mutating probe:
 
 ```bash
-codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+codex --strict-config exec --sandbox read-only --cd <PROJECT_ROOT> \
   "Summarize active instruction sources, available skills/custom agents, and the injected durable task-state path. Do not edit files."
 ```
 
@@ -393,15 +524,16 @@ Expected evidence:
   task-state contents.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
+- Normal startup remains lazy. Compaction and the first complex prompt create
+  only an empty `0600` scaffold below private `0700` directories; the parent
+  writes and updates all semantic content.
 - Sandbox configuration and any installed PreToolUse write guard allow
-  `$CODEX_HOME/task-state` so the parent agent can create and update the
+  `$CODEX_HOME/task-state` so the parent agent can update the
   advertised `current.md`, while broader runtime paths such as
   `$CODEX_HOME/hooks` remain protected unless deliberately synced.
 
-Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values should not create task-state files or directories. They
-validate hook path calculation and prompt-time hints, not active persistent
-model state. Prefer
+Do not run complex synthetic hook probes against a live `$CODEX_HOME`: the
+first complex prompt intentionally creates an empty private scaffold. Prefer
 `global-context-management/scripts/validate-local-templates.py` for hook-unit
 validation because it uses disposable temporary homes. If a hook payload has no
 `session_id`, task state is unavailable and no manual or legacy fallback path is
@@ -413,7 +545,7 @@ historical task-state contents are not injected into hook context.
 Then run an explicit subagent probe:
 
 ```bash
-codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+codex --strict-config exec --sandbox read-only --cd <PROJECT_ROOT> \
   "Use $global-context-management. Explicitly spawn one read-only repo_mapper subagent to inspect this repository. Do not edit files. Wait for it, close it after the result when close controls are available, then report whether the subagent was spawned and closed."
 ```
 

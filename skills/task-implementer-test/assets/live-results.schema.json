@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/task-implementer-test/live-results.schema.json",
+  "title": "Task Implementer Test Live Results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generation_id",
+    "status",
+    "project_head",
+    "orchestration",
+    "application",
+    "artifacts"
+  ],
+  "properties": {
+    "schema": {"const": "task-implementer-test/live-results-v1"},
+    "generation_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "status": {"enum": ["PASS", "PARTIAL", "FAIL"]},
+    "project_head": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "orchestration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependency_waves", "worker_isolation", "reviewed_commits", "ordered_integration", "ff_only_promotion", "final_alignment", "already_complete"],
+      "properties": {
+        "dependency_waves": {"type": "boolean"},
+        "worker_isolation": {"type": "boolean"},
+        "reviewed_commits": {"type": "boolean"},
+        "ordered_integration": {"type": "boolean"},
+        "ff_only_promotion": {"type": "boolean"},
+        "final_alignment": {"type": "boolean"},
+        "already_complete": {"type": "boolean"}
+      }
+    },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frontend", "api_crud", "database_correlation", "restart_persistence", "loopback_only", "database_private"],
+      "properties": {
+        "frontend": {"type": "boolean"},
+        "api_crud": {"type": "boolean"},
+        "database_correlation": {"type": "boolean"},
+        "restart_persistence": {"type": "boolean"},
+        "loopback_only": {"type": "boolean"},
+        "database_private": {"type": "boolean"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application"],
+      "properties": {
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {"const": "evidence/application.json"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      }
+    }
+  }
+}

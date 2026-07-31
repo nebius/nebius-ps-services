@@ -1,22 +1,29 @@
 # Current Codex task state
 
-## Workspace
+## Working scope
 
 ## Objective
 
 ## Constraints
 
-## Current plan
+## Plan
 
-## Decisions made
+## Decisions
 
-## Relevant files and symbols
+## Changed files
 
-## Commands run
-
-## Test status
+## Validation
 
 ## Risks
+
+## Active remediation budget
+
+When troubleshooting has initialized `codex-remediation-budget:v1`, preserve
+its single bounded marker here exactly. Omit this section when no remediation
+budget is active. Do not place raw errors, logs, secrets, private endpoints, or
+customer data in the marker. If `troubleshoot` establishes a causally
+independent blocker, replace the marker with that blocker's fresh attempt-1
+budget and retain only a concise earlier outcome in prose.
 
 ## Next action
 
@@ -26,4 +33,4 @@ Keep this file as a compact rolling summary, not an append-only transcript.
 Replace stale or superseded details with the latest validated state. Do not
 include raw logs, broad command output, full prompts, secrets, customer data,
 private URLs, or copied documentation. If this file grows too large to scan
-quickly, summarize it before continuing.
+quickly or approaches 12 KiB, summarize it before continuing.

@@ -21,6 +21,8 @@ validation, or validation evidence aligned.
 - Verifies vendor-specific claims against official documentation when needed.
 - Adds guardrails for destructive actions, secrets, live systems, and external
   services.
+- Runs mandatory `code-review` and `apply-security` lanes for every target
+  skill before reporting the target as aligned.
 - Applies an optional stateful-workflow profile for coordinator or
   state-machine skills that manage local state, locked plans, evidence,
   retries, or failure routing.
@@ -55,15 +57,20 @@ align-skill checks structure, safety, docs, and validation
 6. For stateful workflow skills, use
    `assets/stateful-workflow-skill-template.md` and validate with
    `scripts/validate-skill-structure.py --profile stateful-workflow`.
-7. Update local skill source materials with evidence-backed reusable learnings
-   discovered during execution.
-8. Run `scripts/validate-skill-structure.py` when available.
-9. Report validation, learning-loop coverage, source-material updates, skipped
-   live checks, and remaining uncertainty.
+7. Run `code-review` in review-only mode and `apply-security` in advisory or
+   scan mode against the target skill scope.
+8. Update local skill source materials with evidence-backed reusable learnings
+   discovered during execution, including reusable review-lane findings.
+9. Run `scripts/validate-skill-structure.py` when available.
+10. Report validation, review-lane results, learning-loop coverage,
+    source-material updates, skipped live checks, and remaining uncertainty.
 
 ## Core Concepts
 
 - Keep `SKILL.md` concise for progressive disclosure.
+- Keep `SKILL.md` limited to trigger, scope, required workflow, guardrails,
+  validation, and output contract; move long rubrics, examples, and templates
+  into supporting folders.
 - Treat `SKILL.md` with front matter `name` and `description` as the OpenAI
   portable minimum.
 - Move detailed references and templates into supporting folders.
@@ -73,8 +80,10 @@ align-skill checks structure, safety, docs, and validation
   source-owned skill must keep that file even though OpenAI Codex treats it as
   optional metadata.
 - Set `policy.allow_implicit_invocation` to `false` for explicit-only,
-  mutating, publishing, setup, or Agentic SDLC phase skills; use `true` for
-  ordinary reusable skills that Codex may safely select from the description.
+  mutating, publishing, ordinary setup, or Agentic SDLC phase skills; use
+  `true` for ordinary reusable skills. A narrow setup exception may use `true`
+  only when implicit work is read-only and explicit current-turn confirmation
+  follows a displayed mutation plan.
 - Do not broaden a skill until its trigger becomes hard to reason about.
 - Capture durable knowledge in reusable skill sources, not in ad hoc notes or
   final-answer-only summaries.
