@@ -213,7 +213,7 @@ jobs:
 
       - name: Download disposable live-upgrade evidence
         if: steps.latest.outputs.new_release == 'true' && steps.evidence-request.outputs.required == 'true'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.live_upgrade_evidence_artifact }}
           path: ${{ runner.temp }}/soperator-live-upgrade-evidence
