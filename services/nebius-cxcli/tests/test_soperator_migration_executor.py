@@ -54438,7 +54438,7 @@ def test_persistent_mount_migration_recovery_quarantines_provisional_target(
     source.mkdir(parents=True)
     target.mkdir(parents=True)
     (source / "payload.txt").write_text("copy-integrity\n", encoding="utf-8")
-    (target / "payload.txt").write_text("copy-integrity\n", encoding="utf-8")
+    shutil.copy2(source / "payload.txt", target / "payload.txt")
     shutil.copystat(source, target, follow_symlinks=False)
     script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
         [

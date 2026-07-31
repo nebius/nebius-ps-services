@@ -7,8 +7,8 @@ All notable changes to this project are tracked here. This changelog follows
 ## [Unreleased]
 
 - Declare Click as a direct development dependency because CLI command-coverage
-  tests use `click.testing`, while current Typer releases vendor Click instead
-  of installing the external distribution.
+  tests use `click.testing`, and constrain Typer and Click to the latest release
+  lines that preserve cxcli's established help and error-rendering contract.
 - Declare `googleapis-common-protos` as a direct runtime dependency so clean
   installs keep the `google.rpc` types used by deployment-status reporting
   when newer Nebius SDK releases no longer install them transitively.
