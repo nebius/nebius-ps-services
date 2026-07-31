@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from nebius_cxcli import cli
@@ -22,6 +23,10 @@ from nebius_cxcli.slurm_action_journal import (
     transition_slurm_action,
 )
 from nebius_cxcli.slurm_jobs import AffectedSlurmJob
+
+
+def _normalized_cli_output(text: str) -> str:
+    return " ".join(unstyle(text).split())
 
 
 def _payload() -> dict[str, Any]:
@@ -734,7 +739,7 @@ def test_ext_soperator_jobs_help_exposes_canonical_command() -> None:
     result = CliRunner().invoke(cli.app, ["ext-soperator", "jobs", "--help"])
 
     assert result.exit_code == 0, result.output
-    normalized = " ".join(result.output.split())
+    normalized = _normalized_cli_output(result.output)
     assert "ext-soperator jobs [OPTIONS] CONFIG_YAML" in normalized
     assert "--target" in normalized
     assert "--acknowledge-login-exit" in normalized
@@ -795,7 +800,7 @@ def test_managed_soperator_jobs_help_exposes_shared_journal_contract() -> None:
     result = CliRunner().invoke(cli.app, ["soperator", "jobs", "--help"])
 
     assert result.exit_code == 0, result.output
-    normalized = " ".join(result.output.split())
+    normalized = _normalized_cli_output(result.output)
     assert "soperator jobs [OPTIONS] CONFIG_YAML" in normalized
     assert "--target" in normalized
     assert "--acknowledge-login-exit" in normalized
