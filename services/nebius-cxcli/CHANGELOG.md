@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Declare `googleapis-common-protos` as a direct runtime dependency so clean
+  installs keep the `google.rpc` types used by deployment-status reporting
+  when newer Nebius SDK releases no longer install them transitively.
 - Replace four ambiguous immutable OCI image regular expressions with one
   linear-time validator, eliminating attacker-amplifiable backtracking in
   controller fencing and GPU migration inputs. Security regressions now cover
