@@ -49,6 +49,9 @@ Merge only after explicit human instruction and final readiness verification.
 - Verify required reviews pass and unresolved conversations do not block policy.
 - Verify branch is up to date when required.
 - Verify UAT passed.
+- Require the PR base and recorded PR authorization base to equal the actual
+  symbolic `origin` default branch, and require its current HEAD to equal the
+  recorded `base_head`. Do not guess from branch names or tolerate base drift.
 - Require the current clean local HEAD, recorded promoted SHA, reviewed PR head,
   and current remote PR head to be identical. Any drift or branch-changing fix
   returns through `sdlc-classify-failure` and `sdlc-start`.
@@ -62,7 +65,8 @@ Merge only after explicit human instruction and final readiness verification.
 - Write `permissions/merge-authorization.json` in the active run directory
   immediately before merge execution. Include `allowed: true`,
   `phase: "sdlc-merge-pr"`, the specific PR URL or number,
-  `expected_head: <promoted-sha>`, `exact_command`,
+  `expected_head: <promoted-sha>`, `base_branch: <origin-default>`,
+  `base_head: <recorded-default-head>`, `exact_command`,
   `explicit_user_request: true`, checks status, review status, UAT status, and
   `expires_at`. All three readiness statuses must be `passed`.
 - Run only that exact authorized CLI command and record the result. Active

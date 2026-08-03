@@ -31,8 +31,8 @@ correction tail found by integration review before finalization.
 When initialized inside a linked worktree created by the `worktree` skill, the
 entire task run is nested under that outer branch. The exact current outer
 `HEAD` becomes the worker base, all wave promotions return to that branch, and
-a private v2 lease with owner kind `task-implementer` blocks outer push, PR creation, and removal through final
-alignment. The task coordinator never bases workers on `origin/main` in this
+a private v3 lease with owner kind `task-implementer` blocks outer push, PR creation, and removal through final
+alignment. The task coordinator never bases workers on the remote default in this
 case.
 
 ## Dependency Waves
@@ -129,17 +129,23 @@ branches into a temporary integration branch in stable task-ID order with
 `git merge --no-ff --no-edit`. Shared managed specs, README/design docs, and
 changelog remain coordinator-owned.
 
+At planning, the coordinator resolves the actual `origin` default. If the
+clean project checkout is on that branch, it automatically creates and switches
+to a deterministic `feature/task-<run-hash>` promotion branch; otherwise it
+reuses the existing non-default branch.
+
 After combined validation, integration `code-review`, and steering
 and project-agent-instructions reconciliation, the unchanged clean primary
-branch advances atomically with
+branch advances under a shared promotion lock with
 `git merge --ff-only <verified-integration-SHA>` after the integration branch
-is verified at that SHA. This fast-forward promotion is the only point where
-tasks become done.
+is verified at that SHA. Before that promotion, clean verified worker
+worktrees are removed and worker refs are deleted with exact expected-old
+SHAs. This fast-forward promotion is the only point where tasks become done.
 
-Clean reachable worktrees are then removed without force and ancestry-proven
-branches are deleted with `git branch -d`. Failures preserve exact resources
-for recovery. The workflow never runs broad prune/gc, cherry-picks, rebases,
-squashes, pushes, or force-removes.
+The integration worktree is removed after promotion, followed by exact-SHA
+integration-ref deletion. Failures preserve exact resources for recovery. The
+workflow never runs broad prune/gc, cherry-picks, rebases, squashes, pushes, or
+force-removes.
 
 After the last wave cleanup, final changed-surface `$align` evidence is sealed
 before a managed outer lease is released. An interruption after the handoff is
@@ -148,10 +154,10 @@ release instead of starting a new task run.
 
 ## Private State And Recovery
 
-Coordinator v4, wave, mutable task-plane v5, immutable assignment v7/result v3,
+Coordinator v5, wave v4, mutable task-plane v5, immutable assignment v7/result v3,
 incoming-handoff, and journal records live with the run
 under the private prompt workspace. Every Git mutation is journaled before
-execution and re-observed afterward. A repeated `run` resumes durable v4 truth
+execution and re-observed afterward. A repeated `run` resumes durable v5 truth
 without recreating branches, worktrees, assignments, commits, or merges.
 
 `orchestration/interop.json` binds a nested run to the exact managed outer
@@ -159,7 +165,7 @@ identity and its worktree-owned lease. Completed prompt history is archive-only
 after the outer worktree has itself been removed; it is never migrated to a
 different workspace identity.
 
-Every execution-plane-v1 or coordinator-v1/v2/v3 run returns
+Every execution-plane-v1 or coordinator-v1/v2/v3/v4 run returns
 `WORKFLOW_UPGRADE_REQUIRED`, including completed records. There is no legacy
 read path, compatibility execution path, or migration command.
 

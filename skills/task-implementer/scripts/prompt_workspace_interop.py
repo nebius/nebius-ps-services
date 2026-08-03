@@ -20,7 +20,7 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import orchestration_dir
 
 
-SCHEMA = 1
+SCHEMA = 2
 NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?")
 LEASE_ID_RE = re.compile(r"[0-9a-f]{32}")
 OBJECT_ID_RE = re.compile(r"[0-9a-f]{40,64}")
@@ -158,6 +158,11 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
         "promoted_head",
         "released",
     }
+    if value.get("schema") == 1:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "worktree interop schema v1 is unsupported; start a new run",
+        )
     if set(value) != required or value.get("schema") != SCHEMA:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "worktree interop state is invalid"
@@ -188,7 +193,8 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
         promoted = value["promoted_head"]
         if (
             NAME_RE.fullmatch(str(name)) is None
-            or value["branch"] != f"worktree/{name}"
+            or not str(name).startswith("project-")
+            or value["branch"] != f"feature/{str(name).removeprefix('project-')}"
             or LEASE_ID_RE.fullmatch(str(value["lease_id"])) is None
             or not Path(str(value["worktree"])).is_absolute()
             or outer_scope is None

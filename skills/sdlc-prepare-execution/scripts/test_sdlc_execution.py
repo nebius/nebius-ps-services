@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import sdlc_execution_core as execution_core  # noqa: E402
 from sdlc_execution_core import (  # noqa: E402
     ExecutionError,
     _claim_worker_session,
@@ -31,6 +32,7 @@ from sdlc_execution_core import (  # noqa: E402
     finish_task,
     integrate_wave,
     journal_path,
+    local_branch_exists,
     parse_locked_plan,
     prepare_execution,
     prepare_wave,
@@ -42,6 +44,7 @@ from sdlc_execution_core import (  # noqa: E402
     start_task,
     task_path,
     wave_path,
+    worktrees,
 )
 from sdlc_execution_interop import ExecutionInteropError, release  # noqa: E402
 
@@ -190,6 +193,8 @@ class GitLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        self.origin = self.root / "origin.git"
+        git(self.root, "init", "--bare", "-q", str(self.origin))
         self.project = self.root / "project"
         self.run_dir = self.root / "private" / "run-1"
         self.plan = self.run_dir / "plans" / "FEAT-001.plan.v1.md"
@@ -209,6 +214,9 @@ class GitLifecycleTests(unittest.TestCase):
         (self.project / "README.md").write_text("fixture\n", encoding="utf-8")
         git(self.project, "add", "-A")
         git(self.project, "commit", "-m", "initial")
+        git(self.project, "remote", "add", "origin", str(self.origin))
+        git(self.project, "push", "-u", "origin", "main")
+        git(self.origin, "symbolic-ref", "HEAD", "refs/heads/main")
         git(self.project, "switch", "-c", "feature/test")
         self.base_head = git(self.project, "rev-parse", "HEAD")
 
@@ -940,6 +948,19 @@ class GitLifecycleTests(unittest.TestCase):
             self.prepare()
         self.assertEqual(raised.exception.code, "WORKTREE_CONFLICT")
 
+    def test_prepare_on_default_creates_and_uses_promotion_branch(self) -> None:
+        git(self.project, "switch", "main")
+        coordinator = self.prepare()
+        self.assertTrue(coordinator["base_branch"].startswith("feature/sdlc-"))
+        self.assertNotEqual(
+            coordinator["base_branch"], coordinator["default_branch"]
+        )
+        self.assertEqual(coordinator["promotion_source"], "auto-created")
+        self.assertEqual(
+            git(self.project, "branch", "--show-current"),
+            coordinator["base_branch"],
+        )
+
     def test_tdd_seal_recovers_commit_completed_before_state_write(self) -> None:
         coordinator = self.prepare()
         integration = Path(coordinator["integration_worktree"])
@@ -1111,8 +1132,8 @@ class GitLifecycleTests(unittest.TestCase):
         state_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v4",
-                    "state_version": 4,
+                    "schema": "agentic-sdlc/execution-coordinator-v5",
+                    "state_version": 5,
                     "feature_id": "FEAT-001",
                     "run_id": "run-1",
                     "project_root": str(self.project.resolve()),
@@ -1122,6 +1143,11 @@ class GitLifecycleTests(unittest.TestCase):
                     "git_common_dir": str(common),
                     "base_branch": "feature/test",
                     "base_head": self.base_head,
+                    "default_remote": "origin",
+                    "default_branch": "main",
+                    "default_ref": "origin/main",
+                    "default_head": self.base_head,
+                    "promotion_source": "existing",
                     "plan_path": str(self.plan),
                     "plan_digest": hashlib.sha256(self.plan.read_bytes()).hexdigest(),
                     "capacity": 2,
@@ -1242,6 +1268,34 @@ class GitLifecycleTests(unittest.TestCase):
             promote_feature(self.run_dir, "FEAT-001", "all evidence passed")
         self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
 
+    def test_promotion_rejects_recorded_remote_default_head_drift(self) -> None:
+        coordinator = self.prepare()
+        integration = Path(coordinator["integration_worktree"])
+        (integration / "feature.py").write_text("VALUE = 1\n", encoding="utf-8")
+        git(integration, "add", "feature.py")
+        git(integration, "commit", "-m", "feat: ready for promotion")
+        state_path = coordinator_path(self.run_dir, "FEAT-001")
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["status"] = "sealed"
+        state["integration_head"] = git(integration, "rev-parse", "HEAD")
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        tree = git(self.project, "rev-parse", "HEAD^{tree}")
+        advanced = git(
+            self.project,
+            "commit-tree",
+            tree,
+            "-p",
+            coordinator["default_head"],
+            "-m",
+            "advance remote default",
+        )
+        git(self.project, "push", "-q", "origin", f"{advanced}:refs/heads/main")
+
+        with self.assertRaises(ExecutionError) as raised:
+            promote_feature(self.run_dir, "FEAT-001", "all evidence passed")
+        self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
+        self.assertTrue(integration.is_dir())
+
     def test_cleanup_retry_accepts_already_removed_reachable_worker(self) -> None:
         coordinator = self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
@@ -1278,6 +1332,96 @@ class GitLifecycleTests(unittest.TestCase):
             self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
         )
         self.assertEqual(completed["status"], "done")
+
+    def test_cleanup_retains_branch_when_registered_worker_path_is_missing(
+        self,
+    ) -> None:
+        coordinator = self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
+        assignments = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        for assignment in assignments:
+            self.start_assignment(assignment, "WAVE-001")
+            worker = Path(assignment["worktree"])
+            filename = "a.py" if assignment["task_id"] == "TASK-001" else "b.py"
+            (worker / "src").mkdir(exist_ok=True)
+            (worker / "src" / filename).write_text("VALUE = 1\n", encoding="utf-8")
+            finish_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                "validation passed",
+                "review passed",
+                f"feat: {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
+            )
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        missing = Path(assignments[0]["worktree"])
+        missing.rename(missing.with_name(f"{missing.name}-moved"))
+
+        with self.assertRaises(ExecutionError) as raised:
+            complete_wave(
+                self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
+            )
+        self.assertEqual(raised.exception.code, "CLEANUP_BLOCKED")
+        self.assertTrue(local_branch_exists(self.project, assignments[0]["branch"]))
+        self.assertIn(missing.resolve(), worktrees(Path(coordinator["project_root"])))
+
+    def test_cleanup_branch_advance_race_retains_exact_ref(self) -> None:
+        coordinator = self.prepare()
+        expected_tip = git(self.project, "rev-parse", "HEAD")
+        branch_name = f"codex/sdlc/{self.run_dir.name}/feat-001/worker-race"
+        ref = f"refs/heads/{branch_name}"
+        worker = self.root / "worker-race"
+        git(
+            self.project,
+            "worktree",
+            "add",
+            "--no-track",
+            "-b",
+            branch_name,
+            str(worker),
+            expected_tip,
+        )
+        original_run = execution_core._run
+        advanced_tip: str | None = None
+
+        def race_before_delete(
+            argv: list[str], cwd: Path, action: str, *, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal advanced_tip
+            if argv[:4] == ["git", "update-ref", "-d", ref] and advanced_tip is None:
+                tree = git(self.project, "rev-parse", f"{expected_tip}^{{tree}}")
+                advanced_tip = git(
+                    self.project,
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    expected_tip,
+                    "-m",
+                    "advance worker during cleanup",
+                )
+                git(self.project, "update-ref", ref, advanced_tip, expected_tip)
+            return original_run(argv, cwd, action, check=check)
+
+        with mock.patch.object(
+            execution_core, "_run", side_effect=race_before_delete
+        ):
+            cleaned = execution_core._cleanup_internal_resource(
+                run_dir=self.run_dir,
+                coordinator=coordinator,
+                repo=self.project,
+                kind="worker",
+                worktree=worker,
+                branch_name=branch_name,
+                expected_tip=expected_tip,
+                reachable_tip=expected_tip,
+            )
+
+        self.assertFalse(cleaned)
+        self.assertFalse(os.path.lexists(worker))
+        self.assertIsNotNone(advanced_tip)
+        self.assertEqual(git(self.project, "rev-parse", ref), advanced_tip)
 
     def test_wrong_assignment_digest_is_rejected(self) -> None:
         self.prepare()
@@ -1319,10 +1463,10 @@ class GitLifecycleTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "REPLAN_REQUIRED")
 
-    def test_v1_v2_and_v3_always_require_workflow_upgrade(self) -> None:
+    def test_legacy_coordinators_always_require_workflow_upgrade(self) -> None:
         state = coordinator_path(self.run_dir, "FEAT-001")
         state.parent.mkdir(parents=True, exist_ok=True)
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             for status in ("running", "done"):
                 with self.subTest(version=version, status=status):
                     state.write_text(

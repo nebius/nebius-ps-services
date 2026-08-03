@@ -8,6 +8,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 Seal any final integration-only changes, fast-forward the unchanged project
 feature branch to the exact verified integration tip, and non-force-clean the
 integration resource without pushing.
+The promotion precheck, ff-only merge, and postcheck run under the shared Git
+common-directory lock. Cleanup removes the integration worktree first and then
+deletes its branch only at the exact expected promoted SHA.
 
 ## Main Boundaries
 

@@ -166,6 +166,11 @@ authorizes delegation, and the current Codex surface exposes delegation tools.
 - `risk_reviewer`: checks near-final work for correctness, regressions,
   security, compatibility, edge cases, and missing tests.
 
+Each standalone role TOML self-identifies with a non-empty `name`,
+`description`, and `developer_instructions`. Its `name` and `description` must
+match the corresponding `[agents.<name>]` declaration, and its `sandbox_mode`
+remains `read-only`.
+
 Subagents inspect, summarize, and report. They do not edit code. The main agent
 owns consolidation, implementation, final verification, and the final answer.
 The main agent also owns cleanup: after spawning a helper, it should wait for

@@ -107,6 +107,12 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - For `run`, invoke private `prompt_workspace.py intake` before reading or
   changing phase state. Trust only its validated bound run, revision, digest,
   and snapshot; never use the editable prompt directly after intake.
+- When the workspace is Git-backed, intake resolves the actual `origin`
+  default through its symbolic `HEAD`. A new run on that clean default
+  automatically creates and switches to `feature/sdlc-<run-hash>` from the
+  verified remote SHA. A recorded run reuses that exact promotion branch and
+  preserves existing dirty changes; identity drift blocks instead of creating
+  another branch or worktree.
 - Route `new` into normal run initialization, `resume` through checkpoint
   reconciliation, `steering` only to `sdlc-auto-steering`, and `done` to
   `ALREADY_COMPLETE`. A different prompt cannot replace an unfinished run.

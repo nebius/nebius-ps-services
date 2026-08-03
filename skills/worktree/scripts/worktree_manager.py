@@ -19,7 +19,13 @@ import subprocess
 import sys
 from typing import Any, Iterable, Sequence
 
+from git_promotion import (
+    GitPromotionError,
+    resolve_remote_default,
+    verify_remote_default,
+)
 from worktree_state import (
+    SCHEMA as MANIFEST_SCHEMA,
     Manifest,
     StateError,
     delete_manifest,
@@ -40,8 +46,7 @@ from worktree_interop import (
 )
 
 
-BASE_REF = "origin/main"
-BRANCH_PREFIX = "worktree/"
+BRANCH_PREFIX = "feature/"
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?$")
 TASK_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 CONFIG_FIELDS = {
@@ -90,6 +95,12 @@ class ManagedWorktree:
     @property
     def scope_cwd(self) -> Path:
         return self.path if self.scope == "." else self.path / self.scope
+
+
+def _branch_for_name(name: str) -> str:
+    if not name.startswith("project-"):
+        raise WorktreeError("managed worktree name must start with project-")
+    return f"{BRANCH_PREFIX}{name.removeprefix('project-')}"
 
 
 def _redact_detail(value: str) -> str:
@@ -273,7 +284,7 @@ def _managed_from_record(repository: Path, record: WorktreeRecord) -> ManagedWor
         raise WorktreeError(
             f"managed path mismatch for {record.branch}: {path} != {record_path}"
         )
-    if record.branch != f"{BRANCH_PREFIX}{name}":
+    if record.branch != _branch_for_name(name):
         raise WorktreeError(f"managed branch/name mismatch for {record.branch}")
     try:
         manifest = load_manifest(repository, name)
@@ -451,9 +462,8 @@ def status_paths(repository: Path, scope: str | None = None) -> list[str]:
     return _paths_from_status(_git_bytes(repository, *arguments))
 
 
-def branch_changed_paths(repository: Path) -> list[str]:
-    merge_base = _git(repository, "merge-base", BASE_REF, "HEAD")
-    data = _git_bytes(repository, "diff", "--name-only", "-z", merge_base, "HEAD")
+def branch_changed_paths(repository: Path, base: str) -> list[str]:
+    data = _git_bytes(repository, "diff", "--name-only", "-z", base, "HEAD")
     return [
         item.decode("utf-8", "surrogateescape") for item in data.split(b"\0") if item
     ]
@@ -523,7 +533,7 @@ def _candidate_available(
     name: str,
     records: Sequence[WorktreeRecord],
 ) -> bool:
-    branch = f"{BRANCH_PREFIX}{name}"
+    branch = _branch_for_name(name)
     path = parent / name
     if (
         path.exists()
@@ -553,7 +563,13 @@ def _new_name(
     raise WorktreeError("could not generate a collision-free worktree name")
 
 
-def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str, Any]:
+def add_worktree(
+    *,
+    cwd: Path,
+    project: str | None,
+    task_slug: str,
+    reuse: str | None = None,
+) -> dict[str, Any]:
     _validate_task_slug(task_slug)
     primary, current_root = discover_repository(cwd)
     if current_root != primary:
@@ -563,29 +579,76 @@ def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str,
     operation = _operation_in_progress(primary)
     if operation:
         raise WorktreeError(f"repository operation is in progress: {operation}")
-    _git(primary, "remote", "get-url", "origin")
-    _git(primary, "fetch", "origin")
-    base = _git(primary, "rev-parse", "--verify", BASE_REF)
+    try:
+        default = resolve_remote_default(primary)
+    except GitPromotionError as error:
+        raise WorktreeError(str(error)) from error
+    base_ref = str(default["default_ref"])
+    base = str(default["default_head"])
     scope, _ = resolve_scope(primary, cwd, project)
+
+    if reuse is not None:
+        _validate_name(reuse)
+        try:
+            manifest = load_manifest(primary, reuse)
+        except StateError as error:
+            raise WorktreeError(str(error)) from error
+        assert manifest is not None
+        if (
+            manifest.status != "active"
+            or manifest.scope != scope
+            or manifest.task_slug != task_slug
+            or manifest.default_remote != default["remote"]
+            or manifest.default_branch != default["default_branch"]
+            or manifest.default_ref != base_ref
+        ):
+            raise WorktreeError(
+                "requested reuse does not match the active lifecycle, project scope, "
+                "task slug, or current remote-default identity"
+            )
+        record = _find_record(
+            primary,
+            current_root,
+            name=reuse,
+            current_cwd=cwd,
+        )
+        managed = _managed_from_record(primary, record)
+        dirty = status_paths(managed.path)
+        default_head_drift = manifest.default_head != default["default_head"]
+        return {
+            "action": "add",
+            "status": "reused",
+            "name": managed.name,
+            "branch": managed.branch,
+            "base_ref": manifest.default_ref,
+            "base_sha": manifest.base,
+            "current_default_sha": default["default_head"],
+            "remote_default_head_drift": default_head_drift,
+            "worktree": str(managed.path),
+            "scope": managed.scope,
+            "scope_cwd": str(managed.scope_cwd),
+            "dirty_paths": dirty,
+        }
+
     dirty_scope = status_paths(primary, scope)
     if dirty_scope:
         raise WorktreeError(
             "selected project has uncommitted changes; commit, push, open a PR, "
-            "and merge that work before creating an origin/main worktree"
+            f"and merge that work before creating a {base_ref} worktree"
         )
-    merge_base = _git(primary, "merge-base", BASE_REF, "HEAD")
+    merge_base = _git(primary, "merge-base", base, "HEAD")
     branch_diff = _git_bytes(
         primary, "diff", "--name-only", "-z", merge_base, "HEAD", "--", scope
     )
     if branch_diff:
         tree_comparison = _run(
-            ["git", "diff", "--quiet", BASE_REF, "HEAD", "--", scope],
+            ["git", "diff", "--quiet", base, "HEAD", "--", scope],
             cwd=primary,
             allowed=(0, 1),
         )
         if tree_comparison.returncode != 0:
             raise WorktreeError(
-                "selected project has branch changes not contained in origin/main; "
+                f"selected project has branch changes not contained in {base_ref}; "
                 "merge its PR before creating another worktree for this project"
             )
 
@@ -597,30 +660,24 @@ def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str,
         raise WorktreeError(f"worktree parent resolves unexpectedly: {parent}")
 
     try:
-        incomplete = [
-            manifest
-            for manifest in matching_manifests(
-                primary, scope=scope, task_slug=task_slug
-            )
-            if manifest.status in {"planned", "recovery", "cleanup-pending"}
-        ]
+        existing = matching_manifests(primary, scope=scope, task_slug=task_slug)
     except StateError as error:
         raise WorktreeError(str(error)) from error
-    if incomplete:
-        names = ", ".join(manifest.name for manifest in incomplete)
+    if existing:
+        names = ", ".join(manifest.name for manifest in existing)
         raise WorktreeError(
-            "an incomplete managed lifecycle already exists for this project/task: "
-            f"{names}; recover or remove it before creating another"
+            "a managed lifecycle already exists for this project/task: "
+            f"{names}; pass --reuse with the exact active name, or recover/remove it"
         )
 
     records = list_worktrees(primary)
     name = _new_name(primary, parent, task_slug, records)
     _validate_name(name)
-    branch = f"{BRANCH_PREFIX}{name}"
+    branch = _branch_for_name(name)
     _git(primary, "check-ref-format", "--branch", branch)
     path = parent / name
     manifest = Manifest(
-        schema=1,
+        schema=MANIFEST_SCHEMA,
         status="planned",
         name=name,
         branch=branch,
@@ -629,6 +686,10 @@ def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str,
         scope=scope,
         base=base,
         task_slug=task_slug,
+        default_remote=str(default["remote"]),
+        default_branch=str(default["default_branch"]),
+        default_ref=base_ref,
+        default_head=base,
     )
     try:
         write_manifest(primary, manifest)
@@ -645,7 +706,7 @@ def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str,
             "-b",
             branch,
             str(path),
-            BASE_REF,
+            base,
         )
         created = True
         for field, value in (
@@ -717,7 +778,7 @@ def add_worktree(*, cwd: Path, project: str | None, task_slug: str) -> dict[str,
         "status": "created",
         "name": name,
         "branch": branch,
-        "base_ref": BASE_REF,
+        "base_ref": base_ref,
         "base_sha": base,
         "worktree": str(managed.path),
         "scope": scope,
@@ -742,16 +803,19 @@ def _find_record(
         raise WorktreeError("current linked worktree is not registered")
     if name is not None:
         _validate_name(name)
-        branch = f"{BRANCH_PREFIX}{name}"
+        try:
+            manifest = load_manifest(primary, name)
+        except StateError as error:
+            raise WorktreeError(str(error)) from error
+        assert manifest is not None
+        branch = manifest.branch
         matches = [record for record in records if record.branch == branch]
     else:
         scope, _ = resolve_scope(primary, current_cwd, project)
         matches = [
             record
             for record in records
-            if record.branch
-            and record.branch.startswith(BRANCH_PREFIX)
-            and _read_config(primary, record.branch, "scope") == scope
+            if record.branch and _read_config(primary, record.branch, "scope") == scope
         ]
     if len(matches) != 1:
         rendered = ", ".join(record.branch or record.path for record in matches)
@@ -791,10 +855,21 @@ def inspect_worktree(
             raise WorktreeError(
                 f"run the action from the recorded project scope: {managed.scope_cwd}"
             ) from error
-    _git(primary, "fetch", "origin")
-    _git(managed.path, "rev-parse", "--verify", BASE_REF)
+    manifest = load_manifest(primary, managed.name)
+    assert manifest is not None
+    try:
+        verify_remote_default(
+            primary,
+            expected_remote=manifest.default_remote,
+            expected_branch=manifest.default_branch,
+            expected_ref=manifest.default_ref,
+            expected_head=manifest.default_head,
+        )
+    except GitPromotionError as error:
+        raise WorktreeError(str(error)) from error
+    _git(managed.path, "rev-parse", "--verify", manifest.default_ref)
     dirty = status_paths(managed.path)
-    committed = branch_changed_paths(managed.path)
+    committed = branch_changed_paths(managed.path, managed.base)
     outside_dirty = sorted(
         path for path in dirty if not _inside_scope(path, managed.scope)
     )
@@ -816,6 +891,9 @@ def inspect_worktree(
         "branch_changed_paths": committed,
         "outside_scope_dirty": outside_dirty,
         "outside_scope_committed": outside_committed,
+        "default_branch": manifest.default_branch,
+        "default_ref": manifest.default_ref,
+        "default_head": manifest.default_head,
     }
 
 
@@ -1004,6 +1082,9 @@ def publication_begin(*, cwd: Path, action: str) -> dict[str, Any]:
     return {
         "action": "publication-begin",
         "scope_cwd": inspected["scope_cwd"],
+        "default_branch": inspected["default_branch"],
+        "default_ref": inspected["default_ref"],
+        "default_head": inspected["default_head"],
         **result,
     }
 
@@ -1026,7 +1107,9 @@ def publication_end_action(
     return {"action": "publication-end", **result}
 
 
-def _pull_requests(repository: Path, branch: str) -> list[dict[str, Any]]:
+def _pull_requests(
+    repository: Path, branch: str, expected_base: str
+) -> list[dict[str, Any]]:
     fields = ",".join(
         (
             "number",
@@ -1048,7 +1131,7 @@ def _pull_requests(repository: Path, branch: str) -> list[dict[str, Any]]:
             "--head",
             branch,
             "--base",
-            "main",
+            expected_base,
             "--limit",
             "100",
             "--json",
@@ -1068,13 +1151,16 @@ def _pull_requests(repository: Path, branch: str) -> list[dict[str, Any]]:
 
 
 def _matching_merged_pr(
-    pull_requests: Sequence[dict[str, Any]], branch: str, head: str
+    pull_requests: Sequence[dict[str, Any]],
+    branch: str,
+    head: str,
+    expected_base: str,
 ) -> dict[str, Any] | None:
     matches = [
         item
         for item in pull_requests
         if item.get("headRefName") == branch
-        and item.get("baseRefName") == "main"
+        and item.get("baseRefName") == expected_base
         and item.get("headRefOid") == head
         and (item.get("state") == "MERGED" or item.get("mergedAt"))
     ]
@@ -1107,7 +1193,7 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
             None,
         )
         suggested = (
-            current_record.branch.removeprefix(BRANCH_PREFIX)
+            _read_config(primary, current_record.branch, "name")
             if current_record and current_record.branch
             else "<generated-worktree-name>"
         )
@@ -1118,12 +1204,12 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
     if name is None:
         raise WorktreeError("remove from the primary checkout requires --name")
     _validate_name(name)
-    branch = f"{BRANCH_PREFIX}{name}"
     try:
         manifest = load_manifest(primary, name, required=False)
     except StateError as error:
         raise WorktreeError(str(error)) from error
 
+    branch = manifest.branch if manifest is not None else _branch_for_name(name)
     _git(primary, "fetch", "origin", "--prune")
     records = list_worktrees(primary)
     record = next((item for item in records if item.branch == branch), None)
@@ -1247,8 +1333,10 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
         scope = base = path_text = None
         recent = []
 
-    pull_requests = _pull_requests(primary, branch)
-    merged_pr = _matching_merged_pr(pull_requests, branch, head)
+    pull_requests = _pull_requests(primary, branch, manifest.default_branch)
+    merged_pr = _matching_merged_pr(
+        pull_requests, branch, head, manifest.default_branch
+    )
     unused_local = False
     if local_exists:
         base_value = managed.base if managed is not None else str(base)
@@ -1350,6 +1438,11 @@ def _parser() -> argparse.ArgumentParser:
         default="work",
         help="public-safe lowercase task slug; never pass prompt text or secrets",
     )
+    add.add_argument(
+        "--reuse",
+        metavar="EXACT_NAME",
+        help="reuse one exact active managed worktree instead of creating another",
+    )
 
     inspect = subparsers.add_parser("inspect", help="validate managed identity")
     inspect.add_argument("--name", help="generated worktree name from primary checkout")
@@ -1444,6 +1537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cwd=Path.cwd(),
                 project=arguments.project,
                 task_slug=arguments.task_slug,
+                reuse=arguments.reuse,
             )
         elif arguments.action == "inspect":
             result = inspect_worktree(
@@ -1501,7 +1595,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 action=arguments.publication_action,
                 reservation_id=arguments.reservation_id,
             )
-    except WorktreeError as error:
+    except (WorktreeError, GitPromotionError) as error:
         print(json.dumps({"status": "blocked", "error": str(error)}, sort_keys=True))
         return 2
     print(json.dumps(result, indent=2, sort_keys=True, default=str))

@@ -250,13 +250,13 @@ class DependencyWaveTest(unittest.TestCase):
                 assert_no_unfinished_v1(run_dir)
             self.assertEqual(completed.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
 
-    def test_legacy_coordinators_always_require_new_v4_run(self) -> None:
+    def test_legacy_coordinators_always_require_new_v5_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
             orchestration = run_dir / "orchestration"
             orchestration.mkdir()
             coordinator = orchestration / "coordinator.json"
-            for version in (1, 2, 3):
+            for version in (1, 2, 3, 4):
                 for status in ("running", "done"):
                     with self.subTest(version=version, status=status):
                         coordinator.write_text(

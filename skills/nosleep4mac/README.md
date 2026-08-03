@@ -23,21 +23,44 @@ The managed plist contains only a generic label, the absolute
 documents that `KeepAlive` implies launch-at-load behavior, so the plist does
 not duplicate it with `RunAtLoad`.
 
-## Behavior
+## Persistence, Idempotency, and Behavior
 
-| Event | Result |
-| --- | --- |
-| User login | launchd loads and maintains the user agent. |
-| Screen lock or display off | The login session and service continue. |
-| AC power | `caffeinate -s` holds `PreventSystemSleep`. |
-| Battery power | Process remains; its AC-only assertion does not apply. |
-| AC power restored | The assertion becomes effective again. |
-| User logout | The per-user agent stops. |
-| Restart before login | The agent waits for that user to log in. |
-| Low power or thermal emergency | macOS may sleep despite an assertion. |
+The helper installs and manages this persistent per-user plist:
 
-The service does not wake an already-sleeping Mac and does not guarantee
-closed-lid execution.
+```text
+$HOME/Library/LaunchAgents/local.nosleep4mac.caffeinate-ac.plist
+```
+
+The plist launches `/usr/bin/caffeinate -s` with `KeepAlive=true`. A healthy
+rerun is a no-op: it does not rewrite the plist, change its modification time,
+restart the service, or change the PID. Missing, stopped, or drifted managed
+state is repaired back to the same canonical plist and single launchd job.
+
+After an ordinary restart:
+
+1. The old process ends and its PID disappears.
+2. At the next login, macOS loads the per-user LaunchAgent.
+3. `KeepAlive` starts and maintains a new `/usr/bin/caffeinate -s` process.
+4. On AC power, the process holds the `PreventSystemSleep` assertion.
+
+You do not need to rerun `$nosleep4mac` after an ordinary restart. Apple
+documents that login loads per-user agents from the user's
+[`Library/LaunchAgents` directory](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html),
+and the local `launchd.plist(5)` manual documents that `KeepAlive=true` implies
+launch-at-load behavior.
+
+The following boundaries are deliberate:
+
+- The agent does not prevent sleep before the user logs in.
+- Logout stops the agent; the next login starts it again.
+- Screen locking or display sleep does not stop it because the user remains
+  logged in.
+- On battery power, the process may remain running but does not prevent system
+  sleep. Its AC-only assertion becomes effective again when AC power returns.
+- A new PID after a restart is expected and does not violate idempotency.
+- macOS may sleep despite an assertion during low-power or thermal emergencies.
+- The service does not wake an already-sleeping Mac or guarantee closed-lid
+  execution.
 
 ## Safety and Recovery
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 
@@ -135,8 +136,17 @@ class TroubleshootContractTest(unittest.TestCase):
             skill,
         )
         self.assertIn(
+            "only after that remediation executes and verification completes does "
+            "it become attempt 1",
+            skill,
+        )
+        self.assertIn(
             "Every canonical attempt's `blocker_key` must exactly match the marker's "
             "top-level `blocker_key`",
+            reference,
+        )
+        self.assertIn(
+            "Do not write a planned or in-progress attempt object",
             reference,
         )
         self.assertIn(
@@ -145,10 +155,148 @@ class TroubleshootContractTest(unittest.TestCase):
             hook_readme,
         )
         self.assertIn(
+            "the denial lists all missing canonical fields together",
+            hook_readme,
+        )
+        self.assertIn(
             "Expect the hook to reject that mixed state as invalid and request "
             "marker repair",
             process_cases,
         )
+
+    def test_remediation_limits_and_terminal_report_have_one_canonical_path(
+        self,
+    ) -> None:
+        skill = " ".join(self.read(TROUBLESHOOT / "SKILL.md").split())
+        reference = " ".join(
+            self.read(TROUBLESHOOT / "references" / "remediation-budget.md").split()
+        )
+        hook_readme = " ".join(
+            self.read(TROUBLESHOOT / "assets" / "hooks" / "README.md").split()
+        )
+
+        self.assertIn(
+            "$troubleshoot --attempt-limit=N --time-limit-minutes=N <problem>", skill
+        )
+        self.assertIn("hard maxima of 10 attempts and 180 minutes", skill)
+        self.assertIn("return that report verbatim", skill)
+        self.assertIn("A bare `$troubleshoot` keeps it", reference)
+        self.assertIn("One flag changes only that field", reference)
+        self.assertIn("explicit reset to 5/120", reference)
+        self.assertIn("records same-blocker continuation only", reference)
+        self.assertIn("return it verbatim as the whole assistant response", reference)
+        self.assertIn(
+            "A lower workflow stop leaves `status: active` and `stop_trigger: null`",
+            reference,
+        )
+        self.assertIn("hard 10/180 maxima", hook_readme)
+        self.assertIn("terminal lock", hook_readme)
+        self.assertIn("Deleting `current.md` remains fail-closed", hook_readme)
+        self.assertIn(
+            "After exhaustion, the next user instruction is required whether",
+            reference,
+        )
+
+    def test_remediation_hook_registers_prompt_tool_and_stop_boundaries(
+        self,
+    ) -> None:
+        hooks = json.loads(self.read(TROUBLESHOOT / "assets" / "hooks.json.template"))
+        remediation_events = [
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "remediation_attempt_guard.py" in hook["command"]
+        ]
+        self.assertEqual(len(remediation_events), 3)
+        self.assertEqual(
+            set(remediation_events), {"UserPromptSubmit", "PreToolUse", "Stop"}
+        )
+        prompt_hook = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]
+        self.assertEqual(prompt_hook["additionalContextLimit"], 800)
+        self.assertEqual(prompt_hook["timeout"], 30)
+
+    def test_live_product_validation_requires_owner_correct_clean_replay(
+        self,
+    ) -> None:
+        skill = " ".join(self.read(TROUBLESHOOT / "SKILL.md").split())
+        reference = " ".join(
+            self.read(
+                TROUBLESHOOT / "references" / "live-product-validation.md"
+            ).split()
+        )
+        readme = " ".join(self.read(TROUBLESHOOT / "README.md").split())
+        process_cases = " ".join(
+            self.read(TROUBLESHOOT / "evals" / "process-cases.md").split()
+        )
+
+        self.assertIn(
+            "whenever a live target is used to verify product behavior", skill
+        )
+        self.assertIn("Causal owner", reference)
+        self.assertIn("Target state", reference)
+        self.assertIn("Evidence lineage", reference)
+        self.assertIn(
+            "An unhealthy target caused by the product is still a product defect",
+            reference,
+        )
+        self.assertIn("Product ownership is criterion-relative", reference)
+        self.assertIn(
+            "Any later change starts a new trial and a new evidence lineage",
+            reference,
+        )
+        self.assertIn(
+            "Observation is non-intervening only when it cannot alter "
+            "criterion-relevant state or execution",
+            reference,
+        )
+        self.assertIn(
+            "Authorization to recover never makes the resulting evidence clean",
+            reference,
+        )
+        self.assertIn(
+            "A design change counts only after it is implemented and deployed",
+            reference,
+        )
+        self.assertIn(
+            "action-specific approval in every environment", reference
+        )
+        self.assertIn(
+            "must precede the earliest product divergence or the first "
+            "contaminated boundary, whichever came first",
+            reference,
+        )
+        self.assertIn(
+            "prove earlier writers, controllers, background jobs, and operators are "
+            "quiescent",
+            reference,
+        )
+        self.assertIn(
+            "When the criterion is idempotent reconciliation", reference
+        )
+        self.assertIn(
+            "successful exit, healthy final state, or idempotent no-op after manual "
+            "pre-satisfaction does not prove the product fixed",
+            reference,
+        )
+        self.assertIn(
+            "Claim end-to-end workflow success only after an end-to-end run",
+            reference,
+        )
+        self.assertIn("out-of-band mutation", readme)
+        self.assertIn("directly pre-satisfy the desired state", process_cases)
+        self.assertIn("amend the declared workflow", process_cases)
+        self.assertIn(
+            "advance its checkpoint after a partial product mutation",
+            process_cases,
+        )
+        self.assertIn(
+            "inspection endpoint that lazily initializes",
+            process_cases,
+        )
+        self.assertIn("stale writer", process_cases)
+        self.assertIn("harness-owned connectivity defect", process_cases)
+        self.assertIn("cached telemetry", process_cases)
 
     def test_design_accepts_proven_handoff_without_reopening_diagnosis(self) -> None:
         skill = self.read(DESIGN / "SKILL.md")

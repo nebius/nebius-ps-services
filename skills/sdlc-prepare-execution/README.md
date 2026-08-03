@@ -10,6 +10,11 @@ private SDLC run directory. Later implementation workers receive separate
 branches and worktrees from that integration line; the project branch does not
 advance again until the final evidence-gated fast-forward promotion.
 
+Preparation resolves the actual `origin` default and records it in coordinator
+v5. If the clean project checkout is still on that default, it automatically
+creates the deterministic run promotion branch; an existing non-default branch
+is reused.
+
 The exact folder initialized by `sdlc-start` is an enforced monorepo boundary:
 Git worktrees contain the full repository, but claims, worker cwd, and changes
 must remain under that folder. The coordinator supports explicit interrupted

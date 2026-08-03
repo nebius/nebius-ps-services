@@ -22,8 +22,8 @@ from typing import Any, Iterator
 from worktree_state import state_directory
 
 
-LEASE_SCHEMA = 2
-RESERVATION_SCHEMA = 1
+LEASE_SCHEMA = 3
+RESERVATION_SCHEMA = 2
 LEASE_KIND = "coordinator"
 OWNER_KINDS = {"task-implementer", "agentic-sdlc"}
 LEASE_STATES = {"planned", "present", "absent"}
@@ -36,6 +36,12 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 class InteropError(RuntimeError):
     """Private interop state is unsafe, conflicting, or incomplete."""
+
+
+def _outer_branch(name: str) -> str:
+    if not name.startswith("project-"):
+        raise InteropError("managed outer name is invalid")
+    return f"feature/{name.removeprefix('project-')}"
 
 
 def _private_dir(path: Path) -> None:
@@ -223,9 +229,9 @@ def validate_lease(value: dict[str, object], name: str) -> dict[str, object]:
         "token",
         "resources",
     }
-    if value.get("schema") == 1:
+    if value.get("schema") in {1, 2}:
         raise InteropError(
-            "WORKFLOW_UPGRADE_REQUIRED: unfinished lease schema v1 is unsupported"
+            "WORKFLOW_UPGRADE_REQUIRED: unfinished legacy lease schema is unsupported"
         )
     if set(value) != required or value.get("schema") != LEASE_SCHEMA:
         raise InteropError("task lease fields or schema are invalid")
@@ -235,7 +241,7 @@ def validate_lease(value: dict[str, object], name: str) -> dict[str, object]:
     if owner_kind not in OWNER_KINDS:
         raise InteropError("task lease owner kind is invalid")
     branch = value.get("branch")
-    if not isinstance(branch, str) or branch != f"worktree/{name}":
+    if not isinstance(branch, str) or branch != _outer_branch(name):
         raise InteropError("task lease branch is invalid")
     scope = _safe_scope(value.get("scope"), "task lease outer scope")
     task_scope = _safe_scope(value.get("task_scope"), "task lease task scope")
@@ -271,6 +277,10 @@ def load_lease(primary: Path, name: str) -> dict[str, object] | None:
 
 
 def validate_reservation(value: dict[str, object], name: str) -> dict[str, object]:
+    if value.get("schema") == 1:
+        raise InteropError(
+            "WORKFLOW_UPGRADE_REQUIRED: unfinished reservation schema v1 is unsupported"
+        )
     if (
         set(value)
         != {
@@ -285,7 +295,7 @@ def validate_reservation(value: dict[str, object], name: str) -> dict[str, objec
         or value.get("schema") != RESERVATION_SCHEMA
     ):
         raise InteropError("publication reservation fields or schema are invalid")
-    if value.get("name") != name or value.get("branch") != f"worktree/{name}":
+    if value.get("name") != name or value.get("branch") != _outer_branch(name):
         raise InteropError("publication reservation identity is invalid")
     if value.get("action") not in PUBLICATION_ACTIONS:
         raise InteropError("publication reservation action is invalid")

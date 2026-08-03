@@ -1377,7 +1377,7 @@ def test_in_place_controller_roll_reasserts_reconciled_target_command_gate(
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
+        migration.SoperatorMigrationCheckpointContinuation,
         match="reasserted the exact inert target controller command gate",
     ):
         migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
@@ -1429,7 +1429,7 @@ def test_in_place_controller_roll_rearms_gate_for_a_later_bridge_owned_segment(
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
+        migration.SoperatorMigrationCheckpointContinuation,
         match="reasserted the exact inert target controller command gate",
     ):
         migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
@@ -1483,7 +1483,7 @@ def test_in_place_controller_roll_uses_admission_window_while_manager_is_paused(
     )
 
     with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
+        migration.SoperatorMigrationCheckpointContinuation,
         match="reasserted the exact inert target controller command gate",
     ):
         migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001
@@ -1560,7 +1560,7 @@ def test_in_place_controller_roll_activates_one_exact_gated_workload_replica(
     )
 
     with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
+        migration.SoperatorMigrationCheckpointContinuation,
         match="activated one exact inert target controller replica",
     ):
         migration._ensure_in_place_target_controller_command_gate(  # noqa: SLF001

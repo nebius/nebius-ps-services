@@ -24,10 +24,24 @@ except ImportError:  # pragma: no cover - Agentic SDLC currently targets POSIX h
     fcntl = None  # type: ignore[assignment]
 
 
+WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
+if str(WORKTREE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(WORKTREE_SCRIPTS))
+from git_promotion import (  # noqa: E402
+    GitPromotionError,
+    common_git_dir,
+    current_branch,
+    ensure_promotion_branch,
+    repository_root,
+    resolve_remote_default,
+)
+
+
 WORKSPACE_SCHEMA = "agentic-sdlc/prompt-workspace-v1"
 PROMPT_SCHEMA = "agentic-sdlc/prompt-v1"
 BINDING_SCHEMA = "agentic-sdlc/prompt-binding-v1"
 ACTIVITY_SCHEMA = "agentic-sdlc/prompt-activity-v1"
+PROMOTION_SCHEMA = "agentic-sdlc/git-promotion-v1"
 MAX_PROMPT_BYTES = 256 * 1024
 PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
 RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
@@ -236,6 +250,88 @@ def git_metadata(project_root: Path) -> tuple[str | None, str | None]:
     except ValueError:
         return None, None
     return str(root), scope
+
+
+def ensure_run_promotion(
+    workspace: dict[str, object], run_dir: Path
+) -> dict[str, object] | None:
+    git_root_value = workspace.get("git_root")
+    if git_root_value is None:
+        return None
+    git_root = Path(str(git_root_value)).resolve()
+    path = run_dir / "git-promotion.json"
+    if path.exists():
+        value = load_json(path, "Git promotion state")
+        required = {
+            "schema",
+            "run_id",
+            "git_root",
+            "git_common_dir",
+            "promotion_branch",
+            "promotion_initial_head",
+            "promotion_source",
+            "default_remote",
+            "default_branch",
+            "default_ref",
+            "default_head",
+        }
+        try:
+            default = resolve_remote_default(git_root)
+            observed_root = repository_root(git_root)
+            observed_common = common_git_dir(git_root)
+            observed_branch = current_branch(git_root)
+        except GitPromotionError as exc:
+            raise PromptWorkspaceError("GIT_PROMOTION_BLOCKED", str(exc)) from exc
+        if (
+            set(value) != required
+            or value.get("schema") != PROMOTION_SCHEMA
+            or value.get("run_id") != run_dir.name
+            or observed_root != git_root
+            or value.get("git_root") != str(observed_root)
+            or value.get("git_common_dir") != str(observed_common)
+            or value.get("promotion_branch") != observed_branch
+            or value.get("default_remote") != default["remote"]
+            or value.get("default_branch") != default["default_branch"]
+            or value.get("default_ref") != default["default_ref"]
+            or value.get("default_remote") != "origin"
+            or value.get("promotion_source") not in {"existing", "auto-created"}
+            or re.fullmatch(
+                r"[0-9a-f]{40,64}", str(value.get("promotion_initial_head") or "")
+            )
+            is None
+            or re.fullmatch(
+                r"[0-9a-f]{40,64}", str(value.get("default_head") or "")
+            )
+            is None
+        ):
+            raise PromptWorkspaceError(
+                "GIT_PROMOTION_BLOCKED",
+                "recorded promotion branch or repository identity changed",
+            )
+        return value
+    try:
+        promotion = ensure_promotion_branch(
+            git_root,
+            lifecycle_id=run_dir.name,
+            task_slug="sdlc",
+        )
+    except GitPromotionError as exc:
+        raise PromptWorkspaceError("GIT_PROMOTION_BLOCKED", str(exc)) from exc
+    value = {
+        "schema": PROMOTION_SCHEMA,
+        "run_id": run_dir.name,
+        "git_root": promotion["checkout"],
+        "git_common_dir": promotion["git_common_dir"],
+        "promotion_branch": promotion["promotion_branch"],
+        "promotion_initial_head": promotion["promotion_initial_head"],
+        "promotion_source": promotion["promotion_source"],
+        "default_remote": promotion["remote"],
+        "default_branch": promotion["default_branch"],
+        "default_ref": promotion["default_ref"],
+        "default_head": promotion["default_head"],
+    }
+    write_atomic(path, stable_json(value))
+    return value
 
 
 def reject_git_private_root(codex_home: Path) -> None:
@@ -1194,6 +1290,11 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
             run_dir, binding = new_run(project_dir, document, accepted_at)
         update_activity(project_dir, str(document["prompt_id"]), accepted_at)
         latest = binding["revisions"][-1]
+    promotion = (
+        None
+        if outcome == "ALREADY_COMPLETE"
+        else ensure_run_promotion(workspace, run_dir)
+    )
     result = {
         "action": action,
         "project_id": workspace["project_id"],
@@ -1212,6 +1313,9 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
         result["renamed"] = True
     if outcome:
         result["outcome"] = outcome
+    if promotion is not None:
+        result["promotion_branch"] = promotion["promotion_branch"]
+        result["default_branch"] = promotion["default_branch"]
     return result
 
 

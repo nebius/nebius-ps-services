@@ -2125,6 +2125,7 @@ def test_bridge_fenced_journal_accepts_fenced_target_bridge_authority_reentry() 
             "epoch": "bridge-target-epoch",
         }
     )
+    journal["segment_epoch_suffix"] = "epoch"
     journal["authority"]["history"].append(
         {
             "epoch": "bridge-target-epoch",
@@ -2135,6 +2136,24 @@ def test_bridge_fenced_journal_accepts_fenced_target_bridge_authority_reentry() 
     )
 
     validate_bridge_journal(journal)
+
+    takeover["target_stop_pods"][0]["pod_uid"] = "same-node-successor-pod-uid"
+    target_epoch = f"target-{journal['segment_epoch_suffix']}"
+    takeover["last_target_start_failure"] = {
+        "schema": "nebius-cxcli/target-singleton-start-failure-v1",
+        "status": "observed",
+        "target_start_state": "accepted",
+        "target_start_pod_uid": "controller-pod-uid",
+        "target_start_node_name": "controller-node",
+        "authority_owner": "target-singleton",
+        "authority_epoch_sha256": hashlib.sha256(target_epoch.encode()).hexdigest(),
+    }
+
+    validate_bridge_journal(journal)
+
+    takeover["last_target_start_failure"]["target_start_node_name"] = "different-node"
+    with pytest.raises(ValueError, match="interrupted singleton client recovery proof"):
+        validate_bridge_journal(journal)
 
 
 @pytest.mark.parametrize(

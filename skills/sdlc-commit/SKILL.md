@@ -66,11 +66,14 @@ Seal and promote one completed feature locally without pushing.
    records the new exact tip. Do not squash, amend, or rewrite worker/merge
    history.
 4. Verify the original project checkout still has the recorded non-default
-   base branch, exact base HEAD, and a clean status.
-5. Run the private helper `promote`. It uses `git merge --ff-only` to move the
-   project branch to the exact sealed tip, verifies equality, then unlocks and
-   removes only the clean registered integration worktree and deletes its
-   reachable branch with non-force `git branch -d`.
+   base branch, exact base HEAD, and a clean status. Re-resolve the symbolic
+   remote default and require its branch and HEAD to equal the recorded
+   default identity; remote-default drift blocks promotion without cleanup.
+5. Run the private helper `promote`. A common-Git-directory lock covers the
+   exact branch/base precheck, `git merge --ff-only` to the sealed tip, and
+   postcheck. It then unlocks and removes only the clean registered integration
+   worktree before deleting its ref with
+   `git update-ref -d <ref> <exact-promoted-tip>`.
 6. Only after `promote` reports `done`, record the promoted SHA and empty
    cleanup result in structured commit evidence. Bind it to the clean project
    checkout HEAD on the recorded base branch and verified absence of the

@@ -8,6 +8,26 @@ from typing import Any
 
 from .runtime_config import to_plain_data
 
+_NEBIUS_REQUEST_TIMEOUT_SECONDS = 60.0
+_NEBIUS_REQUEST_PER_RETRY_TIMEOUT_SECONDS = 20.0
+_NEBIUS_REQUEST_RETRIES = 0
+_NEBIUS_OPERATION_POLL_RETRIES = 2
+
+
+def bounded_nebius_request_kwargs(
+    *,
+    timeout_seconds: float = _NEBIUS_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, float | int]:
+    """Return finite time and retry bounds for one synchronous SDK request."""
+
+    timeout = max(float(timeout_seconds), 1.0)
+    return {
+        "timeout": timeout,
+        "per_retry_timeout": min(timeout, _NEBIUS_REQUEST_PER_RETRY_TIMEOUT_SECONDS),
+        "auth_timeout": min(timeout, _NEBIUS_REQUEST_TIMEOUT_SECONDS),
+        "retries": _NEBIUS_REQUEST_RETRIES,
+    }
+
 
 def sdk_message_to_mapping(value: object) -> Mapping[str, Any]:
     """Convert a Nebius SDK wrapper object to a JSON-style mapping."""
@@ -75,8 +95,21 @@ def wait_nebius_operation(
     sync_wait = getattr(operation, "sync_wait", None)
     if not callable(sync_wait):
         raise RuntimeError(f"{action} did not return a waitable Nebius provider operation.")
+    poll_timeout = min(
+        max(float(timeout_seconds), 1.0),
+        _NEBIUS_REQUEST_PER_RETRY_TIMEOUT_SECONDS,
+    )
     try:
-        sync_wait(timeout=timeout_seconds)
+        sync_wait(
+            timeout=timeout_seconds,
+            poll_iteration_timeout=poll_timeout,
+            poll_per_retry_timeout=poll_timeout,
+            poll_retries=_NEBIUS_OPERATION_POLL_RETRIES,
+            auth_timeout=min(
+                max(float(timeout_seconds), 1.0),
+                _NEBIUS_REQUEST_TIMEOUT_SECONDS,
+            ),
+        )
     except TimeoutError as exc:
         raise subprocess.TimeoutExpired(action, timeout_seconds) from exc
     successful = getattr(operation, "successful", None)

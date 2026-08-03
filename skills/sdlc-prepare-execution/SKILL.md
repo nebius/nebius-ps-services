@@ -28,8 +28,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 ## Inputs
 
 - Active run directory, current `FEAT-*`, and locked plan.
-- Canonical project checkout, named feature branch, exact `HEAD`, and Git common
-  directory, plus the exact initialized project folder and repo-relative scope.
+- Canonical project checkout, verified `origin` default identity, named
+  promotion branch, exact `HEAD`, and Git common directory, plus the exact
+  initialized project folder and repo-relative scope.
 - Current requirements, design, project-instruction decision, context,
   steering, and checkpoint state.
 
@@ -52,8 +53,10 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 ## Process
 
-1. Require a named non-default branch. Reject unrelated dirt or private state
-   inside the repository.
+1. Resolve and verify the actual `origin` default. If the clean checkout is on
+   it, automatically create and switch to the deterministic run promotion
+   branch; otherwise reuse the current non-default branch. Reject unrelated
+   dirt or private state inside the repository.
 2. If current requirements/design changes and an optional
    `project-agent-instructions`-owned project-root `AGENTS.md` are the only
    tracked changes, stage from the repository root with `git add -A`, create
@@ -76,7 +79,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Repeated preparation returns the same verified integration identity.
 - Never recreate a recorded branch, worktree, wave, task, or contract commit.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
-  closed. Every execution coordinator schema v1, v2, or v3 record returns
+  closed. Every execution coordinator schema v1, v2, v3, or v4 record returns
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,

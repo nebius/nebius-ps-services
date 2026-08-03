@@ -64,7 +64,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-start run <prompt-path-or-unique-filename>`
 - `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
   `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
-- schema-v4 execution, exact initialized-folder scope, `task-recover`,
+- schema-v5 execution, exact initialized-folder scope, `task-recover`,
   `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
@@ -123,6 +123,9 @@ Verify read-only:
 - `UserPromptSubmit` does not perform SDLC routing.
 - Stop continuation routes through the explicit prompt-bound `sdlc-start run`
   action.
+- Active PR and merge authorization binds both the exact promoted head and the
+  recorded symbolic remote-default branch and HEAD; later default drift fails
+  closed.
 
 Do not install, trust, edit, delete, or rewrite hooks during verification.
 
@@ -256,7 +259,7 @@ For a nested monorepo project, verify all claims, worker `scope_cwd`, staged
 paths, and committed paths remain inside the initialized folder. Exercise a
 confirmed interrupted-worker transfer, a resource-free future-wave replan, a
 rejected staged-secret attempt, and the fake-process sequential fallback. In a
-managed outer worktree, verify the `agentic-sdlc` v2 lease blocks publication,
+managed outer worktree, verify the `agentic-sdlc` v3 lease blocks publication,
 tracks all internal resources and promoted heads, releases only after final
 alignment/UAT/docs with a clean exact head, and allows the create-PR reservation
 only afterward. Keep live Codex execution `PARTIAL` when binary/auth/capacity is

@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator
 
+import sys
+
 from sdlc_execution_interop import (
     ExecutionInteropError,
     acquire as acquire_outer_lease,
@@ -25,7 +27,18 @@ from sdlc_execution_interop import (
 )
 
 
-COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v4"
+WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
+if str(WORKTREE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(WORKTREE_SCRIPTS))
+from git_promotion import (  # noqa: E402
+    GitPromotionError,
+    ensure_promotion_branch,
+    promote_ff_only,
+    verify_remote_default,
+)
+
+
+COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v5"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
 TASK_SCHEMA = "agentic-sdlc/execution-task-v3"
 ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v2"
@@ -45,7 +58,6 @@ SINGLETON_DOMAIN_CLASSES = {
     "publication",
     "terraform",
 }
-DEFAULT_BRANCHES = {"main", "master", "trunk", "develop", "default"}
 SENSITIVE_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\bAWS_ACCESS_KEY_ID\b\s*[:=]\s*[A-Z0-9]{16,}"),
@@ -799,13 +811,27 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "agentic-sdlc/execution-coordinator-v1",
         "agentic-sdlc/execution-coordinator-v2",
         "agentic-sdlc/execution-coordinator-v3",
+        "agentic-sdlc/execution-coordinator-v4",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "execution coordinator schema v1/v2/v3 is unsupported",
+            "legacy execution coordinator schema is unsupported",
         )
     if value.get("schema") != COORDINATOR_SCHEMA:
         raise ExecutionError("EXECUTION_STATE_INVALID", "coordinator schema is invalid")
+    if (
+        value.get("state_version") != 5
+        or value.get("default_remote") != "origin"
+        or not isinstance(value.get("default_branch"), str)
+        or not value["default_branch"]
+        or value.get("default_ref") != f"origin/{value['default_branch']}"
+        or SHA_RE.fullmatch(str(value.get("default_head") or "")) is None
+        or value.get("promotion_source") not in {"existing", "auto-created"}
+        or value.get("base_branch") == value.get("default_branch")
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
+        )
     return value
 
 
@@ -878,14 +904,17 @@ def prepare_execution(
     tasks = parse_locked_plan(plan_text)
     _verify_claim_paths(project_root, project_scope, tasks)
     waves = build_dependency_waves(tasks)
-    current_branch = branch(project_root)
-    if not current_branch or current_branch in DEFAULT_BRANCHES:
-        raise ExecutionError(
-            "POLICY_BLOCK", "preparation requires a named non-default branch"
+    try:
+        promotion = ensure_promotion_branch(
+            project_root,
+            lifecycle_id=run_dir.name,
+            task_slug="sdlc",
         )
-    if not clean(project_root):
-        raise ExecutionError("WORKTREE_CONFLICT", "project checkout must be clean")
-    base_head = head(project_root)
+    except GitPromotionError as exc:
+        code = "WORKTREE_CONFLICT" if "must be clean" in str(exc) else "POLICY_BLOCK"
+        raise ExecutionError(code, str(exc)) from exc
+    current_branch = str(promotion["promotion_branch"])
+    base_head = str(promotion["promotion_initial_head"])
     state_path = coordinator_path(run_dir, feature_id)
     recovering = state_path.exists()
     if state_path.exists():
@@ -896,6 +925,9 @@ def prepare_execution(
             "project_scope": project_scope,
             "base_branch": current_branch,
             "base_head": base_head,
+            "default_remote": promotion["remote"],
+            "default_branch": promotion["default_branch"],
+            "default_ref": promotion["default_ref"],
             "plan_digest": plan_digest,
             "git_common_dir": str(common_dir),
         }
@@ -934,7 +966,7 @@ def prepare_execution(
             )
         coordinator = {
             "schema": COORDINATOR_SCHEMA,
-            "state_version": 4,
+            "state_version": 5,
             "feature_id": feature_id,
             "run_id": run_dir.name,
             "project_root": str(project_root),
@@ -944,6 +976,11 @@ def prepare_execution(
             "git_common_dir": str(common_dir),
             "base_branch": current_branch,
             "base_head": base_head,
+            "default_remote": promotion["remote"],
+            "default_branch": promotion["default_branch"],
+            "default_ref": promotion["default_ref"],
+            "default_head": promotion["default_head"],
+            "promotion_source": promotion["promotion_source"],
             "plan_path": str(plan_path),
             "plan_digest": plan_digest,
             "capacity": capacity,
@@ -2761,73 +2798,22 @@ def complete_wave(
         task_commit = read_json(result_path(run_dir, feature_id, wave_id, task_id))[
             "commit"
         ]
-        if not _is_ancestor(integration, task_commit, wave["integration_head"]):
+        if not _cleanup_internal_resource(
+            run_dir=run_dir,
+            coordinator=coordinator,
+            repo=integration,
+            kind="worker",
+            worktree=worker,
+            branch_name=str(assignment["branch"]),
+            expected_tip=str(task_commit),
+            reachable_tip=str(wave["integration_head"]),
+        ):
             retained.append(
                 {
                     "task_id": task_id,
                     "branch": assignment["branch"],
                     "path": str(worker),
                 }
-            )
-            continue
-        if worker.exists():
-            if not clean(worker) or head(worker) != task_commit:
-                retained.append(
-                    {
-                        "task_id": task_id,
-                        "branch": assignment["branch"],
-                        "path": str(worker),
-                    }
-                )
-                continue
-            git(
-                integration,
-                ["worktree", "unlock", str(worker)],
-                "unlock worker",
-                check=False,
-            )
-            result = _run(
-                ["git", "worktree", "remove", str(worker)],
-                integration,
-                "remove worker worktree",
-                check=False,
-            )
-            if result.returncode != 0:
-                retained.append(
-                    {
-                        "task_id": task_id,
-                        "branch": assignment["branch"],
-                        "path": str(worker),
-                    }
-                )
-                continue
-        if local_branch_exists(integration, assignment["branch"]):
-            result = _run(
-                ["git", "branch", "-d", assignment["branch"]],
-                integration,
-                "delete worker branch",
-                check=False,
-            )
-            if result.returncode != 0:
-                retained.append(
-                    {
-                        "task_id": task_id,
-                        "branch": assignment["branch"],
-                        "path": str(worker),
-                    }
-                )
-        if not worker.exists() and not local_branch_exists(
-            integration, assignment["branch"]
-        ):
-            _interop(
-                "worker resource release",
-                record_outer_resource,
-                run_dir,
-                Path(str(coordinator["selected_project_root"])),
-                kind="worker",
-                path=worker,
-                branch=str(assignment["branch"]),
-                state="absent",
             )
     wave["combined_evidence"] = evidence.strip()
     wave["cleanup_retained"] = retained
@@ -2859,6 +2845,96 @@ def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
         check=False,
     )
     return result.returncode == 0
+
+
+def _cleanup_internal_resource(
+    *,
+    run_dir: Path,
+    coordinator: dict[str, Any],
+    repo: Path,
+    kind: str,
+    worktree: Path,
+    branch_name: str,
+    expected_tip: str,
+    reachable_tip: str,
+) -> bool:
+    registration = worktrees(repo).get(worktree.resolve())
+    path_present = os.path.lexists(worktree)
+    ref = f"refs/heads/{branch_name}"
+    branch_result = _run(
+        ["git", "rev-parse", "--verify", ref],
+        repo,
+        "read cleanup branch",
+        check=False,
+    )
+    if branch_result.returncode != 0:
+        if registration is not None or path_present:
+            return False
+        _interop(
+            f"{kind} resource release",
+            record_outer_resource,
+            run_dir,
+            Path(str(coordinator["selected_project_root"])),
+            kind=kind,
+            path=worktree,
+            branch=branch_name,
+            state="absent",
+        )
+        return True
+    branch_tip = branch_result.stdout.strip()
+    if branch_tip != expected_tip or not _is_ancestor(repo, expected_tip, reachable_tip):
+        return False
+    if path_present and registration is None:
+        return False
+    if registration is not None:
+        if (
+            not worktree.is_dir()
+            or worktree.is_symlink()
+            or registration.get("branch") != ref
+            or git_common_dir(worktree) != git_common_dir(repo)
+            or head(worktree) != expected_tip
+            or not clean(worktree)
+        ):
+            return False
+        git(
+            repo,
+            ["worktree", "unlock", str(worktree)],
+            f"unlock {kind}",
+            check=False,
+        )
+        removal = _run(
+            ["git", "worktree", "remove", str(worktree)],
+            repo,
+            f"remove {kind} worktree",
+            check=False,
+        )
+        if removal.returncode != 0:
+            return False
+    deletion = _run(
+        ["git", "update-ref", "-d", ref, expected_tip],
+        repo,
+        f"delete exact {kind} branch tip",
+        check=False,
+    )
+    if deletion.returncode != 0:
+        return False
+    if (
+        os.path.lexists(worktree)
+        or worktree.resolve() in worktrees(repo)
+        or local_branch_exists(repo, branch_name)
+    ):
+        return False
+    _interop(
+        f"{kind} resource release",
+        record_outer_resource,
+        run_dir,
+        Path(str(coordinator["selected_project_root"])),
+        kind=kind,
+        path=worktree,
+        branch=branch_name,
+        state="absent",
+    )
+    return True
 
 
 def seal_feature(
@@ -2967,28 +3043,45 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
             raise ExecutionError(
                 "PROMOTION_BLOCKED", "project branch moved or is dirty"
             )
-        if project_head == coordinator["base_head"]:
-            append_journal(
-                journal_path(run_dir, feature_id, "coordinator"),
-                {
-                    "event": "promotion_intent",
-                    "base": coordinator["base_head"],
-                    "target": coordinator["integration_head"],
-                },
-            )
-            git(
-                project,
-                ["merge", "--ff-only", coordinator["integration_head"]],
-                "promote feature integration",
-            )
-        elif project_head != coordinator["integration_head"]:
+        if project_head not in {
+            coordinator["base_head"],
+            coordinator["integration_head"],
+        }:
             raise ExecutionError(
                 "PROMOTION_BLOCKED", "project HEAD is neither the base nor promoted tip"
             )
-        if head(project) != coordinator["integration_head"]:
-            raise ExecutionError(
-                "PROMOTION_FAILED", "project HEAD does not match integration tip"
+        try:
+            verify_remote_default(
+                project,
+                expected_remote=str(coordinator["default_remote"]),
+                expected_branch=str(coordinator["default_branch"]),
+                expected_ref=str(coordinator["default_ref"]),
+                expected_head=str(coordinator["default_head"]),
             )
+        except GitPromotionError as exc:
+            raise ExecutionError("PROMOTION_BLOCKED", str(exc)) from exc
+        append_journal(
+            journal_path(run_dir, feature_id, "coordinator"),
+            {
+                "event": "promotion_intent",
+                "base": coordinator["base_head"],
+                "target": coordinator["integration_head"],
+            },
+        )
+        try:
+            promote_ff_only(
+                project,
+                expected_branch=str(coordinator["base_branch"]),
+                expected_base=str(coordinator["base_head"]),
+                target=str(coordinator["integration_head"]),
+            )
+        except GitPromotionError as exc:
+            code = (
+                "PROMOTION_FAILED"
+                if head(project) == coordinator["integration_head"]
+                else "PROMOTION_BLOCKED"
+            )
+            raise ExecutionError(code, str(exc)) from exc
         coordinator["promoted_head"] = coordinator["integration_head"]
         coordinator["promotion_evidence"] = evidence.strip()
         coordinator["status"] = "promoted"
@@ -3017,65 +3110,27 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
         },
     )
     retained: list[dict[str, str]] = []
-    if integration.exists():
-        if not clean(integration) or head(integration) != coordinator["promoted_head"]:
-            retained.append(
-                {
-                    "kind": "integration",
-                    "branch": coordinator["integration_branch"],
-                    "path": str(integration),
-                }
-            )
-        else:
-            git(
-                project,
-                ["worktree", "unlock", str(integration)],
-                "unlock integration",
-                check=False,
-            )
-            result = _run(
-                ["git", "worktree", "remove", str(integration)],
-                project,
-                "remove integration worktree",
-                check=False,
-            )
-            if result.returncode != 0:
-                retained.append(
-                    {
-                        "kind": "integration",
-                        "branch": coordinator["integration_branch"],
-                        "path": str(integration),
-                    }
-                )
-    if not retained and local_branch_exists(project, coordinator["integration_branch"]):
-        result = _run(
-            ["git", "branch", "-d", coordinator["integration_branch"]],
-            project,
-            "delete integration branch",
-            check=False,
+    if not _cleanup_internal_resource(
+        run_dir=run_dir,
+        coordinator=coordinator,
+        repo=project,
+        kind="integration",
+        worktree=integration,
+        branch_name=str(coordinator["integration_branch"]),
+        expected_tip=str(coordinator["promoted_head"]),
+        reachable_tip=str(coordinator["promoted_head"]),
+    ):
+        retained.append(
+            {
+                "kind": "integration",
+                "branch": coordinator["integration_branch"],
+                "path": str(integration),
+            }
         )
-        if result.returncode != 0:
-            retained.append(
-                {
-                    "kind": "integration",
-                    "branch": coordinator["integration_branch"],
-                    "path": str(integration),
-                }
-            )
     coordinator["cleanup_retained"] = retained
     if retained:
         _save_coordinator(run_dir, feature_id, coordinator)
         raise ExecutionError("CLEANUP_BLOCKED", "integration resources remain")
-    _interop(
-        "integration resource release",
-        record_outer_resource,
-        run_dir,
-        Path(str(coordinator["selected_project_root"])),
-        kind="integration",
-        path=integration,
-        branch=str(coordinator["integration_branch"]),
-        state="absent",
-    )
     coordinator["status"] = "done"
     _save_coordinator(run_dir, feature_id, coordinator)
     return coordinator

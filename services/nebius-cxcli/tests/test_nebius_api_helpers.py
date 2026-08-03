@@ -22,10 +22,10 @@ class _Operation:
         self.id = operation_id
         self._successful = successful
         self._timeout = timeout
-        self.waited_with: int | None = None
+        self.waited_with: dict[str, float | int] | None = None
 
-    def sync_wait(self, *, timeout: int) -> None:
-        self.waited_with = timeout
+    def sync_wait(self, **kwargs: float | int) -> None:
+        self.waited_with = kwargs
         if self._timeout:
             raise TimeoutError("provider timeout")
 
@@ -47,7 +47,13 @@ def test_wait_nebius_operation_requires_successful_terminal_operation() -> None:
         )
         is operation
     )
-    assert operation.waited_with == 19
+    assert operation.waited_with == {
+        "timeout": 19,
+        "poll_iteration_timeout": 19,
+        "poll_per_retry_timeout": 19,
+        "poll_retries": 2,
+        "auth_timeout": 19,
+    }
     assert nebius_operation_id(operation) == "operation-123"
 
 

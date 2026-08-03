@@ -44,6 +44,12 @@ An exact manual rename is repaired, while rename-plus-edit or duplicate copies
 fail closed so prompt history and Stop continuation cannot drift.
 There is no bare `$sdlc-start` resume action.
 
+For a Git-backed workspace, intake resolves the actual symbolic `origin`
+default. A new run on that clean branch is moved automatically to a
+deterministic `feature/sdlc-<run-hash>` promotion branch. Resumes reuse the
+recorded branch, including preserving unfinished dirty changes; they never
+silently create a replacement worktree.
+
 ## Main Boundaries
 
 - Do not free-edit requirements or design.
@@ -115,6 +121,8 @@ all other long Nebius assignments remain fail-closed during an active run.
 Coordinator-registered integration and worker worktrees outside the original
 checkout remain inside active-run policy; sensitive raw Git actions require
 exact identity and action-scoped authorization.
+PR authorization and creation also require an explicit base equal to the
+resolved `origin` default; the hook does not guess a default branch name.
 
 Validate the source bundle from the `skills/` directory:
 

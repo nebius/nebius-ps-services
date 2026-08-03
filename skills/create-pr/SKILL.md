@@ -81,14 +81,19 @@ promote a new exact SHA before publication is retried.
 Immediately before each authorized push or GitHub PR creation call, write a
 short-lived `permissions/pr-authorization.json` containing at least
 `allowed: true`, `phase: "create-pr"`, the exact branch,
-`expected_head: <promoted_head>`, `uat_status: "passed"`, and `expires_at`.
+`expected_head: <promoted_head>`, the dynamically resolved
+`base_branch: <origin-default>`, `base_head: <recorded-default-head>`,
+`uat_status: "passed"`, and `expires_at`. Re-resolve the symbolic remote
+default immediately before authorization and reject either branch or HEAD
+drift.
 Publish with one direct `git push origin HEAD:<branch>` action, and create a PR
-with one direct `gh pr create --head <branch> ...` action or a PR-creation MCP
-call whose `head` is that branch. Do not use a shell wrapper, prepend or append
-another command, or omit the explicit PR head. Reuse an existing remote branch
-or PR only when its head is the exact promoted SHA; any other remote head is a
-blocker, not permission to update or overwrite it. Remove or expire the
-authorization when publication completes or stops.
+with one direct `gh pr create --base <origin-default> --head <branch> ...`
+action or a PR-creation MCP call whose `base` and `head` are those exact
+branches. Do not use a shell wrapper, prepend or append another command, or
+omit either explicit branch. Reuse an existing remote branch or PR only when
+its head is the exact promoted SHA and its base is the recorded remote default;
+any mismatch is a blocker, not permission to update or overwrite it. Remove or
+expire the authorization when publication completes or stops.
 
 ## Local Check Order
 
@@ -244,9 +249,10 @@ without rewriting branch history.
      moved nearby code, and stop when the conflict needs product or business
      judgment.
    - When multiple branches are requested, also validate the proposed merge
-     order with a throwaway local branch or worktree starting at `origin/<base>`
-     and merging the target branches in order. Do not push the throwaway
-     branch.
+     order with one temporary local branch starting at `origin/<base>` and
+     merging the target branches in order. Require a clean checkout, never
+     push that branch, and delete it with its exact expected old SHA after the
+     check. Do not create an unmanaged throwaway worktree.
    - If a later branch depends on an earlier branch, either merge the earlier
      branch into the later branch so the ordered path is conflict-free, or
      report that the later PR should be refreshed after the earlier PR lands.

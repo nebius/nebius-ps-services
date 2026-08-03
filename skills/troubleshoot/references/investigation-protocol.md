@@ -143,6 +143,6 @@ next experiment. Do not convert incomplete access into false certainty.
 - **Retry-admission gate:** require new evidence and a genuinely new
   evidence-derived hypothesis before each remediation retry.
 - **Completion gate:** one passing test or restart is not closure.
-- **Remediation-budget gate:** permit no more than five remediation attempts
-  for one blocker tranche; after the fifth failure or the active time limit,
-  stop all tools and report instead of widening the search.
+- **Remediation-budget gate:** use the saved 5/120 default or user-authorized
+  profile through the 10/180 maxima for one blocker tranche; at its attempt or
+  active-time limit, stop all tools and report instead of widening the search.

@@ -206,8 +206,8 @@ checkout.
 
 Workspace, prompt, and run-manifest schemas are unchanged. The execution state
 machine has no compatibility path: every
-`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3 run returns
-`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v3 resources,
+`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4 run returns
+`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v5 resources,
 including completed records. Do not add a legacy read path, migration, or
 upgrade command.
 

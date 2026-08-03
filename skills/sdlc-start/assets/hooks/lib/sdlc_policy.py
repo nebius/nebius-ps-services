@@ -14,6 +14,7 @@ from .sdlc_state import (
     ActiveRun,
     detect_current_branch,
     detect_default_branch,
+    detect_default_identity,
     git_common_dir,
     git_head,
     is_inside,
@@ -23,7 +24,6 @@ from .sdlc_state import (
 )
 
 
-DEFAULT_BRANCHES = {"main", "master", "trunk", "develop", "default"}
 WRITE_TOOL_KEYWORDS = (
     "write",
     "create",
@@ -272,6 +272,8 @@ def auth_valid(
     expected_pr: str | None = None,
     expected_checks_status: str | None = None,
     expected_review_status: str | None = None,
+    expected_base: str | None = None,
+    expected_base_head: str | None = None,
     require_explicit_user_request: bool = False,
 ) -> tuple[bool, str]:
     if not active:
@@ -335,6 +337,16 @@ def auth_valid(
             False,
             f"{filename} has review status {auth.get('review_status')}, "
             f"not {expected_review_status}",
+        )
+    if expected_base and auth.get("base_branch") != expected_base:
+        return (
+            False,
+            f"{filename} base branch {auth.get('base_branch')} is not {expected_base}",
+        )
+    if expected_base_head and auth.get("base_head") != expected_base_head:
+        return (
+            False,
+            f"{filename} base HEAD {auth.get('base_head')} is not {expected_base_head}",
         )
     if require_explicit_user_request and auth.get("explicit_user_request") is not True:
         return False, f"{filename} lacks an explicit user merge request"
@@ -536,13 +548,39 @@ def gh_pr_create_head_matches(words: list[str], branch: str) -> bool:
     return matched
 
 
+def gh_pr_create_base_matches(words: list[str], base: str) -> bool:
+    matched = False
+    index = 3
+    while index < len(words):
+        word = words[index]
+        if word in {"--base", "-B"}:
+            if index + 1 >= len(words) or words[index + 1] != base:
+                return False
+            matched = True
+            index += 2
+            continue
+        if word.startswith("--base="):
+            if word.removeprefix("--base=") != base:
+                return False
+            matched = True
+        if word.startswith("-B") and word != "-B":
+            if word.removeprefix("-B").removeprefix("=") != base:
+                return False
+            matched = True
+        index += 1
+    return matched
+
+
 def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, str]:
     branch = detect_current_branch(project_root)
+    default_branch, default_head = detect_default_identity(project_root)
     current_head = git_head(project_root)
     if not branch:
         return False, "current checkout must have a named branch"
     if not current_head:
         return False, "current checkout has no resolvable HEAD"
+    if not default_branch or not default_head:
+        return False, "origin default branch and HEAD cannot be resolved"
     return auth_valid(
         active,
         "pr-authorization.json",
@@ -550,6 +588,8 @@ def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, s
         expected_phase="create-pr",
         expected_head=current_head,
         expected_uat_status="passed",
+        expected_base=default_branch,
+        expected_base_head=default_head,
     )
 
 
@@ -581,11 +621,14 @@ def merge_auth_valid(
     active: ActiveRun | None, project_root: Path, command: str, words: list[str]
 ) -> tuple[bool, str]:
     branch = detect_current_branch(project_root)
+    default_branch, default_head = detect_default_identity(project_root)
     current_head = git_head(project_root)
     if not branch:
         return False, "current checkout must have a named branch"
     if not current_head:
         return False, "current checkout has no resolvable HEAD"
+    if not default_branch or not default_head:
+        return False, "origin default branch and HEAD cannot be resolved"
     pr_target, shape_reason = canonical_gh_pr_merge_target(words, current_head)
     if pr_target is None:
         return False, shape_reason
@@ -600,6 +643,8 @@ def merge_auth_valid(
         expected_pr=pr_target,
         expected_checks_status="passed",
         expected_review_status="passed",
+        expected_base=default_branch,
+        expected_base_head=default_head,
         require_explicit_user_request=True,
     )
     if not ok:
@@ -618,7 +663,18 @@ def git_policy_reason(
         return wrapper_reason
     branch = detect_current_branch(project_root)
     default_branch = detect_default_branch(project_root)
-    protected = DEFAULT_BRANCHES | {default_branch}
+    protected = {default_branch} if default_branch else set()
+    if not default_branch and any(
+        (
+            is_git_command(words, "commit"),
+            is_git_command(words, "push"),
+            is_git_command(words, "merge"),
+            is_git_command(words, "rebase"),
+            is_gh_pr_create(words),
+            is_gh_pr_merge(words),
+        )
+    ):
+        return "Blocked: the symbolic origin default branch cannot be resolved."
     sensitive_execution_git = (
         is_git_command(words, "commit")
         or is_git_command(words, "merge")
@@ -733,6 +789,11 @@ def git_policy_reason(
                 "Blocked: GitHub PR creation head must match the authorized "
                 f"branch {branch}."
             )
+        if not gh_pr_create_base_matches(words, default_branch):
+            return (
+                "Blocked: GitHub PR creation base must match the authorized "
+                f"remote default branch {default_branch}."
+            )
     return None
 
 
@@ -763,6 +824,11 @@ def mcp_policy_reason(
             return (
                 "Blocked: GitHub PR creation head must match the authorized "
                 "current branch."
+            )
+        if active and tool_input.get("base") != detect_default_branch(project_root):
+            return (
+                "Blocked: GitHub PR creation base must match the authorized "
+                "remote default branch."
             )
     if ("slack" in lower or "confluence" in lower) and any(
         word in lower for word in WRITE_TOOL_KEYWORDS

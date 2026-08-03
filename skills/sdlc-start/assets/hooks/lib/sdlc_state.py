@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -175,17 +176,26 @@ def detect_current_branch(project_root: Path) -> str:
     return run_git(project_root, ["branch", "--show-current"])
 
 
+def detect_default_identity(project_root: Path) -> tuple[str, str]:
+    remote = run_git(project_root, ["ls-remote", "--symref", "origin", "HEAD"])
+    symbolic = [
+        line.removeprefix("ref: ").split("\t", 1)[0]
+        for line in remote.splitlines()
+        if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD")
+    ]
+    heads = [
+        line.split("\t", 1)[0]
+        for line in remote.splitlines()
+        if line.endswith("\tHEAD")
+        and re.fullmatch(r"[0-9a-f]{40,64}", line.split("\t", 1)[0])
+    ]
+    if len(symbolic) == 1 and len(heads) == 1:
+        return symbolic[0].removeprefix("refs/heads/"), heads[0]
+    return "", ""
+
+
 def detect_default_branch(project_root: Path) -> str:
-    origin_head = run_git(
-        project_root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]
-    )
-    if origin_head.startswith("origin/"):
-        return origin_head.removeprefix("origin/")
-    for candidate in ("main", "master", "trunk", "develop"):
-        ref = run_git(project_root, ["rev-parse", "--verify", "--quiet", candidate])
-        if ref:
-            return candidate
-    return "main"
+    return detect_default_identity(project_root)[0]
 
 
 def git_head(project_root: Path) -> str:
@@ -253,7 +263,7 @@ def _execution_registration(
             coordinator = load_json(coordinator_path) or {}
         except json.JSONDecodeError:
             continue
-        if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v4":
+        if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v5":
             continue
         integration_path = coordinator.get("integration_worktree")
         if integration_path and is_inside(cwd_path, str(integration_path)):

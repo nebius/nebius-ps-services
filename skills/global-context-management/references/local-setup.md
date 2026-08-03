@@ -60,6 +60,36 @@ Keep detailed workflow instructions in this skill instead of expanding the
 global file.
 
 ```markdown
+## Live Product Validation
+
+- When a live target is used to verify product behavior, define and freeze the
+  expected product-owned behavior and keep the declared product workflow
+  separate from fixture setup, environment recovery, and independent
+  verification. Observation is non-intervening only when it cannot alter
+  criterion-relevant state or execution; classify nominally read-only actions
+  by their effect. Changing the declaration starts a new trial and never cleans
+  earlier evidence.
+- The agent may operate the product and perform authorized recovery, but a
+  mutation outside the declared product workflow that performs, bypasses, or
+  pre-satisfies a product-owned step marks the affected trial and dependent
+  evidence as intervened. Recovery authorization never makes that evidence
+  valid proof.
+- Confirmed non-production may receive bounded reversible changes within
+  existing authority. Production and unconfirmed targets remain read-only
+  without exact action authorization. Destructive, irreversible, credential,
+  IAM, data, public-exposure, deletion, material-cost, or material-availability
+  actions require action-specific approval in every environment.
+- Fix the proven causal owner at its authoritative boundary. A product-fixed
+  claim requires an implemented source or configuration repair; environment,
+  test, harness, or evaluator defects are repaired at their owner and rerun
+  without claiming a product fix.
+- Replay from a declared or independently proven known-good product-supported
+  checkpoint before the earliest product divergence or first contaminated
+  boundary, whichever came first. Prove prior writers are quiescent, observe
+  the product perform the relevant transition, and verify authoritative
+  postconditions independently. Otherwise report mitigation or a blocker, not
+  a verified fix.
+
 ## Context Management
 
 - For non-trivial planning, implementation, debugging, refactoring, migration,
@@ -137,6 +167,11 @@ description = "Read-only reviewer focused on correctness, regressions, security,
 nickname_candidates = ["Reviewer", "Sentinel", "Auditor"]
 config_file = "agents/risk_reviewer.toml"
 ```
+
+Every standalone custom-agent TOML must contain a non-empty `name`,
+`description`, and `developer_instructions`. The `name` and `description` must
+match its `[agents.<name>]` declaration above, and `sandbox_mode` must remain
+`read-only`.
 
 If an MCP server currently stores a secret directly in `config.toml`, move it
 to an environment variable and configure the server to use `env_vars`.

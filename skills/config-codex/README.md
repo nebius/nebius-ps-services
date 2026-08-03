@@ -115,11 +115,26 @@ default contract:
 For `AGENTS.md`, exact template parity is a no-op. Otherwise, add or update
 only the compact managed context section. Empty or stale managed markers do not
 satisfy validation; the content between the markers must carry the current
-durable guidance, including nested-project precedence, higher-level safeguard,
-conflict-stop, explicit-read-after-generation, and override rules. For
-`config.toml`, parse the file first and patch the
-minimum settings needed for hooks, multi-agent support, and the three read-only
-custom agent config layers.
+durable guidance, including exactly one canonical live-product-validation
+section, nested-project precedence, higher-level safeguard, conflict-stop,
+explicit-read-after-generation, and override rules. For `config.toml`, parse
+the file first and patch the minimum settings needed for hooks, multi-agent
+support, and the three read-only custom agent config layers.
+The complete `AGENTS.md` must contain only that one active
+live-product-validation heading. ATX and Setext headings are recognized;
+fenced code examples are ignored. Duplicate or override-like headings outside
+the managed section fail preflight.
+
+The global live-product invariant freezes each trial declaration and permits
+authorized target recovery while keeping it separate from product proof. An
+out-of-band mutation that performs, bypasses, or pre-satisfies a product-owned
+step marks the affected evidence intervened. Production, unconfirmed, and
+high-impact action-approval boundaries remain unchanged. Nominally read-only
+actions are classified by their criterion-relevant effects. Only owner-correct
+repair followed by a clean replay from a declared or independently proven
+known-good checkpoint before the earliest divergence or contamination can
+support a product-fixed claim; detailed trial and reporting mechanics remain
+in `troubleshoot` rather than the global file.
 
 The managed defaults permit cleanup of temporary trees created by the current
 task only after the exact task-specific path is resolved and validated under
@@ -256,9 +271,12 @@ remain in `global-context-management`.
 This global-context setup owns only the non-SDLC hook events: `SessionStart`
 for stable global context and task-state path injection, and `UserPromptSubmit`
 for lightweight prompt-time context, safety, or opt-in delegation requests.
-Workflow-specific systems such as Agentic SDLC must use separate hook events,
-for example `PreToolUse` for hard guardrails and `Stop` for bounded
-continuation.
+Workflow-specific systems such as Agentic SDLC must use separately owned hook
+registrations, for example `PreToolUse` for hard guardrails and `Stop` for
+bounded continuation. A reviewed workflow may also register its own
+`UserPromptSubmit` handler for narrow explicit authorization and bounded
+private state; the global handler remains lightweight and does not route that
+workflow.
 
 Use `SessionStart` for global conventions, workspace context, environment
 notes, coding standards, and stable task-state path hints. Do not use it to
@@ -288,6 +306,12 @@ The custom agent config layers define three bounded roles:
 - `repo_mapper`: maps relevant files, symbols, flows, and conventions.
 - `test_strategist`: identifies focused tests and validation order.
 - `risk_reviewer`: reviews near-final work for defects and missing tests.
+
+Each standalone role TOML self-identifies with a non-empty `name`,
+`description`, and `developer_instructions`. Its `name` and `description` must
+match the corresponding `[agents.<name>]` declaration in `config.toml`, and
+its `sandbox_mode` remains `read-only`. Each configured target must be a
+regular non-symlink file that resolves inside Codex home.
 
 They inspect, summarize, and report. The main agent owns edits, final
 decisions, and cleanup. After a helper returns its final summary, the main
@@ -575,10 +599,12 @@ setup.
   home.
 - `README.md`: human-facing design, architecture, core concepts, and workflow.
 - `references/local-setup.md`: detailed setup and validation checklist.
-- `assets/AGENTS.md.template`: generic global instruction file.
-- Its managed global defaults include the bounded `troubleshoot` remediation
-  policy and preservation of the private remediation marker for existing
-  merge-safe installations.
+- `assets/AGENTS.md.template`: generic global instruction file, including the
+  compact live-product-validation invariant.
+- Its managed global defaults intentionally omit `troubleshoot` attempt limits,
+  retry-admission rules, blocker-tranche semantics, and exhaustion reporting.
+  Those belong to the workflow skill and its optional enforcement hook. The
+  template retains only private-marker preservation for task-state continuity.
 - `assets/config.toml.template`: create-only public-safe missing-config recovery
   baseline.
 - `references/config-recovery.md`: recovery allowlist, explicit omissions,

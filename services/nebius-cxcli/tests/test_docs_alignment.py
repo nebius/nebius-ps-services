@@ -1913,7 +1913,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Soperator/Slurm validation suite still runs at validation hold" in readme_flat
     assert "per-phase `phase_state[<phase>].fast_verification` proof" in design_flat
     assert "targeted phase-fast smoke" in design_flat
-    assert "Rerun the same upgrade command while a phase is pending" in readme_flat
+    assert (
+        "When a fail-closed phase is pending, resolve its reported blocker and rerun "
+        "the same upgrade command" in readme_flat
+    )
+    assert "typed internal continuation boundaries do not surface" in readme_flat
     assert "The journal never stores or reconstructs the desired path" in readme_flat
     assert "The external Soperator steady-state handoff is:" in readme_flat
     assert (

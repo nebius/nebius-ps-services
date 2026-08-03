@@ -647,30 +647,55 @@ def test_writer_boundary_revalidation_binds_exact_recovery_config_successor(
     )
     if drift in {"repeat_attempt", "repeat_unfenced"}:
         takeover = journal["target_singleton_takeover"]
-        takeover["target_primary_takeover_history"] = [
-            {"pod_uid": "target-start-pod-uid"}
-        ]
+        takeover["target_ref"] = "target"
+        takeover["target_primary_takeover_history"] = [{"pod_uid": "target-start-pod-uid"}]
         takeover["target_start"] = {
             "state": "accepted",
             "pod_uid": "replacement-target-pod-uid",
             "node_name": "target-node",
+            "target_ref": "target",
+            "target_image": "target-image",
+            "observed_replicas_before": 1,
+            "preparing_at": "2026-07-21T10:40:00Z",
+            "dispatching_at": "2026-07-21T10:40:01Z",
+            "accepted_at": "2026-07-21T10:40:02Z",
+            "ungate_required": True,
         }
+        takeover["target_stop_attempt"] = 1
+        takeover["target_stop_unscheduled_pending"] = False
         takeover["target_stop_pods"] = [
             {
+                "pod_name": "controller-0",
                 "pod_uid": "replacement-target-pod-uid",
                 "node_name": "target-node",
+                "node_uid": "target-node-uid",
             }
         ]
+        journal["version_transition"] = {"target_image": "target-image"}
         if drift == "repeat_attempt":
-            takeover["target_runtime_fence"] = [
+            fence = {
+                "schema": "nebius-cxcli-controller-runtime-fence/v1",
+                "fenced": True,
+                "node_name": "target-node",
+                "node_uid": "target-node-uid",
+                "pod_uid": "target-fence-pod-uid",
+                "marker_sha256": "a" * 64,
+                "node_identity_sha256": "b" * 64,
+                "slurmctld_count": 0,
+                "writable_state_mount_count": 0,
+                "unreadable_process_count": 0,
+                "verified_at": "2026-07-21T10:41:12Z",
+            }
+            takeover["target_runtime_fence"] = [fence]
+            journal["runtime_fence_proofs"] = [
                 {
-                    "schema": "nebius-cxcli-controller-runtime-fence/v1",
-                    "fenced": True,
-                    "node_name": "target-node",
-                    "slurmctld_count": 0,
-                    "writable_state_mount_count": 0,
-                    "unreadable_process_count": 0,
-                    "verified_at": "2026-07-21T10:41:12Z",
+                    "purpose": "failed-target-singleton-takeover-1",
+                    "status": "verified",
+                    "fresh_attempt": True,
+                    "attempt_id": "c" * 32,
+                    "boundary": f"failed-target-singleton-takeover-1-attempt-{'c' * 32}",
+                    "targets": [{"node_uid": "target-node-uid"}],
+                    "results": [copy.deepcopy(fence)],
                 }
             ]
 

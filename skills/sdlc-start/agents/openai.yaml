@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Start"
   short_description: "Run prompt-bound Agentic SDLC"
-  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-path-or-unique-filename> to continue the prompt-bound workflow with conditional troubleshoot diagnosis, bounded repair control, and ordered revalidation of every invalidated gate."
+  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-path-or-unique-filename> to continue the prompt-bound workflow. Resolve the actual remote default, create a deterministic promotion branch when starting there, and preserve that exact run identity through conditional troubleshoot diagnosis, bounded repair control, and ordered revalidation of every invalidated gate."
 policy:
   allow_implicit_invocation: false

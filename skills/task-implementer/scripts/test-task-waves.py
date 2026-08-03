@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -51,9 +52,11 @@ class WorktreeWaveTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "workspace with spaces"
         self.root.mkdir()
+        self.origin = self.root / "origin.git"
+        git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        git("init", "-q", cwd=self.repo)
+        git("init", "-q", "-b", "trunk", cwd=self.repo)
         git("config", "user.name", "Wave Test", cwd=self.repo)
         git("config", "user.email", "wave@example.invalid", cwd=self.repo)
         self.scope = self.repo / "services" / "example"
@@ -65,6 +68,15 @@ class WorktreeWaveTest(unittest.TestCase):
         git("add", "-A", cwd=self.repo)
         git("commit", "-qm", "initial", cwd=self.repo)
         self.initial = git("rev-parse", "HEAD", cwd=self.repo)
+        default_branch = git("branch", "--show-current", cwd=self.repo)
+        git("remote", "add", "origin", str(self.origin), cwd=self.repo)
+        git("push", "-qu", "origin", default_branch, cwd=self.repo)
+        git(
+            "symbolic-ref",
+            "HEAD",
+            f"refs/heads/{default_branch}",
+            cwd=self.origin,
+        )
         self.codex_home = self.root / "codex home"
         initialized = pw.init_workspace(
             self.repo, "services/example", self.codex_home, clock=lambda: FIXED
@@ -277,6 +289,12 @@ class WorktreeWaveTest(unittest.TestCase):
         self,
     ) -> None:
         plan = pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        self.assertTrue(str(plan["base_branch"]).startswith("feature/task-"))
+        self.assertNotEqual(plan["base_branch"], plan["default_branch"])
+        self.assertEqual(plan["promotion_source"], "auto-created")
+        self.assertEqual(
+            git("branch", "--show-current", cwd=self.repo), plan["base_branch"]
+        )
         self.assertEqual(
             [item["batches"] for item in plan["waves"]],
             [[["task-1"], ["task-2"]], [["task-3"]]],
@@ -402,17 +420,6 @@ class WorktreeWaveTest(unittest.TestCase):
             pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
         self.assertEqual(dirty_promotion.exception.code, "PROMOTION_BLOCKED")
         dirty.unlink()
-        promoted = pw.promote_wave(
-            self.workspace, self.run_id, evidence, clock=lambda: FIXED
-        )
-        self.assertEqual(promoted["promoted_head"], integration_tip)
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), integration_tip)
-        self.assertEqual(
-            (self.scope / "one.txt").read_text(encoding="utf-8"), "task-1\n"
-        )
-        self.assertEqual(
-            (self.scope / "two.txt").read_text(encoding="utf-8"), "task-2\n"
-        )
         task_one_assignment = json.loads(
             (
                 self.run_dir
@@ -424,10 +431,21 @@ class WorktreeWaveTest(unittest.TestCase):
         )
         cleanup_dirty = Path(task_one_assignment["worktree"]) / "cleanup-dirty.txt"
         cleanup_dirty.write_text("retain\n", encoding="utf-8")
-        retained = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
-        self.assertEqual(retained["status"], "cleanup")
-        self.assertTrue(retained["cleanup_retained"])
+        with self.assertRaises(PromptWorkspaceError) as retained_worker:
+            pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+        self.assertEqual(retained_worker.exception.code, "CLEANUP_BLOCKED")
         cleanup_dirty.unlink()
+        promoted = pw.promote_wave(
+            self.workspace, self.run_id, evidence, clock=lambda: FIXED
+        )
+        self.assertEqual(promoted["promoted_head"], integration_tip)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), integration_tip)
+        self.assertEqual(
+            (self.scope / "one.txt").read_text(encoding="utf-8"), "task-1\n"
+        )
+        self.assertEqual(
+            (self.scope / "two.txt").read_text(encoding="utf-8"), "task-2\n"
+        )
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
         worktrees = git("worktree", "list", "--porcelain", cwd=self.repo)
@@ -499,6 +517,7 @@ class WorktreeWaveTest(unittest.TestCase):
                 session_id="integration-boundary-worker",
                 clock=lambda: FIXED,
             )
+
             for elapsed in range(30, 331, 30):
                 pw.heartbeat_task(
                     self.workspace,
@@ -530,6 +549,151 @@ class WorktreeWaveTest(unittest.TestCase):
         journal = self.run_dir / "orchestration" / "journals" / "wave-001.jsonl"
         for line in journal.read_text(encoding="utf-8").splitlines():
             self.assertIsInstance(json.loads(line), dict)
+
+    def test_remote_default_head_drift_blocks_promotion_before_worker_cleanup(
+        self,
+    ) -> None:
+        _integrated, _integration, evidence = self._integrated_first_wave()
+        coordinator = json.loads(
+            (self.run_dir / "orchestration" / "coordinator.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        tree = git("rev-parse", "HEAD^{tree}", cwd=self.repo)
+        advanced = git(
+            "commit-tree",
+            tree,
+            "-p",
+            coordinator["default_head"],
+            "-m",
+            "advance remote default",
+            cwd=self.repo,
+        )
+        git(
+            "push",
+            "-q",
+            "origin",
+            f"{advanced}:refs/heads/{coordinator['default_branch']}",
+            cwd=self.repo,
+        )
+        assignment = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        with self.assertRaises(PromptWorkspaceError) as raised:
+            pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+        self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
+        self.assertTrue(Path(assignment["worktree"]).is_dir())
+
+    def test_remote_default_advance_during_cleanup_blocks_promotion(self) -> None:
+        _integrated, _integration, evidence = self._integrated_first_wave()
+        coordinator = json.loads(
+            (self.run_dir / "orchestration" / "coordinator.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        original_cleanup = waves._cleanup_resource
+        advanced = False
+
+        def cleanup_then_advance(**kwargs: object) -> bool:
+            nonlocal advanced
+            cleaned = original_cleanup(**kwargs)
+            if not advanced:
+                tree = git("rev-parse", "HEAD^{tree}", cwd=self.repo)
+                remote_tip = git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    coordinator["default_head"],
+                    "-m",
+                    "advance default during cleanup",
+                    cwd=self.repo,
+                )
+                git(
+                    "push",
+                    "-q",
+                    "origin",
+                    f"{remote_tip}:refs/heads/{coordinator['default_branch']}",
+                    cwd=self.repo,
+                )
+                advanced = True
+            return cleaned
+
+        with mock.patch.object(
+            waves, "_cleanup_resource", side_effect=cleanup_then_advance
+        ):
+            with self.assertRaises(PromptWorkspaceError) as raised:
+                pw.promote_wave(
+                    self.workspace, self.run_id, evidence, clock=lambda: FIXED
+                )
+        self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
+
+    def test_branch_advance_race_retains_worker_ref_and_blocks_promotion(self) -> None:
+        _integrated, _integration, evidence = self._integrated_first_wave()
+        assignment = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        branch = str(assignment["branch"])
+        ref = f"refs/heads/{branch}"
+        expected_tip = git("rev-parse", ref, cwd=self.repo)
+        original_journaled_git = waves._journaled_git
+        advanced_tip: str | None = None
+
+        def race_before_delete(
+            journal: Path,
+            repo: Path,
+            arguments: list[str],
+            description: str,
+            clock: Callable[[], datetime],
+            *,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess[bytes]:
+            nonlocal advanced_tip
+            if arguments[:3] == ["update-ref", "-d", ref] and advanced_tip is None:
+                tree = git("rev-parse", f"{expected_tip}^{{tree}}", cwd=self.repo)
+                advanced_tip = git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    expected_tip,
+                    "-m",
+                    "advance worker during cleanup",
+                    cwd=self.repo,
+                )
+                git("update-ref", ref, advanced_tip, expected_tip, cwd=self.repo)
+            return original_journaled_git(
+                journal,
+                repo,
+                arguments,
+                description,
+                clock,
+                check=check,
+            )
+
+        with mock.patch.object(
+            waves, "_journaled_git", side_effect=race_before_delete
+        ):
+            with self.assertRaises(PromptWorkspaceError) as raised:
+                pw.promote_wave(
+                    self.workspace, self.run_id, evidence, clock=lambda: FIXED
+                )
+        self.assertEqual(raised.exception.code, "CLEANUP_BLOCKED")
+        self.assertIsNotNone(advanced_tip)
+        self.assertEqual(git("rev-parse", ref, cwd=self.repo), advanced_tip)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
 
     def test_scope_expansion_fails_replan_and_retains_recovery_resources(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
@@ -1098,6 +1262,7 @@ class WorktreeWaveTest(unittest.TestCase):
         )
         git("commit", "-qm", "add gitlink fixture", cwd=self.repo)
         base = git("rev-parse", "HEAD", cwd=self.repo)
+        git("push", "-q", "origin", "HEAD", cwd=self.repo)
         (self.repo / "services" / "example" / "vendor").mkdir()
         handoff = self.run_dir / "handoff.md"
         text = handoff.read_text(encoding="utf-8").replace(
@@ -1124,6 +1289,7 @@ class WorktreeWaveTest(unittest.TestCase):
         git("add", "services/example/linked", cwd=self.repo)
         git("commit", "-qm", "add symlink fixture", cwd=self.repo)
         base = git("rev-parse", "HEAD", cwd=self.repo)
+        git("push", "-q", "origin", "HEAD", cwd=self.repo)
         handoff = self.run_dir / "handoff.md"
         text = handoff.read_text(encoding="utf-8").replace(
             "exact: services/example/one.txt",
@@ -1157,6 +1323,58 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
         worktrees = git("worktree", "list", "--porcelain", cwd=self.repo)
         self.assertEqual(worktrees.count("worktree "), 1)
+
+    def test_legacy_wave_and_interop_schemas_are_rejected(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
+        wave_path = self.run_dir / "orchestration" / "waves" / "wave-001.json"
+        wave = json.loads(wave_path.read_text(encoding="utf-8"))
+        wave["schema"] = "task-implementer/wave-v3"
+        wave_path.write_text(
+            json.dumps(wave, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with self.assertRaises(PromptWorkspaceError) as wave_error:
+            pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        self.assertEqual(wave_error.exception.code, "EXECUTION_STATE_INVALID")
+
+        wave["schema"] = "task-implementer/wave-v4"
+        wave_path.write_text(
+            json.dumps(wave, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        interop_path = self.run_dir / "orchestration" / "interop.json"
+        interop = json.loads(interop_path.read_text(encoding="utf-8"))
+        interop["schema"] = 1
+        interop_path.write_text(
+            json.dumps(interop, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with self.assertRaises(PromptWorkspaceError) as interop_error:
+            pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        self.assertEqual(interop_error.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+
+    def test_broken_symlink_resource_is_not_recorded_absent(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
+        wave = json.loads(
+            (
+                self.run_dir / "orchestration" / "waves" / "wave-001.json"
+            ).read_text(encoding="utf-8")
+        )
+        broken = self.root / "broken-worker"
+        broken.symlink_to(self.root / "missing-worker-target", target_is_directory=True)
+        workspace = pw.verify_workspace(self.workspace)
+
+        cleaned = waves._cleanup_resource(
+            workspace=workspace,
+            run_dir=self.run_dir,
+            wave=wave,
+            repo=self.repo,
+            kind="worker",
+            worktree=broken,
+            branch="codex/task/missing/worker",
+            expected_tip=self.initial,
+            reachable_tip=self.initial,
+            clock=lambda: FIXED,
+        )
+        self.assertFalse(cleaned)
+        self.assertTrue(os.path.lexists(broken))
 
     def test_journal_completes_partial_writes_as_one_json_line(self) -> None:
         journal = self.run_dir / "orchestration" / "journals" / "partial.jsonl"

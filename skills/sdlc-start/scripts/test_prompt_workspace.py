@@ -94,6 +94,65 @@ class PromptWorkspaceTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(prompt.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(prompt.parent.stat().st_mode), 0o700)
 
+    def test_intake_bootstraps_remote_default_and_reuses_dirty_run_branch(self) -> None:
+        origin = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+        subprocess.run(
+            ["git", "init", "-q", "-b", "trunk", str(self.project)], check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(self.project), "config", "user.name", "SDLC Start"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.project),
+                "config",
+                "user.email",
+                "sdlc-start@example.invalid",
+            ],
+            check=True,
+        )
+        tracked = self.project / "tracked.txt"
+        tracked.write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.project), "add", "tracked.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.project), "commit", "-qm", "initial"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.project), "remote", "add", "origin", str(origin)],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.project), "push", "-qu", "origin", "trunk"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(origin), "symbolic-ref", "HEAD", "refs/heads/trunk"],
+            check=True,
+        )
+
+        prompt = self.prompt_path()
+        first = self.intake(prompt)
+        branch = subprocess.run(
+            ["git", "-C", str(self.project), "branch", "--show-current"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        self.assertTrue(branch.startswith("feature/sdlc-"))
+        self.assertEqual(first["promotion_branch"], branch)
+        self.assertEqual(first["default_branch"], "trunk")
+
+        tracked.write_text("unfinished\n", encoding="utf-8")
+        resumed = self.intake(prompt)
+        self.assertEqual(resumed["action"], "resume")
+        self.assertEqual(resumed["promotion_branch"], branch)
+        self.assertEqual(tracked.read_text(encoding="utf-8"), "unfinished\n")
+
     def test_concurrent_init_creates_one_starter_prompt(self) -> None:
         with ThreadPoolExecutor(max_workers=6) as executor:
             results = list(executor.map(lambda _index: self.initialize(), range(6)))

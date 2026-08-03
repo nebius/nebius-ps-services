@@ -49,16 +49,25 @@ alternatives eliminated, confidence, regression oracle, evidence references,
 and the bounded owner handoff. Missing evidence and competing hypotheses stop;
 failure to find an implementation bug does not authorize redesign.
 
-Each autonomous blocker tranche is capped at five total remediation attempts
-or 120 active minutes. The five-attempt maximum cannot be raised or disabled.
+Each autonomous blocker tranche defaults to five remediation attempts and 120
+active minutes. Users can set a session profile up to 10/180 with optional
+flags, for example
+`$troubleshoot --attempt-limit=10 --time-limit-minutes=180 <problem>`. A bare
+invocation keeps the saved profile; one flag changes only that field; explicit
+5/120 resets the defaults. The UserPromptSubmit hook binds selected values to a
+private session authorization so free-text prose cannot change marker limits.
+A task-specific earlier workflow stop stays in prose and leaves active status
+and a null stop trigger.
 Before every retry, the agent must acquire new logs, a new stack trace, new code
 inspection evidence, or an equivalent observation and derive a genuinely new
 falsifiable hypothesis. Rewording the same hypothesis or reusing evidence is
 not sufficient. If the retry gate cannot be satisfied, the agent stops with a
-structured investigation report. It also reports failures 1 through 4, then
-stops all tools and returns the complete report at the first numeric limit. Only
-an explicit user instruction starts another bounded tranche for that blocker.
-A causally independent blocker starts a fresh attempt-1 budget; prior attempts,
+structured investigation report. It reports each non-terminal failure, then
+stops all tools and returns the complete report at the first numeric limit. A
+new user instruction starts fresh state; it never reopens the exhausted tranche.
+A causally independent blocker starts with an empty ledger; its next completed
+remediation and verification become attempt 1. Planned or in-progress work
+stays in prose and never becomes a partial attempt object. Prior attempts,
 elapsed active time, exhaustion state, and stop trigger do not carry over.
 Every counted attempt records the exact marker blocker key. A missing, mixed,
 or carried binding makes the marker invalid and enters repair instead of
@@ -67,6 +76,22 @@ exhausting the new blocker. Marker validation and repair consume no attempt.
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but
 does not prove why the failure occurred.
+
+## Live Product Validation
+
+Live verification separates causal ownership, target recovery state, and proof
+lineage. Each trial freezes its declared product workflow; changing that
+declaration starts a new lineage and cannot clean earlier evidence. Codex may
+operate the declared workflow and perform authorized stabilization or recovery,
+but an out-of-band mutation that performs, bypasses, or pre-satisfies a
+product-owned step marks the affected evidence intervened. Nominally read-only
+observation is also classified by effect when it can alter criterion-relevant
+state or execution. After owner-correct repair, verification resumes from a
+declared or independently proven known-good product-supported checkpoint before
+the earliest product divergence or contamination, proves earlier writers are
+quiescent, observes the product perform the relevant transition, and checks
+authoritative postconditions independently. A healthy target or successful
+no-op after manual pre-satisfaction is mitigation, not proof.
 
 ## Observability Evidence
 
@@ -116,13 +141,17 @@ runtime evidence produces `BLOCKED_MISSING_EVIDENCE` with the exact data gap.
 - `references/software-failure-playbooks.md` owns code and shell failure classes.
 - `references/infrastructure-failure-playbooks.md` owns installed and distributed
   stack failure classes.
+- `references/live-product-validation.md` owns product-versus-intervention
+  boundaries, evidence lineage, owner-correct repair, clean replay, and
+  claim-scope rules for live product testing.
 - `references/technique-selection.md` maps causal questions to diagnostics.
 - `references/verification-and-reporting.md` owns closure and reporting.
 - `references/observability-evidence.md` owns the runtime-evidence eligibility,
   scope, staged-query, and unavailable/partial contract.
 - `references/remediation-budget.md` owns attempt identity, limits, durable
   marker state, continuation tranches, and exhaustion reporting.
-- `assets/hooks/` contains the optional `PreToolUse` and `Stop` guard bundle.
+- `assets/hooks/` contains the optional `UserPromptSubmit`, `PreToolUse`, and
+  `Stop` guard bundle.
 - `scripts/` contains deterministic evidence helpers and their tests.
 - `evals/` contains trigger and process evaluation cases.
 

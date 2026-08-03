@@ -6,6 +6,8 @@
   trigger validation.`
 - `$worktree add --project services/example-api prepare the migration report
   changes.`
+- `$worktree add --project services/example-api --reuse
+  project-migration-report-a7c2f9 and preserve its unfinished changes.`
 - `$worktree push Commit the managed worktree changes as "fix(skills): tighten
   trigger validation" and push them.`
 - `$worktree create-pr Open or reuse the PR for this managed worktree with title
@@ -25,6 +27,8 @@
 
 - The skill requires an explicit `$worktree` invocation.
 - No action means `add`; no compatibility aliases are accepted.
+- An existing active scope/task lifecycle blocks duplicate creation and is
+  reusable only by its exact generated name.
 - `push` and `create-pr` compose with their existing sibling skills only after
   an action-bound private publication reservation plus managed identity and
   project-scope checks.

@@ -72,7 +72,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
-| `worktree` | Explicit only | Create and manage one project-scoped full-repository worktree from `origin/main`, with serialized publication, nested task ownership, and proof-gated cleanup. |
+| `worktree` | Explicit only | Create or exactly reuse one project-scoped full-repository worktree from the verified `origin` default, with serialized publication, nested task ownership, and proof-gated cleanup. |
 
 ### Project Engineering
 
@@ -99,7 +99,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
-| `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
+| `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures with a session-configurable bounded repair budget, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
 
 ### Agentic SDLC Workflow
 
@@ -174,7 +174,7 @@ $create-pr Create a PR for the current local work, using a new prep branch if I 
 
 $create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
 
-$worktree Create an isolated worktree from origin/main for the current monorepo project to fix trigger validation.
+$worktree Create an isolated worktree from the verified origin default for the current monorepo project to fix trigger validation.
 
 $worktree create-pr Open or reuse the PR for this managed worktree, then leave cleanup for a separate remove action after merge.
 
@@ -205,6 +205,8 @@ $align-skill Review and standardize skills/foo against the canonical skill struc
 $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
 
 $brainstorm Explore this architecture idea, gather the relevant project docs, related skills, internal context, and official vendor docs, and challenge weak assumptions before we implement anything.
+
+$troubleshoot --attempt-limit=10 --time-limit-minutes=180 Diagnose this persistent failure and repair it only after proving the cause.
 
 $create-learning-course Create a public-safe course workspace for engineers learning Kubernetes networking, with mission, syllabus, sources, HTML lessons, exercises, glossary, and publication review.
 
@@ -580,10 +582,17 @@ progress.
 
 The coordinator verifies worker commits and changed paths, merges task branches
 into a temporary integration branch in stable task-ID order, runs combined
-validation and review, reconciles steering, and advances the unchanged primary
-branch only with `git merge --ff-only`. Tasks become done after promotion.
-Clean reachable worktrees and branches are removed without force; any failure
-retains exact recovery resources and leaves the project branch unchanged.
+validation and review, reconciles steering, then removes clean worker
+worktrees and deletes their refs at exact expected SHAs. It advances the
+unchanged primary promotion branch only after the recorded remote-default
+branch and HEAD are reverified and under the shared lock with
+`git merge --ff-only`; tasks become done after promotion. Integration cleanup
+then removes its worktree before exact-SHA ref deletion. Any failure retains
+exact recovery resources and leaves unverified work intact.
+
+At wave planning, the actual symbolic `origin` default is resolved and
+verified. A clean checkout on it is automatically switched to a deterministic
+`feature/task-<run-hash>` branch; an existing non-default branch is reused.
 
 When the project checkout is itself managed by `worktree`, the exact outer
 branch `HEAD` is the task base and sole promotion target. A private lease keeps
@@ -823,7 +832,7 @@ only when the evidence gate requires it, a provenance-owned project-root
 conditional decision after design and before auto-steering or planning.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-Each active feature also has schema-v4 execution state and private worktrees
+Each active feature also has schema-v5 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
 claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in enforced
@@ -831,8 +840,10 @@ capacity batches inside dependency waves, using one fresh native agent or
 sequential ephemeral `codex exec` fallback per task and immutable direct-
 predecessor handoffs, retains worker and ordered
 merge commits, and cleans only proven reachable resources without force. The
-project branch stays unchanged until `sdlc-commit` seals the final integration
-tip and promotes it with `git merge --ff-only`.
+project promotion branch stays unchanged until `sdlc-commit` seals the final
+integration tip and promotes it under the shared Git lock with
+`git merge --ff-only`, after reverifying the recorded remote-default branch
+and HEAD.
 Project-level managed prompts and immutable run revisions also remain under
 `~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while
@@ -855,9 +866,10 @@ directory; the skills create those files only immediately before the guarded
 action. Registered integration and worker worktrees remain inside hook policy
 even outside the original checkout, with exact Git identity and action-scoped
 authorization checks for sensitive raw Git operations.
-PR publication authorization binds the `create-pr` phase, branch, clean exact
-promoted HEAD, passing UAT status, and expiry. It guards active-run pushes and
-PR creation without blocking read-only PR inspection.
+PR publication authorization binds the `create-pr` phase, branch, actual
+remote-default base, clean exact promoted HEAD, passing UAT status, and expiry.
+It guards active-run pushes and PR creation without blocking read-only PR
+inspection.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
@@ -1021,13 +1033,18 @@ change returns through `sdlc-classify-failure` and `sdlc-start`.
 
 `worktree` isolates one selected monorepo project in a sibling
 `<repo-name>-worktrees/` directory while retaining a full-repository checkout.
-`add` is the default action and always starts a generated `worktree/<name>`
-branch at the freshly fetched `origin/main`; dirty or branch-divergent work in
+`add` is the default action and starts a generated `feature/<task-and-suffix>`
+branch at the verified symbolic `origin` default; dirty or branch-divergent work in
 the selected project blocks creation, while unrelated primary-checkout changes
-are preserved. `push` and `create-pr` acquire action-bound private publication
+are preserved. `add --reuse <exact-name>` returns only that matching active
+managed worktree and reports its dirty paths plus any remote-default HEAD drift
+without changing them. `push` and
+`create-pr` acquire action-bound private publication
 reservations, verify managed identity and project-scope containment, then reuse
-`commit-push` and `create-pr`. Nested `task-implementer` and Agentic SDLC runs
-use owner-bound v2 leases on the outer branch until internal cleanup and final
+`commit-push` and `create-pr`. A changed remote-default branch or HEAD blocks
+publication without altering the retained worktree. Nested `task-implementer`
+and Agentic SDLC runs
+use owner-bound v3 leases on the outer branch until internal cleanup and final
 alignment. `remove` runs from the
 primary checkout with an exact generated name and requires durable ownership
 state plus a clean worktree and exact merged-PR/head proof, or an unused
@@ -1072,6 +1089,12 @@ preferences and placeholders while excluding personal project lists, private
 or plugin-managed integrations, desktop/generated state, and secret-bearing
 values. Existing laptop `AGENTS.md` and `config.toml` files are merge targets,
 not template replacement targets.
+Its compact global live-product policy freezes each trial declaration and
+permits authorized recovery without weakening production or high-impact action
+approval. Observation is classified by effect, and environment intervention
+cannot become product proof: owner-correct repair and a clean replay from a
+proven known-good point before the earliest product divergence or contamination
+are required for a verified product-fix claim.
 Private prompt-workspace access is opt-in: it can create a `0700`
 `$CODEX_HOME/task-implementer` root and add only that exact root to an existing
 `workspace-write` configuration without changing sandbox or approval policy.
@@ -1285,6 +1308,18 @@ Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
 
+For live product validation, `troubleshoot` records causal ownership, target
+recovery state, and evidence lineage separately and freezes each trial's
+declared workflow. Authorized stabilization may restore a degraded target, but
+an out-of-band mutation that performs, bypasses, or pre-satisfies a
+product-owned step intervenes in the affected trial; so does nominally
+read-only observation when it changes criterion-relevant state or execution. A
+verified product fix requires an implemented owner-correct repair, a declared
+or independently proven known-good checkpoint before the earliest product
+divergence or contamination, quiescent prior writers, observed product-owned
+transitions, and independent postconditions. Checkpoint replay proves only the
+affected segment unless the full workflow is rerun.
+
 Runtime observability is a gated experiment rather than a default discovery
 step. When a deployed-runtime hypothesis needs scoped facts,
 `troubleshoot` invokes `nebius-grafana-query` in evidence-provider mode after
@@ -1325,29 +1360,37 @@ requires new evidence and a new falsifiable hypothesis; duplicates, permission
 denials, and crash replay do not consume attempts.
 
 After one remediation fails against the same blocker, `troubleshoot` starts a
-bounded tranche before another repair. Each tranche has a hard maximum of five
-remediation attempts or 120 active minutes, whichever comes first; the attempt
-maximum cannot be raised or disabled. Every retry requires newly acquired logs,
+bounded tranche before another repair. Each session defaults to five attempts
+and 120 active minutes, with optional `$troubleshoot --attempt-limit=N` and
+`--time-limit-minutes=N` flags capped at 10/180. A task-specific
+earlier stop remains workflow guidance in prose and cannot be represented as a
+free-text numeric override; it leaves the canonical marker active with a null
+stop trigger and returns a normal structured report. Every retry requires newly acquired logs,
 stack traces, code inspection, runtime-state evidence, or an equivalent
 observation plus a genuinely new falsifiable hypothesis. If that gate cannot be
 satisfied, no retry runs and a structured investigation report identifies the
-missing evidence and next action. Failures 1 through 4 are reported as progress;
-after the exact private state update records exhaustion, all other tool use
+missing evidence and next action. Each non-terminal failure is reported as
+progress; after the exact private state update records exhaustion, other tool use
 stops and a complete user-visible report is returned. The Stop hook requests
 one correction containing a bounded, redacted minimum report for an incomplete
 response. If that correction is ignored, it stops and emits the fallback as a
-UI/event-stream warning instead of looping. Historical exhausted v1 data
+UI/event-stream warning instead of looping. When the hook supplies the bounded
+report, the assistant returns it verbatim instead of rewriting its exact
+marker-derived fields. Historical exhausted v1 data
 markers remain report-only without requiring invented evidence or authored
-attempt IDs. Previous v2 state fails closed for exact marker repair rather than
-continuing under a dual-limits compatibility path, while all newly authored
-state uses the canonical v3 data schema. A new explicit user instruction is
-required for another bounded tranche. The optional
+attempt IDs. Previous v2 and v3 state fails closed for exact marker repair rather
+than continuing under a dual-limits compatibility path, while all newly authored
+state uses the canonical v4 data schema. A new user instruction is required for
+fresh state; an exhausted tranche cannot be reopened. The optional
 `troubleshoot/assets/hooks` bundle enforces the
-recorded private task-state budget at supported `PreToolUse` and `Stop`
-boundaries. Every canonical attempt is bound to the marker's exact blocker key,
+recorded private task-state budget at supported `UserPromptSubmit`, `PreToolUse`,
+and `Stop` boundaries. Every canonical attempt is bound to the marker's exact blocker key,
 so an old ledger copied onto an independent issue is rejected as invalid rather
 than exhausting that issue. The hook does not infer causal identity or attempts
-from raw command failures.
+from raw command failures. Attempt entries are appended only after remediation
+and verification complete; planned or in-progress work remains in prose with
+an empty ledger. A malformed partial entry receives one atomic remove-or-
+complete repair instruction listing all missing canonical fields.
 
 ## Skills Installer
 

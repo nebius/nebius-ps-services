@@ -7,11 +7,14 @@ interface:
     waves from complete write claims and conflict domains; use
     isolated full-repository worktrees and one reviewed direct-child commit per
     worker;
+    create a deterministic promotion branch when starting on the actual remote
+    default;
     when nested in a worktree-managed checkout, base on and promote only to
     that exact outer branch while its private lease blocks publication;
     integrate in stable order; validate and review the combined result;
     reconcile steering; promote only by ff-only merge; clean up internal
-    resources without force; and release the outer lease only after final
-    alignment."
+    worker resources after combined evidence, clean integration resources only
+    after promotion, use exact-SHA ref deletion without force, and release the
+    outer lease only after final alignment."
 policy:
   allow_implicit_invocation: false

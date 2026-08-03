@@ -73,10 +73,11 @@ duplicating branches, worktrees, assignments, commits, or merges.
 $task-implementer run <managed-prompt-from-inside-a-$worktree-checkout>
 ```
 
-Bind the run to the exact outer worktree branch and current `HEAD`. Keep every
+Bind the run to the exact outer worktree branch and current `HEAD`; never create
+a replacement outer worktree merely because one already exists. Keep every
 worker/integration branch private and temporary, promote only back to the outer
 branch, and block outer push, PR creation, and removal until final alignment
-and lease release. Never use `origin/main` as the nested worker base.
+and lease release. Never use the remote default as the nested worker base.
 
 ```text
 $task-implementer run <same-completed-prompt-after-an-interrupted-final-release>

@@ -18,7 +18,7 @@ cleanup checks; do not rewrite its command logic ad hoc.
 A managed worktree has all of these properties:
 
 - it appears in `git worktree list --porcelain -z`;
-- its branch is `worktree/<generated-name>`;
+- its branch is `feature/<generated-name-with-project-prefix-removed>`;
 - its absolute path is under the sibling
   `<repo-parent>/<repo-name>-worktrees/` directory;
 - its branch-local Git configuration records the canonical repo-relative
@@ -46,13 +46,15 @@ Before managed branch or worktree creation:
 
 1. Require a named branch, `origin`, no in-progress Git operation, and no
    unresolved conflicts.
-2. Fetch `origin`, require `origin/main`, and record its exact SHA.
+2. Resolve `origin` `HEAD` with `git ls-remote --symref`, fetch only the
+   advertised branch, require the fetched SHA to equal advertised `HEAD`, and
+   record the exact remote, branch, ref, and SHA.
 3. Canonicalize the optional repository-relative project path and reject any
    escape outside the Git root.
 4. Reject staged, unstaged, or untracked files in the selected project.
-5. Compare the current branch with its `origin/main` merge base and reject
+5. Compare the current branch with its recorded remote-default merge base and reject
    branch-introduced changes in the selected project unless the selected-scope
-   tree is exactly equal to `origin/main`. The exact-tree exception supports a
+   tree is exactly equal to that remote-default tree. The exception supports a
    squash-merged change whose old feature branch is no longer ancestry-merged.
    This deliberately allows an old or dirty feature branch when its changes
    are confined to another monorepo project.
@@ -70,22 +72,30 @@ Creation uses the fixed base and no upstream:
 ```bash
 git worktree add \
   --no-track \
-  -b "worktree/<generated-name>" \
+  -b "feature/<generated-name-with-project-prefix-removed>" \
   "<repo-parent>/<repo-name>-worktrees/<generated-name>" \
-  origin/main
+  origin/<recorded-default-branch>
 ```
 
 Write a private `planned` ownership manifest before creation. After creation,
-write local Git metadata, re-observe the exact path, branch, base SHA,
+write local Git metadata, re-observe the exact path, branch, base/default SHA,
 cleanliness, common Git directory, and scope directory, then promote the
 manifest to `active`. Roll back only a clean just-created worktree whose branch
 still equals the recorded base; otherwise retain a `recovery` manifest.
+
+An existing scope/task lifecycle blocks duplicate creation. Reuse requires the
+caller to pass `--reuse <exact-generated-name>` and the helper to prove that
+the active manifest, registered worktree, branch metadata, scope, task slug,
+and remote-default branch identity agree. Reuse reports dirty paths plus any
+recorded/current default-HEAD drift and never resets, cleans, commits, or
+recreates the worktree. Default-HEAD drift blocks inspect/publication but does
+not make unfinished local changes inaccessible.
 
 ## Push And PR Handoff
 
 Acquire the action-bound private publication reservation before either handoff.
 The reservation operation performs the same scope-clean inspection, fetches
-current `origin/main`, validates managed identity, and rejects:
+the recorded remote-default ref, validates managed identity, and rejects:
 
 - dirty tracked or untracked paths outside the recorded scope;
 - branch-owned committed paths outside the recorded scope;
@@ -95,9 +105,10 @@ After a passing inspection:
 
 - `push` follows `commit-push` without changing its whole-repository staging or
   divergence rules;
-- `create-pr` follows `create-pr` on the same branch with base `main` without
-  changing its validation, merge-from-base, push, PR reuse, or check-waiting
-  rules.
+- `create-pr` follows `create-pr` on the same branch with the
+  `default_branch`, `default_ref`, and `default_head` returned by
+  `publication-begin`, without changing its validation, merge-from-base, push,
+  PR reuse, or check-waiting rules. Never infer or guess the base.
 
 Keep the reservation identity private and release it only after the child
 workflow returns successfully. If the process stops or the result is uncertain,
@@ -117,7 +128,7 @@ safe for this project-isolation workflow.
 ## Nested Coordinator Ownership
 
 When `task-implementer` or Agentic SDLC starts inside a managed linked worktree,
-it acquires a v2 worktree-owned lease with owner kind `task-implementer` or
+it acquires a v3 worktree-owned lease with owner kind `task-implementer` or
 `agentic-sdlc`. The lease is bound to the exact outer name, branch, path, scope,
 common Git directory, private workspace/run, task scope, and starting `HEAD`.
 Integration and worker resources are declared before creation and tracked
@@ -129,7 +140,8 @@ The lease makes the task coordinator internal to the outer workflow:
 - every wave or feature starts from the current exact outer branch `HEAD`;
 - worker branches merge into a temporary integration branch, then verified
   fast-forward promotion advances only the outer worktree branch;
-- per-wave cleanup removes internal worktrees and branches without force;
+- combined integration validation/review precedes exact-SHA worker cleanup,
+  and per-wave cleanup removes internal worktrees and branches without force;
 - the lease remains across all local work and final changed-surface alignment;
 - outer inspect, push, PR creation, and removal remain blocked until release.
 
@@ -141,8 +153,8 @@ migration.
 
 Agentic SDLC additionally requires final alignment, UAT, and documentation
 evidence before releasing its run-level lease. It then acquires the normal
-`create-pr` publication reservation. Lease v2 is independent from publication
-reservation schema v1; upgrading leases does not invalidate reservations.
+`create-pr` publication reservation. Lease v3 is independent from publication
+reservation schema v2; upgrading leases does not invalidate reservations.
 
 ## Cleanup Proof
 
@@ -159,8 +171,8 @@ requires matching durable ownership
 state, then requires a clean worktree and no in-progress operation. Cleanup is
 authorized only by one of:
 
-1. exactly one PR for the exact head branch and base `main` is `MERGED`, and
-   its `headRefOid` equals the local or remaining remote tip; or
+1. exactly one PR for the exact head branch and its recorded default base is
+   `MERGED`, and its `headRefOid` equals the local or remaining remote tip; or
 2. the branch was never published, has no PR, and contains no commit beyond
    its recorded creation base.
 

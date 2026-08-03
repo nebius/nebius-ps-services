@@ -34,6 +34,15 @@ Reject symptom masking such as:
 Never claim an unrun check passed. Record command, target, result, and any
 coverage limitation.
 
+For live product verification, also follow `live-product-validation.md`. Bind
+the proof to one declared candidate, target, checkpoint, and evidence lineage.
+A successful exit or healthy target after an out-of-band mutation does not
+prove the product fixed; require a clean replay from a declared or independently
+proven known-good checkpoint before the earliest product divergence or
+contamination, with product-owned transition evidence and independent
+authoritative postconditions. Treat nominally read-only observation as
+intervening when it can alter criterion-relevant state or execution.
+
 ## Outcome Classification
 
 - `VERIFIED_FIXED`: causal mechanism is proven or high confidence, repair is
@@ -92,6 +101,10 @@ coverage limitation.
 - Regression oracle:
 - Targeted and boundary checks:
 - Repeated or dynamic diagnostics:
+- Live trial status and claim scope:
+- Candidate, target, checkpoint, and replay range:
+- Intervention ledger and first contaminated boundary:
+- Product-owned transitions and independent postconditions:
 
 ## Residual Uncertainty And Next Action
 ```
@@ -125,7 +138,9 @@ runtime state where applicable.
 
 The optional Stop hook requests one correction when the report is missing a
 required section or marker-bound attempt and includes a bounded, redacted
-minimum report for the assistant to return. If the continued response is still
+minimum report for the assistant to return verbatim as the whole response. Do
+not prefix, enrich, or paraphrase its exact marker-derived fields. If the
+continued response is still
 incomplete, it stops instead of recursing indefinitely and emits that fallback
 as a UI/event-stream warning, not an assistant-authored response. For a
 historical exhausted v1 data marker that predates recorded `new_evidence`, the

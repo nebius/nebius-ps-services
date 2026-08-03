@@ -16,8 +16,8 @@ from prompt_workspace_core import (
 from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v4"
-WAVE_SCHEMA = "task-implementer/wave-v3"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v5"
+WAVE_SCHEMA = "task-implementer/wave-v4"
 ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
 RESULT_SCHEMA = "task-implementer/worker-result-v3"
 TASK_PLANE_SCHEMA = "task-implementer/task-plane-v5"
@@ -458,7 +458,7 @@ def assert_no_unfinished_v1(run_dir: Path) -> None:
             )
     raise PromptWorkspaceError(
         "WORKFLOW_UPGRADE_REQUIRED",
-        "execution-plane-v1 is unsupported; start a new v4 run",
+        "execution-plane-v1 is unsupported; start a new v5 run",
     )
 
 
@@ -472,16 +472,22 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         "task-implementer/coordinator-v1",
         "task-implementer/coordinator-v2",
         "task-implementer/coordinator-v3",
+        "task-implementer/coordinator-v4",
     }:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "coordinator-v1/v2/v3 is unsupported; start a new v4 run",
+            "legacy coordinator state is unsupported; start a new v5 run",
         )
     required = {
         "schema",
         "run_id",
         "base_branch",
         "initial_head",
+        "default_remote",
+        "default_branch",
+        "default_ref",
+        "default_head",
+        "promotion_source",
         "plan_sha256",
         "waves",
         "active_wave",
@@ -504,6 +510,19 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
     if value.get("status") not in {"running", "blocked", "done"}:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator status is invalid"
+        )
+    if (
+        value.get("default_remote") != "origin"
+        or not isinstance(value.get("default_branch"), str)
+        or not value["default_branch"]
+        or value.get("default_ref") != f"origin/{value['default_branch']}"
+        or not isinstance(value.get("default_head"), str)
+        or SHA_RE.fullmatch(str(value["default_head"])) is None
+        or value.get("promotion_source") not in {"existing", "auto-created"}
+        or value.get("base_branch") == value.get("default_branch")
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
         )
     return value
 

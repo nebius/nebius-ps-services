@@ -40,6 +40,9 @@ readiness only; fresh-session execution is required to observe activation.
     in project `<project>` between these UTC timestamps. Use runtime evidence
     only if it can distinguish the current dependency and saturation
     hypotheses, and keep production read-only."
+13. "$troubleshoot --attempt-limit=10 --time-limit-minutes=180 Diagnose this
+    persistent cross-layer failure, preserve new evidence between repairs, and
+    stop at the configured limit."
 
 ## Should Not Trigger Implicitly
 
@@ -64,6 +67,9 @@ readiness only; fresh-session execution is required to observe activation.
   should activate troubleshooting even when the first symptom is a test failure.
 - A first failed remediation should activate the bounded remediation contract
   before a second repair, even when the task began as ordinary implementation.
+- Optional budget flags are parsed only after an exact leading `$troubleshoot`;
+  quoted, fenced, embedded, malformed, or problem-trailing lookalikes do not
+  authorize a profile change.
 - A known Terraform, Helm, or cloud implementation should use the domain skill;
   an unexplained failure in the deployed stack should use troubleshooting and
   consult the domain skill for product-specific commands.

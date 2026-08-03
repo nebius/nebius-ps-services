@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: "Requires explicit invocation to create, publish, open a PR for, or safely remove an isolated full-repository Git worktree for one monorepo project. Use `$worktree` or `$worktree add` to start project work from `origin/main`, `$worktree push` or `$worktree create-pr` for serialized publication, and `$worktree remove` only after proof and after any nested Task Implementer or Agentic SDLC lease is released. Do not use implicitly, for parallel-agent orchestration, or for ordinary commit/PR requests outside managed worktrees."
+description: "Requires explicit invocation to create, exactly reuse, publish, open a PR for, or safely remove an isolated full-repository Git worktree for one monorepo project. Use `$worktree` or `$worktree add` to start from the dynamically resolved `origin` default, `$worktree add --reuse EXACT_NAME` to preserve an active managed worktree and its changes, publication actions for serialized push/PR work, and `$worktree remove` only after proof and nested-owner release. Do not use implicitly or for parallel orchestration."
 ---
 
 # Worktree
@@ -22,7 +22,7 @@ Require explicit invocation. Keep `policy.allow_implicit_invocation: false` in
 Expose exactly these actions:
 
 ```text
-$worktree [add] [<task description>] [--project <repo-relative-directory>]
+$worktree [add] [<task description>] [--project <repo-relative-directory>] [--reuse <exact-name>]
 $worktree push [<commit-message request>]
 $worktree create-pr [<title/body request>]
 $worktree remove <generated-worktree-name>
@@ -39,6 +39,12 @@ $worktree remove <generated-worktree-name>
   project scope because those paths may contain confidential identifiers.
 - Keep generated names internal until `add` returns them. Do not require the
   user to choose a unique identifier.
+- Reuse only when the caller supplies the exact generated name and it matches
+  one active manifest with the same project scope, task slug, registered path,
+  branch, and remote-default branch identity. Report existing dirty paths and
+  any remote-default HEAD drift while preserving the worktree unchanged;
+  drift blocks later inspect/publication. A scope/slug match alone is never
+  adoption authority.
 - Do not add compatibility aliases, a merge action, a force-remove action, or
   a standalone installed CLI.
 
@@ -63,7 +69,7 @@ $worktree remove <generated-worktree-name>
 ## Inputs
 
 - Python 3 on a Unix-like host and a current Git CLI.
-- A Git repository with an `origin` remote and `origin/main`.
+- A Git repository whose `origin` advertises an unambiguous symbolic `HEAD`.
 - Git credentials that can fetch and, for `push` or remote cleanup, update the
   exact managed branch.
 - An authenticated GitHub CLI for `create-pr` and `remove`; cleanup queries all
@@ -79,8 +85,8 @@ $worktree remove <generated-worktree-name>
 - Read `references/lifecycle.md` before executing any action.
 - For `push`, read and apply the current `commit-push` skill after acquiring
   the private managed-worktree publication reservation.
-- For `create-pr`, read and apply the current `create-pr` skill with base
-  `main` after acquiring the private managed-worktree publication reservation.
+- For `create-pr`, read and apply the current `create-pr` skill with the exact
+  recorded remote-default base after acquiring the private reservation.
 - Inspect applicable repository instructions and the current Git status before
   every mutation.
 - Verify version-sensitive Git and GitHub CLI behavior against current official
@@ -89,13 +95,13 @@ $worktree remove <generated-worktree-name>
 ## Writes
 
 - `add` creates a sibling `<repo-name>-worktrees/` directory, one linked
-  worktree, one `worktree/<generated-name>` local branch, and branch-associated
+  worktree, one `feature/<public-safe-task-and-suffix>` local branch, and branch-associated
   metadata in local Git configuration. It also records durable private
   ownership state under `<repo-name>-worktrees/.worktree-skill/` after fetch
   preflight and before the first managed branch or worktree mutation.
 - `push` may stage the full linked worktree, commit, and push the managed branch
   through `commit-push`.
-- `create-pr` may validate, commit, update from `origin/main`, push, and create
+- `create-pr` may validate, commit, update from the recorded remote default, push, and create
   or reuse a GitHub PR through `create-pr`.
 - `remove` may remove the clean linked worktree, delete its local branch, and
   conditionally delete its exact unchanged remote branch after merged-PR proof.
@@ -114,10 +120,12 @@ $worktree remove <generated-worktree-name>
    ```text
    python3 <skill-dir>/scripts/worktree_manager.py add \
      [--project <repo-relative-directory>] \
+     [--reuse <exact-generated-name>] \
      --task-slug <public-safe-slug>
    ```
 
-2. Let the helper fetch `origin`, require `origin/main`, validate the selected
+2. Let the helper resolve `origin` `HEAD` with `ls-remote --symref`, fetch that
+   exact branch, verify its advertised and fetched SHA agree, validate the selected
    scope, preserve unrelated primary-checkout dirt, and block dirty or
    branch-divergent work in the selected project.
 3. Let the helper create and re-observe the full-repository linked worktree
@@ -150,9 +158,10 @@ $worktree remove <generated-worktree-name>
 
 1. Acquire `publication-begin --publication-action create-pr` from the recorded
    project directory and keep its reservation identity private.
-2. Apply `create-pr` on the same managed branch with base `main`. Reuse an open
-   PR and preserve its validation, current-base merge, explicit push, and check
-   reporting rules.
+2. Apply `create-pr` on the same managed branch with the returned
+   `default_branch`, `default_ref`, and `default_head` as the exact recorded
+   default identity. Reuse an open PR and preserve its validation, current-base
+   merge, explicit push, and check reporting rules. Do not infer or guess a base.
 3. Only after the child flow returns successfully, release the exact private
    reservation with `publication-end --publication-action create-pr`. On an
    interrupted or uncertain attempt, repeat `$worktree create-pr` to resume it.
@@ -213,7 +222,7 @@ $worktree remove <generated-worktree-name>
 - Leases and reservations serialize cooperating skill workflows; they are not
   an OS sandbox against arbitrary processes. Stop and re-observe the checkout
   if an uncoordinated writer may be changing it.
-- An active v2 `task-implementer` or `agentic-sdlc` owner lease blocks
+- An active v3 `task-implementer` or `agentic-sdlc` owner lease blocks
   `inspect`, `push`, `create-pr`, and `remove` until every internal resource is
   cleaned, the outer branch is clean at the final promoted head, and the
   owner-specific final gates release the lease.
@@ -238,8 +247,9 @@ $worktree remove <generated-worktree-name>
 
 ## Completion Criteria
 
-- `add`: the registered worktree is clean, on the generated branch, at the
-  fetched `origin/main` SHA, and the project scope exists inside it.
+- `add`: the result is either the exact requested active worktree (with dirty
+  paths and remote-default HEAD drift reported and preserved) or a new clean registered worktree on its
+  generated branch at the verified remote-default SHA.
 - `push`: `commit-push` reports the exact managed branch pushed and final
   linked-worktree status.
 - `create-pr`: `create-pr` returns the PR number/URL and terminal or explicitly

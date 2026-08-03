@@ -72,6 +72,92 @@ _OTHER_VALID_ED25519_PUBLIC_KEY = _VALID_ED25519_PUBLIC_KEY.replace(
 )
 
 
+def test_managed_soperator_upgrade_continues_typed_checkpoint_under_same_locks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    attempts = 0
+
+    @contextmanager
+    def execution_lock(path: Path) -> Iterator[None]:
+        events.append(f"enter:{path.name}")
+        try:
+            yield
+        finally:
+            events.append(f"exit:{path.name}")
+
+    def run_locked(**_kwargs: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        events.append(f"run:{attempts}")
+        if attempts == 1:
+            raise soperator_migration_module.SoperatorMigrationCheckpointContinuation(
+                "final target values accepted",
+                boundary="final-target-values-accepted",
+                progress_evidence={"status": "accepted", "revision": 7},
+                retry_interval_seconds=0,
+            )
+
+    checkpoint_path = tmp_path / "checkpoint.json"
+    monkeypatch.setattr(cli_module, "SoperatorMigrationExecutionLock", execution_lock)
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_upgrade_checkpoint_path",
+        lambda *_args, **_kwargs: checkpoint_path,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_managed_soperator_cluster_upgrade_locked",
+        run_locked,
+    )
+
+    cli_module._run_managed_soperator_cluster_upgrade(  # noqa: SLF001
+        config_path=tmp_path / "config.yaml",
+        source_payload={},
+        target=cli_module._HelmChartUpgradeTarget(  # noqa: SLF001
+            selector="apps:soperator@cluster",
+            chart_id="soperator",
+            target_ref="cluster",
+        ),
+        to_chart_version="1.0.0",
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        node_group="",
+        disruption_policy="safe-surge",
+        drain_timeout="30m",
+        strategy_max_surge_count=None,
+        zero_surge_max_unavailable="all",
+        max_parallel_worker_groups=1,
+        backup_dir=None,
+        populate_jail_refresh="auto",
+        jail_persistent_mounts=(),
+        jail_sfs_resize_policy="reject",
+        jail_sfs_resize_to_gib=None,
+        job_policy="fail",
+        cancel_job=(),
+        requeue_job=(),
+        job_wait_timeout="0s",
+        job_refresh_interval="30s",
+        slurm_scheduling_pause=True,
+        login_session_policy="target-ready",
+        login_session_drain_timeout="0s",
+        dry_run=False,
+        interactive=False,
+    )
+
+    assert attempts == 2
+    assert events == [
+        "enter:config.lock",
+        "enter:execute.lock",
+        "run:1",
+        "run:2",
+        "exit:execute.lock",
+        "exit:config.lock",
+    ]
+
+
 def test_external_soperator_discovery_refresh_defers_during_jail_mutation_boundary() -> None:
     checkpoint = {
         "completed_phases": ["discovery-and-plan"],
@@ -2179,9 +2265,7 @@ def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_external_soperator_backup_recovery_requires_dedicated_noninteractive_flag() -> (
-    None
-):
+def test_external_soperator_backup_recovery_requires_dedicated_noninteractive_flag() -> None:
     command = (
         "nebius-cxcli",
         "ext-soperator",
@@ -2387,9 +2471,7 @@ def test_external_soperator_campaign_backup_verifier_rejects_unsafe_permissions(
     with pytest.raises(RuntimeError, match="unsafe file ownership or permissions") as exc_info:
         cli_module._external_soperator_campaign_backup_file_identity(archive)
 
-    assert cli_module._external_soperator_backup_failure_class(exc_info.value) == (
-        "archive-unsafe"
-    )
+    assert cli_module._external_soperator_backup_failure_class(exc_info.value) == ("archive-unsafe")
 
 
 def test_external_soperator_terminal_recovery_backup_uses_final_state_transition(
@@ -9173,10 +9255,7 @@ def test_create_interactive_existing_project_requires_confirmation(
     assert "Existing project detected." in result.output
     assert "Continue and overwrite the existing project folder from scratch?" in result.output
     assert (
-        result.output.count(
-            "Continue and overwrite the existing project folder from scratch?"
-        )
-        == 3
+        result.output.count("Continue and overwrite the existing project folder from scratch?") == 3
     )
     assert "(y/n, q/qq=stop wizard) [n]" not in result.output
     assert "Existing deployments root detected." not in result.output
@@ -15302,7 +15381,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Current segment: Kubernetes 1.31 -> 1.32 plus Soperator" in result.output
     assert "Remaining segments: none" in result.output
     assert "Campaign execution: one approved command continues" in result.output
-    assert "Resume command after a pending phase, error, or interrupt:" in result.output
+    assert "Resume command after resolving a reported safety blocker or interrupt:" in result.output
     assert "--target external-cluster --execute --approve" in result.output
     assert "--login-session-policy" not in result.output
     assert "--login-session-drain-timeout" not in result.output
@@ -15384,6 +15463,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         in result.output
     )
     assert "Failure handling contract:" in result.output
+    assert "Continuation contract:" in result.output
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
@@ -15731,8 +15811,13 @@ def test_external_checkpoint_readers_reconcile_before_strict_validation(
         reconciled.append(checkpoint)
         return True
 
-    def _validate(checkpoint: Mapping[str, object]) -> None:
+    def _validate(
+        checkpoint: Mapping[str, object],
+        *,
+        allow_source_binding_promotion: bool = False,
+    ) -> None:
         assert checkpoint["test_reconciled_before_validation"] is True
+        assert allow_source_binding_promotion is True
         validated.append(dict(checkpoint))
 
     monkeypatch.setattr(
@@ -16711,7 +16796,15 @@ def test_ext_soperator_upgrade_resumes_later_hop_with_journal_bound_replacement(
         "size_bytes": campaign_archive.stat().st_size,
         "sha256": hashlib.sha256(campaign_archive.read_bytes()).hexdigest(),
         "manifest_sha256": "test-manifest",
-        "included_categories": ["kubernetes", "recreation"],
+        "included_categories": [
+            "accounting",
+            "generated",
+            "kubernetes",
+            "recreation",
+            "slurm",
+            "soperator",
+            "source",
+        ],
     }
     checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
     live_snapshot = _old_soperator_snapshot_with_provider(
@@ -18272,12 +18365,14 @@ def test_external_soperator_resume_scope_tracks_cleanup_crash_windows() -> None:
     assert target_only["mode"] == "target-only"
 
 
-def test_external_soperator_resume_scope_uses_campaign_transition_after_phase_reset() -> None:
+def test_external_soperator_resume_scope_reads_v2_campaign_transition_before_promotion() -> None:
     checkpoint = _active_dual_cr_resume_checkpoint()
     checkpoint["phase_state"] = {}
     checkpoint["completed_segment_ids"] = ["segment-1"]
     checkpoint["slurmcluster_identity_transition"] = {
-        "schema": (soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA),
+        "schema": (
+            soperator_migration_module._SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_V2_SCHEMA  # noqa: SLF001
+        ),
         "phase_id": "rolling-compute-migration",
         "target_ref": "target-cluster",
         "origin_segment_id": "segment-1",
@@ -18553,6 +18648,30 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         "name": "external-cluster",
         "uid": "target-slurmcluster-uid",
     }
+    backup_path = tmp_path / "campaign-backup.tar.gz"
+    backup_path.write_bytes(b"campaign backup fixture\n")
+    backup_sha256 = hashlib.sha256(backup_path.read_bytes()).hexdigest()
+    backup_manifest_sha256 = "b" * 64
+    checkpoint["backup"] = {
+        "required": True,
+        "scope": "campaign",
+        "campaign_fingerprint": campaign["fingerprint"],
+        "origin_segment_id": first_segment_id,
+        "origin_source_report_fingerprint": "test-source-report",
+        "path": str(backup_path),
+        "size_bytes": backup_path.stat().st_size,
+        "sha256": backup_sha256,
+        "manifest_sha256": backup_manifest_sha256,
+        "included_categories": [
+            "accounting",
+            "generated",
+            "kubernetes",
+            "recreation",
+            "slurm",
+            "soperator",
+            "source",
+        ],
+    }
     checkpoint["slurmcluster_identity_transition"] = {
         "schema": (soperator_migration_module.SOPERATOR_SLURMCLUSTER_IDENTITY_TRANSITION_SCHEMA),
         "phase_id": "rolling-compute-migration",
@@ -18560,6 +18679,22 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
         "origin_segment_id": first_segment_id,
         "source": source_ref,
         "target": target_ref,
+        "execution_source": {
+            **target_ref,
+            "sshd_host_key_secret_name": "source-sshd-keys",
+        },
+        "source_binding_proof": {
+            "schema": (
+                soperator_migration_module._SOPERATOR_SLURMCLUSTER_EXECUTION_SOURCE_PROOF_SCHEMA
+            ),
+            "status": "verified",
+            "source": source_ref,
+            "target": target_ref,
+            "backup_origin_segment_id": first_segment_id,
+            "backup_archive_sha256": backup_sha256,
+            "backup_manifest_sha256": backup_manifest_sha256,
+            "source_sshd_host_key_secret_name": "source-sshd-keys",
+        },
         "target_values_apply_started_at": "2026-07-12T00:00:00Z",
         "handoff_bound_at": "2026-07-12T00:01:00Z",
         "source_cleanup": {
@@ -18617,6 +18752,24 @@ def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_record
 
     _stub_external_soperator_upgrade_kubeconfig(monkeypatch)
     _stub_external_soperator_upgrade_backup(monkeypatch)
+    monkeypatch.setattr(
+        cli_module,
+        "_verify_external_soperator_campaign_backup",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "_verified_external_upgrade_backup_identity",
+        lambda **_kwargs: (
+            {
+                "source_slurmcluster_ref": {
+                    **source_ref,
+                    "sshd_host_key_secret_name": "source-sshd-keys",
+                }
+            },
+            {"origin_segment_id": first_segment_id},
+        ),
+    )
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", collect_snapshot)
     monkeypatch.setattr(
         cli_module,

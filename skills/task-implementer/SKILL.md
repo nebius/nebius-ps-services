@@ -54,8 +54,11 @@ $task-implementer run <prompt-path-or-unique-filename>
 ## Inputs
 
 - One explicit public action.
-- The canonical project checkout, current named branch, repo instructions, and
-  immutable prompt snapshot.
+- The canonical project checkout, an `origin` with an unambiguous symbolic
+  default branch, repo instructions, and immutable prompt snapshot. A clean
+  checkout on that actual default is automatically switched to a deterministic
+  `feature/task-<run-hash>` promotion branch; an existing non-default branch is
+  reused rather than replaced.
 - When the checkout is owned by `worktree`, its exact managed outer identity,
   recorded scope, and current `HEAD`; that outer branch is the sole promotion
   target for the full task run.
@@ -145,7 +148,7 @@ and private result record.
 3. Combine overlapping work before IDs lock when it is one coherent result.
    Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
    cycles or malformed ownership. If the project checkout is a `worktree`
-   managed linked worktree, acquire its private v2 lease with owner kind
+   managed linked worktree, acquire its private v3 lease with owner kind
    `task-implementer` at the exact current
    outer `HEAD` before creating task resources. Reject any worker or
    coordinator write claim that escapes the managed task scope; never clip it.
@@ -193,7 +196,10 @@ Task states are
 
 For each wave:
 
-1. Require a clean named project branch and record its exact `HEAD`.
+1. Resolve and verify the actual remote default. Require a clean named project
+   branch; when it is that default, create and switch to the deterministic
+   run promotion branch from the verified default SHA. Otherwise retain the
+   existing branch. Record both identities and exact `HEAD` in coordinator v5.
 2. Register resource intent in the managed outer lease when present, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
@@ -285,21 +291,25 @@ For each wave:
    one final integration commit only for a non-empty diff. Product-code fixes
    become a new isolated correction task.
 11. Run combined validation and integration `code-review`; reconcile queued
-    steering. Invoke private `wave-promote` only when evidence is complete and
-    the primary checkout remains clean, on the recorded branch, at the recorded
-    base. Promotion is `git merge --ff-only <verified-integration-SHA>` after
-    verifying the integration branch still identifies that exact commit.
-12. Mark tasks done only after promotion. Invoke private `wave-cleanup`; unlock
-    and non-force-remove clean reachable worktrees, then ancestry-proven
-    branches with `git branch -d`. Cleanup uses `git worktree remove` without
-    force and records each absent resource in the outer lease. Never run broad
-    prune or gc. All worker and integration resources stay internal: they are
-    never pushed, published, or merged anywhere except the outer project branch.
+   steering. Once that evidence is bound to the unchanged integration tip,
+    unlock and remove every clean worker with
+    `git worktree remove <exact-worker-path>`, then delete each worker ref with
+    `git update-ref -d <ref> <exact-worker-tip>`. Dirty,
+    advanced, or unverifiable workers block promotion and remain intact.
+12. Invoke private `wave-promote` only after worker cleanup succeeds, the
+    primary checkout remains clean on the recorded promotion branch at its
+    recorded base, and the actual remote-default branch and HEAD still equal
+    their recorded identity. A common-Git-directory lock covers identity precheck,
+    `git merge --ff-only <verified-integration-SHA>`, and postcheck. Mark tasks
+    done only after promotion. Then `wave-cleanup` removes the integration
+    worktree first with `git worktree remove <exact-integration-path>` and its
+    branch second with an exact expected-old SHA. Never
+    run broad prune or gc. Internal branches are never pushed or published.
 
 ## Idempotency
 
 - Every Git mutation is journaled before execution and re-observed afterward.
-- Repeated `run` resumes recorded v4 execution state; it does not recreate assignments,
+- Repeated `run` resumes recorded v5 execution state; it does not recreate assignments,
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
@@ -313,7 +323,7 @@ For each wave:
   blocks outer inspect, push, PR creation, and removal. It releases only from a
   clean outer branch at the final promoted head with every internal resource
   absent. Missing or malformed coordination state fails closed.
-- Execution-plane-v1 and coordinator-v1/v2/v3 runs are unsupported and return
+- Execution-plane-v1 and coordinator-v1/v2/v3/v4 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.
 
@@ -348,7 +358,7 @@ For each wave:
   assumptions.
 - Do not let workers touch the primary checkout, other refs/worktrees, shared
   handoff/spec/docs, Git maintenance, external systems, or undeclared paths.
-- Do not push or publish internal task branches, target `origin/main`, or let
+- Do not push or publish internal task branches, target the remote default, or let
   outer `worktree` push/create-pr/remove run while the task lease is active.
 - Do not force-remove worktrees, force-delete branches, copy local state,
   initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,

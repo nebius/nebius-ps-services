@@ -11,6 +11,9 @@ must all identify the same commit. The merge uses one exact authorized
 `gh pr merge <pr-number-or-url> [--merge|--rebase|--squash]
 --match-head-commit <sha>` command. The merge-queue form omits the strategy.
 Other flags, implicit PR selection, and compound commands fail closed.
+The PR and its short-lived authorization must also name the actual symbolic
+`origin` default as their exact base branch and bind its recorded HEAD. A
+changed default branch or HEAD blocks the merge.
 
 ## Main Boundaries
 

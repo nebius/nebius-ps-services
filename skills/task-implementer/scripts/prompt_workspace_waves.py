@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
+import sys
 
 from prompt_workspace_core import (
     PromptWorkspaceError,
@@ -66,6 +67,17 @@ from prompt_workspace_runs import (
     read_handoff_text,
     scope_lock,
     verify_run,
+)
+
+
+WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
+if str(WORKTREE_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(WORKTREE_SCRIPTS))
+from git_promotion import (  # noqa: E402
+    GitPromotionError,
+    ensure_promotion_branch,
+    promote_ff_only,
+    verify_remote_default,
 )
 
 
@@ -330,6 +342,7 @@ def _load_wave(run_dir: Path, wave_id: str) -> dict[str, object]:
         "created_at",
         "updated_at",
         "promoted_head",
+        "workers_cleaned",
         "cleanup_retained",
     }
     if (
@@ -341,6 +354,12 @@ def _load_wave(run_dir: Path, wave_id: str) -> dict[str, object]:
         raise PromptWorkspaceError("EXECUTION_STATE_INVALID", "wave state is invalid")
     if value.get("status") not in WAVE_STATES:
         raise PromptWorkspaceError("EXECUTION_STATE_INVALID", "wave status is invalid")
+    if not isinstance(value.get("workers_cleaned"), bool) or not isinstance(
+        value.get("cleanup_retained"), list
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "wave cleanup state is invalid"
+        )
     task_ids = value.get("task_ids")
     states = value.get("task_states")
     if (
@@ -936,20 +955,23 @@ def plan_waves(
         if existing is not None:
             _existing_run_interop(manifest_path, workspace, run_dir, existing)
             return existing
-        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        _common_dir(repo)
-        if not _clean(repo):
-            raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT",
-                "project checkout must be clean before wave planning",
-            )
-        branch = _branch(repo)
-        base = _head(repo)
         text = read_handoff_text(run_dir)
         if text is None:
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "handoff is required before wave planning"
             )
+        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
+        _common_dir(repo)
+        try:
+            promotion = ensure_promotion_branch(
+                repo,
+                lifecycle_id=run_id,
+                task_slug="task",
+            )
+        except GitPromotionError as error:
+            raise PromptWorkspaceError("WORKTREE_CONFLICT", str(error)) from error
+        branch = str(promotion["promotion_branch"])
+        base = str(promotion["promotion_initial_head"])
         tasks = parse_task_plans(text)
         waves = build_dependency_waves(tasks)
         if not waves:
@@ -990,6 +1012,7 @@ def plan_waves(
                 "created_at": created,
                 "updated_at": created,
                 "promoted_head": None,
+                "workers_cleaned": False,
                 "cleanup_retained": [],
             }
             _save_wave(run_dir, wave)
@@ -1022,6 +1045,11 @@ def plan_waves(
             "run_id": run_id,
             "base_branch": branch,
             "initial_head": base,
+            "default_remote": promotion["remote"],
+            "default_branch": promotion["default_branch"],
+            "default_ref": promotion["default_ref"],
+            "default_head": promotion["default_head"],
+            "promotion_source": promotion["promotion_source"],
             "plan_sha256": sha256_json(plan),
             "waves": [
                 {
@@ -1061,7 +1089,7 @@ def replan_waves(
         coordinator = load_coordinator_state(run_dir)
         if coordinator is None:
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "run has no v4 coordinator"
+                "EXECUTION_STATE_INVALID", "run has no v5 coordinator"
             )
         active_wave = coordinator.get("active_wave")
         if coordinator["status"] == "running" and isinstance(active_wave, str):
@@ -1175,6 +1203,7 @@ def replan_waves(
                     else created
                 ),
                 "promoted_head": None,
+                "workers_cleaned": False,
                 "cleanup_retained": [],
             }
             if existing_wave is not None and existing_wave != wave:
@@ -2721,6 +2750,118 @@ def _replace_task_status(text: str, task_id: str, status: str) -> str:
     return text[: match.start(1)] + section + text[match.end(1) :]
 
 
+def _cleanup_resource(
+    *,
+    workspace: dict[str, object],
+    run_dir: Path,
+    wave: dict[str, object],
+    repo: Path,
+    kind: str,
+    worktree: Path,
+    branch: str,
+    expected_tip: str,
+    reachable_tip: str,
+    clock: Callable[[], datetime],
+) -> bool:
+    worktrees = _registered_worktrees(repo)
+    registration = worktrees.get(worktree.resolve())
+    registered = registration is not None
+    path_present = os.path.lexists(worktree)
+    branch_result = _git(
+        repo,
+        ["rev-parse", "--verify", f"refs/heads/{branch}"],
+        "read cleanup branch",
+        check=False,
+    )
+    if branch_result.returncode != 0:
+        if not registered and not path_present:
+            record_resource(
+                workspace,
+                run_dir,
+                kind=kind,
+                path=worktree,
+                branch=branch,
+                state="absent",
+            )
+            return True
+        return False
+    branch_commit = branch_result.stdout.decode("ascii", errors="strict").strip()
+    if branch_commit != expected_tip:
+        return False
+    reachable = (
+        _git(
+            repo,
+            ["merge-base", "--is-ancestor", branch_commit, reachable_tip],
+            "verify cleanup ancestry",
+            check=False,
+        ).returncode
+        == 0
+    )
+    if (
+        not reachable
+        or (path_present and not registered)
+        or (
+            registered
+            and (
+                registration.get("branch") != f"refs/heads/{branch}"
+                or _head(worktree) != expected_tip
+                or not _clean(worktree)
+            )
+        )
+    ):
+        return False
+    if registered:
+        _journaled_git(
+            _journal_path(run_dir, str(wave["wave_id"])),
+            repo,
+            ["worktree", "unlock", str(worktree)],
+            "unlock managed worktree",
+            clock,
+            check=False,
+        )
+        removal = _journaled_git(
+            _journal_path(run_dir, str(wave["wave_id"])),
+            repo,
+            ["worktree", "remove", str(worktree)],
+            "remove managed worktree",
+            clock,
+            check=False,
+        )
+        if removal.returncode != 0:
+            return False
+    deletion = _journaled_git(
+        _journal_path(run_dir, str(wave["wave_id"])),
+        repo,
+        ["update-ref", "-d", f"refs/heads/{branch}", expected_tip],
+        "delete exact managed branch tip",
+        clock,
+        check=False,
+    )
+    if deletion.returncode != 0:
+        return False
+    if (
+        os.path.lexists(worktree)
+        or worktree.resolve() in _registered_worktrees(repo)
+        or _git(
+            repo,
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            "verify cleanup branch removal",
+            check=False,
+        ).returncode
+        == 0
+    ):
+        return False
+    record_resource(
+        workspace,
+        run_dir,
+        kind=kind,
+        path=worktree,
+        branch=branch,
+        state="absent",
+    )
+    return True
+
+
 def promote_wave(
     manifest_path: Path,
     run_id: str,
@@ -2844,46 +2985,84 @@ def promote_wave(
                 "REPLAN_REQUIRED",
                 "coordinator final commit changed files outside shared documentation ownership",
             )
-        if _branch(repo) != coordinator["base_branch"]:
-            raise PromptWorkspaceError(
-                "PROMOTION_BLOCKED",
-                "primary checkout branch changed since wave preparation",
-            )
-        observed = _head(repo)
-        if observed == target and _clean(repo):
-            result = None
-        elif observed == wave["base_commit"] and _clean(repo):
-            result = _journaled_git(
-                _journal_path(run_dir, str(wave["wave_id"])),
-                repo,
-                ["merge", "--ff-only", target],
-                "promote the verified integration branch",
-                clock,
-                check=False,
-            )
-            observed = _head(repo)
-        else:
+        if (
+            _branch(repo) != coordinator["base_branch"]
+            or _head(repo) not in {wave["base_commit"], target}
+            or not _clean(repo)
+        ):
             raise PromptWorkspaceError(
                 "PROMOTION_BLOCKED",
                 "primary checkout moved or became dirty before promotion",
             )
-        if result is not None and result.returncode != 0 and observed != target:
-            classification = (
-                "unchanged" if observed == wave["base_commit"] else "unexpectedly_moved"
+        try:
+            verify_remote_default(
+                repo,
+                expected_remote=str(coordinator["default_remote"]),
+                expected_branch=str(coordinator["default_branch"]),
+                expected_ref=str(coordinator["default_ref"]),
+                expected_head=str(coordinator["default_head"]),
             )
+        except GitPromotionError as error:
+            raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
+        retained_workers: list[str] = []
+        for task_id in wave["task_ids"]:
+            assignment = _validated_assignment(
+                _assignment_path(run_dir, str(wave["wave_id"]), str(task_id))
+            )
+            _validate_assignment_context(
+                assignment,
+                workspace,
+                coordinator,
+                run_dir,
+                wave,
+                str(task_id),
+            )
+            plane = _load_task_plane(run_dir, str(wave["wave_id"]), str(task_id))
+            worktree = Path(str(assignment["worktree"]))
+            branch = str(assignment["branch"])
+            if not _cleanup_resource(
+                workspace=workspace,
+                run_dir=run_dir,
+                wave=wave,
+                repo=repo,
+                kind="worker",
+                worktree=worktree,
+                branch=branch,
+                expected_tip=str(plane["commit"]),
+                reachable_tip=target,
+                clock=clock,
+            ):
+                retained_workers.append(f"{worktree} ({branch})")
+        wave["workers_cleaned"] = not retained_workers
+        wave["cleanup_retained"] = retained_workers
+        wave["updated_at"] = _utc(clock)
+        _save_wave(run_dir, wave)
+        if retained_workers:
             raise PromptWorkspaceError(
-                "PROMOTION_FAILED", f"promotion result classified as {classification}"
+                "CLEANUP_BLOCKED",
+                "worker worktrees or branches could not be removed after combined validation",
             )
-        if observed != target:
-            raise PromptWorkspaceError(
-                "PROMOTION_FAILED",
-                "promotion did not publish the verified integration tip",
+        try:
+            verify_remote_default(
+                repo,
+                expected_remote=str(coordinator["default_remote"]),
+                expected_branch=str(coordinator["default_branch"]),
+                expected_ref=str(coordinator["default_ref"]),
+                expected_head=str(coordinator["default_head"]),
             )
-        if not _clean(repo):
-            raise PromptWorkspaceError(
-                "PROMOTION_FAILED",
-                "promotion reached the verified tip but a hook dirtied the checkout",
+        except GitPromotionError as error:
+            raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
+        try:
+            promotion = promote_ff_only(
+                repo,
+                expected_branch=str(coordinator["base_branch"]),
+                expected_base=str(wave["base_commit"]),
+                target=target,
             )
+        except GitPromotionError as error:
+            code = "PROMOTION_FAILED" if _head(repo) == target else "PROMOTION_BLOCKED"
+            raise PromptWorkspaceError(code, str(error)) from error
+        observed = str(promotion["head"])
         record_promotion(workspace, run_dir, observed)
         handoff = read_handoff_text(run_dir)
         if handoff is None:
@@ -2936,6 +3115,11 @@ def cleanup_wave(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "cleanup requires verified promotion"
             )
+        if wave.get("workers_cleaned") is not True:
+            raise PromptWorkspaceError(
+                "CLEANUP_BLOCKED",
+                "worker resources must be cleaned before promotion",
+            )
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         promoted = str(wave["promoted_head"])
         if (
@@ -2951,140 +3135,28 @@ def cleanup_wave(
         wave["updated_at"] = _utc(clock)
         retained: list[str] = []
         _save_wave(run_dir, wave)
-        resources: list[tuple[str, Path, str, str]] = []
-        for task_id in wave["task_ids"]:
-            assignment = _validated_assignment(
-                _assignment_path(run_dir, str(wave["wave_id"]), str(task_id))
-            )
-            _validate_assignment_context(
-                assignment,
-                workspace,
-                coordinator,
-                run_dir,
-                wave,
-                str(task_id),
-            )
-            plane = _load_task_plane(run_dir, str(wave["wave_id"]), str(task_id))
-            resources.append(
-                (
-                    "worker",
-                    Path(str(assignment["worktree"])),
-                    str(assignment["branch"]),
-                    str(plane["commit"]),
-                )
-            )
-        resources.append(
+        resources = [
             (
                 "integration",
                 Path(str(wave["integration_worktree"])),
                 str(wave["integration_branch"]),
                 promoted,
             )
-        )
+        ]
         for kind, worktree, branch, expected_tip in resources:
-            worktrees = _registered_worktrees(repo)
-            registration = worktrees.get(worktree.resolve())
-            registered = registration is not None
-            branch_result = _git(
-                repo,
-                ["rev-parse", "--verify", f"refs/heads/{branch}"],
-                "read cleanup branch",
-                check=False,
-            )
-            if branch_result.returncode != 0:
-                if not registered and not worktree.exists():
-                    record_resource(
-                        workspace,
-                        run_dir,
-                        kind=kind,
-                        path=worktree,
-                        branch=branch,
-                        state="absent",
-                    )
-                    continue
-                retained.append(f"{worktree} ({branch})")
-                continue
-            branch_commit = branch_result.stdout.decode(
-                "ascii", errors="strict"
-            ).strip()
-            if branch_commit != expected_tip:
-                retained.append(f"{worktree} ({branch})")
-                continue
-            reachable = (
-                _git(
-                    repo,
-                    ["merge-base", "--is-ancestor", branch_commit, promoted],
-                    "verify cleanup ancestry",
-                    check=False,
-                ).returncode
-                == 0
-            )
-            if (
-                not reachable
-                or (worktree.exists() and not registered)
-                or (
-                    registered
-                    and (
-                        registration.get("branch") != f"refs/heads/{branch}"
-                        or _head(worktree) != expected_tip
-                        or not _clean(worktree)
-                    )
-                )
-            ):
-                retained.append(f"{worktree} ({branch})")
-                continue
-            if registered:
-                _journaled_git(
-                    _journal_path(run_dir, str(wave["wave_id"])),
-                    repo,
-                    ["worktree", "unlock", str(worktree)],
-                    "unlock managed worktree",
-                    clock,
-                    check=False,
-                )
-                removal = _journaled_git(
-                    _journal_path(run_dir, str(wave["wave_id"])),
-                    repo,
-                    ["worktree", "remove", str(worktree)],
-                    "remove managed worktree",
-                    clock,
-                    check=False,
-                )
-                if removal.returncode != 0:
-                    retained.append(f"{worktree} ({branch})")
-                    continue
-            deletion = _journaled_git(
-                _journal_path(run_dir, str(wave["wave_id"])),
-                repo,
-                ["branch", "-d", branch],
-                "delete reachable managed branch",
-                clock,
-                check=False,
-            )
-            if deletion.returncode != 0:
-                retained.append(f"{worktree} ({branch})")
-                continue
-            if (
-                worktree.exists()
-                or worktree.resolve() in _registered_worktrees(repo)
-                or _git(
-                    repo,
-                    ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-                    "verify cleanup branch removal",
-                    check=False,
-                ).returncode
-                == 0
-            ):
-                retained.append(f"{worktree} ({branch})")
-                continue
-            record_resource(
-                workspace,
-                run_dir,
+            if not _cleanup_resource(
+                workspace=workspace,
+                run_dir=run_dir,
+                wave=wave,
+                repo=repo,
                 kind=kind,
-                path=worktree,
+                worktree=worktree,
                 branch=branch,
-                state="absent",
-            )
+                expected_tip=expected_tip,
+                reachable_tip=promoted,
+                clock=clock,
+            ):
+                retained.append(f"{worktree} ({branch})")
         wave["cleanup_retained"] = retained
         wave["updated_at"] = _utc(clock)
         if retained:

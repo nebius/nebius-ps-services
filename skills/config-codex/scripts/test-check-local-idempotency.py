@@ -21,35 +21,60 @@ SCRIPT = Path(__file__).resolve().with_name("check-local-idempotency.py")
 CREATE_RECOVERY_SCRIPT = Path(__file__).resolve().with_name("create-recovery-config.py")
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = SKILL_ROOT / "assets"
+EXPECTED_AGENT_DESCRIPTIONS = {
+    "repo_mapper": (
+        "Read-only codebase explorer for relevant files, symbols, execution "
+        "paths, dependencies, and conventions."
+    ),
+    "test_strategist": (
+        "Read-only verification planner for tests, fixtures, CI commands, "
+        "local commands, and validation gaps."
+    ),
+    "risk_reviewer": (
+        "Read-only reviewer focused on correctness, regressions, security, "
+        "compatibility, edge cases, and missing tests."
+    ),
+}
 MANAGED_BLOCK = "\n".join(
     [
         "<!-- BEGIN config-codex managed context -->",
         "## Working Defaults",
         "",
-        "- After one remediation fails against the same blocker, use",
-        "  `troubleshoot` before another repair. Each blocker tranche has a hard",
-        "  maximum of five remediation attempts or 120 active minutes, whichever",
-        "  comes first; a current instruction may lower but never raise or",
-        "  disable the attempt maximum. Require newly acquired evidence and a",
-        "  genuinely new evidence-derived hypothesis before every retry. Report",
-        "  attempts 1 through 4 as progress; at exhaustion,",
-        "  make only the exact private task-state update that records the stop, then call",
-        "  no other tool and return the complete troubleshooting report. If the evidence",
-        "  or hypothesis gate cannot be satisfied earlier, stop and return the",
-        "  structured investigation report. Only a new explicit user",
-        "  instruction may start another bounded tranche.",
-        "- When evidence establishes a causally independent blocker, start its",
-        "  own fresh budget at attempt 1. Use the five-attempt maximum and default",
-        "  120-minute limit unless the current instruction sets a lower attempt",
-        "  limit or another time limit for the new blocker. Do not carry attempts,",
-        "  active time, tranche, exhaustion status, or stop trigger from another",
-        "  blocker. Permission denials and marker validation or repair consume no",
-        "  attempt.",
         "- Agents may clean up temporary trees they created during the current",
         "  task. Resolve and validate the exact task-specific path under the",
         "  system temporary directory first, use a scoped non-forced deletion",
         '  such as `find "$task_temp_dir" -depth -delete`, and never target the',
         "  temporary root or an unresolved variable.",
+        "",
+        "## Live Product Validation",
+        "",
+        "- When a live target is used to verify product behavior, define and freeze the",
+        "  expected product-owned behavior and keep the declared product workflow",
+        "  separate from fixture setup, environment recovery, and independent",
+        "  verification. Observation is non-intervening only when it cannot alter",
+        "  criterion-relevant state or execution; classify nominally read-only actions",
+        "  by their effect. Changing the declaration starts a new trial and never cleans",
+        "  earlier evidence.",
+        "- The agent may operate the product and perform authorized recovery, but a",
+        "  mutation outside the declared product workflow that performs, bypasses, or",
+        "  pre-satisfies a product-owned step marks the affected trial and dependent",
+        "  evidence as intervened. Recovery authorization never makes that evidence",
+        "  valid proof.",
+        "- Confirmed non-production may receive bounded reversible changes within",
+        "  existing authority. Production and unconfirmed targets remain read-only",
+        "  without exact action authorization. Destructive, irreversible, credential,",
+        "  IAM, data, public-exposure, deletion, material-cost, or material-availability",
+        "  actions require action-specific approval in every environment.",
+        "- Fix the proven causal owner at its authoritative boundary. A product-fixed",
+        "  claim requires an implemented source or configuration repair; environment,",
+        "  test, harness, or evaluator defects are repaired at their owner and rerun",
+        "  without claiming a product fix.",
+        "- Replay from a declared or independently proven known-good product-supported",
+        "  checkpoint before the earliest product divergence or first contaminated",
+        "  boundary, whichever came first. Prove prior writers are quiescent, observe",
+        "  the product perform the relevant transition, and verify authoritative",
+        "  postconditions independently. Otherwise report mitigation or a blocker, not",
+        "  a verified fix.",
         "",
         "## Nested project instructions",
         "",
@@ -105,7 +130,44 @@ def copy_template(source: Path, target: Path) -> None:
     target.write_bytes(source.read_bytes())
 
 
+def markdown_section(value: str, heading: str) -> str:
+    lines = value.splitlines()
+    start = lines.index(heading)
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end]).strip()
+
+
 class CheckLocalIdempotencyTest(unittest.TestCase):
+    def test_custom_agent_templates_have_aligned_required_metadata(self) -> None:
+        for name, description in EXPECTED_AGENT_DESCRIPTIONS.items():
+            with self.subTest(name=name):
+                template = ASSETS / "agents" / f"{name}.toml.template"
+                with template.open("rb") as handle:
+                    agent = tomllib.load(handle)
+                self.assertEqual(agent.get("name"), name)
+                self.assertEqual(agent.get("description"), description)
+                self.assertEqual(agent.get("sandbox_mode"), "read-only")
+                self.assertIsInstance(agent.get("developer_instructions"), str)
+                self.assertTrue(agent["developer_instructions"].strip())
+
+    def test_agents_template_excludes_troubleshoot_owned_policy(self) -> None:
+        template = (ASSETS / "AGENTS.md.template").read_text(encoding="utf-8")
+        for forbidden in (
+            "After one remediation fails against the same blocker",
+            "When evidence establishes a causally independent blocker",
+            "remediation attempts or 60 active minutes",
+            "remediation attempts or 120 active minutes",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, template)
+
     def test_agents_template_has_nested_project_conflict_policy(self) -> None:
         template = (ASSETS / "AGENTS.md.template").read_text(encoding="utf-8")
         for term in (
@@ -118,6 +180,47 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         ):
             with self.subTest(term=term):
                 self.assertIn(term, template)
+
+    def test_agents_template_has_live_product_validation_policy(self) -> None:
+        template = (ASSETS / "AGENTS.md.template").read_text(encoding="utf-8")
+        normalized_template = " ".join(template.split())
+        for document in (template, MANAGED_BLOCK):
+            headings = [
+                line
+                for line in document.splitlines()
+                if line.startswith("#")
+                and line.lstrip("# ").startswith("Live Product Validation")
+            ]
+            self.assertEqual(headings, ["## Live Product Validation"])
+        self.assertEqual(
+            " ".join(
+                markdown_section(
+                    template, "## Live Product Validation"
+                ).split()
+            ),
+            " ".join(
+                markdown_section(
+                    MANAGED_BLOCK, "## Live Product Validation"
+                ).split()
+            ),
+        )
+        for term in (
+            "## Live Product Validation",
+            "define and freeze the expected product-owned behavior",
+            "Observation is non-intervening only when it cannot alter criterion-relevant state or execution",
+            "classify nominally read-only actions by their effect",
+            "Changing the declaration starts a new trial and never cleans earlier evidence",
+            "performs, bypasses, or pre-satisfies",
+            "Recovery authorization never makes that evidence valid proof",
+            "Production and unconfirmed targets remain read-only",
+            "action-specific approval in every environment",
+            "Fix the proven causal owner at its authoritative boundary",
+            "before the earliest product divergence or first contaminated boundary, whichever came first",
+            "Prove prior writers are quiescent",
+            "not a verified fix",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, normalized_template)
 
     def test_public_config_template_defaults_to_sol_xhigh_fast(self) -> None:
         template_path = ASSETS / "config.toml.template"
@@ -382,6 +485,29 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value), encoding="utf-8")
 
+    def write_agent_config(
+        self,
+        role_name: str,
+        **overrides: object,
+    ) -> None:
+        values: dict[str, object | None] = {
+            "name": role_name,
+            "description": EXPECTED_AGENT_DESCRIPTIONS.get(
+                role_name,
+                "Read-only additional role.",
+            ),
+            "sandbox_mode": "read-only",
+            "developer_instructions": "Remain read-only and report findings.",
+        }
+        values.update(overrides)
+        rendered = "\n".join(
+            f"{key} = {json.dumps(value)}"
+            for key, value in values.items()
+            if value is not None
+        )
+        path = self.codex_home / "agents" / f"{role_name}.toml"
+        path.write_text(f"{rendered}\n", encoding="utf-8")
+
     def create_task_implementer_workspace(self, mode: int = 0o700) -> Path:
         path = self.codex_home / "task-implementer"
         path.mkdir()
@@ -641,21 +767,34 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             result.stdout,
         )
 
-    def test_default_rejects_incomplete_remediation_policy(self) -> None:
-        required_lines = (
-            "  maximum of five remediation attempts or 120 active minutes, whichever",
-            "  disable the attempt maximum. Require newly acquired evidence and a",
-            "  genuinely new evidence-derived hypothesis before every retry. Report",
-            "  attempts 1 through 4 as progress; at exhaustion,",
-            "  no other tool and return the complete troubleshooting report. If the evidence",
-            "  instruction may start another bounded tranche.",
-            "  limit or another time limit for the new blocker. Do not carry attempts,",
-            "  blocker. Permission denials and marker validation or repair consume no",
-            "  temporary root or an unresolved variable.",
+    def test_default_rejects_missing_live_product_validation_policy(self) -> None:
+        start = MANAGED_BLOCK.index("## Live Product Validation")
+        end = MANAGED_BLOCK.index("## Nested project instructions")
+        incomplete = MANAGED_BLOCK[:start] + MANAGED_BLOCK[end:]
+        (self.codex_home / "AGENTS.md").write_text(
+            incomplete,
+            encoding="utf-8",
         )
-        for required_line in required_lines:
-            with self.subTest(required_line=required_line):
-                incomplete = MANAGED_BLOCK.replace(f"{required_line}\n", "", 1)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_rejects_weakened_live_product_validation_policy(self) -> None:
+        for fragment in (
+            "Changing the declaration starts a new trial and never cleans\n  earlier evidence.",
+            "bypasses, ",
+            "Production and unconfirmed targets remain read-only",
+            "actions require action-specific approval in every environment.",
+            "classify nominally read-only actions\n  by their effect.",
+            "earliest product divergence or first contaminated\n  boundary, whichever came first.",
+            "postconditions independently. Otherwise report mitigation or a blocker, not\n  a verified fix.",
+        ):
+            with self.subTest(fragment=fragment):
+                incomplete = MANAGED_BLOCK.replace(fragment, "", 1)
+                self.assertNotEqual(incomplete, MANAGED_BLOCK)
                 (self.codex_home / "AGENTS.md").write_text(
                     incomplete,
                     encoding="utf-8",
@@ -668,6 +807,266 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 )
                 self.assertIn(
                     "AGENTS.md managed block is stale or incomplete",
+                    result.stdout,
+                )
+
+    def test_default_rejects_duplicate_live_product_validation_policy(self) -> None:
+        duplicate = MANAGED_BLOCK.replace(
+            "## Nested project instructions",
+            "## Live Product Validation\n\n"
+            "- Recovery alone proves the product fixed.\n\n"
+            "## Nested project instructions",
+            1,
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            duplicate,
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_rejects_live_product_validation_override_heading(
+        self,
+    ) -> None:
+        override = MANAGED_BLOCK.replace(
+            "## Nested project instructions",
+            "## Live Product Validation Override\n\n"
+            "- Production recovery may ignore exact-action authorization.\n\n"
+            "## Nested project instructions",
+            1,
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            override,
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_rejects_live_product_policy_outside_managed_block(
+        self,
+    ) -> None:
+        for heading in (
+            "## Live Product Validation",
+            "## Live Product Validation Override",
+            "  ## Live Product Validation Override",
+            "   ### Live Product Validation",
+            "## **Live Product Validation Override**",
+            "## `Live Product Validation Override`",
+            "## [Live Product Validation Override](policy)",
+            "## live product validation override",
+            "## LIVE PRODUCT VALIDATION OVERRIDE",
+        ):
+            with self.subTest(heading=heading):
+                document = (
+                    f"{heading}\n\n"
+                    "- Recovery alone proves the product fixed.\n\n"
+                    f"{MANAGED_BLOCK}"
+                )
+                (self.codex_home / "AGENTS.md").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "AGENTS.md managed block is stale or incomplete",
+                    result.stdout,
+                )
+
+    def test_default_rejects_duplicate_managed_marker_pairs(self) -> None:
+        (self.codex_home / "AGENTS.md").write_text(
+            f"{MANAGED_BLOCK}\n\n{MANAGED_BLOCK}",
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_rejects_setext_live_product_policy_heading(self) -> None:
+        for underline in ("=", "-"):
+            with self.subTest(underline=underline):
+                document = (
+                    "Live Product Validation Override\n"
+                    f"{underline * 32}\n\n"
+                    "Recovery alone proves the product fixed.\n\n"
+                    f"{MANAGED_BLOCK}"
+                )
+                (self.codex_home / "AGENTS.md").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "AGENTS.md managed block is stale or incomplete",
+                    result.stdout,
+                )
+
+    def test_default_rejects_multiline_setext_policy_heading(self) -> None:
+        document = (
+            "Live Product Validation Override\n"
+            "continued title\n"
+            "---------------\n\n"
+            "Recovery alone proves the product fixed.\n\n"
+            f"{MANAGED_BLOCK}"
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            document,
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_rejects_inline_markup_in_setext_policy_heading(
+        self,
+    ) -> None:
+        for heading in (
+            "**Live Product Validation Override**",
+            "`Live Product Validation Override`",
+            "[Live Product Validation Override](policy)",
+            "LiVe PrOdUcT VaLiDaTiOn OvErRiDe",
+        ):
+            with self.subTest(heading=heading):
+                document = f"{heading}\n{'-' * 32}\n\n{MANAGED_BLOCK}"
+                (self.codex_home / "AGENTS.md").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "AGENTS.md managed block is stale or incomplete",
+                    result.stdout,
+                )
+
+    def test_default_ignores_live_product_headings_in_fenced_code(self) -> None:
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                document = (
+                    "# Markdown examples\n\n"
+                    f"{fence}markdown\n"
+                    "## Live Product Validation Override\n\n"
+                    "Live Product Validation Override\n"
+                    "--------------------------------\n"
+                    f"{fence}\n\n"
+                    f"{MANAGED_BLOCK}"
+                )
+                (self.codex_home / "AGENTS.md").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+                self.assert_check_passes()
+
+    def test_default_ignores_list_nested_fenced_code_headings(self) -> None:
+        examples = (
+            (
+                "- ```markdown\n"
+                "  ## Live Product Validation Override\n"
+                "  ```"
+            ),
+            (
+                "1. ~~~markdown\n"
+                "   Live Product Validation Override\n"
+                "   --------------------------------\n"
+                "   ~~~"
+            ),
+        )
+        for example in examples:
+            with self.subTest(example=example.splitlines()[0]):
+                document = f"# Markdown examples\n\n{example}\n\n{MANAGED_BLOCK}"
+                (self.codex_home / "AGENTS.md").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+                self.assert_check_passes()
+
+    def test_default_rejects_heading_after_invalid_backtick_fence(self) -> None:
+        document = (
+            "```markdown`\n"
+            "## Live Product Validation Override\n\n"
+            "Recovery alone proves the product fixed.\n\n"
+            f"{MANAGED_BLOCK}"
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            document,
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "AGENTS.md managed block is stale or incomplete",
+            result.stdout,
+        )
+
+    def test_default_does_not_open_invalid_backtick_fence(self) -> None:
+        document = (
+            "```markdown`\n"
+            "This is ordinary Markdown text, not a fenced code block.\n\n"
+            f"{MANAGED_BLOCK}"
+        )
+        (self.codex_home / "AGENTS.md").write_text(
+            document,
+            encoding="utf-8",
+        )
+        self.assert_check_passes()
+
+    def test_default_rejects_troubleshoot_owned_remediation_policy(self) -> None:
+        policies = (
+            "- After one remediation fails against the same blocker, stop after "
+            "three distinct failed remediation attempts or 60 active minutes.",
+            "- After one remediation fails against the same blocker, use "
+            "`troubleshoot` before another repair. Each blocker tranche has a hard "
+            "maximum of five remediation attempts or 120 active minutes.",
+            "- When evidence establishes a causally independent blocker, start its "
+            "own fresh budget at attempt 1.",
+        )
+        for policy in policies:
+            with self.subTest(policy=policy):
+                managed = MANAGED_BLOCK.replace(
+                    "## Working Defaults\n",
+                    f"## Working Defaults\n\n{policy}\n",
+                    1,
+                )
+                (self.codex_home / "AGENTS.md").write_text(
+                    managed,
+                    encoding="utf-8",
+                )
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "AGENTS.md managed block contains troubleshoot-owned "
+                    "remediation policy",
                     result.stdout,
                 )
 
@@ -705,6 +1104,23 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             result.stdout,
         )
 
+    def test_rejects_float_concurrent_thread_budget(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "max_concurrent_threads_per_session = 16",
+                "max_concurrent_threads_per_session = 16.0",
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "agents.max_concurrent_threads_per_session is not 16",
+            result.stdout,
+        )
+
     def test_rejects_legacy_and_undocumented_agent_limits(self) -> None:
         config_path = self.codex_home / "config.toml"
         config_path.write_text(
@@ -726,6 +1142,402 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("agents.max_threads is a legacy alias", result.stdout)
         self.assertIn("agents.max_depth is undocumented", result.stdout)
+
+    def test_rejects_missing_or_invalid_required_agent_metadata(self) -> None:
+        for field in ("name", "description", "developer_instructions"):
+            for label, value in (
+                ("missing", None),
+                ("empty", ""),
+                ("whitespace", "  \t"),
+                ("non-string", 7),
+            ):
+                with self.subTest(field=field, value=label):
+                    self.write_agent_config("repo_mapper", **{field: value})
+                    result = self.run_check()
+                    self.assertNotEqual(
+                        result.returncode,
+                        0,
+                        result.stdout + result.stderr,
+                    )
+                    self.assertIn(
+                        f"agents.repo_mapper.config_file {field}",
+                        result.stdout,
+                    )
+
+    def test_rejects_agent_name_or_description_drift_without_echoing_it(
+        self,
+    ) -> None:
+        for field, value in (
+            ("name", "PRIVATE_AGENT_NAME_SENTINEL"),
+            ("description", "PRIVATE_AGENT_DESCRIPTION_SENTINEL"),
+        ):
+            with self.subTest(field=field):
+                self.write_agent_config("repo_mapper", **{field: value})
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    f"agents.repo_mapper.config_file {field} does not match",
+                    result.stdout,
+                )
+                self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_rejects_missing_or_non_read_only_agent_sandbox(self) -> None:
+        for label, value in (("missing", None), ("write", "workspace-write")):
+            with self.subTest(value=label):
+                self.write_agent_config("repo_mapper", sandbox_mode=value)
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    "agents.repo_mapper.config_file sandbox_mode is not read-only",
+                    result.stdout,
+                )
+
+    def test_rejects_invalid_agent_declaration_description(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                f'description = "{EXPECTED_AGENT_DESCRIPTIONS["repo_mapper"]}"',
+                "description = 7",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "agents.repo_mapper.description must be a non-empty string",
+            result.stdout,
+        )
+
+    def test_validates_additional_configured_agent_metadata(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + """
+
+[agents.extra_role]
+description = "Read-only additional role."
+config_file = "agents/extra_role.toml"
+""",
+            encoding="utf-8",
+        )
+        extra_path = self.codex_home / "agents" / "extra_role.toml"
+        extra_path.write_text('sandbox_mode = "read-only"\n', encoding="utf-8")
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "additional configured agent #1.config_file name must be a "
+            "non-empty string",
+            result.stdout,
+        )
+        self.assertIn(
+            "additional configured agent #1.config_file description must be a "
+            "non-empty string",
+            result.stdout,
+        )
+        self.assertIn(
+            "additional configured agent #1.config_file developer_instructions "
+            "must be a "
+            "non-empty string",
+            result.stdout,
+        )
+
+        self.write_agent_config("extra_role")
+        self.assert_check_passes()
+
+    def test_rejects_additional_agent_identity_or_description_drift(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + """
+
+[agents.extra_role]
+description = "Read-only additional role."
+config_file = "agents/extra_role.toml"
+""",
+            encoding="utf-8",
+        )
+        for field, value in (
+            ("name", "PRIVATE_EXTRA_NAME_SENTINEL"),
+            ("description", "PRIVATE_EXTRA_DESCRIPTION_SENTINEL"),
+        ):
+            with self.subTest(field=field):
+                self.write_agent_config("extra_role", **{field: value})
+                result = self.run_check()
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                self.assertIn(
+                    f"additional configured agent #1.config_file {field} "
+                    "does not match",
+                    result.stdout,
+                )
+                self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_redacts_additional_agent_identifiers_and_metadata(self) -> None:
+        private_role = "PRIVATE_CUSTOMER_ROLE_SENTINEL"
+        private_config_name = "PRIVATE_CUSTOMER_CONFIG_SENTINEL.toml"
+        private_declared_description = "PRIVATE_DECLARATION_SENTINEL"
+        private_file_name = "PRIVATE_FILE_NAME_SENTINEL"
+        private_file_description = "PRIVATE_FILE_DESCRIPTION_SENTINEL"
+        private_instructions = "PRIVATE_INSTRUCTIONS_SENTINEL"
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + f"""
+
+[agents.{private_role}]
+description = "{private_declared_description}"
+config_file = "agents/{private_config_name}"
+""",
+            encoding="utf-8",
+        )
+        private_path = self.codex_home / "agents" / private_config_name
+        private_path.write_text(
+            "\n".join(
+                (
+                    f'name = "{private_file_name}"',
+                    f'description = "{private_file_description}"',
+                    'sandbox_mode = "workspace-write"',
+                    f'developer_instructions = "{private_instructions}"',
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined_output)
+        self.assertIn(
+            "additional configured agent #1.config_file name does not match",
+            result.stdout,
+        )
+        for private_value in (
+            private_role,
+            private_config_name,
+            private_declared_description,
+            private_file_name,
+            private_file_description,
+            private_instructions,
+        ):
+            with self.subTest(private_value=private_value):
+                self.assertNotIn(private_value, combined_output)
+
+    def test_rejects_directory_agent_target_without_path_disclosure(self) -> None:
+        private_role = "PRIVATE_DIRECTORY_ROLE_SENTINEL"
+        private_config_name = "PRIVATE_DIRECTORY_CONFIG_SENTINEL"
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + f"""
+
+[agents.{private_role}]
+description = "Private directory role."
+config_file = "agents/{private_config_name}"
+""",
+            encoding="utf-8",
+        )
+        (self.codex_home / "agents" / private_config_name).mkdir()
+
+        result = self.run_check()
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined_output)
+        self.assertIn(
+            "additional configured agent #1.config_file target must be a "
+            "regular non-symlink file",
+            result.stdout,
+        )
+        self.assertNotIn(private_role, combined_output)
+        self.assertNotIn(private_config_name, combined_output)
+        self.assertNotIn("Traceback", combined_output)
+
+    def test_rejects_symlinked_agent_target_without_path_disclosure(self) -> None:
+        private_role = "PRIVATE_SYMLINK_ROLE_SENTINEL"
+        private_config_name = "PRIVATE_SYMLINK_CONFIG_SENTINEL.toml"
+        private_target_name = "PRIVATE_SYMLINK_TARGET_SENTINEL.toml"
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + f"""
+
+[agents.{private_role}]
+description = "Private symlink role."
+config_file = "agents/{private_config_name}"
+""",
+            encoding="utf-8",
+        )
+        private_target = Path(self.tmp.name) / private_target_name
+        private_target.write_text(
+            "\n".join(
+                (
+                    f'name = "{private_role}"',
+                    'description = "Private symlink role."',
+                    'sandbox_mode = "read-only"',
+                    'developer_instructions = "Inspect only."',
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        (self.codex_home / "agents" / private_config_name).symlink_to(
+            private_target
+        )
+
+        result = self.run_check()
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined_output)
+        self.assertIn(
+            "additional configured agent #1.config_file target must be a "
+            "regular non-symlink file",
+            result.stdout,
+        )
+        for private_value in (
+            private_role,
+            private_config_name,
+            private_target_name,
+        ):
+            with self.subTest(private_value=private_value):
+                self.assertNotIn(private_value, combined_output)
+        self.assertNotIn("Traceback", combined_output)
+
+    def test_rejects_parent_symlink_escape_without_path_disclosure(self) -> None:
+        private_role = "PRIVATE_PARENT_ROLE_SENTINEL"
+        private_parent_name = "PRIVATE_PARENT_LINK_SENTINEL"
+        private_config_name = "PRIVATE_PARENT_CONFIG_SENTINEL.toml"
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + f"""
+
+[agents.{private_role}]
+description = "Private parent symlink role."
+config_file = "agents/{private_parent_name}/{private_config_name}"
+""",
+            encoding="utf-8",
+        )
+        private_parent = Path(self.tmp.name) / "outside-agents"
+        private_parent.mkdir()
+        (private_parent / private_config_name).write_text(
+            "\n".join(
+                (
+                    f'name = "{private_role}"',
+                    'description = "Private parent symlink role."',
+                    'sandbox_mode = "read-only"',
+                    'developer_instructions = "Inspect only."',
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        (self.codex_home / "agents" / private_parent_name).symlink_to(
+            private_parent,
+            target_is_directory=True,
+        )
+
+        result = self.run_check()
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined_output)
+        self.assertIn(
+            "additional configured agent #1.config_file must stay inside "
+            "Codex home",
+            result.stdout,
+        )
+        for private_value in (
+            private_role,
+            private_parent_name,
+            private_config_name,
+        ):
+            with self.subTest(private_value=private_value):
+                self.assertNotIn(private_value, combined_output)
+        self.assertNotIn("Traceback", combined_output)
+
+    def test_redacts_malformed_additional_agent_toml(self) -> None:
+        private_role = "PRIVATE_MALFORMED_ROLE_SENTINEL"
+        private_config_name = "PRIVATE_MALFORMED_CONFIG_SENTINEL.toml"
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + f"""
+
+[agents.{private_role}]
+description = "Private malformed role."
+config_file = "agents/{private_config_name}"
+""",
+            encoding="utf-8",
+        )
+        (self.codex_home / "agents" / private_config_name).write_text(
+            "name = PRIVATE_MALFORMED_VALUE_SENTINEL\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined_output)
+        self.assertIn(
+            "additional configured agent #1.config_file target is not valid TOML",
+            result.stdout,
+        )
+        for private_value in (
+            private_role,
+            private_config_name,
+            "PRIVATE_MALFORMED_VALUE_SENTINEL",
+        ):
+            with self.subTest(private_value=private_value):
+                self.assertNotIn(private_value, combined_output)
+        self.assertNotIn("Traceback", combined_output)
+
+    def test_load_toml_redacts_unreadable_path(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "config_codex_check_local_idempotency_unreadable",
+            SCRIPT,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        private_path = Path(self.tmp.name) / "PRIVATE_UNREADABLE_SENTINEL.toml"
+        failures: list[str] = []
+
+        with mock.patch.object(
+            module.Path,
+            "read_text",
+            side_effect=PermissionError(
+                f"PRIVATE_PERMISSION_SENTINEL: {private_path}"
+            ),
+        ), mock.patch("builtins.print") as print_mock:
+            result = module.load_toml(
+                private_path,
+                "additional configured agent #1.config_file target",
+                failures,
+            )
+
+        self.assertEqual(result, {})
+        self.assertEqual(
+            failures,
+            [
+                "additional configured agent #1.config_file target could not "
+                "be read safely"
+            ],
+        )
+        print_mock.assert_called_once_with(
+            "FAIL additional configured agent #1.config_file target could not "
+            "be read safely"
+        )
+        rendered_calls = repr(print_mock.call_args_list)
+        self.assertNotIn(str(private_path), rendered_calls)
+        self.assertNotIn("PRIVATE_PERMISSION_SENTINEL", rendered_calls)
 
     def test_template_mcp_audit_detects_drift(self) -> None:
         config_path = self.codex_home / "config.toml"

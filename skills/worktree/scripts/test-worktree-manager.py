@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -143,6 +145,62 @@ class WorktreeManagerTest(unittest.TestCase):
             "skills",
         )
 
+    def test_add_uses_nonstandard_symbolic_remote_default(self) -> None:
+        git("branch", "trunk", self.base, cwd=self.repo)
+        git("push", "-qu", "origin", "trunk", cwd=self.repo)
+        git("symbolic-ref", "HEAD", "refs/heads/trunk", cwd=self.origin)
+
+        result = self.add()
+
+        self.assertEqual(result["base_ref"], "origin/trunk")
+        self.assertEqual(result["base_sha"], self.base)
+
+    def test_add_uses_recorded_sha_when_remote_tracking_ref_advances(self) -> None:
+        original_git = wm._git
+        advanced: str | None = None
+
+        def advance_before_preflight(
+            cwd: Path, *arguments: str, allowed: Iterable[int] = (0,)
+        ) -> str:
+            nonlocal advanced
+            if arguments and arguments[0] == "merge-base" and advanced is None:
+                tree = git("rev-parse", f"{self.base}^{{tree}}", cwd=self.repo)
+                advanced = git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    self.base,
+                    "-m",
+                    "advance remote-tracking ref",
+                    cwd=self.repo,
+                )
+                git(
+                    "update-ref",
+                    "refs/remotes/origin/main",
+                    advanced,
+                    self.base,
+                    cwd=self.repo,
+                )
+            return original_git(cwd, *arguments, allowed=allowed)
+
+        with (
+            mock.patch.object(wm, "_git", side_effect=advance_before_preflight),
+            mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"),
+        ):
+            result = wm.add_worktree(
+                cwd=self.repo / "skills",
+                project=None,
+                task_slug="fix-triggers",
+            )
+
+        self.assertIsNotNone(advanced)
+        self.assertEqual(git("rev-parse", "origin/main", cwd=self.repo), advanced)
+        self.assertEqual(result["base_sha"], self.base)
+        self.assertEqual(
+            git("rev-parse", "HEAD", cwd=Path(str(result["worktree"]))),
+            self.base,
+        )
+
     def test_add_does_not_embed_project_scope_in_generated_identity(self) -> None:
         scope = self.repo / "customers" / "example-confidential"
         with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
@@ -153,7 +211,7 @@ class WorktreeManagerTest(unittest.TestCase):
             )
         self.assertEqual(result["scope"], "customers/example-confidential")
         self.assertEqual(result["name"], "project-fix-triggers-a7c2f9")
-        self.assertEqual(result["branch"], "worktree/project-fix-triggers-a7c2f9")
+        self.assertEqual(result["branch"], "feature/fix-triggers-a7c2f9")
         self.assertEqual(
             Path(str(result["worktree"])).name,
             "project-fix-triggers-a7c2f9",
@@ -191,7 +249,7 @@ class WorktreeManagerTest(unittest.TestCase):
             )
 
     def test_add_allows_scope_tree_already_squash_merged_to_main(self) -> None:
-        git("switch", "-qc", "feature", cwd=self.repo)
+        git("switch", "-qc", "topic", cwd=self.repo)
         skill = self.repo / "skills" / "skill.txt"
         skill.write_text("squashed result\n", encoding="utf-8")
         git("add", "-A", cwd=self.repo)
@@ -217,7 +275,7 @@ class WorktreeManagerTest(unittest.TestCase):
 
     def test_interrupted_add_rolls_back_resources_and_planned_manifest(self) -> None:
         name = "project-fix-triggers-a7c2f9"
-        branch = f"worktree/{name}"
+        branch = "feature/fix-triggers-a7c2f9"
         worktree = self.root / "example-monorepo-worktrees" / name
         with (
             mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"),
@@ -233,9 +291,61 @@ class WorktreeManagerTest(unittest.TestCase):
         self.assertFalse(wm._local_branch_exists(self.repo, branch))
         self.assertFalse(wm.manifest_path(self.repo, name).exists())
 
+    def test_add_reuses_only_the_exact_active_lifecycle_and_preserves_changes(
+        self,
+    ) -> None:
+        created = self.add()
+        worktree = Path(str(created["worktree"]))
+        changed = worktree / "skills" / "skill.txt"
+        changed.write_text("unfinished\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(wm.WorktreeError, "managed lifecycle"):
+            self.add()
+        reused = wm.add_worktree(
+            cwd=self.repo / "skills",
+            project=None,
+            task_slug="fix-triggers",
+            reuse=str(created["name"]),
+        )
+
+        self.assertEqual(reused["status"], "reused")
+        self.assertEqual(reused["worktree"], created["worktree"])
+        self.assertEqual(reused["branch"], created["branch"])
+        self.assertEqual(reused["dirty_paths"], ["skills/skill.txt"])
+        self.assertFalse(reused["remote_default_head_drift"])
+        self.assertEqual(changed.read_text(encoding="utf-8"), "unfinished\n")
+
+    def test_add_reuse_cli_returns_json_without_altering_dirty_changes(self) -> None:
+        created = self.add()
+        worktree = Path(str(created["worktree"]))
+        changed = worktree / "skills" / "skill.txt"
+        changed.write_text("unfinished\n", encoding="utf-8")
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(MODULE_PATH),
+                "add",
+                "--task-slug",
+                "fix-triggers",
+                "--reuse",
+                str(created["name"]),
+            ],
+            cwd=self.repo / "skills",
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "reused")
+        self.assertEqual(payload["dirty_paths"], ["skills/skill.txt"])
+        self.assertEqual(changed.read_text(encoding="utf-8"), "unfinished\n")
+
     def test_interrupted_add_with_failed_rollback_is_recoverable(self) -> None:
         name = "project-fix-triggers-a7c2f9"
-        branch = f"worktree/{name}"
+        branch = "feature/fix-triggers-a7c2f9"
         worktree = self.root / "example-monorepo-worktrees" / name
         original_write = wm._write_config
         original_run = wm._run
@@ -310,6 +420,37 @@ class WorktreeManagerTest(unittest.TestCase):
                 require_scope_clean=True,
             )
 
+    def test_inspect_rejects_recorded_remote_default_head_drift(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        tree = git("rev-parse", "HEAD^{tree}", cwd=self.repo)
+        advanced = git(
+            "commit-tree",
+            tree,
+            "-p",
+            self.base,
+            "-m",
+            "advance remote default",
+            cwd=self.repo,
+        )
+        git("push", "-q", "origin", f"{advanced}:refs/heads/main", cwd=self.repo)
+
+        reused = wm.add_worktree(
+            cwd=self.repo / "skills",
+            project=None,
+            task_slug="fix-triggers",
+            reuse=str(result["name"]),
+        )
+        self.assertEqual(reused["status"], "reused")
+        self.assertTrue(reused["remote_default_head_drift"])
+
+        with self.assertRaisesRegex(wm.WorktreeError, "remote default changed"):
+            wm.inspect_worktree(
+                cwd=worktree / "skills",
+                name=None,
+                require_scope_clean=True,
+            )
+
     def test_task_lease_blocks_outer_inspect_and_remove_until_release(self) -> None:
         result = self.add()
         worktree = Path(str(result["worktree"]))
@@ -351,7 +492,7 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertEqual(inspected["head"], outer_head)
 
-    def test_agentic_sdlc_owner_uses_v2_lease_and_releases_before_publication(
+    def test_agentic_sdlc_owner_uses_v3_lease_and_releases_before_publication(
         self,
     ) -> None:
         result = self.add()
@@ -366,7 +507,7 @@ class WorktreeManagerTest(unittest.TestCase):
             owner_kind="agentic-sdlc",
         )
         lease_id = str(acquired["token"])
-        self.assertEqual(acquired["schema"], 2)
+        self.assertEqual(acquired["schema"], 3)
         self.assertEqual(acquired["owner_kind"], "agentic-sdlc")
         resource = self.root / "agentic-integration"
         wm.task_lease_resource(
@@ -405,6 +546,32 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         publication = wm.publication_begin(cwd=worktree / "skills", action="create-pr")
         self.assertEqual(publication["status"], "acquired")
+        self.assertEqual(publication["default_branch"], "main")
+        self.assertEqual(publication["default_ref"], "origin/main")
+        self.assertEqual(publication["default_head"], self.base)
+
+    def test_publication_begin_cli_returns_recorded_default_identity(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(MODULE_PATH),
+                "publication-begin",
+                "--publication-action",
+                "create-pr",
+            ],
+            cwd=worktree / "skills",
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["default_branch"], "main")
+        self.assertEqual(payload["default_ref"], "origin/main")
+        self.assertEqual(payload["default_head"], self.base)
 
     def test_planned_resource_symlink_does_not_poison_lease_identity(self) -> None:
         result = self.add()
@@ -582,7 +749,22 @@ class WorktreeManagerTest(unittest.TestCase):
                 require_scope_clean=True,
             )
 
-    def test_unfinished_v1_lease_requires_workflow_upgrade(self) -> None:
+    def test_manifest_v1_is_rejected_without_compatibility_fallback(self) -> None:
+        result = self.add()
+        manifest_path = wm.manifest_path(self.repo, str(result["name"]))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema"] = 1
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(wm.WorktreeError, "unsupported ownership"):
+            wm.inspect_worktree(
+                cwd=self.repo,
+                name=str(result["name"]),
+                require_scope_clean=False,
+            )
+
+    def test_unfinished_legacy_leases_require_workflow_upgrade(self) -> None:
         result = self.add()
         worktree = Path(str(result["worktree"]))
         lease = (
@@ -593,7 +775,30 @@ class WorktreeManagerTest(unittest.TestCase):
             / f"{result['name']}.json"
         )
         lease.parent.mkdir(parents=True, exist_ok=True)
-        lease.write_text('{"schema": 1}\n', encoding="utf-8")
+        for schema in (1, 2):
+            with self.subTest(schema=schema):
+                lease.write_text(f'{{"schema": {schema}}}\n', encoding="utf-8")
+                with self.assertRaisesRegex(
+                    wm.WorktreeError, "WORKFLOW_UPGRADE_REQUIRED"
+                ):
+                    wm.inspect_worktree(
+                        cwd=worktree / "skills",
+                        name=None,
+                        require_scope_clean=True,
+                    )
+
+    def test_publication_reservation_v1_requires_workflow_upgrade(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        reservation = (
+            self.root
+            / "example-monorepo-worktrees"
+            / ".worktree-skill"
+            / "reservations"
+            / f"{result['name']}.json"
+        )
+        reservation.parent.mkdir(parents=True, exist_ok=True)
+        reservation.write_text('{"schema": 1}\n', encoding="utf-8")
         with self.assertRaisesRegex(wm.WorktreeError, "WORKFLOW_UPGRADE_REQUIRED"):
             wm.inspect_worktree(
                 cwd=worktree / "skills",

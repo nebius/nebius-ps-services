@@ -37,6 +37,10 @@ target repository's toolchain and current official language or runtime guidance.
 
 ## Inputs
 
+- Optional session budget flags immediately after the skill name:
+  `$troubleshoot --attempt-limit=N --time-limit-minutes=N <problem>`. Do not add
+  a `-- <problem>` separator. Omitted flags keep the saved session value; initial
+  defaults are 5 attempts and 120 active minutes, with maxima of 10 and 180.
 - The expected and actual behavior, error signature, request or job identifiers,
   timestamps, known-good and known-bad cases, and attempted mitigations.
 - Repository, command, service, host, container, cluster, deployment, database,
@@ -61,6 +65,9 @@ target repository's toolchain and current official language or runtime guidance.
   [infrastructure-failure-playbooks.md](references/infrastructure-failure-playbooks.md)
   for installed stacks, services, containers, networks, storage, databases,
   orchestrators, and distributed systems.
+- Read [live-product-validation.md](references/live-product-validation.md)
+  whenever a live target is used to verify product behavior or a product test
+  failure may require target stabilization or recovery.
 - Read [technique-selection.md](references/technique-selection.md) before using
   bisection, sanitizers, tracing, profiling, fuzzing, or repeated trials.
 - Read
@@ -227,6 +234,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    - Re-run the original reproducer, counterfactual, targeted tests, affected
      integration boundaries, relevant dynamic diagnostics, and enough repeated
      trials for intermittent failures. Confirm repository hygiene.
+   - For live product verification, require a clean replay under
+     `references/live-product-validation.md`; recovery or a healthy final state
+     alone cannot prove the product fixed.
 10. **REPORTED**
     - Classify the outcome as `VERIFIED_FIXED`, `MITIGATED_NOT_PROVEN`,
       `DIAGNOSED_NOT_FIXED`, `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
@@ -240,6 +250,11 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   and any explicit `diagnose only`, `read only`, or `do not change` boundary.
 - When the request asks to solve a problem and does not prohibit changes, repair
   code and tests once the causal mechanism is sufficiently supported.
+- For live product verification, freeze the declared product workflow for each
+  trial and keep it separate from environment intervention. Changing the
+  declaration starts a new evidence lineage. Authorized stabilization or
+  recovery may be necessary, but it marks affected evidence as intervened and
+  never substitutes for owner-correct repair and a later clean replay.
 - In confirmed non-production, allow bounded reversible service, configuration,
   rollout, scaling, or package changes when they are necessary to resolve the
   issue; preview or dry-run first when available and observe after every change.
@@ -273,10 +288,14 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - After three low-information experiments, stop and rebuild the model and
   hypothesis set before running another experiment.
 - After one remediation fails against a stable blocker, initialize the
-  remediation budget before a second repair. A blocker tranche permits no more
-  than five total remediation attempts and 120 active minutes, whichever is
-  reached first. A user may lower the attempt limit, but must not raise or
-  disable the five-attempt maximum.
+  remediation budget before a second repair. A blocker tranche starts at the
+  saved session profile: five total remediation attempts and 120 active minutes
+  by default, with hard maxima of 10 attempts and 180 minutes. The first reached
+  limit stops the tranche. Only the UserPromptSubmit authorization hook may
+  establish non-default marker values; prompt prose and `override_summary`
+  cannot. A current-task user may require an earlier workflow stop in prose. At
+  that earlier stop, leave `status: active` and `stop_trigger: null`, return a
+  normal report without `REMEDIATION_BUDGET_EXHAUSTED`, and wait.
 - Admit a retry only after new evidence obtained since the preceding failed
   attempt changes the model and supports a genuinely new hypothesis with a
   falsifiable prediction. Record them in the working ledgers before the retry
@@ -284,23 +303,28 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   verification. Rewording the same hypothesis or reusing the same evidence
   does not qualify.
 - When evidence establishes a causally independent blocker, replace the marker
-  with a fresh blocker budget: attempt 1, tranche 1, zero active time, and no
-  inherited attempts or stop trigger. This is not a continuation of the earlier
-  blocker and does not require a new user instruction.
+  with a fresh blocker budget: tranche 1, zero active time, an empty attempt
+  ledger, and no inherited stop trigger. Keep the next remediation plan in
+  prose; only after that remediation executes and verification completes does
+  it become attempt 1. This is not a continuation of the earlier blocker and
+  does not require a new user instruction.
 - Bind every completed attempt to the exact top-level marker `blocker_key`.
   Missing, mixed, or carried attempt bindings are invalid coordination state,
   not evidence that the new blocker exhausted its budget.
 - Treat permission denials and remediation-marker validation or repair as
   coordination events, not counted remediation attempts or budget exhaustion.
-- Report failed attempts 1 through 4 to the user. After the fifth failed attempt
-  or time exhaustion, set the marker to `exhausted`, call no other tools, and
-  transition directly to `REPORTED`.
+- Report each failed attempt before another repair. At the configured attempt or
+  time limit, set the marker to `exhausted`, call no other tools, and transition
+  directly to `REPORTED`.
 - If the new-evidence or new-hypothesis gate cannot be satisfied before the
   maximum, stop without another remediation and return the structured
   investigation report with the exact missing evidence and next action.
-- Never extend or reset a tranche for the same blocker without an explicit
-  current-task user instruction. A bare `continue` after the report starts a
-  fresh default tranche for that blocker, still capped at five attempts.
+- Never extend or reset a tranche for the same blocker without a new current-task
+  user instruction. Optional flags update the saved session profile. An active
+  resize is valid only when both resulting limits remain strictly above the
+  completed-attempt and consumed-active-time counters. An exhausted tranche is
+  never reopened; the next user instruction starts fresh state using the saved
+  profile.
 - Helper scripts must be safe to rerun and must replace only the exact output
   path selected by the user.
 
@@ -329,7 +353,7 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   `MODEL` or `HYPOTHESES` rather than defending the earlier explanation.
 - If a remediation tranche is exhausted, return `UNRESOLVED`,
   `BLOCKED_MISSING_EVIDENCE`, or `DIAGNOSED_NOT_FIXED` as supported by the
-  evidence; do not attempt a sixth remediation before a new user instruction.
+  evidence; do not attempt another remediation before a new user instruction.
 - If a retry lacks newly acquired evidence or a genuinely new hypothesis,
   return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported instead of
   repeating the prior remediation path.
@@ -400,6 +424,10 @@ Return:
   route when applicable, or why the repair remained local.
 - Remediation or mitigation performed, with authority and safety basis.
 - Regression oracle and verification evidence.
+- For live product verification, the declared trial boundary, candidate and
+  checkpoint identities, intervention and contamination record, clean replay
+  range, product-owned transition evidence, independent postconditions, and
+  exact scope of the supported claim.
 - Observability decision, matching-signal provenance, readiness reuse, stage,
   relevant structured facts, data gaps, and query cost when applicable.
 - Final outcome classification, residual uncertainty, and exact next action.
@@ -409,6 +437,9 @@ Return:
 - On budget exhaustion, the exact stop trigger, `REMEDIATION_BUDGET_EXHAUSTED`,
   the blocking error and source, every counted attempt, current state, and the
   user action required before another tranche.
+- When the Stop hook supplies its bounded marker-derived report, return that
+  report verbatim as the complete assistant response. Do not paraphrase,
+  enrich, prefix, or replace its exact `Blocker:` and attempt fields.
 - On an earlier retry-gate stop, the same structured investigation fields,
   the missing evidence or hypothesis, and the highest-information next action.
 

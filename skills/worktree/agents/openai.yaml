@@ -2,7 +2,8 @@ interface:
   display_name: "Worktree"
   short_description: "Manage isolated worktrees and nested coordinator ownership"
   default_prompt: "Use $worktree to create a safe isolated full-repository
-    worktree for the current monorepo project from origin/main, serialize
+    worktree for the current monorepo project from the actual symbolic origin
+    default, reuse an exact managed worktree only when explicitly selected, serialize
     publication actions, and keep nested Task Implementer or Agentic SDLC workers internal
     until their outer lease is released."
 policy:

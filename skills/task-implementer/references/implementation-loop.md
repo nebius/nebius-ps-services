@@ -195,8 +195,13 @@ Run combined validation and integration `code-review` in the integration
 worktree. Reconcile all queued steering. If steering contradicts the active
 wave, preserve the integration branch and stop before promotion.
 
-Recheck that the primary checkout is clean, on the recorded named branch, at
-the recorded base. Promote atomically:
+After combined evidence is bound to the integration tip, remove each verified
+clean worker worktree and delete its ref with an exact expected-old SHA. If a
+worker is dirty, advanced, or unverifiable, retain it and block promotion.
+
+Recheck that the primary checkout is clean, on the recorded named promotion
+branch, at the recorded base. Hold the common-Git-directory promotion lock
+through precheck, merge, and postcheck:
 
 ```text
 git merge --ff-only <verified-integration-SHA>
@@ -213,14 +218,15 @@ promotion-based, not worker-result-based.
 
 ## Cleanup
 
-After verified promotion, prove every temporary branch is reachable from the
-promoted project `HEAD`. For each clean managed worktree:
+After verified promotion, prove the integration branch is reachable from the
+promoted project `HEAD`. For its clean managed worktree:
 
 1. unlock the exact path;
 2. run non-force `git worktree remove <path>`;
-3. run `git branch -d <branch>`.
+3. run `git update-ref -d refs/heads/<branch> <exact-expected-tip>`.
 
-Remove task resources before the integration resource. Never use `--force`,
+Task resources were removed before promotion; remove the integration resource
+after promotion. Never use `--force`,
 `rm -rf`, broad `git worktree prune`, or `git gc`. Dirty, unreachable, or
 failed resources remain recorded. Cleanup failure does not roll back promotion.
 

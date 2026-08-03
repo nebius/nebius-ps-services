@@ -63,6 +63,8 @@ class HookTestCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.codex_home = self.root / "codex"
+        self.origin = self.root / "origin.git"
+        git(self.root, "init", "--bare", "-q", str(self.origin))
         self.project = self.root / "project"
         self.project.mkdir()
         try:
@@ -82,6 +84,15 @@ class HookTestCase(unittest.TestCase):
         )
         git(self.project, "add", ".")
         git(self.project, "commit", "-m", "initial")
+        git(self.project, "remote", "add", "origin", str(self.origin))
+        git(self.project, "push", "-u", "origin", "main")
+        git(self.origin, "symbolic-ref", "HEAD", "refs/heads/main")
+        git(
+            self.project,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -275,6 +286,8 @@ class HookTestCase(unittest.TestCase):
         authorization = {
             "allowed": True,
             "branch": "agent/test",
+            "base_branch": "main",
+            "base_head": git(self.project, "rev-parse", "origin/main"),
             "phase": name.removesuffix("-authorization.json"),
             "expires_at": expires.isoformat().replace("+00:00", "Z"),
         }
@@ -375,7 +388,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v4",
+                    "schema": "agentic-sdlc/execution-coordinator-v5",
                     "status": "done",
                     "base_branch": "main",
                     "project_root": str(self.project),
@@ -470,7 +483,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v4",
+                "schema": "agentic-sdlc/execution-coordinator-v5",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -1172,6 +1185,24 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_denied(result, "expected HEAD")
 
+    def test_pretool_denies_push_when_remote_default_head_advanced(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("Bash", "git push origin HEAD:agent/test"),
+            self.codex_home,
+        )
+        self.assert_denied(result, "base HEAD")
+
     def test_pretool_denies_push_without_passing_uat_authorization(self) -> None:
         self.switch_feature()
         run_dir = self.active_run()
@@ -1301,7 +1332,9 @@ class HookTestCase(unittest.TestCase):
         )
         result = run_hook(
             PRE_TOOL,
-            self.pre_payload("Bash", "gh pr create --head agent/test --fill"),
+            self.pre_payload(
+                "Bash", "gh pr create --base main --head agent/test --fill"
+            ),
             self.codex_home,
         )
         self.assertEqual(result, {})
@@ -1322,6 +1355,53 @@ class HookTestCase(unittest.TestCase):
             self.codex_home,
         )
         self.assert_denied(result, "head must match")
+
+    def test_pretool_denies_gh_pr_create_without_exact_base(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+        )
+        commands = (
+            "gh pr create --head agent/test --fill",
+            "gh pr create --base other --head agent/test --fill",
+            "gh pr create -Bother -Hagent/test --fill",
+            "gh pr create -B -Hagent/test --fill",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "base must match")
+
+    def test_pretool_denies_gh_pr_create_when_remote_default_head_advanced(
+        self,
+    ) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(
+            run_dir,
+            "pr-authorization.json",
+            phase="create-pr",
+            expected_head=git(self.project, "rev-parse", "HEAD"),
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "Bash", "gh pr create --base main --head agent/test --fill"
+            ),
+            self.codex_home,
+        )
+        self.assert_denied(result, "base HEAD")
 
     def test_pretool_denies_compound_gh_pr_create(self) -> None:
         self.switch_feature()
@@ -1384,7 +1464,12 @@ class HookTestCase(unittest.TestCase):
         run_dir = self.active_run()
         payload = self.pre_payload(
             "mcp__github__create_pull_request",
-            tool_input={"owner": "example", "repo": "demo", "head": "agent/test"},
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "main",
+                "head": "agent/test",
+            },
         )
         denied = run_hook(PRE_TOOL, payload, self.codex_home)
         self.assert_denied(denied, "PR authorization")
@@ -1401,10 +1486,27 @@ class HookTestCase(unittest.TestCase):
 
         wrong_head = self.pre_payload(
             "mcp__github__create_pull_request",
-            tool_input={"owner": "example", "repo": "demo", "head": "other"},
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "main",
+                "head": "other",
+            },
         )
         denied = run_hook(PRE_TOOL, wrong_head, self.codex_home)
         self.assert_denied(denied, "head must match")
+
+        wrong_base = self.pre_payload(
+            "mcp__github__create_pull_request",
+            tool_input={
+                "owner": "example",
+                "repo": "demo",
+                "base": "other",
+                "head": "agent/test",
+            },
+        )
+        denied = run_hook(PRE_TOOL, wrong_base, self.codex_home)
+        self.assert_denied(denied, "base must match")
 
     def test_pretool_denies_gh_pr_merge_without_authorization(self) -> None:
         self.switch_feature()
@@ -1468,6 +1570,27 @@ class HookTestCase(unittest.TestCase):
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assertEqual(result, {})
+
+    def test_pretool_denies_merge_when_remote_default_head_advanced(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        head = git(self.project, "rev-parse", "HEAD")
+        command = f"gh pr merge 42 --squash --match-head-commit {head}"
+        self.authorize(
+            run_dir,
+            "merge-authorization.json",
+            phase="sdlc-merge-pr",
+            pr="42",
+            expected_head=head,
+            exact_command=command,
+            explicit_user_request=True,
+            checks_status="passed",
+            review_status="passed",
+            uat_status="passed",
+            base_head="0" * 40,
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assert_denied(result, "base HEAD")
 
     def test_pretool_allows_exact_authorized_merge_queue_command(self) -> None:
         self.switch_feature()

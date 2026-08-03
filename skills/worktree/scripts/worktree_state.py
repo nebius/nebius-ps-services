@@ -11,7 +11,7 @@ import tempfile
 from typing import Any
 
 
-SCHEMA = 1
+SCHEMA = 2
 STATE_DIRECTORY = ".worktree-skill"
 STATUSES = {"planned", "active", "recovery", "cleanup-pending"}
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?$")
@@ -34,6 +34,10 @@ class Manifest:
     scope: str
     base: str
     task_slug: str
+    default_remote: str
+    default_branch: str
+    default_ref: str
+    default_head: str
     expected_head: str | None = None
 
     def updated(self, *, status: str, expected_head: str | None = None) -> "Manifest":
@@ -117,6 +121,10 @@ def load_manifest(
         "scope",
         "base",
         "task_slug",
+        "default_remote",
+        "default_branch",
+        "default_ref",
+        "default_head",
         "expected_head",
     }
     if set(payload) != expected:
@@ -134,6 +142,10 @@ def load_manifest(
         "scope",
         "base",
         "task_slug",
+        "default_remote",
+        "default_branch",
+        "default_ref",
+        "default_head",
     )
     if any(not isinstance(getattr(manifest, field), str) for field in string_fields):
         raise StateError(f"ownership manifest values are invalid: {path}")
@@ -143,9 +155,13 @@ def load_manifest(
         raise StateError(f"unsupported ownership manifest schema: {manifest.schema}")
     if manifest.status not in STATUSES:
         raise StateError(f"ownership manifest status is invalid: {path}")
-    if not NAME_RE.fullmatch(manifest.name) or manifest.name != name:
+    if (
+        not NAME_RE.fullmatch(manifest.name)
+        or manifest.name != name
+        or not manifest.name.startswith("project-")
+    ):
         raise StateError(f"ownership manifest name is invalid: {path}")
-    if manifest.branch != f"worktree/{manifest.name}":
+    if manifest.branch != f"feature/{manifest.name.removeprefix('project-')}":
         raise StateError(f"ownership manifest branch is invalid: {path}")
     if (
         not Path(manifest.primary).is_absolute()
@@ -159,6 +175,14 @@ def load_manifest(
         raise StateError(f"ownership manifest base is invalid: {path}")
     if not TASK_SLUG_RE.fullmatch(manifest.task_slug):
         raise StateError(f"ownership manifest task slug is invalid: {path}")
+    if (
+        manifest.default_remote != "origin"
+        or manifest.default_branch == ""
+        or manifest.default_ref != f"origin/{manifest.default_branch}"
+        or not OBJECT_ID_RE.fullmatch(manifest.default_head)
+        or manifest.default_head != manifest.base
+    ):
+        raise StateError(f"ownership manifest default identity is invalid: {path}")
     if manifest.expected_head is not None and (
         not isinstance(manifest.expected_head, str)
         or not OBJECT_ID_RE.fullmatch(manifest.expected_head)

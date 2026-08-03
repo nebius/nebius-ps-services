@@ -178,7 +178,7 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `execution/FEAT-*/coordinator.json`: schema-v4 feature execution identity,
+- `execution/FEAT-*/coordinator.json`: schema-v5 feature execution identity,
   exact base/integration SHAs, wave pointers, and promotion state.
 - `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `incoming-handoffs/`,
   `sessions/`, `results/`, and `journals/`: separate private records for
@@ -217,9 +217,11 @@ or `sdlc-create-design` before they become implementation truth.
 ### Feature execution plane
 
 One active feature has one persistent integration branch/worktree from
-pre-TDD preparation through final promotion. The original named project branch
-stays clean and fixed at its recorded base SHA during TDD, implementation,
-validation, tests, evaluation, documentation, and spec alignment.
+pre-TDD preparation through final promotion. The project promotion branch is
+either the current named non-default branch or a deterministic `feature/sdlc-*`
+branch created from the verified symbolic `origin` default. It stays clean and
+fixed at its recorded base SHA during TDD, implementation, validation, tests,
+evaluation, documentation, and spec alignment.
 
 The locked plan contains stable `TASK-*` records with requirement IDs,
 dependencies, exact/prefix write claims, conflict domains, focused validation,
@@ -536,7 +538,7 @@ The preflight must verify and record:
 - deterministic failure-event, diagnosis, repair-control, design-admission,
   corrective-plan, full task-definition digest, and Stop-hook route contracts
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs schema-v4 execution through promotion, proves the v2 outer
+  worktree, runs schema-v5 execution through promotion, proves the v3 outer
   lease blocks publication, releases after final evidence, and then acquires
   the create-PR reservation
 - duplicate SDLC skill-name detection
@@ -632,9 +634,11 @@ Required happy-path evidence:
   Multi-layer behavior docs are backed by evaluated slice evidence.
 - `sdlc-align-specs` confirms requirements, design, plan, implementation,
   documentation, slice evidence, and other evidence agree.
-- `sdlc-commit` seals final integration changes, verifies all evidence, and
-  fast-forwards the unchanged project branch to the exact integration tip only
-  after evidence passes, then non-force-cleans the integration resource.
+- `sdlc-commit` seals final integration changes, verifies all evidence and the
+  recorded remote-default identity, removes clean reachable worker resources,
+  and fast-forwards the unchanged project promotion branch to the exact
+  integration tip under the common-Git-directory lock. It then removes the
+  clean integration worktree and deletes its ref at the exact promoted SHA.
 - `sdlc-uat-tests` records product-level UAT evidence after all features are
   committed.
 - private SDLC state, plans, screenshots, transcripts, and evidence stay out
@@ -908,15 +912,17 @@ history cannot be preserved, the workflow stops for human direction.
 
 ### `sdlc-prepare-execution`
 
-Runs after plan lock and before TDD. It requires a clean named non-default
-project branch, validates the locked task graph, creates deterministic waves,
-and prepares or resumes the feature integration branch/worktree at the exact
-project base SHA. The exact folder selected by `workspace init` is enforced as
-the claim, worker-cwd, and changed-path boundary even in a monorepo. It records
-schema-v4 private execution state, supports confirmed interrupted-worker
-transfer and resource-free future-wave replanning, and acquires an
-`agentic-sdlc` v2 lease when nested in a managed outer worktree. It never
-implements behavior, promotes, or force-cleans resources.
+Runs after plan lock and before TDD. It requires a clean project checkout. A
+named non-default branch is reused; a checkout on the verified symbolic
+`origin` default is switched to a deterministic `feature/sdlc-*` promotion
+branch. It validates the locked task graph and prepares or resumes the feature
+integration branch/worktree at the exact project base SHA. The exact folder
+selected by `workspace init` is enforced as the claim, worker-cwd, and
+changed-path boundary even in a monorepo. It records schema-v5 private
+execution state, supports confirmed interrupted-worker transfer and
+resource-free future-wave replanning, and acquires an `agentic-sdlc` v3 lease
+when nested in a managed outer worktree. It never implements behavior,
+promotes, or force-cleans resources.
 `replan-future` serializes the transition, compares full canonical definitions
 and definition digests for every resource-owning wave, and replaces only
 resource-free planned future waves.

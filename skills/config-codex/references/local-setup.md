@@ -164,6 +164,12 @@ assets/agents/risk_reviewer.toml.template
   -> $CODEX_HOME/agents/risk_reviewer.toml
 ```
 
+Every standalone custom-agent TOML must contain a non-empty `name`,
+`description`, and `developer_instructions`. The `name` and `description` must
+match its `[agents.<name>]` declaration in `config.toml`, and `sandbox_mode`
+must remain `read-only`. Each configured target must be a regular non-symlink
+file that resolves inside Codex home.
+
 For hook scripts, custom-agent TOML files, and optional policy files, use
 replace-if-unmodified behavior:
 
@@ -214,24 +220,33 @@ If `$CODEX_HOME/AGENTS.md` is missing, create it from
 small managed section for `config-codex`/`global-context-management` guidance
 and leave unrelated user rules untouched. Marker presence alone is not enough:
 empty or stale managed blocks must be updated in place.
+The complete file must contain exactly one active live-product-validation
+heading. ATX and Setext headings are recognized; fenced code examples are
+ignored. Duplicate or override-like headings outside the managed section fail
+preflight.
 
-The managed section must include the global remediation default: after one
-failed repair against the same blocker, use `troubleshoot`, cap the blocker
-tranche at five remediation attempts or 120 active minutes, and allow a current
-instruction to lower but never raise or disable the attempt maximum. Require
-newly acquired evidence and a genuinely new evidence-derived hypothesis before
-every retry. Report failures 1 through 4 as progress; at exhaustion make only
-the exact private state update before stopping all other tools and returning the
-complete report. If the evidence or hypothesis gate cannot be satisfied
-earlier, stop and return the structured investigation report. Another bounded
-tranche requires a new explicit user instruction for the same blocker. A
-causally independent blocker starts its own fresh budget at attempt 1. Use the
-five-attempt maximum and default 120-minute limit unless the current instruction
-sets a lower attempt limit or another time limit for the new blocker. Do not
-carry attempts, active time, tranche, exhaustion status, or stop trigger from
-the earlier blocker. Permission denials and marker validation or repair consume
-no attempt. Preserve the active
-`codex-remediation-budget:v1` marker while rewriting private task state.
+The managed section must include exactly one canonical copy of the compact
+live-product-validation invariant from `assets/AGENTS.md.template`. It must keep
+declared product execution separate from fixture setup and recovery, freeze
+each trial declaration, mark out-of-band execution, bypass, or pre-satisfaction
+of a product-owned step as intervened evidence, classify nominally read-only
+actions by their criterion-relevant effects, and retain production and
+high-impact action-approval boundaries. It requires owner-correct repair and
+permits a verified-fix claim only after clean replay from a declared or
+independently proven known-good checkpoint before the earliest product
+divergence or contamination, with quiescent prior writers and independent
+postconditions. Detailed trial and reporting rules belong to `troubleshoot`,
+not the global file.
+
+The managed section must not duplicate `troubleshoot` attempt limits,
+retry-admission rules, blocker-tranche semantics, or exhaustion reporting.
+Those workflow semantics belong to the skill; its separately owned optional
+UserPromptSubmit/PreToolUse/Stop hook owns explicit budget authorization,
+mechanical validation, and enforcement. Keeping a second copy in global
+instructions allows policy drift and can cause a compliant agent to author a
+marker the current guard rejects. Preserve the active
+`codex-remediation-budget:v1` marker while rewriting private task state; this is
+continuity guidance only and does not define the marker's limits or lifecycle.
 
 The managed section must also permit agents to clean up temporary trees they
 created during the current task. Require the exact task-specific path to be

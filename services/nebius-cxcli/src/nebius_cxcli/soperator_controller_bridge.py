@@ -2539,6 +2539,44 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
                 and bool(str(takeover.get("jwt_material_proof_cleared_at") or ""))
                 and bridge_role_count == 2
             )
+            failure_receipt = takeover.get("last_target_start_failure")
+            recovery_refence_pending = (
+                str(authority.get("owner") or "") == "bridge-target"
+                and str(authority.get("epoch") or "")
+                == str(takeover.get("bridge_authority_epoch") or "")
+                and isinstance(target_stop_attempt, int)
+                and not isinstance(target_stop_attempt, bool)
+                and target_stop_attempt > 0
+                and bool(str(target_start.get("pod_uid") or ""))
+                and str(target_stop.get("pod_uid") or "") != str(target_start.get("pod_uid") or "")
+                and str(target_stop.get("node_name") or "")
+                == str(target_start.get("node_name") or "")
+                and bool(str(target_stop.get("node_uid") or ""))
+                and takeover.get("controller_pod_uid") == ""
+                and takeover.get("controller_workload_uid") == ""
+                and _required_mapping(
+                    takeover.get("jwt_material_proof"),
+                    field="bridge interrupted recovery cleared JWT proof",
+                )
+                == {}
+                and bool(str(takeover.get("jwt_material_proof_cleared_at") or ""))
+                and bridge_role_count == 2
+                and isinstance(failure_receipt, Mapping)
+                and failure_receipt.get("schema")
+                == "nebius-cxcli/target-singleton-start-failure-v1"
+                and failure_receipt.get("status") == "observed"
+                and str(failure_receipt.get("target_start_state") or "") == "accepted"
+                and str(failure_receipt.get("target_start_pod_uid") or "")
+                == str(target_start.get("pod_uid") or "")
+                and str(failure_receipt.get("target_start_node_name") or "")
+                == str(target_start.get("node_name") or "")
+                and failure_receipt.get("authority_owner") == "target-singleton"
+                and str(failure_receipt.get("authority_epoch_sha256") or "")
+                == hashlib.sha256(
+                    f"target-{str(journal.get('segment_epoch_suffix') or '')}".encode()
+                ).hexdigest()
+            )
+            recovery_authority = recovery_authority or recovery_refence_pending
             if recovery_authority:
                 _validate_runtime_fence_evidence(
                     takeover.get("target_runtime_fence"),

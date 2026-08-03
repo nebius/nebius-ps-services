@@ -253,11 +253,13 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "execution.sessions-recovery",
         "execution.replan",
         "execution.secret-gate",
+        "git.promotion-safety",
     },
     "sdlc-implement-plan": {
         "execution.sequential-fallback",
-        "interop.outer-lease-v2",
+        "interop.outer-lease-v3",
         "interop.task-implementer-compatibility",
+        "interop.task-implementer-promotion",
     },
 }
 SKILL_LANE_REQUIREMENTS = {
@@ -880,7 +882,7 @@ def check_design(ctx: Context) -> None:
         "task-recover",
         "replan-future",
         "sequential fallback",
-        "v2 outer",
+        "v3 outer",
         "verification-live-results-v3",
         "predefined runtime operational criterion",
         "non-Grafana provenance",
@@ -1125,7 +1127,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "replan-future",
                 "git merge --no-ff --no-edit",
                 "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v4",
+                "agentic-sdlc/execution-coordinator-v5",
             ],
         ),
         "locked plan task graph": (
@@ -1153,16 +1155,17 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "workspace-write",
             ],
         ),
-        "workflow state v2 with execution coordinator v4": (
+        "workflow state v2 with execution coordinator v5": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v4",
+                "agentic-sdlc/execution-coordinator-v5",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "sessions/<session-hash>.json",
                 'phase: "create-pr"',
                 "expected_head",
+                "base_head",
                 'uat_status: "passed"',
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
@@ -1176,8 +1179,9 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "PR_HEAD_DRIFT",
                 "sdlc-classify-failure",
                 "expected_head: <promoted_head>",
+                "base_head: <recorded-default-head>",
                 'uat_status: "passed"',
-                "gh pr create --head <branch>",
+                "gh pr create --base <origin-default> --head <branch>",
                 "Do not use a shell wrapper",
             ],
         ),
@@ -1198,6 +1202,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "exact promoted and reviewed SHA",
                 "--match-head-commit <promoted-sha>",
                 "exact_command",
+                "base_head: <recorded-default-head>",
                 "explicit_user_request: true",
                 "explicit PR number or URL",
                 "--admin",
@@ -1237,7 +1242,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             [
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
-                "coordinator schema v1, v2, or v3",
+                "coordinator schema v1, v2, v3, or v4",
                 "sdlc-update-documents, then sdlc-align-specs",
             ],
         ),
@@ -2262,8 +2267,16 @@ def check_capability_regressions(ctx: Context) -> None:
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             ctx.skills_root / "worktree",
         ),
+        "git-promotion": (
+            [sys.executable, "scripts/test-git-promotion.py", "-v"],
+            ctx.skills_root / "worktree",
+        ),
         "task-implementer": (
             [sys.executable, "scripts/test-worktree-interoperability.py", "-v"],
+            ctx.skills_root / "task-implementer",
+        ),
+        "task-waves": (
+            [sys.executable, "scripts/test-task-waves.py", "-v"],
             ctx.skills_root / "task-implementer",
         ),
         "hooks": (
@@ -2574,14 +2587,46 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("dispatch", "test_missing_codex_is_environment_blocker"),
             ),
         ),
-        "interop.outer-lease-v2": (
+        "git.promotion-safety": (
+            "Verified remote-default and exact promotion safety",
+            (
+                (
+                    "git-promotion",
+                    "test_resolves_symbolic_remote_default_without_name_guessing",
+                ),
+                (
+                    "git-promotion",
+                    "test_recorded_remote_default_head_drift_is_rejected",
+                ),
+                (
+                    "git-promotion",
+                    "test_ff_only_promotion_and_exact_branch_deletion",
+                ),
+                (
+                    "git-promotion",
+                    "test_promotion_lock_regular_file_fails_with_structured_error",
+                ),
+                (
+                    "worktree",
+                    "test_add_uses_recorded_sha_when_remote_tracking_ref_advances",
+                ),
+            ),
+        ),
+        "interop.outer-lease-v3": (
             "Managed outer-worktree lease lifecycle",
             (
                 (
                     "worktree",
-                    "test_agentic_sdlc_owner_uses_v2_lease_and_releases_before_publication",
+                    "test_agentic_sdlc_owner_uses_v3_lease_and_releases_before_publication",
                 ),
-                ("worktree", "test_unfinished_v1_lease_requires_workflow_upgrade"),
+                (
+                    "worktree",
+                    "test_unfinished_legacy_leases_require_workflow_upgrade",
+                ),
+                (
+                    "worktree",
+                    "test_publication_reservation_v1_requires_workflow_upgrade",
+                ),
                 (
                     "execution",
                     "test_managed_outer_execution_releases_before_publication",
@@ -2598,6 +2643,27 @@ def check_capability_regressions(ctx: Context) -> None:
                 (
                     "task-implementer",
                     "test_managed_write_claim_cannot_escape_outer_scope",
+                ),
+            ),
+        ),
+        "interop.task-implementer-promotion": (
+            "Task Implementer exact promotion and cleanup lifecycle",
+            (
+                (
+                    "task-waves",
+                    "test_full_repository_worktrees_ordered_merge_ff_promotion_and_cleanup",
+                ),
+                (
+                    "task-waves",
+                    "test_remote_default_head_drift_blocks_promotion_before_worker_cleanup",
+                ),
+                (
+                    "task-waves",
+                    "test_branch_advance_race_retains_worker_ref_and_blocks_promotion",
+                ),
+                (
+                    "task-waves",
+                    "test_legacy_wave_and_interop_schemas_are_rejected",
                 ),
             ),
         ),
@@ -2626,6 +2692,14 @@ def check_capability_regressions(ctx: Context) -> None:
                     "hooks",
                     "test_pretool_denies_gh_pr_create_without_explicit_head",
                 ),
+                (
+                    "hooks",
+                    "test_pretool_denies_gh_pr_create_without_exact_base",
+                ),
+                (
+                    "hooks",
+                    "test_pretool_denies_gh_pr_create_when_remote_default_head_advanced",
+                ),
                 ("hooks", "test_pretool_denies_compound_gh_pr_create"),
                 ("hooks", "test_pretool_guards_only_github_pr_creation_writes"),
             ),
@@ -2635,6 +2709,10 @@ def check_capability_regressions(ctx: Context) -> None:
             (
                 ("hooks", "test_pretool_denies_gh_pr_merge_without_authorization"),
                 ("hooks", "test_pretool_allows_exact_authorized_gh_pr_merge"),
+                (
+                    "hooks",
+                    "test_pretool_denies_merge_when_remote_default_head_advanced",
+                ),
                 (
                     "hooks",
                     "test_pretool_allows_exact_authorized_merge_queue_command",
@@ -3764,7 +3842,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Future-wave replan", "execution.replan"),
         ("Secret persistence gate", "execution.secret-gate"),
         ("Sequential fallback", "execution.sequential-fallback"),
-        ("Managed outer lease", "interop.outer-lease-v2"),
+        ("Managed outer lease", "interop.outer-lease-v3"),
         ("Task Implementer interoperability", "interop.task-implementer-compatibility"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),
@@ -3890,7 +3968,9 @@ def report(ctx: Context) -> str:
             "- `python3 -m unittest discover -v -s sdlc-prepare-execution/scripts -p 'test_*.py'`",
             "- `python3 sdlc-implement-plan/scripts/test_worker_dispatch.py -v`",
             "- `python3 worktree/scripts/test-worktree-manager.py -v`",
+            "- `python3 worktree/scripts/test-git-promotion.py -v`",
             "- `python3 task-implementer/scripts/test-worktree-interoperability.py -v`",
+            "- `python3 task-implementer/scripts/test-task-waves.py -v`",
             "- `python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py -v`",
             "- `python3 sdlc-evaluate/scripts/test_observability_contract.py -v`",
             "- `python3 sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py -v`",

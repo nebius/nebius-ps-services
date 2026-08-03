@@ -505,7 +505,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             integration_value = coordinator.get("integration_worktree")
             if (
                 coordinator.get("schema")
-                != "agentic-sdlc/execution-coordinator-v4"
+                != "agentic-sdlc/execution-coordinator-v5"
             ):
                 return "Agentic SDLC execution coordinator is inconsistent."
             fingerprint_ids = current_state.get("fingerprint_ids")

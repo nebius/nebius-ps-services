@@ -111,3 +111,7 @@ Stop for explicit approval before destructive, irreversible, credential, IAM,
 data, public-exposure, deletion, material-cost, or material-availability
 actions. Keep production and unconfirmed environments read-only until the user
 authorizes the exact action.
+
+When a live infrastructure change occurs while verifying product behavior,
+also follow `live-product-validation.md`. Mutation authority permits recovery;
+it does not make an intervened trial valid product evidence.

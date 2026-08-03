@@ -79,14 +79,68 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Raised the global `troubleshoot` same-blocker remediation budget from three
-  attempts and 60 active minutes to five attempts and 120 active minutes. The
-  hook still requires new evidence and a new falsifiable hypothesis before
-  every retry and requires newly written state to use the canonical v3 schema.
+- Added a hook-free global live-product-validation invariant and detailed
+  `troubleshoot` proof contract. Each trial freezes its declared workflow, and
+  later changes start a new lineage rather than laundering prior intervention.
+  Codex may operate that workflow and perform authorized stabilization or
+  recovery without weakening production or high-impact approval boundaries,
+  but out-of-band mutations that perform, bypass, or pre-satisfy product-owned
+  steps now mark the affected evidence intervened; nominally read-only actions
+  are classified by their criterion-relevant effects. Product-fixed claims
+  require owner-correct implemented repair, replay from a declared or
+  independently proven known-good checkpoint before the earliest product
+  divergence or contamination, quiescent prior writers, observed product-owned
+  transitions, and independent postconditions; checkpoint replay does not
+  overclaim whole-workflow success. Config Codex validates exactly one
+  canonical compact managed global policy, recognizes active ATX and Setext
+  policy headings while ignoring fenced examples, rejects duplicate or
+  override-like conflicting sections, and adds no hook.
+- Unified Git-worktree ownership across `worktree`, Task Implementer, and
+  Agentic SDLC. Workflows now resolve the actual symbolic `origin` default,
+  automatically create deterministic `feature/*` promotion branches when
+  starting there, reuse recorded non-default/managed identities, and bind PR
+  authorization to the exact promoted head plus recorded default branch and
+  SHA, failing closed on later default drift. Public worktrees support explicit
+  exact-name reuse without altering dirty changes. Shared promotion is ff-only
+  under a common-Git-directory lock. The `--project` documentation now makes
+  clear that it selects an existing repository-relative operating scope, not a
+  worktree destination or branch-naming input. Worker worktrees are removed
+  after combined evidence, integration worktrees after promotion, and all
+  internal refs are deleted with expected-old SHAs. Upgraded Task Implementer
+  coordinator state to v5 and wave state to v4, Agentic SDLC coordinator state
+  to v5, and made corresponding hard schema cuts to worktree ownership, lease,
+  and reservation state.
+- Made the `troubleshoot` remediation budget session-configurable with optional
+  `$troubleshoot --attempt-limit=N --time-limit-minutes=N` flags, 5/120
+  defaults, and hard 10/180 maxima. Bare invocations preserve the profile,
+  partial overrides preserve the other field, explicit 5/120 resets it, and
+  active reductions at or below consumed work fail without exhausting or
+  changing the tranche. A dedicated `UserPromptSubmit` hook writes a bounded,
+  atomic, workspace/session/turn-bound private authorization; v4 markers bind
+  exact values to it, pending active resizes preserve the ledger and counters,
+  and a terminal lock prevents exhausted state from being reopened without a
+  new user instruction. Marker deletion now remains fail-closed under that lock
+  while still admitting an exact marker restore. Previous v3 state is
+  repair-only and is not reinterpreted. Kept attempt limits, retry-admission
+  rules, blocker-tranche semantics, and exhaustion reporting out of the global
+  `AGENTS.md` template so the workflow skill and optional enforcement hook
+  remain the canonical owners at their respective boundaries. Config Codex now
+  rejects stale managed blocks that still contain either policy version.
+  Task-specific earlier stops remain workflow-owned, and free-text override
+  summaries record same-blocker continuation but cannot authorize numeric
+  limits. The workflow still requires new evidence and a new falsifiable
+  hypothesis before every retry and requires newly written state to use the
+  canonical v4 schema.
   It preserves historical exhausted v1 report delivery, makes previous v2 state
   fail closed for exact marker repair instead of adding a dual-limits
   compatibility path, and keeps fallback reports bounded while covering every
-  counted attempt.
+  counted attempt. The skill now requires the hook-provided terminal report to
+  be returned verbatim so exact marker-derived fields are not paraphrased away.
+- Made partial planned remediation-attempt markers recover atomically. The
+  canonical ledger now explicitly contains only post-verification records;
+  planned and in-progress work remains in prose with an empty ledger. The hook
+  reports every missing canonical field together and gives one remove-or-
+  complete repair action instead of prompting field-by-field repair cycles.
 - Split complete application scaffolding into three explicit ownership layers:
   `app-stack` now emits a closed logical-only technology handoff;
   `scaffold-project` schema v2 owns repository topology, per-path routing,
@@ -284,6 +338,10 @@ All notable changes to the reusable Codex skills are tracked here.
   `agents.max_concurrent_threads_per_session = 16`, removing the legacy
   `agents.max_threads` alias and undocumented `agents.max_depth` setting from
   the reusable baseline.
+- Required standalone custom-agent files to self-identify with aligned,
+  non-empty `name`, `description`, and `developer_instructions` metadata while
+  remaining read-only, with redacted regular non-symlink target validation plus
+  source, mirror, fixture, and preflight coverage.
 - Updated the public Codex config baseline to use `gpt-5.6-sol`, `xhigh`
   reasoning for normal and Plan modes, and the Fast service tier by default.
 - Refactored the read-only `code-info` skill to accept explicit project-folder

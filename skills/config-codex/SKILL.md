@@ -78,11 +78,28 @@ For existing `$CODEX_HOME/AGENTS.md`:
   unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
-- Keep the global remediation default, task-owned temporary cleanup rule,
-  nested-project instruction precedence/conflict policy, and task-state marker
-  preservation in that managed section so existing installations receive the
-  same policy as a newly rendered `AGENTS.md.template` without replacing
-  user-owned content.
+- Keep the task-owned temporary cleanup rule, live-product-validation
+  invariant, nested-project instruction precedence/conflict policy, and
+  task-state marker preservation in that managed section so existing
+  installations receive the same durable policy as a newly rendered
+  `AGENTS.md.template` without replacing user-owned content.
+- Keep live-product guidance compact: global instructions freeze each trial's
+  declared workflow, distinguish product execution from intervention, preserve
+  production and high-impact approval boundaries, and require owner-correct
+  repair plus clean replay from before the earliest product divergence or
+  contamination. Observation is non-intervening only when it cannot affect the
+  tested state or execution. Detailed trial, lineage, and reporting rules
+  remain in `troubleshoot`.
+- Require exactly one active live-product-validation heading across the
+  complete `AGENTS.md`; recognize ATX and Setext headings, ignore fenced code
+  examples, and reject duplicate or override-like headings outside the managed
+  section.
+- Do not duplicate `troubleshoot` attempt limits, retry-admission rules,
+  blocker-tranche semantics, or exhaustion reporting in global `AGENTS.md`.
+  The skill owns those workflow semantics and its separately owned optional
+  UserPromptSubmit/PreToolUse/Stop hook owns explicit budget authorization and
+  mechanical enforcement. Global context retains only marker-preservation
+  continuity for task-state rewrites.
 - If managed markers already exist, update only the content between those
   markers.
 - Treat empty or stale managed markers as incomplete; update the managed block
@@ -111,6 +128,11 @@ For existing `$CODEX_HOME/config.toml`:
   custom-agent config references as the minimal config surface for global
   context management. Do not add the legacy `agents.max_threads` alias or the
   undocumented `agents.max_depth` key.
+- Require every standalone custom-agent TOML to have a non-empty `name`,
+  `description`, and `developer_instructions`; keep `name` and `description`
+  aligned with its `[agents.<name>]` declaration and keep `sandbox_mode` set to
+  `read-only`. Require each configured target to be a regular non-symlink file
+  that resolves inside Codex home.
 - Treat explicit `[[skills.config]]` entries for `global-context-management`
   and `config-codex` as optional when the skills are already discoverable from
   the installed user skills directory.
@@ -354,5 +376,8 @@ This skill's global-context setup owns only `SessionStart` and
   lightweight context hints. Do not route `sdlc-start`, parse requirements,
   select workflow skills, create run state, or inject large documents.
 
-Workflow-specific guardrails such as Agentic SDLC must use separate event
-hooks, for example `PreToolUse` and `Stop`.
+Workflow-specific guardrails such as Agentic SDLC must use separate reviewed
+event hooks, for example `PreToolUse` and `Stop`. A separately owned workflow
+may also use its own `UserPromptSubmit` registration for a narrow explicit
+authorization syntax and bounded private state; that does not make the global
+prompt hook a workflow router.

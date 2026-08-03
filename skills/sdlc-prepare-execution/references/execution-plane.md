@@ -48,7 +48,7 @@ batches; batches do not change logical dependencies or wave IDs.
 
 ## State And Resources
 
-Private execution state uses `agentic-sdlc/execution-coordinator-v4`,
+Private execution state uses `agentic-sdlc/execution-coordinator-v5`,
 `execution-wave-v2`, `execution-task-v3`, `worker-assignment-v2`, and
 `worker-result-v4`. Wave, task, assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
@@ -60,7 +60,7 @@ retain append-only hashes of every
 worker session that has owned the task. A process-safe execution transition
 lock serializes task ownership, atomic private session claims prevent one
 identity from owning multiple tasks, and recovery requires the exact current
-attempt. Every coordinator v1/v2/v3 record fails
+attempt. Every coordinator v1/v2/v3/v4 record fails
 with `WORKFLOW_UPGRADE_REQUIRED` and retains resources, including completed
 records.
 
@@ -86,9 +86,10 @@ Branch/path components are sanitized IDs; never include prompt text or secrets.
    stable task-ID order with `git merge --no-ff --no-edit`.
 5. Run combined evidence at the exact integration tip and non-force-clean
    reachable worker resources.
-6. After all downstream evidence passes, fast-forward the clean project branch
-   to the verified integration tip with `git merge --ff-only` and
-   non-force-clean the integration resource.
+6. After all downstream evidence passes, hold the common-Git-directory lock
+   while fast-forwarding the clean project promotion branch to the verified
+   integration tip with `git merge --ff-only`, then non-force-remove the
+   integration worktree and delete its ref with the exact promoted SHA.
 
 The project branch remains at the recorded contract base throughout TDD,
 implementation, validation, testing, evaluation, documentation, and alignment.
@@ -111,13 +112,13 @@ assignments, worktrees, branches, results, commits, or active journals.
 Completed and current waves remain immutable, and every task in them must match
 both its full canonical definition and recorded definition digest.
 
-When execution starts inside a managed outer worktree, acquire the shared v2
+When execution starts inside a managed outer worktree, acquire the shared v3
 lease as owner `agentic-sdlc`, register integration/worker resources, and record
 each promoted feature head. Release only after all resources are absent and
 final alignment, UAT, and documentation evidence exists; PR publication begins
 after release.
 
-Execution coordinator schema v1/v2/v3 is unsupported. Return
+Execution coordinator schema v1/v2/v3/v4 is unsupported. Return
 `WORKFLOW_UPGRADE_REQUIRED` without changing its resources, including for
 completed records. There is no legacy read path or migration.
 
