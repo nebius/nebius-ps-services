@@ -22,6 +22,7 @@ from typing import Any, Iterable, Sequence
 from git_promotion import (
     GitPromotionError,
     promote_ff_only,
+    public_safe_slug,
 )
 from worktree_state import (
     SCHEMA as MANIFEST_SCHEMA,
@@ -121,6 +122,7 @@ class AddPreflight:
     source_ref: str
     base: str
     scope: str
+    task_slug: str
     parent: Path
 
 
@@ -429,6 +431,14 @@ def _validate_task_slug(slug: str) -> None:
         )
 
 
+def _resolve_task_slug(project_path: Path, task_slug: str | None) -> str:
+    resolved = task_slug
+    if resolved is None:
+        resolved = public_safe_slug(project_path.name)
+    _validate_task_slug(resolved)
+    return resolved
+
+
 def _validate_scope_value(scope: str) -> None:
     if scope == ".":
         return
@@ -584,10 +594,13 @@ def _new_name(
     raise WorktreeError("could not generate a collision-free worktree name")
 
 
-def _preflight_add(*, cwd: Path, project: str | None, task_slug: str) -> AddPreflight:
+def _preflight_add(
+    *, cwd: Path, project: str | None, task_slug: str | None
+) -> AddPreflight:
     """Validate add without creating lifecycle state or managed directories."""
 
-    _validate_task_slug(task_slug)
+    if task_slug is not None:
+        _validate_task_slug(task_slug)
     primary, current_root = discover_repository(cwd)
     if current_root != primary:
         raise WorktreeError("add must be invoked from the primary checkout")
@@ -613,7 +626,8 @@ def _preflight_add(*, cwd: Path, project: str | None, task_slug: str) -> AddPref
         )
     base = _git(primary, "rev-parse", "HEAD")
     source_ref = f"refs/heads/{source_branch}"
-    scope, _ = resolve_scope(primary, cwd, project)
+    scope, project_path = resolve_scope(primary, cwd, project)
+    resolved_task_slug = _resolve_task_slug(project_path, task_slug)
     try:
         parent = checked_worktree_parent(primary)
     except StateError as error:
@@ -625,6 +639,7 @@ def _preflight_add(*, cwd: Path, project: str | None, task_slug: str) -> AddPref
         source_ref=source_ref,
         base=base,
         scope=scope,
+        task_slug=resolved_task_slug,
         parent=parent,
     )
 
@@ -633,7 +648,7 @@ def _add_worktree_unlocked(
     *,
     cwd: Path,
     project: str | None,
-    task_slug: str,
+    task_slug: str | None,
     reuse: str | None = None,
 ) -> dict[str, Any]:
     preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
@@ -643,6 +658,7 @@ def _add_worktree_unlocked(
     source_ref = preflight.source_ref
     base = preflight.base
     scope = preflight.scope
+    task_slug = preflight.task_slug
 
     if reuse is not None:
         _validate_name(reuse)
@@ -683,6 +699,7 @@ def _add_worktree_unlocked(
             "source_head_drift": manifest.base != source_head,
             "worktree": str(managed.path),
             "scope": managed.scope,
+            "task_slug": task_slug,
             "scope_cwd": str(managed.scope_cwd),
             "dirty_paths": dirty,
         }
@@ -811,6 +828,7 @@ def _add_worktree_unlocked(
         "base_sha": base,
         "worktree": str(managed.path),
         "scope": scope,
+        "task_slug": task_slug,
         "scope_cwd": str(managed.scope_cwd),
     }
 
@@ -819,7 +837,7 @@ def add_worktree(
     *,
     cwd: Path,
     project: str | None,
-    task_slug: str,
+    task_slug: str | None,
     reuse: str | None = None,
 ) -> dict[str, Any]:
     preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
@@ -940,6 +958,7 @@ def inspect_worktree(
         **asdict(managed),
         "path": str(managed.path),
         "scope_cwd": str(managed.scope_cwd),
+        "task_slug": manifest.task_slug,
         "dirty_paths": dirty,
         "branch_changed_paths": committed,
         "source_branch": manifest.source_branch,
@@ -2236,8 +2255,10 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--project", help="repository-relative project directory")
     add.add_argument(
         "--task-slug",
-        default="work",
-        help="public-safe lowercase task slug; never pass prompt text or secrets",
+        help=(
+            "public-safe lowercase task slug; defaults to the normalized resolved "
+            "project-directory basename"
+        ),
     )
     add.add_argument(
         "--reuse",

@@ -79,7 +79,7 @@ class WorktreeManagerTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def add(
-        self, task_slug: str = "fix-triggers", project: str | None = None
+        self, task_slug: str | None = "fix-triggers", project: str | None = None
     ) -> dict[str, object]:
         with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
             return wm.add_worktree(
@@ -160,6 +160,102 @@ class WorktreeManagerTest(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(upstream.returncode, 0)
+
+    def test_add_defaults_task_slug_to_current_project_basename(self) -> None:
+        result = self.add(task_slug=None)
+        worktree = Path(str(result["worktree"]))
+
+        self.assertEqual(result["scope"], "skills")
+        self.assertEqual(result["task_slug"], "skills")
+        self.assertEqual(result["name"], "project-skills-a7c2f9")
+        self.assertEqual(result["branch"], "feature/skills-a7c2f9")
+        self.assertEqual(Path(str(result["scope_cwd"])), worktree / "skills")
+        manifest = ownership_state.load_manifest(
+            self.repo, "project-skills-a7c2f9"
+        )
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        self.assertEqual(manifest.task_slug, "skills")
+
+    def test_add_defaults_task_slug_to_selected_project_basename(self) -> None:
+        result = self.add(task_slug=None, project="services/example")
+        worktree = Path(str(result["worktree"]))
+
+        self.assertEqual(result["scope"], "services/example")
+        self.assertEqual(result["task_slug"], "example")
+        self.assertEqual(result["name"], "project-example-a7c2f9")
+        self.assertEqual(result["branch"], "feature/example-a7c2f9")
+        self.assertEqual(
+            Path(str(result["scope_cwd"])), worktree / "services/example"
+        )
+
+    def test_add_defaults_task_slug_to_repository_basename_at_root(self) -> None:
+        with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
+            result = wm.add_worktree(
+                cwd=self.repo,
+                project=None,
+                task_slug=None,
+            )
+
+        self.assertEqual(result["scope"], ".")
+        self.assertEqual(result["task_slug"], "example-monorepo")
+        self.assertEqual(result["name"], "project-example-monorepo-a7c2f9")
+
+    def test_default_task_slug_normalizes_project_basename(self) -> None:
+        self.assertEqual(
+            wm._resolve_task_slug(Path("Example_API.v2"), None),
+            "example-api-v2",
+        )
+        self.assertEqual(wm._resolve_task_slug(Path("部署"), None), "work")
+        self.assertEqual(
+            wm._resolve_task_slug(Path("ignored"), "explicit-task"),
+            "explicit-task",
+        )
+
+    def test_default_task_slug_requires_exact_reuse_for_existing_lifecycle(
+        self,
+    ) -> None:
+        created = self.add(task_slug=None)
+
+        with self.assertRaisesRegex(wm.WorktreeError, "already exists"):
+            self.add(task_slug=None)
+
+        reused = wm.add_worktree(
+            cwd=self.repo / "skills",
+            project=None,
+            task_slug=None,
+            reuse=str(created["name"]),
+        )
+        self.assertEqual(reused["status"], "reused")
+        self.assertEqual(reused["task_slug"], "skills")
+
+        with self.assertRaisesRegex(wm.WorktreeError, "does not match"):
+            wm.add_worktree(
+                cwd=self.repo / "skills",
+                project=None,
+                task_slug="different-task",
+                reuse=str(created["name"]),
+            )
+
+    def test_previous_generic_work_slug_requires_explicit_reuse_identity(self) -> None:
+        created = self.add(task_slug="work")
+
+        with self.assertRaisesRegex(wm.WorktreeError, "does not match"):
+            wm.add_worktree(
+                cwd=self.repo / "skills",
+                project=None,
+                task_slug=None,
+                reuse=str(created["name"]),
+            )
+
+        reused = wm.add_worktree(
+            cwd=self.repo / "skills",
+            project=None,
+            task_slug="work",
+            reuse=str(created["name"]),
+        )
+        self.assertEqual(reused["status"], "reused")
+        self.assertEqual(reused["task_slug"], "work")
 
     def test_add_requires_entire_primary_to_be_clean(self) -> None:
         cases = {
@@ -285,8 +381,10 @@ class WorktreeManagerTest(unittest.TestCase):
             self.add(project=str(self.repo / "skills"))
         self.assertFalse(wm.state_directory(self.repo).exists())
 
-        result = self.add(task_slug="normalized-scope", project="services/../skills")
+        result = self.add(task_slug=None, project="services/../skills")
         self.assertEqual(result["scope"], "skills")
+        self.assertEqual(result["task_slug"], "skills")
+        self.assertEqual(result["name"], "project-skills-a7c2f9")
 
     @unittest.skipUnless(os.name == "posix", "POSIX symlink safety")
     def test_project_scope_rejects_symlink_escape_without_state(self) -> None:

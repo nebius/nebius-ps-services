@@ -79,6 +79,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Made description-less `$worktree` creation derive its public-safe task slug
+  from the resolved project directory basename instead of the generic `work`
+  label. The helper now reports that resolved slug with created, reused, and
+  inspected lifecycle output; explicit task slugs and exact reuse/duplicate
+  guards remain authoritative. Existing generic-`work` lifecycles remain
+  accessible only through an explicit `--task-slug work` exact reuse.
 - Hardened the local-source `worktree` composition contract. Rejected `add`
   preflights no longer create or redirect private state; canonical non-symlink
   state paths are shared by manifests, reservations, leases, and locks.

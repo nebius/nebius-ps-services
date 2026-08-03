@@ -36,8 +36,11 @@ $worktree integrate <generated-worktree-name> [--restart]
 $worktree remove <generated-worktree-name>
 ```
 
-- Derive one public-safe task slug from the task description; never pass raw
-  prompt text, secrets, repository names, or project paths into generated
+- When a task description is present, derive one public-safe task slug from it.
+  When it is absent, let the helper normalize the resolved project directory's
+  basename; for example, scope `skills` defaults to task slug `skills`. An empty
+  normalized basename falls back to `work`.
+- Never pass raw prompt text, secrets, or a full project path into generated
   identities.
 - `--project` selects an existing starting directory and descriptive label. It
   never creates a partial checkout or restricts changed paths.
@@ -74,15 +77,18 @@ $worktree remove <generated-worktree-name>
    configured `origin/HEAD`, and the sibling parent/state path is canonical and
    non-symlinked. The helper repeats this preflight under its lifecycle lock
    before creating state or worktree resources.
-2. Resolve the project directory, derive the task slug, then run:
+2. Resolve the project directory. Derive and pass a task slug when the user
+   supplied a task description; otherwise omit `--task-slug` so the helper
+   derives it from the resolved directory basename. Then run:
 
    ```bash
    python3 <skill-dir>/scripts/worktree_manager.py add \
-     --task-slug <public-safe-slug> [--project <directory>] [--reuse <exact-name>]
+     [--task-slug <public-safe-slug>] [--project <directory>] [--reuse <exact-name>]
    ```
 
 3. Treat the returned source SHA as immutable creation evidence. Return the
-   generated name, branch, full worktree path, and selected starting directory.
+   resolved task slug, generated name, branch, full worktree path, and selected
+   starting directory.
 
 ### Integrate
 
@@ -130,6 +136,9 @@ $worktree remove <generated-worktree-name>
 
 - Exact `--reuse` preserves an active child and reports source-head drift; it
   never rebases or refreshes the child.
+- Repeating a description-less add in the same project resolves the same
+  project-basename slug and fails closed on the existing lifecycle unless the
+  exact generated name is supplied with `--reuse`.
 - Repeating `integrate` resumes the same durable `(source head, child head,
   candidate ref/path)` attempt. A promoted-but-unrecorded candidate reconciles
   from Git proof before cleanup.
@@ -190,6 +199,6 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return the action, generated name, child/source branches and exact SHAs,
-worktree/start-directory paths, candidate or recovery path when applicable,
-validation status, retained resources, and precise next action.
+Return the action, resolved task slug, generated name, child/source branches
+and exact SHAs, worktree/start-directory paths, candidate or recovery path when
+applicable, validation status, retained resources, and precise next action.

@@ -1043,6 +1043,12 @@ that exact local `HEAD` and creates a generated no-upstream child without
 fetching. `--project` selects the returned starting directory and label only;
 it does not restrict changed paths or staging.
 
+When no task description is supplied, `add` normalizes the resolved project
+directory basename as the task slug. From `skills/`, bare `$worktree` therefore
+creates `project-skills-<6-hex>` on `feature/skills-<6-hex>` and returns the
+child's `skills/` directory. Explicit task descriptions continue to produce
+their own public-safe slugs.
+
 `integrate` requires clean committed child work and released nested workflow
 leases. It builds one durable private candidate from the current source head,
 retains merge conflicts for recovery, exposes the exact candidate for

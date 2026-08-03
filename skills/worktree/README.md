@@ -27,6 +27,13 @@ never symlinks.
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.
 
+When `<task>` is omitted, `add` normalizes the resolved project directory's
+basename into the task slug. For example, invoking `$worktree` from `skills/`
+creates `project-skills-<6-hex>` on branch `feature/skills-<6-hex>` under the
+sibling worktree parent and returns `<worktree>/skills` as the starting
+directory. An explicit task keeps using its derived public-safe slug; a
+basename that normalizes to empty falls back to `work`.
+
 Integration creates a durable private merge candidate from the current source
 head, merges the exact clean child head with `--no-ff`, retains conflicts for
 developer resolution, and exposes the exact candidate for non-mutating

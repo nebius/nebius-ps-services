@@ -2,8 +2,10 @@
 
 ## Should Trigger
 
+- `$worktree`
 - `$worktree Create an isolated worktree from my current clean feature branch
   for the skills project.`
+- `$worktree add --project services/example-api`
 - `$worktree add --project services/example-api prepare the migration report
   changes.`
 - `$worktree add --project services/example-api --reuse
@@ -25,6 +27,9 @@
 
 - The skill requires an explicit `$worktree` invocation.
 - No action means `add`; no compatibility aliases are accepted.
+- With no task description, `add` derives the task slug from the resolved
+  project-directory basename, so invocation from `skills/` creates a
+  `project-skills-<6-hex>` worktree and `feature/skills-<6-hex>` branch.
 - `add` requires the complete primary checkout to be clean and captures the
   exact current named non-default local source branch and `HEAD` without fetch.
 - `--project` selects the initial directory and label only; it is not a

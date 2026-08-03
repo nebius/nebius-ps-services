@@ -25,6 +25,9 @@ may change in the same child.
   directories and reject every encountered symlink or non-directory.
 - Resolve configured `origin/HEAD` only to reject the default branch; do not
   fetch or compare source content with a remote.
+- Resolve project scope before task identity. When no explicit task slug is
+  supplied, normalize the resolved project directory basename and use `work`
+  only when normalization is empty.
 - Freeze the exact local source ref and SHA before writing planned ownership
   state and before creating the generated branch/worktree.
 - Hold the private repository lifecycle lock from duplicate-manifest selection
