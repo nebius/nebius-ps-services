@@ -76,8 +76,10 @@ $task-implementer run <managed-prompt-from-inside-a-$worktree-checkout>
 Bind the run to the exact outer worktree branch and current `HEAD`; never create
 a replacement outer worktree merely because one already exists. Keep every
 worker/integration branch private and temporary, promote only back to the outer
-branch, and block outer push, PR creation, and removal until final alignment
-and lease release. Never use the remote default as the nested worker base.
+branch, and block outer integration and removal until final alignment and
+lease release. Then hand the exact child to `$worktree integrate`; never push
+it or use it as a PR head. Never use the remote default as the nested worker
+base.
 
 ```text
 $task-implementer run <same-completed-prompt-after-an-interrupted-final-release>

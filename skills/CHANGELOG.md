@@ -79,6 +79,38 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened the local-source `worktree` composition contract. Rejected `add`
+  preflights no longer create or redirect private state; canonical non-symlink
+  state paths are shared by manifests, reservations, leases, and locks.
+  Publication guards now classify primary and linked checkouts, integration
+  candidates, and Task/Agentic workers from durable ownership instead of branch
+  config alone. Ownership manifests use hard-cut schema v4 to retain the exact
+  lease owner, token, and `active|released` participation state. Outer leases
+  use hard-cut schema v4 with an ordered promotion history, expected-head
+  compare-and-set, resource-resurrection checks, terminal release receipts, and
+  durable removal-intent snapshots across receipt/manifest deletion crashes.
+  Task Implementer and Agentic SDLC now reconcile local interop against live
+  clean Git plus durable lease truth, and Agentic promotion persists lease proof
+  before local interop and coordinator `promoted` state. Deterministic gates now
+  require removal-crash recovery, successive promotion history, both publication
+  consumers' managed-worktree guards, canonical project-scope rejection, Git
+  operation preflight, and the exact managed-child integration handoff. Agentic
+  multi-feature runs now reuse the run-scoped lease at each live feature base
+  and reconcile a later promotion from the exact lease-history predecessor.
+  Atomic state replacement and ordered receipt, manifest, reservation, and
+  removal-intent deletion now fsync their containing directories. Worker
+  session claims are fully written and fsynced before atomic no-replace
+  publication, eliminating empty-claim races and crash-stranded final claims.
+- Reworked `worktree` into a hard-cut local-source lifecycle. `add` now requires
+  the complete primary checkout to be clean on a named non-default branch and
+  creates a no-upstream child from the exact local `HEAD`; `--project` is only
+  a starting-directory label. `integrate` uses a durable private recovery
+  worktree, exact two-parent merge proof, non-mutating combined validation, and
+  ff-only source promotion. Child push/PR actions are rejected and `remove`
+  now depends only on exact local unused-or-integrated proof. Task Implementer
+  and Agentic SDLC use managed-local promotion, release into this outer
+  integration handoff, and record exact source-integration proof before
+  completion. Older worktree, interop, and coordinator schemas are unsupported.
 - Added a hook-free global live-product-validation invariant and detailed
   `troubleshoot` proof contract. Each trial freezes its declared workflow, and
   later changes start a new lineage rather than laundering prior intervention.

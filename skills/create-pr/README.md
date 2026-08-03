@@ -6,6 +6,9 @@ and GitHub steps.
 
 ## What It Does
 
+- Rejects publication from every state-classified managed child, integration
+  candidate, nested worker, or inconsistent ownership claim and routes it to
+  its local owner; only an unmanaged final source branch may become a PR head.
 - Creates or reuses feature branches.
 - Reuses the current non-default branch as the normal path, staging existing
   work only after formatting, whitespace, lint, and test gates complete,
@@ -25,7 +28,7 @@ and GitHub steps.
 - Preserves explicit user-supplied PR titles and bodies.
 - When invoked from Agentic SDLC, checks local UAT evidence and summarizes
   requirements, features, validation, tests, evaluation, and UAT in the PR body.
-- In an active Agentic SDLC run, switches to publication-only mode: it requires
+- In an active unmanaged Agentic SDLC run, switches to publication-only mode: it requires
   a clean exact promoted SHA with passing UAT and does not stage, commit, merge,
   repair, or otherwise change that SHA. Push and CLI PR creation use one direct
   action with explicit ref and head arguments.

@@ -174,6 +174,12 @@ class WorktreeWaveTest(unittest.TestCase):
         path.write_text(handoff, encoding="utf-8")
         path.chmod(0o600)
 
+    def test_replan_without_coordinator_reports_current_schema(self) -> None:
+        with self.assertRaises(PromptWorkspaceError) as raised:
+            pw.replan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
+        self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
+        self.assertEqual(str(raised.exception), "run has no v6 coordinator")
+
     def _complete_worker(self, task_id: str, filename: str) -> dict[str, object]:
         assignment_path = (
             self.run_dir
@@ -683,9 +689,7 @@ class WorktreeWaveTest(unittest.TestCase):
                 check=check,
             )
 
-        with mock.patch.object(
-            waves, "_journaled_git", side_effect=race_before_delete
-        ):
+        with mock.patch.object(waves, "_journaled_git", side_effect=race_before_delete):
             with self.assertRaises(PromptWorkspaceError) as raised:
                 pw.promote_wave(
                     self.workspace, self.run_id, evidence, clock=lambda: FIXED
@@ -1353,9 +1357,9 @@ class WorktreeWaveTest(unittest.TestCase):
     def test_broken_symlink_resource_is_not_recorded_absent(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
         wave = json.loads(
-            (
-                self.run_dir / "orchestration" / "waves" / "wave-001.json"
-            ).read_text(encoding="utf-8")
+            (self.run_dir / "orchestration" / "waves" / "wave-001.json").read_text(
+                encoding="utf-8"
+            )
         )
         broken = self.root / "broken-worker"
         broken.symlink_to(self.root / "missing-worker-target", target_is_directory=True)

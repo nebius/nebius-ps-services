@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Safely manage project-scoped linked Git worktrees.
+"""Safely manage locally integrated linked Git worktrees.
 
 The public interface is the ``worktree`` Codex skill. This helper owns only
-deterministic discovery, creation, inspection, and cleanup mechanics. It never
-commits changes or creates pull requests.
+deterministic discovery, creation, inspection, integration, and cleanup
+mechanics. It never commits user changes, pushes, or creates pull requests.
 """
 
 from __future__ import annotations
@@ -21,28 +21,44 @@ from typing import Any, Iterable, Sequence
 
 from git_promotion import (
     GitPromotionError,
-    resolve_remote_default,
-    verify_remote_default,
+    promote_ff_only,
 )
 from worktree_state import (
     SCHEMA as MANIFEST_SCHEMA,
     Manifest,
     StateError,
+    all_manifests,
+    checked_worktree_parent,
     delete_manifest,
     load_manifest,
     manifest_path,
     matching_manifests,
+    state_directory,
     write_manifest,
 )
 from worktree_interop import (
     InteropError,
     acquire_task_lease,
+    active_reservations,
+    all_leases,
     assert_idle,
-    begin_publication,
-    end_publication,
+    begin_integration,
+    delete_lease_removal,
+    delete_released_lease,
+    end_integration,
+    integration_transition_lock,
     interop_lock,
+    inspect_task_lease,
+    lifecycle_lease,
+    lifecycle_creation_lock,
+    load_lease,
+    load_lease_removal,
+    load_reservation,
     release_task_lease,
+    prepare_lease_removal,
+    update_integration,
     update_task_lease,
+    validate_released_resources,
 )
 
 
@@ -95,6 +111,17 @@ class ManagedWorktree:
     @property
     def scope_cwd(self) -> Path:
         return self.path if self.scope == "." else self.path / self.scope
+
+
+@dataclass(frozen=True)
+class AddPreflight:
+    primary: Path
+    current_root: Path
+    source_branch: str
+    source_ref: str
+    base: str
+    scope: str
+    parent: Path
 
 
 def _branch_for_name(name: str) -> str:
@@ -469,14 +496,6 @@ def branch_changed_paths(repository: Path, base: str) -> list[str]:
     ]
 
 
-def _inside_scope(path: str, scope: str) -> bool:
-    if scope == ".":
-        return True
-    candidate = PurePosixPath(path)
-    boundary = PurePosixPath(scope)
-    return candidate == boundary or boundary in candidate.parents
-
-
 def _operation_in_progress(repository: Path) -> str | None:
     for marker in (
         "MERGE_HEAD",
@@ -500,22 +519,6 @@ def _operation_in_progress(repository: Path) -> str | None:
     if _git(repository, "diff", "--name-only", "--diff-filter=U"):
         return "unresolved conflicts"
     return None
-
-
-def _remote_head(repository: Path, branch: str) -> str | None:
-    output = _git(
-        repository,
-        "ls-remote",
-        "--heads",
-        "origin",
-        f"refs/heads/{branch}",
-    )
-    if not output:
-        return None
-    lines = [line for line in output.splitlines() if line.strip()]
-    if len(lines) != 1:
-        raise WorktreeError(f"origin returned multiple matches for {branch}")
-    return lines[0].split(maxsplit=1)[0]
 
 
 def _local_branch_exists(repository: Path, branch: str) -> bool:
@@ -542,11 +545,29 @@ def _candidate_available(
         or _local_branch_exists(repository, branch)
     ):
         return False
-    if _remote_head(repository, branch) is not None:
-        return False
     return not any(
         Path(record.path) == path or record.branch == branch for record in records
     )
+
+
+def _configured_default_branch(repository: Path) -> str:
+    _git(repository, "remote", "get-url", "origin")
+    result = _run(
+        ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        cwd=repository,
+        allowed=(0, 1),
+    )
+    if result.returncode != 0:
+        raise WorktreeError(
+            "cannot determine the configured default branch from origin/HEAD"
+        )
+    symbolic = result.stdout.strip()
+    prefix = "origin/"
+    if not symbolic.startswith(prefix) or symbolic == prefix:
+        raise WorktreeError("configured origin/HEAD is invalid")
+    branch = symbolic.removeprefix(prefix)
+    _git(repository, "check-ref-format", "--branch", branch)
+    return branch
 
 
 def _new_name(
@@ -563,29 +584,65 @@ def _new_name(
     raise WorktreeError("could not generate a collision-free worktree name")
 
 
-def add_worktree(
+def _preflight_add(*, cwd: Path, project: str | None, task_slug: str) -> AddPreflight:
+    """Validate add without creating lifecycle state or managed directories."""
+
+    _validate_task_slug(task_slug)
+    primary, current_root = discover_repository(cwd)
+    if current_root != primary:
+        raise WorktreeError("add must be invoked from the primary checkout")
+    source_branch = _git(
+        primary, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1)
+    )
+    if source_branch == "":
+        raise WorktreeError("cannot add a worktree from detached HEAD")
+    operation = _operation_in_progress(primary)
+    if operation:
+        raise WorktreeError(f"repository operation is in progress: {operation}")
+    default_branch = _configured_default_branch(primary)
+    if source_branch == default_branch:
+        raise WorktreeError(
+            "worktree creation requires a non-default source branch; create or "
+            "switch to a feature branch and rerun $worktree"
+        )
+    dirty_primary = status_paths(primary)
+    if dirty_primary:
+        raise WorktreeError(
+            "the primary source worktree must be completely clean: "
+            + ", ".join(dirty_primary)
+        )
+    base = _git(primary, "rev-parse", "HEAD")
+    source_ref = f"refs/heads/{source_branch}"
+    scope, _ = resolve_scope(primary, cwd, project)
+    try:
+        parent = checked_worktree_parent(primary)
+    except StateError as error:
+        raise WorktreeError(str(error)) from error
+    return AddPreflight(
+        primary=primary,
+        current_root=current_root,
+        source_branch=source_branch,
+        source_ref=source_ref,
+        base=base,
+        scope=scope,
+        parent=parent,
+    )
+
+
+def _add_worktree_unlocked(
     *,
     cwd: Path,
     project: str | None,
     task_slug: str,
     reuse: str | None = None,
 ) -> dict[str, Any]:
-    _validate_task_slug(task_slug)
-    primary, current_root = discover_repository(cwd)
-    if current_root != primary:
-        raise WorktreeError("add must be invoked from the primary checkout")
-    if _git(primary, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1)) == "":
-        raise WorktreeError("cannot add a worktree from detached HEAD")
-    operation = _operation_in_progress(primary)
-    if operation:
-        raise WorktreeError(f"repository operation is in progress: {operation}")
-    try:
-        default = resolve_remote_default(primary)
-    except GitPromotionError as error:
-        raise WorktreeError(str(error)) from error
-    base_ref = str(default["default_ref"])
-    base = str(default["default_head"])
-    scope, _ = resolve_scope(primary, cwd, project)
+    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
+    primary = preflight.primary
+    current_root = preflight.current_root
+    source_branch = preflight.source_branch
+    source_ref = preflight.source_ref
+    base = preflight.base
+    scope = preflight.scope
 
     if reuse is not None:
         _validate_name(reuse)
@@ -598,13 +655,12 @@ def add_worktree(
             manifest.status != "active"
             or manifest.scope != scope
             or manifest.task_slug != task_slug
-            or manifest.default_remote != default["remote"]
-            or manifest.default_branch != default["default_branch"]
-            or manifest.default_ref != base_ref
+            or manifest.source_branch != source_branch
+            or manifest.source_ref != source_ref
         ):
             raise WorktreeError(
                 "requested reuse does not match the active lifecycle, project scope, "
-                "task slug, or current remote-default identity"
+                "task slug, or current local source branch"
             )
         record = _find_record(
             primary,
@@ -614,50 +670,27 @@ def add_worktree(
         )
         managed = _managed_from_record(primary, record)
         dirty = status_paths(managed.path)
-        default_head_drift = manifest.default_head != default["default_head"]
+        source_head = _git(primary, "rev-parse", source_ref)
         return {
             "action": "add",
             "status": "reused",
             "name": managed.name,
             "branch": managed.branch,
-            "base_ref": manifest.default_ref,
+            "source_branch": manifest.source_branch,
+            "source_ref": manifest.source_ref,
             "base_sha": manifest.base,
-            "current_default_sha": default["default_head"],
-            "remote_default_head_drift": default_head_drift,
+            "current_source_sha": source_head,
+            "source_head_drift": manifest.base != source_head,
             "worktree": str(managed.path),
             "scope": managed.scope,
             "scope_cwd": str(managed.scope_cwd),
             "dirty_paths": dirty,
         }
 
-    dirty_scope = status_paths(primary, scope)
-    if dirty_scope:
-        raise WorktreeError(
-            "selected project has uncommitted changes; commit, push, open a PR, "
-            f"and merge that work before creating a {base_ref} worktree"
-        )
-    merge_base = _git(primary, "merge-base", base, "HEAD")
-    branch_diff = _git_bytes(
-        primary, "diff", "--name-only", "-z", merge_base, "HEAD", "--", scope
-    )
-    if branch_diff:
-        tree_comparison = _run(
-            ["git", "diff", "--quiet", base, "HEAD", "--", scope],
-            cwd=primary,
-            allowed=(0, 1),
-        )
-        if tree_comparison.returncode != 0:
-            raise WorktreeError(
-                f"selected project has branch changes not contained in {base_ref}; "
-                "merge its PR before creating another worktree for this project"
-            )
-
-    parent = primary.parent / f"{primary.name}-worktrees"
-    if parent.is_symlink():
-        raise WorktreeError(f"worktree parent must not be a symlink: {parent}")
-    parent.mkdir(parents=True, exist_ok=True)
-    if _canonical(parent) != parent.absolute():
-        raise WorktreeError(f"worktree parent resolves unexpectedly: {parent}")
+    try:
+        parent = checked_worktree_parent(primary, create=True)
+    except StateError as error:
+        raise WorktreeError(str(error)) from error
 
     try:
         existing = matching_manifests(primary, scope=scope, task_slug=task_slug)
@@ -686,10 +719,8 @@ def add_worktree(
         scope=scope,
         base=base,
         task_slug=task_slug,
-        default_remote=str(default["remote"]),
-        default_branch=str(default["default_branch"]),
-        default_ref=base_ref,
-        default_head=base,
+        source_branch=source_branch,
+        source_ref=source_ref,
     )
     try:
         write_manifest(primary, manifest)
@@ -770,21 +801,38 @@ def add_worktree(
                 pass
         raise
 
-    unrelated = [
-        path for path in status_paths(primary) if not _inside_scope(path, scope)
-    ]
     return {
         "action": "add",
         "status": "created",
         "name": name,
         "branch": branch,
-        "base_ref": base_ref,
+        "source_branch": source_branch,
+        "source_ref": source_ref,
         "base_sha": base,
         "worktree": str(managed.path),
         "scope": scope,
         "scope_cwd": str(managed.scope_cwd),
-        "unrelated_primary_changes": unrelated,
     }
+
+
+def add_worktree(
+    *,
+    cwd: Path,
+    project: str | None,
+    task_slug: str,
+    reuse: str | None = None,
+) -> dict[str, Any]:
+    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
+    try:
+        with lifecycle_creation_lock(preflight.primary):
+            return _add_worktree_unlocked(
+                cwd=cwd,
+                project=project,
+                task_slug=task_slug,
+                reuse=reuse,
+            )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
 
 
 def _find_record(
@@ -830,7 +878,7 @@ def inspect_worktree(
     *,
     cwd: Path,
     name: str | None,
-    require_scope_clean: bool,
+    require_clean: bool,
     enforce_interop_idle: bool = True,
 ) -> dict[str, Any]:
     primary, current_root = discover_repository(cwd)
@@ -842,45 +890,50 @@ def inspect_worktree(
                 assert_idle(primary, managed.name)
         except InteropError as error:
             raise WorktreeError(str(error)) from error
-    if require_scope_clean:
-        if current_root == primary:
-            raise WorktreeError(
-                "scope-clean inspection for push or create-pr must run inside "
-                "the managed linked worktree"
-            )
-        current_directory = _canonical(cwd)
-        try:
-            current_directory.relative_to(_canonical(managed.scope_cwd))
-        except ValueError as error:
-            raise WorktreeError(
-                f"run the action from the recorded project scope: {managed.scope_cwd}"
-            ) from error
     manifest = load_manifest(primary, managed.name)
     assert manifest is not None
-    try:
-        verify_remote_default(
-            primary,
-            expected_remote=manifest.default_remote,
-            expected_branch=manifest.default_branch,
-            expected_ref=manifest.default_ref,
-            expected_head=manifest.default_head,
-        )
-    except GitPromotionError as error:
-        raise WorktreeError(str(error)) from error
-    _git(managed.path, "rev-parse", "--verify", manifest.default_ref)
     dirty = status_paths(managed.path)
     committed = branch_changed_paths(managed.path, managed.base)
-    outside_dirty = sorted(
-        path for path in dirty if not _inside_scope(path, managed.scope)
-    )
-    outside_committed = sorted(
-        path for path in committed if not _inside_scope(path, managed.scope)
-    )
-    if require_scope_clean and (outside_dirty or outside_committed):
+    if require_clean and dirty:
         raise WorktreeError(
-            "managed branch contains changes outside its recorded project scope: "
-            + ", ".join(outside_dirty + outside_committed)
+            "managed worktree must be completely clean: " + ", ".join(dirty)
         )
+    source_head = _git(primary, "rev-parse", "--verify", manifest.source_ref)
+    source_contains_integration = False
+    if manifest.status == "integrated":
+        assert manifest.integration_source_head is not None
+        assert manifest.integration_child_head is not None
+        assert manifest.integration_head is not None
+        parents = _git(
+            primary,
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            manifest.integration_head,
+        ).split()
+        if parents != [
+            manifest.integration_head,
+            manifest.integration_source_head,
+            manifest.integration_child_head,
+        ]:
+            raise WorktreeError("recorded integration merge proof is no longer exact")
+        ancestry = _run(
+            [
+                "git",
+                "merge-base",
+                "--is-ancestor",
+                manifest.integration_head,
+                manifest.source_ref,
+            ],
+            cwd=primary,
+            allowed=(0, 1),
+        )
+        if ancestry.returncode != 0:
+            raise WorktreeError(
+                "current local source branch no longer contains the recorded integration"
+            )
+        source_contains_integration = True
     return {
         "action": "inspect",
         "status": "valid",
@@ -889,11 +942,15 @@ def inspect_worktree(
         "scope_cwd": str(managed.scope_cwd),
         "dirty_paths": dirty,
         "branch_changed_paths": committed,
-        "outside_scope_dirty": outside_dirty,
-        "outside_scope_committed": outside_committed,
-        "default_branch": manifest.default_branch,
-        "default_ref": manifest.default_ref,
-        "default_head": manifest.default_head,
+        "source_branch": manifest.source_branch,
+        "source_ref": manifest.source_ref,
+        "source_head": source_head,
+        "source_contains_integration": source_contains_integration,
+        "source_base": manifest.base,
+        "lifecycle_status": manifest.status,
+        "integration_source_head": manifest.integration_source_head,
+        "integration_child_head": manifest.integration_child_head,
+        "integration_head": manifest.integration_head,
     }
 
 
@@ -937,7 +994,282 @@ def inspect_managed_anchor(*, cwd: Path) -> dict[str, Any]:
         "head": managed.head,
         "common_dir": str(common_dir),
         "primary": str(primary),
+        "source_branch": manifest.source_branch,
+        "source_ref": manifest.source_ref,
+        "source_base": manifest.base,
     }
+
+
+def publication_guard(*, cwd: Path, action: str) -> dict[str, Any]:
+    if action not in {"push", "create-pr"}:
+        raise WorktreeError("publication guard action is invalid")
+    primary, current_root = discover_repository(cwd)
+    record = next(
+        (
+            item
+            for item in list_worktrees(primary)
+            if _canonical(Path(item.path)) == current_root
+        ),
+        None,
+    )
+    if record is None:
+        raise WorktreeError("current linked worktree is not registered")
+
+    branch = record.branch
+    if branch is not None:
+        metadata = {
+            field: _read_config(primary, branch, field) for field in CONFIG_FIELDS
+        }
+        present = {field for field, value in metadata.items() if value is not None}
+        if present:
+            if len(present) != len(CONFIG_FIELDS):
+                raise WorktreeError(
+                    "partial managed worktree metadata makes publication unsafe"
+                )
+            managed = _managed_from_record(primary, record)
+            raise WorktreeError(
+                f"managed child branches must not {action}; run $worktree integrate "
+                f"{managed.name}, then publish the source branch"
+            )
+
+    current_path = current_root
+    current_common = _canonical(
+        Path(
+            _git(
+                current_root,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        )
+    )
+
+    def classify_claim(claim_path: str, claim_branch: str, label: str) -> bool:
+        path_matches = Path(claim_path) == current_path
+        branch_matches = branch == claim_branch
+        if path_matches != branch_matches:
+            raise WorktreeError(
+                f"{label} partially matches this checkout; publication is unsafe"
+            )
+        return path_matches and branch_matches
+
+    try:
+        for manifest in all_manifests(primary):
+            if classify_claim(manifest.worktree, manifest.branch, "ownership manifest"):
+                raise WorktreeError(
+                    f"managed child branches must not {action}; run $worktree "
+                    f"integrate {manifest.name}, then publish the source branch"
+                )
+        for reservation in active_reservations(primary):
+            claims = (
+                (
+                    str(reservation["worktree"]),
+                    str(reservation["branch"]),
+                    "integration child reservation",
+                ),
+                (
+                    str(reservation["integration_worktree"]),
+                    str(reservation["integration_branch"]),
+                    "integration candidate reservation",
+                ),
+            )
+            for claim_path, claim_branch, label in claims:
+                if classify_claim(claim_path, claim_branch, label):
+                    raise WorktreeError(
+                        f"private {label} branches must not {action}; publish only "
+                        "the locally integrated source branch"
+                    )
+        for lease in all_leases(primary):
+            if Path(str(lease["common_dir"])) != current_common:
+                raise WorktreeError(
+                    "task lease Git common directory is inconsistent with this repository"
+                )
+            if classify_claim(
+                str(lease["worktree"]), str(lease["branch"]), "task lease outer"
+            ):
+                raise WorktreeError(
+                    f"managed outer branches must not {action}; finish the owning "
+                    "coordinator and locally integrate the outer worktree"
+                )
+            for resource in lease["resources"]:
+                if classify_claim(
+                    str(resource["path"]),
+                    str(resource["branch"]),
+                    "task lease resource",
+                ):
+                    if resource["state"] == "absent":
+                        raise WorktreeError(
+                            "an absent task lease resource has reappeared; publication "
+                            "is unsafe"
+                        )
+                    raise WorktreeError(
+                        f"private task coordinator branches must not {action}; "
+                        "promote through the owning coordinator"
+                    )
+        parent = checked_worktree_parent(primary)
+    except (InteropError, StateError) as error:
+        raise WorktreeError(str(error)) from error
+    if parent in current_path.parents:
+        raise WorktreeError(
+            "an unclaimed checkout exists inside the managed worktree namespace; "
+            "publication is unsafe"
+        )
+    return {
+        "action": "publication-guard",
+        "status": "allowed",
+        "mode": "source" if current_root == primary else "unmanaged",
+    }
+
+
+def _record_manifest_lease(
+    primary: Path,
+    *,
+    name: str,
+    owner_kind: str,
+    token: str,
+    state: str,
+) -> None:
+    """Advance the durable ownership marker after the lease write succeeds."""
+
+    if state not in {"active", "released"}:
+        raise WorktreeError("ownership manifest lease state is invalid")
+    try:
+        with interop_lock(primary):
+            lease = lifecycle_lease(
+                primary,
+                name,
+                allow_external_transition=True,
+            )
+            if (
+                lease is None
+                or lease["owner_kind"] != owner_kind
+                or lease["token"] != token
+                or lease["state"] != state
+            ):
+                raise WorktreeError(
+                    "task lease changed before its ownership marker was recorded"
+                )
+            manifest = load_manifest(primary, name)
+            assert manifest is not None
+            current_identity = (manifest.lease_owner, manifest.lease_token)
+            expected_identity = (owner_kind, token)
+            if state == "active":
+                if manifest.lease_state == "released":
+                    raise WorktreeError(
+                        "released ownership manifest cannot become active"
+                    )
+                if (
+                    manifest.lease_state == "active"
+                    and current_identity != expected_identity
+                ):
+                    raise WorktreeError(
+                        "task lease disagrees with its ownership manifest"
+                    )
+            elif manifest.lease_state == "none":
+                raise WorktreeError(
+                    "released task lease is missing its active ownership marker"
+                )
+            elif current_identity != expected_identity:
+                raise WorktreeError("task lease disagrees with its ownership manifest")
+            if manifest.lease_state != state or current_identity != expected_identity:
+                write_manifest(
+                    primary,
+                    manifest.updated(
+                        lease_state=state,
+                        lease_owner=owner_kind,
+                        lease_token=token,
+                    ),
+                )
+    except (InteropError, StateError) as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _validate_outer_lease_receipt(
+    primary: Path,
+    *,
+    name: str,
+    manifest: Manifest | None,
+    observed_head: str | None = None,
+    for_removal: bool = False,
+) -> dict[str, object] | None:
+    """Bind a terminal receipt to exact outer identity and absent resources."""
+
+    try:
+        intent = load_lease_removal(primary, name)
+        if intent is not None:
+            if not for_removal:
+                raise InteropError(
+                    "outer worktree removal is in progress; repeat $worktree remove"
+                )
+            lease = intent["receipt"]
+            current = load_lease(primary, name)
+            if current is not None and current != lease:
+                raise InteropError("task lease disagrees with its removal intent")
+        else:
+            lease = (
+                lifecycle_lease(primary, name)
+                if manifest is not None
+                else load_lease(primary, name)
+            )
+        if lease is None:
+            return None
+        if lease["state"] != "released":
+            raise InteropError(
+                f"{lease['owner_kind']} still owns the outer worktree; "
+                "the outer lifecycle is blocked"
+            )
+        expected_worktree = (
+            Path(manifest.worktree)
+            if manifest is not None
+            else checked_worktree_parent(primary) / name
+        )
+        expected_branch = (
+            manifest.branch if manifest is not None else _branch_for_name(name)
+        )
+        expected_scope = manifest.scope if manifest is not None else lease["scope"]
+        common_dir = _canonical(
+            Path(
+                _git(
+                    primary,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                )
+            )
+        )
+        if (
+            lease["branch"] != expected_branch
+            or Path(str(lease["worktree"])) != expected_worktree
+            or lease["scope"] != expected_scope
+            or Path(str(lease["common_dir"])) != common_dir
+        ):
+            raise InteropError("released task lease outer identity is inconsistent")
+        expected_head = observed_head
+        if expected_head is None and manifest is not None:
+            expected_head = (
+                manifest.integration_child_head
+                if manifest.status == "integrated"
+                else manifest.base
+            )
+        if expected_head is not None and lease["promoted_head"] != expected_head:
+            raise InteropError("released task lease promoted head is inconsistent")
+        records = list_worktrees(primary)
+        registered = {_canonical(Path(item.path)) for item in records}
+        branches = set(
+            _git(
+                primary,
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/",
+            ).splitlines()
+        )
+        return validate_released_resources(
+            lease,
+            registered_worktrees=registered,
+            existing_branches=branches,
+        )
+    except (InteropError, StateError) as error:
+        raise WorktreeError(str(error)) from error
 
 
 def task_lease_acquire(
@@ -972,7 +1304,79 @@ def task_lease_acquire(
         )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
+    _record_manifest_lease(
+        Path(str(anchor["primary"])),
+        name=str(anchor["name"]),
+        owner_kind=owner_kind,
+        token=str(result["token"]),
+        state="active",
+    )
     return {"action": "task-lease-acquire", **result}
+
+
+def task_lease_inspect(
+    *, cwd: Path, name: str, lease_id: str, owner_kind: str
+) -> dict[str, Any]:
+    primary, managed = _leased_anchor(cwd, name)
+    common_dir = _canonical(
+        Path(
+            _git(
+                managed.path,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        )
+    )
+    try:
+        lease = inspect_task_lease(
+            primary, name=name, token=lease_id, owner_kind=owner_kind
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    _record_manifest_lease(
+        primary,
+        name=name,
+        owner_kind=owner_kind,
+        token=lease_id,
+        state=str(lease["state"]),
+    )
+    expected = {
+        "branch": managed.branch,
+        "worktree": str(managed.path),
+        "common_dir": str(common_dir),
+    }
+    if any(lease.get(key) != value for key, value in expected.items()):
+        raise WorktreeError("task lease no longer matches the managed outer checkout")
+    if lease["state"] == "released":
+        records = list_worktrees(primary)
+        registered = {_canonical(Path(record.path)) for record in records}
+        branches = set(
+            _git(
+                primary, "for-each-ref", "--format=%(refname:short)", "refs/heads/"
+            ).splitlines()
+        )
+        resurrected = [
+            f"{resource['path']} ({resource['branch']})"
+            for resource in lease["resources"]
+            if (
+                Path(str(resource["path"])).resolve() in registered
+                or Path(str(resource["path"])).exists()
+                or Path(str(resource["path"])).is_symlink()
+                or resource["branch"] in branches
+            )
+        ]
+        if resurrected:
+            raise WorktreeError(
+                "released task lease resources reappeared: " + ", ".join(resurrected)
+            )
+    return {
+        "action": "task-lease-inspect",
+        "status": "valid",
+        **lease,
+        "outer_head": managed.head,
+        "outer_clean": not status_paths(managed.path),
+    }
 
 
 def _leased_anchor(cwd: Path, name: str) -> tuple[Path, ManagedWorktree]:
@@ -1012,11 +1416,23 @@ def task_lease_resource(
 
 
 def task_lease_promote(
-    *, cwd: Path, name: str, lease_id: str, promoted_head: str, owner_kind: str
+    *,
+    cwd: Path,
+    name: str,
+    lease_id: str,
+    promoted_head: str,
+    expected_head: str,
+    owner_kind: str,
 ) -> dict[str, Any]:
     primary, managed = _leased_anchor(cwd, name)
     if managed.head != promoted_head:
         raise WorktreeError("outer worktree is not at the promoted task head")
+    if status_paths(managed.path):
+        raise WorktreeError("outer worktree must be clean before promotion is recorded")
+    if not _is_ancestor(primary, expected_head, promoted_head):
+        raise WorktreeError(
+            "promoted task head does not descend from its expected head"
+        )
     try:
         result = update_task_lease(
             primary,
@@ -1024,6 +1440,7 @@ def task_lease_promote(
             token=lease_id,
             owner_kind=owner_kind,
             promoted_head=promoted_head,
+            expected_previous_head=expected_head,
         )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
@@ -1057,116 +1474,14 @@ def task_lease_release(
         )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
+    _record_manifest_lease(
+        primary,
+        name=name,
+        owner_kind=owner_kind,
+        token=lease_id,
+        state="released",
+    )
     return {"action": "task-lease-release", **result}
-
-
-def publication_begin(*, cwd: Path, action: str) -> dict[str, Any]:
-    inspected = inspect_worktree(
-        cwd=cwd,
-        name=None,
-        require_scope_clean=True,
-        enforce_interop_idle=False,
-    )
-    primary, _ = discover_repository(cwd)
-    try:
-        result = begin_publication(
-            primary,
-            name=str(inspected["name"]),
-            branch=str(inspected["branch"]),
-            worktree=Path(str(inspected["path"])),
-            action=action,
-            starting_head=str(inspected["head"]),
-        )
-    except InteropError as error:
-        raise WorktreeError(str(error)) from error
-    return {
-        "action": "publication-begin",
-        "scope_cwd": inspected["scope_cwd"],
-        "default_branch": inspected["default_branch"],
-        "default_ref": inspected["default_ref"],
-        "default_head": inspected["default_head"],
-        **result,
-    }
-
-
-def publication_end_action(
-    *, cwd: Path, action: str, reservation_id: str
-) -> dict[str, Any]:
-    primary, current_root = discover_repository(cwd)
-    record = _find_record(primary, current_root, name=None, current_cwd=cwd)
-    managed = _managed_from_record(primary, record)
-    try:
-        result = end_publication(
-            primary,
-            name=managed.name,
-            action=action,
-            reservation_id=reservation_id,
-        )
-    except InteropError as error:
-        raise WorktreeError(str(error)) from error
-    return {"action": "publication-end", **result}
-
-
-def _pull_requests(
-    repository: Path, branch: str, expected_base: str
-) -> list[dict[str, Any]]:
-    fields = ",".join(
-        (
-            "number",
-            "url",
-            "state",
-            "mergedAt",
-            "headRefName",
-            "headRefOid",
-            "baseRefName",
-        )
-    )
-    result = _run(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--state",
-            "all",
-            "--head",
-            branch,
-            "--base",
-            expected_base,
-            "--limit",
-            "100",
-            "--json",
-            fields,
-        ],
-        cwd=repository,
-    )
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise WorktreeError("GitHub CLI returned invalid PR JSON") from error
-    if not isinstance(payload, list) or not all(
-        isinstance(item, dict) for item in payload
-    ):
-        raise WorktreeError("GitHub CLI returned an unexpected PR response")
-    return payload
-
-
-def _matching_merged_pr(
-    pull_requests: Sequence[dict[str, Any]],
-    branch: str,
-    head: str,
-    expected_base: str,
-) -> dict[str, Any] | None:
-    matches = [
-        item
-        for item in pull_requests
-        if item.get("headRefName") == branch
-        and item.get("baseRefName") == expected_base
-        and item.get("headRefOid") == head
-        and (item.get("state") == "MERGED" or item.get("mergedAt"))
-    ]
-    if len(matches) > 1:
-        raise WorktreeError("multiple merged PRs match the exact managed branch head")
-    return matches[0] if matches else None
 
 
 def _remove_local_branch(primary: Path, branch: str, *, expected_head: str) -> str:
@@ -1175,9 +1490,515 @@ def _remove_local_branch(primary: Path, branch: str, *, expected_head: str) -> s
     _run(
         ["git", "config", "--local", "--remove-section", f"branch.{branch}"],
         cwd=primary,
-        allowed=(0, 5),
+        allowed=(0, 5, 128),
     )
     return "deleted-with-expected-old-value"
+
+
+def _branch_head(primary: Path, branch: str) -> str | None:
+    result = _run(
+        ["git", "rev-parse", "--verify", f"refs/heads/{branch}"],
+        cwd=primary,
+        allowed=(0, 128),
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _is_ancestor(repository: Path, ancestor: str, descendant: str) -> bool:
+    result = _run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repository,
+        allowed=(0, 1),
+    )
+    return result.returncode == 0
+
+
+def _merge_parents(repository: Path, commit: str) -> tuple[str, str]:
+    fields = _git(repository, "rev-list", "--parents", "-n", "1", commit).split()
+    if len(fields) != 3 or fields[0] != commit:
+        raise WorktreeError("integration candidate is not an exact two-parent merge")
+    return fields[1], fields[2]
+
+
+def _integration_branch(name: str) -> str:
+    return f"codex/worktree-integrate/{name}"
+
+
+def _integration_path(primary: Path, name: str) -> Path:
+    return state_directory(primary) / "integrations" / name
+
+
+def _source_snapshot(primary: Path, manifest: Manifest) -> str:
+    branch = _git(primary, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
+    if branch != manifest.source_branch:
+        raise WorktreeError(
+            "the primary checkout is no longer on the recorded source branch"
+        )
+    if status_paths(primary):
+        raise WorktreeError("the primary source worktree must be completely clean")
+    head = _git(primary, "rev-parse", "HEAD")
+    ref_head = _git(primary, "rev-parse", "--verify", manifest.source_ref)
+    if head != ref_head:
+        raise WorktreeError("the checked-out source branch and source ref disagree")
+    if not _is_ancestor(primary, manifest.base, head):
+        raise WorktreeError(
+            "the source branch no longer descends from the recorded creation base"
+        )
+    return head
+
+
+def _candidate_record(
+    primary: Path, branch: str, expected_path: Path
+) -> WorktreeRecord | None:
+    records = [record for record in list_worktrees(primary) if record.branch == branch]
+    if len(records) > 1:
+        raise WorktreeError("integration branch is checked out more than once")
+    if not records:
+        return None
+    record = records[0]
+    if _canonical(Path(record.path)) != _canonical(expected_path):
+        raise WorktreeError("integration worktree path changed from durable state")
+    return record
+
+
+def _prepare_candidate(
+    primary: Path, reservation: dict[str, object]
+) -> dict[str, object]:
+    name = str(reservation["name"])
+    branch = str(reservation["integration_branch"])
+    path = Path(str(reservation["integration_worktree"]))
+    source_head = str(reservation["source_head"])
+    parent = path.parent
+    if parent.is_symlink():
+        raise WorktreeError(f"integration parent must not be a symlink: {parent}")
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    record = _candidate_record(primary, branch, path) if path.exists() else None
+    branch_head = _branch_head(primary, branch)
+    if record is None:
+        if path.exists() or path.is_symlink():
+            raise WorktreeError("unregistered integration worktree path already exists")
+        if branch_head is None:
+            _git(
+                primary,
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                branch,
+                str(path),
+                source_head,
+            )
+        else:
+            if branch_head != source_head:
+                raise WorktreeError("integration branch advanced during preparation")
+            _git(primary, "worktree", "add", str(path), branch)
+        record = _candidate_record(primary, branch, path)
+    if record is None:
+        raise WorktreeError("integration worktree could not be re-observed")
+    if (
+        _git(path, "rev-parse", "HEAD") != source_head
+        or status_paths(path)
+        or _operation_in_progress(path)
+    ):
+        raise WorktreeError("prepared integration worktree is not clean at source HEAD")
+    try:
+        return update_integration(
+            primary,
+            name=name,
+            reservation_id=str(reservation["token"]),
+            state="present",
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _seal_candidate(primary: Path, reservation: dict[str, object]) -> dict[str, object]:
+    path = Path(str(reservation["integration_worktree"]))
+    source_head = str(reservation["source_head"])
+    child_head = str(reservation["child_head"])
+    operation = _operation_in_progress(path)
+    if operation is None:
+        if _git(path, "rev-parse", "HEAD") != source_head or status_paths(path):
+            raise WorktreeError("integration candidate changed before merge")
+        result = _run(
+            ["git", "merge", "--no-ff", "--no-commit", child_head],
+            cwd=path,
+            allowed=(0, 1),
+        )
+        if result.returncode == 1:
+            return {
+                **reservation,
+                "status": "conflict",
+                "recovery_worktree": str(path),
+                "next_action": "resolve conflicts, stage the resolution, and repeat $worktree integrate",
+            }
+        _git(path, "commit", "--no-edit")
+    elif operation == "MERGE_HEAD":
+        merge_head = _git(path, "rev-parse", "MERGE_HEAD")
+        if merge_head != child_head:
+            raise WorktreeError("integration recovery MERGE_HEAD changed")
+        if _git(path, "diff", "--name-only", "--diff-filter=U"):
+            return {
+                **reservation,
+                "status": "conflict",
+                "recovery_worktree": str(path),
+                "next_action": "resolve conflicts, stage the resolution, and repeat $worktree integrate",
+            }
+        _git(path, "commit", "--no-edit")
+    else:
+        raise WorktreeError(
+            f"unexpected integration operation is in progress: {operation}"
+        )
+    candidate = _git(path, "rev-parse", "HEAD")
+    first_parent, second_parent = _merge_parents(path, candidate)
+    if first_parent != source_head or second_parent != child_head:
+        raise WorktreeError("integration merge parents do not match durable state")
+    if status_paths(path) or _operation_in_progress(path):
+        raise WorktreeError("sealed integration candidate is not clean")
+    try:
+        return update_integration(
+            primary,
+            name=str(reservation["name"]),
+            reservation_id=str(reservation["token"]),
+            state="ready",
+            integration_head=candidate,
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _remove_integration_candidate(
+    primary: Path,
+    reservation: dict[str, object],
+    *,
+    abort_merge: bool,
+) -> None:
+    path = Path(str(reservation["integration_worktree"]))
+    branch = str(reservation["integration_branch"])
+    expected_head = str(
+        reservation["integration_head"]
+        if reservation["state"] == "ready"
+        else reservation["source_head"]
+    )
+    record = _candidate_record(primary, branch, path) if path.exists() else None
+    if record is not None:
+        operation = _operation_in_progress(path)
+        if operation == "MERGE_HEAD" and abort_merge:
+            _git(path, "merge", "--abort")
+            operation = _operation_in_progress(path)
+        if operation:
+            raise WorktreeError(
+                f"integration recovery remains in progress: {operation}"
+            )
+        if status_paths(path):
+            raise WorktreeError(
+                "integration recovery worktree is dirty; preserve or clean it before restart"
+            )
+        observed_head = _git(path, "rev-parse", "HEAD")
+        branch_head = _branch_head(primary, branch)
+        if observed_head != expected_head or branch_head != expected_head:
+            raise WorktreeError(
+                "integration candidate branch advanced beyond durable state; "
+                "preserve it for manual recovery"
+            )
+        _git(primary, "worktree", "remove", str(path))
+    elif path.exists() or path.is_symlink():
+        raise WorktreeError("unregistered integration recovery path remains")
+    branch_head = _branch_head(primary, branch)
+    if branch_head is not None:
+        if branch_head != expected_head:
+            raise WorktreeError(
+                "integration candidate branch advanced beyond durable state; "
+                "preserve it for manual recovery"
+            )
+        _remove_local_branch(primary, branch, expected_head=expected_head)
+
+
+def _integrate_worktree_unlocked(
+    *,
+    cwd: Path,
+    name: str,
+    validated_head: str | None,
+    restart: bool,
+) -> dict[str, Any]:
+    primary, _ = discover_repository(cwd)
+    _validate_name(name)
+    try:
+        manifest = load_manifest(primary, name)
+    except StateError as error:
+        raise WorktreeError(str(error)) from error
+    assert manifest is not None
+    if manifest.status == "integrated":
+        reservation = load_reservation(primary, name)
+        if reservation is not None:
+            _remove_integration_candidate(primary, reservation, abort_merge=False)
+            try:
+                end_integration(
+                    primary,
+                    name=name,
+                    reservation_id=str(reservation["token"]),
+                )
+            except InteropError as error:
+                raise WorktreeError(str(error)) from error
+        return {
+            "action": "integrate",
+            "status": "already-integrated",
+            "name": name,
+            "source_branch": manifest.source_branch,
+            "source_head": manifest.integration_head,
+            "child_head": manifest.integration_child_head,
+        }
+    if manifest.status != "active":
+        raise WorktreeError(
+            f"managed worktree cannot integrate from status {manifest.status}"
+        )
+    reservation = load_reservation(primary, name)
+    record = _find_record(primary, primary, name=name, current_cwd=cwd)
+    managed = _managed_from_record(primary, record)
+    _validate_outer_lease_receipt(
+        primary,
+        name=name,
+        manifest=manifest,
+        observed_head=managed.head,
+    )
+    if reservation is None:
+        try:
+            with interop_lock(primary):
+                assert_idle(primary, name)
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+    operation = _operation_in_progress(managed.path)
+    if operation:
+        raise WorktreeError(f"child worktree operation is in progress: {operation}")
+    dirty = status_paths(managed.path)
+    if dirty:
+        raise WorktreeError(
+            "child worktree must be completely clean before integration: "
+            + ", ".join(dirty)
+        )
+    child_head = managed.head
+    if not _is_ancestor(primary, manifest.base, child_head):
+        raise WorktreeError("child branch no longer descends from its creation base")
+    if child_head == manifest.base:
+        raise WorktreeError("child branch has no committed work to integrate")
+    source_head = _source_snapshot(primary, manifest)
+    if restart:
+        if reservation is None:
+            raise WorktreeError("there is no active integration attempt to restart")
+        if reservation.get("state") == "ready" and source_head == reservation.get(
+            "integration_head"
+        ):
+            raise WorktreeError(
+                "the integration candidate is already the source HEAD and must be reconciled, not restarted"
+            )
+        _remove_integration_candidate(primary, reservation, abort_merge=True)
+        try:
+            end_integration(
+                primary,
+                name=name,
+                reservation_id=str(reservation["token"]),
+            )
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+        return _integrate_worktree_unlocked(
+            cwd=cwd, name=name, validated_head=None, restart=False
+        )
+    if reservation is not None:
+        source_already_promoted = reservation.get(
+            "state"
+        ) == "ready" and source_head == reservation.get("integration_head")
+        if source_head != reservation["source_head"] and not source_already_promoted:
+            raise WorktreeError(
+                "source moved during integration; rerun with --restart after reviewing the retained recovery attempt"
+            )
+        if child_head != reservation["child_head"]:
+            raise WorktreeError("child branch advanced during integration")
+    else:
+        integration_branch = _integration_branch(name)
+        integration_path = _integration_path(primary, name)
+        try:
+            reservation = begin_integration(
+                primary,
+                name=name,
+                branch=managed.branch,
+                worktree=managed.path,
+                source_branch=manifest.source_branch,
+                source_ref=manifest.source_ref,
+                source_head=source_head,
+                child_head=child_head,
+                integration_branch=integration_branch,
+                integration_worktree=integration_path,
+            )
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+    if reservation["state"] == "planned":
+        reservation = _prepare_candidate(primary, reservation)
+    if reservation["state"] == "present":
+        reservation = _seal_candidate(primary, reservation)
+        if reservation.get("status") == "conflict":
+            return {"action": "integrate", **reservation}
+    candidate = str(reservation["integration_head"])
+    candidate_path = Path(str(reservation["integration_worktree"]))
+    first_parent, second_parent = _merge_parents(candidate_path, candidate)
+    candidate_worktree_head = _git(candidate_path, "rev-parse", "HEAD")
+    candidate_ref_head = _git(
+        primary,
+        "rev-parse",
+        "--verify",
+        str(reservation["integration_branch"]),
+    )
+    if (
+        first_parent != reservation["source_head"]
+        or second_parent != reservation["child_head"]
+        or candidate_worktree_head != candidate
+        or candidate_ref_head != candidate
+        or status_paths(candidate_path)
+        or _operation_in_progress(candidate_path)
+    ):
+        raise WorktreeError("ready integration candidate failed exact verification")
+    if validated_head is None:
+        return {
+            "action": "integrate",
+            "status": "validation-required",
+            "name": name,
+            "source_branch": manifest.source_branch,
+            "source_head": reservation["source_head"],
+            "child_head": reservation["child_head"],
+            "candidate_head": candidate,
+            "candidate_worktree": str(candidate_path),
+            "next_action": "run non-mutating combined alignment and tests, then repeat with --validated-head",
+        }
+    if validated_head != candidate:
+        raise WorktreeError(
+            "validated head does not match the exact integration candidate"
+        )
+    observed_source = _source_snapshot(primary, manifest)
+    if observed_source not in {
+        reservation["source_head"],
+        reservation["integration_head"],
+    }:
+        raise WorktreeError("source moved after candidate validation")
+    if _git(managed.path, "rev-parse", "HEAD") != reservation["child_head"]:
+        raise WorktreeError("child moved after candidate validation")
+    try:
+        promotion = promote_ff_only(
+            primary,
+            expected_branch=manifest.source_branch,
+            expected_base=str(reservation["source_head"]),
+            target=candidate,
+        )
+    except GitPromotionError as error:
+        raise WorktreeError(str(error)) from error
+    try:
+        integrated = manifest.updated(
+            status="integrated",
+            expected_head=str(reservation["child_head"]),
+            integration_source_head=str(reservation["source_head"]),
+            integration_child_head=str(reservation["child_head"]),
+            integration_head=candidate,
+        )
+        write_manifest(primary, integrated)
+    except StateError as error:
+        raise WorktreeError(str(error)) from error
+    _remove_integration_candidate(primary, reservation, abort_merge=False)
+    try:
+        end_integration(
+            primary,
+            name=name,
+            reservation_id=str(reservation["token"]),
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    return {
+        "action": "integrate",
+        "status": "integrated",
+        "name": name,
+        "source_branch": manifest.source_branch,
+        "source_head": promotion["head"],
+        "child_head": reservation["child_head"],
+        "merge_head": candidate,
+    }
+
+
+def integrate_worktree(
+    *,
+    cwd: Path,
+    name: str,
+    validated_head: str | None,
+    restart: bool,
+) -> dict[str, Any]:
+    primary, _ = discover_repository(cwd)
+    _validate_name(name)
+    try:
+        with integration_transition_lock(primary, name):
+            return _integrate_worktree_unlocked(
+                cwd=cwd,
+                name=name,
+                validated_head=validated_head,
+                restart=restart,
+            )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _finalize_outer_removal_state(
+    primary: Path,
+    *,
+    name: str,
+    manifest: Manifest | None,
+    receipt: dict[str, object] | None,
+) -> None:
+    """Delete receipt and manifest behind a durable exact removal intent."""
+
+    try:
+        if receipt is not None:
+            prepare_lease_removal(primary, name, receipt)
+        records = list_worktrees(primary)
+        registered = {_canonical(Path(item.path)) for item in records}
+        branches = set(
+            _git(
+                primary,
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/",
+            ).splitlines()
+        )
+        delete_released_lease(
+            primary,
+            name,
+            registered_worktrees=registered,
+            existing_branches=branches,
+            expected_lease=receipt,
+        )
+        if manifest is not None:
+            delete_manifest(primary, name)
+        if receipt is not None:
+            records = list_worktrees(primary)
+            registered = {_canonical(Path(item.path)) for item in records}
+            branches = set(
+                _git(
+                    primary,
+                    "for-each-ref",
+                    "--format=%(refname:short)",
+                    "refs/heads/",
+                ).splitlines()
+            )
+            validate_released_resources(
+                receipt,
+                registered_worktrees=registered,
+                existing_branches=branches,
+            )
+            if load_lease(primary, name) is not None:
+                raise InteropError(
+                    "task lease reappeared before removal intent deletion"
+                )
+            delete_lease_removal(
+                primary,
+                name,
+                expected_receipt=receipt,
+            )
+    except (InteropError, StateError) as error:
+        raise WorktreeError(str(error)) from error
 
 
 def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
@@ -1210,18 +2031,28 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
         raise WorktreeError(str(error)) from error
 
     branch = manifest.branch if manifest is not None else _branch_for_name(name)
-    _git(primary, "fetch", "origin", "--prune")
     records = list_worktrees(primary)
     record = next((item for item in records if item.branch == branch), None)
     local_exists = _local_branch_exists(primary, branch)
-    remote_head = _remote_head(primary, branch)
 
-    if record is None and not local_exists and remote_head is None:
-        if manifest is not None:
-            try:
-                delete_manifest(primary, name)
-            except StateError as error:
-                raise WorktreeError(str(error)) from error
+    if record is None and not local_exists:
+        try:
+            if manifest is not None and load_lease_removal(primary, name) is None:
+                assert_idle(primary, name)
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+        receipt = _validate_outer_lease_receipt(
+            primary,
+            name=name,
+            manifest=manifest,
+            for_removal=True,
+        )
+        _finalize_outer_removal_state(
+            primary,
+            name=name,
+            manifest=manifest,
+            receipt=receipt,
+        )
         return {
             "action": "remove",
             "status": "already-removed",
@@ -1232,6 +2063,11 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
         raise WorktreeError(
             "refusing cleanup because the durable managed ownership manifest is missing"
         )
+    if load_lease_removal(primary, name) is None:
+        try:
+            assert_idle(primary, name)
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
     if (
         manifest.branch != branch
         or manifest.name != name
@@ -1242,40 +2078,6 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
         )
     if record is not None and not local_exists:
         raise WorktreeError("registered worktree branch is missing locally")
-
-    if manifest.status in {"planned", "recovery"}:
-        recovery_heads: list[tuple[str, str]] = []
-        if local_exists:
-            recovery_heads.append(
-                ("local branch", _git(primary, "rev-parse", f"refs/heads/{branch}"))
-            )
-        if remote_head is not None:
-            recovery_heads.append(("remote branch", remote_head))
-        for resource, current_head in recovery_heads:
-            if current_head != manifest.base:
-                raise WorktreeError(
-                    f"{resource} advanced beyond its recorded recovery base: "
-                    f"{current_head} != {manifest.base}"
-                )
-
-    cleanup_head: str | None = None
-    if manifest.status == "cleanup-pending":
-        cleanup_head = manifest.expected_head
-        if cleanup_head is None:
-            raise WorktreeError("cleanup-pending manifest has no verified head")
-        remaining_heads: list[tuple[str, str]] = []
-        if local_exists:
-            remaining_heads.append(
-                ("local branch", _git(primary, "rev-parse", f"refs/heads/{branch}"))
-            )
-        if remote_head is not None:
-            remaining_heads.append(("remote branch", remote_head))
-        for resource, current_head in remaining_heads:
-            if current_head != cleanup_head:
-                raise WorktreeError(
-                    f"{resource} advanced after cleanup proof: "
-                    f"{current_head} != {cleanup_head}"
-                )
 
     managed: ManagedWorktree | None = None
     if record is not None:
@@ -1295,7 +2097,6 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
                 + ", ".join(dirty)
             )
         head = managed.head
-        recent = _git(managed.path, "log", "--format=%H", "-5").splitlines()
     elif local_exists:
         head = _git(primary, "rev-parse", f"refs/heads/{branch}")
         if manifest.status in {"planned", "recovery"}:
@@ -1326,44 +2127,44 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
                 raise WorktreeError(
                     "local branch metadata does not match ownership manifest"
                 )
-        recent = _git(primary, "log", "--format=%H", "-5", branch).splitlines()
     else:
-        assert remote_head is not None
-        head = remote_head
-        scope = base = path_text = None
-        recent = []
+        raise WorktreeError("managed local branch is missing")
 
-    pull_requests = _pull_requests(primary, branch, manifest.default_branch)
-    merged_pr = _matching_merged_pr(
-        pull_requests, branch, head, manifest.default_branch
+    _validate_outer_lease_receipt(
+        primary,
+        name=name,
+        manifest=manifest,
+        observed_head=head,
+        for_removal=True,
     )
-    unused_local = False
-    if local_exists:
-        base_value = managed.base if managed is not None else str(base)
-        unique_count = int(
-            _git(primary, "rev-list", "--count", f"{base_value}..{head}")
-        )
-        unused_local = unique_count == 0 and remote_head is None and not pull_requests
-    if merged_pr is None and not unused_local:
-        raise WorktreeError(
-            "cleanup requires an exact merged PR/head match, or a never-published "
-            "local branch with no commits beyond its recorded base"
-        )
-    if remote_head is not None and remote_head != head:
-        raise WorktreeError(
-            f"remote branch advanced unexpectedly: {remote_head} != verified {head}"
-        )
-    if cleanup_head is not None and head != cleanup_head:
-        raise WorktreeError(
-            f"managed head advanced after cleanup proof: {head} != {cleanup_head}"
-        )
-    if cleanup_head is None:
-        try:
-            write_manifest(
-                primary, manifest.updated(status="cleanup-pending", expected_head=head)
+
+    if manifest.status in {"planned", "recovery", "active"}:
+        if head != manifest.base:
+            raise WorktreeError(
+                "unintegrated child commits must be integrated before removal"
             )
-        except StateError as error:
-            raise WorktreeError(str(error)) from error
+    elif manifest.status == "integrated":
+        if (
+            head != manifest.integration_child_head
+            or manifest.integration_source_head is None
+            or manifest.integration_head is None
+        ):
+            raise WorktreeError("integrated child no longer matches durable proof")
+        first_parent, second_parent = _merge_parents(primary, manifest.integration_head)
+        if (
+            first_parent != manifest.integration_source_head
+            or second_parent != manifest.integration_child_head
+        ):
+            raise WorktreeError("recorded local integration merge proof is invalid")
+        source_head = _git(primary, "rev-parse", "--verify", manifest.source_ref)
+        if not _is_ancestor(primary, manifest.integration_head, source_head):
+            raise WorktreeError(
+                "source history no longer contains the recorded local integration"
+            )
+    else:
+        raise WorktreeError(
+            f"managed worktree cannot be removed from status {manifest.status}"
+        )
 
     removed_path: str | None = None
     if managed is not None:
@@ -1387,16 +2188,19 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
             )
         local_result = _remove_local_branch(primary, branch, expected_head=head)
 
-    remote_result = "already-absent"
-    if remote_head is not None:
-        lease = f"--force-with-lease=refs/heads/{branch}:{head}"
-        _git(primary, "push", lease, "origin", f":refs/heads/{branch}")
-        remote_result = "deleted-with-exact-lease"
-    _git(primary, "fetch", "origin", "--prune")
-    try:
-        delete_manifest(primary, name)
-    except StateError as error:
-        raise WorktreeError(str(error)) from error
+    receipt = _validate_outer_lease_receipt(
+        primary,
+        name=name,
+        manifest=manifest,
+        observed_head=head,
+        for_removal=True,
+    )
+    _finalize_outer_removal_state(
+        primary,
+        name=name,
+        manifest=manifest,
+        receipt=receipt,
+    )
 
     return {
         "action": "remove",
@@ -1406,9 +2210,7 @@ def _remove_worktree_unlocked(*, cwd: Path, name: str | None) -> dict[str, Any]:
         "head": head,
         "worktree": removed_path,
         "local_branch": local_result,
-        "remote_branch": remote_result,
-        "pull_request": merged_pr,
-        "recent_commit_shas": recent,
+        "integration_head": manifest.integration_head,
     }
 
 
@@ -1419,7 +2221,6 @@ def remove_worktree(*, cwd: Path, name: str | None) -> dict[str, Any]:
     _validate_name(name)
     try:
         with interop_lock(primary):
-            assert_idle(primary, name)
             return _remove_worktree_unlocked(cwd=cwd, name=name)
     except InteropError as error:
         raise WorktreeError(str(error)) from error
@@ -1447,9 +2248,23 @@ def _parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="validate managed identity")
     inspect.add_argument("--name", help="generated worktree name from primary checkout")
     inspect.add_argument(
-        "--require-scope-clean",
+        "--require-clean",
         action="store_true",
-        help="fail when dirty or committed paths escape the recorded scope",
+        help="fail unless the entire managed linked worktree is clean",
+    )
+
+    integrate = subparsers.add_parser(
+        "integrate", help="prepare, validate, or promote one local integration"
+    )
+    integrate.add_argument("--name", required=True)
+    integrate.add_argument(
+        "--validated-head",
+        help="exact candidate SHA after non-mutating combined validation",
+    )
+    integrate.add_argument(
+        "--restart",
+        action="store_true",
+        help="explicitly discard the exact retained attempt and start from current source",
     )
 
     remove = subparsers.add_parser("remove", help="remove a safely completed worktree")
@@ -1461,6 +2276,12 @@ def _parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "anchor-inspect", help="internal: inspect a managed outer checkout"
+    )
+    publication_guard_parser = subparsers.add_parser(
+        "publication-guard", help="internal: block direct managed-child publication"
+    )
+    publication_guard_parser.add_argument(
+        "--publication-action", required=True, choices=("push", "create-pr")
     )
 
     task_acquire = subparsers.add_parser(
@@ -1491,12 +2312,22 @@ def _parser() -> argparse.ArgumentParser:
         "--owner-kind", required=True, choices=("task-implementer", "agentic-sdlc")
     )
 
+    task_inspect = subparsers.add_parser(
+        "task-lease-inspect", help="internal: inspect exact task coordinator ownership"
+    )
+    task_inspect.add_argument("--name", required=True)
+    task_inspect.add_argument("--lease-id", required=True)
+    task_inspect.add_argument(
+        "--owner-kind", required=True, choices=("task-implementer", "agentic-sdlc")
+    )
+
     task_promote = subparsers.add_parser(
         "task-lease-promote", help="internal: record an outer promotion"
     )
     task_promote.add_argument("--name", required=True)
     task_promote.add_argument("--lease-id", required=True)
     task_promote.add_argument("--promoted-head", required=True)
+    task_promote.add_argument("--expected-head", required=True)
     task_promote.add_argument(
         "--owner-kind", required=True, choices=("task-implementer", "agentic-sdlc")
     )
@@ -1511,20 +2342,6 @@ def _parser() -> argparse.ArgumentParser:
         "--owner-kind", required=True, choices=("task-implementer", "agentic-sdlc")
     )
 
-    publication_begin_parser = subparsers.add_parser(
-        "publication-begin", help="internal: reserve outer publication"
-    )
-    publication_begin_parser.add_argument(
-        "--publication-action", required=True, choices=("push", "create-pr")
-    )
-
-    publication_end_parser = subparsers.add_parser(
-        "publication-end", help="internal: release outer publication"
-    )
-    publication_end_parser.add_argument(
-        "--publication-action", required=True, choices=("push", "create-pr")
-    )
-    publication_end_parser.add_argument("--reservation-id", required=True)
     return parser
 
 
@@ -1543,12 +2360,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = inspect_worktree(
                 cwd=Path.cwd(),
                 name=arguments.name,
-                require_scope_clean=arguments.require_scope_clean,
+                require_clean=arguments.require_clean,
+            )
+        elif arguments.action == "integrate":
+            result = integrate_worktree(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                validated_head=arguments.validated_head,
+                restart=arguments.restart,
             )
         elif arguments.action == "remove":
             result = remove_worktree(cwd=Path.cwd(), name=arguments.name)
         elif arguments.action == "anchor-inspect":
             result = inspect_managed_anchor(cwd=Path.cwd())
+        elif arguments.action == "publication-guard":
+            result = publication_guard(
+                cwd=Path.cwd(), action=arguments.publication_action
+            )
         elif arguments.action == "task-lease-acquire":
             result = task_lease_acquire(
                 cwd=Path.cwd(),
@@ -1569,12 +2397,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 state=arguments.state,
                 owner_kind=arguments.owner_kind,
             )
+        elif arguments.action == "task-lease-inspect":
+            result = task_lease_inspect(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                lease_id=arguments.lease_id,
+                owner_kind=arguments.owner_kind,
+            )
         elif arguments.action == "task-lease-promote":
             result = task_lease_promote(
                 cwd=Path.cwd(),
                 name=arguments.name,
                 lease_id=arguments.lease_id,
                 promoted_head=arguments.promoted_head,
+                expected_head=arguments.expected_head,
                 owner_kind=arguments.owner_kind,
             )
         elif arguments.action == "task-lease-release":
@@ -1585,17 +2421,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 promoted_head=arguments.promoted_head,
                 owner_kind=arguments.owner_kind,
             )
-        elif arguments.action == "publication-begin":
-            result = publication_begin(
-                cwd=Path.cwd(), action=arguments.publication_action
-            )
         else:
-            result = publication_end_action(
-                cwd=Path.cwd(),
-                action=arguments.publication_action,
-                reservation_id=arguments.reservation_id,
-            )
-    except (WorktreeError, GitPromotionError) as error:
+            parser.error(f"unsupported action: {arguments.action}")
+            raise AssertionError("unreachable")
+    except (WorktreeError, GitPromotionError, InteropError, StateError) as error:
         print(json.dumps({"status": "blocked", "error": str(error)}, sort_keys=True))
         return 2
     print(json.dumps(result, indent=2, sort_keys=True, default=str))

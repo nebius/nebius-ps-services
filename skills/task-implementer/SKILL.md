@@ -54,11 +54,12 @@ $task-implementer run <prompt-path-or-unique-filename>
 ## Inputs
 
 - One explicit public action.
-- The canonical project checkout, an `origin` with an unambiguous symbolic
-  default branch, repo instructions, and immutable prompt snapshot. A clean
-  checkout on that actual default is automatically switched to a deterministic
-  `feature/task-<run-hash>` promotion branch; an existing non-default branch is
-  reused rather than replaced.
+- The canonical project checkout, repo instructions, and immutable prompt
+  snapshot. In an unmanaged checkout, `origin` must expose an unambiguous
+  symbolic default branch; a clean checkout on that default is switched to a
+  deterministic `feature/task-<run-hash>` promotion branch. A managed child
+  instead uses its exact local branch and current `HEAD` without fetching or
+  consulting the remote default.
 - When the checkout is owned by `worktree`, its exact managed outer identity,
   recorded scope, and current `HEAD`; that outer branch is the sole promotion
   target for the full task run.
@@ -148,10 +149,13 @@ and private result record.
 3. Combine overlapping work before IDs lock when it is one coherent result.
    Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
    cycles or malformed ownership. If the project checkout is a `worktree`
-   managed linked worktree, acquire its private v3 lease with owner kind
-   `task-implementer` at the exact current
-   outer `HEAD` before creating task resources. Reject any worker or
-   coordinator write claim that escapes the managed task scope; never clip it.
+   managed linked worktree, acquire its private v4 lease with owner kind
+   `task-implementer` at the exact current outer `HEAD` before creating task
+   resources. On every resume, reconcile the exact lease token, owner, run,
+   promoted head, release state, clean outer checkout, and live Git identity;
+   never trust local interop flags alone. The active lease blocks outer
+   integration and removal. Reject any worker or coordinator write claim that
+   escapes the managed task scope; never clip it.
 4. Coordinate every recorded wave through the lifecycle below. A logical wave
    may dispatch in capacity-sized batches, but batching never changes its wave.
 5. Reconcile queued steering only at a safe wave boundary. Contradictory
@@ -164,10 +168,12 @@ and private result record.
 6. Continue with the next wave from the newly promoted project `HEAD`. After
    the last cleanup, run final changed-surface `$align`, then invoke private
    `run-finalize` with its concise evidence. Only that transition marks the
-   handoff done and releases a managed outer lease. An unchanged completed
-   prompt returns `ALREADY_COMPLETE`; an interrupted lease release returns a
-   private finalization-pending outcome and repeats the same final transition.
-   Edited completed content starts a new internal run only after release.
+   handoff done and releases a managed outer lease. For a managed child, report
+   the exact `$worktree integrate <generated-name>` handoff; do not push the
+   child or open a PR from it. An unchanged completed prompt returns
+   `ALREADY_COMPLETE`; an interrupted lease release returns a private
+   finalization-pending outcome and repeats the same final transition. Edited
+   completed content starts a new internal run only after release.
 
 ## Dependency-Wave Contract
 
@@ -196,10 +202,12 @@ Task states are
 
 For each wave:
 
-1. Resolve and verify the actual remote default. Require a clean named project
-   branch; when it is that default, create and switch to the deterministic
-   run promotion branch from the verified default SHA. Otherwise retain the
-   existing branch. Record both identities and exact `HEAD` in coordinator v5.
+1. Require a clean named project branch. In an unmanaged checkout, resolve and
+   verify the actual remote default; when the current branch is that default,
+   create and switch to the deterministic run promotion branch from the
+   verified default SHA. In a managed child, retain the exact local child
+   branch and current `HEAD` without fetching or resolving a remote default.
+   Record the selected mode and exact identity in coordinator v6.
 2. Register resource intent in the managed outer lease when present, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
@@ -309,7 +317,7 @@ For each wave:
 ## Idempotency
 
 - Every Git mutation is journaled before execution and re-observed afterward.
-- Repeated `run` resumes recorded v5 execution state; it does not recreate assignments,
+- Repeated `run` resumes recorded v6 execution state; it does not recreate assignments,
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
@@ -320,10 +328,11 @@ For each wave:
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.
 - A managed outer lease spans every wave and final `$align`. While held it
-  blocks outer inspect, push, PR creation, and removal. It releases only from a
-  clean outer branch at the final promoted head with every internal resource
-  absent. Missing or malformed coordination state fails closed.
-- Execution-plane-v1 and coordinator-v1/v2/v3/v4 runs are unsupported and return
+  blocks outer integration and removal. It releases only from a clean outer
+  branch at the final promoted head with every internal resource absent. The
+  released child then hands off to `$worktree integrate`; publication remains
+  a source-branch action. Missing or malformed coordination state fails closed.
+- Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.
 
@@ -336,7 +345,7 @@ For each wave:
   `UNSUPPORTED_SYMLINK_SCOPE` for claims crossing tracked symlinks;
   `WORKTREE_COLLISION` or `WORKTREE_CONFLICT` for identity/drift;
   `INTEGRATION_CONFLICT` or `INTEGRATION_VALIDATION_FAILED` before promotion;
-  `PROMOTION_BLOCKED` or `PROMOTION_FAILED` for publication failure;
+  `PROMOTION_BLOCKED` or `PROMOTION_FAILED` for local promotion failure;
   `CLEANUP_BLOCKED` for retained unsafe resources; and
   `ENVIRONMENT_BLOCKER` for missing safe bootstrap state or access.
 - Native subagents inherit the parent sandbox but are not intrinsically bound
@@ -348,6 +357,9 @@ For each wave:
   returns `WORKFLOW_UPGRADE_REQUIRED`; do not infer, migrate, or adopt its
   resources. There is no TTL, PID-based recovery, force-clear, or compatibility
   path for task leases.
+- Treat the schema-v4 `released` lease record as the terminal receipt. Repair a
+  missed local interop write only when its owner, token, promoted SHA, clean
+  outer checkout, and absent resources match exactly; otherwise stop.
 
 ## Must Not
 
@@ -358,8 +370,9 @@ For each wave:
   assumptions.
 - Do not let workers touch the primary checkout, other refs/worktrees, shared
   handoff/spec/docs, Git maintenance, external systems, or undeclared paths.
-- Do not push or publish internal task branches, target the remote default, or let
-  outer `worktree` push/create-pr/remove run while the task lease is active.
+- Do not push or publish internal task branches or managed child branches,
+  target the remote default from managed mode, or let outer `worktree`
+  integrate/remove run while the task lease is active.
 - Do not force-remove worktrees, force-delete branches, copy local state,
   initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,
   or perform live external writes without separate authorization.

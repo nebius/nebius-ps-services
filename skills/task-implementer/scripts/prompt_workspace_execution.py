@@ -16,7 +16,7 @@ from prompt_workspace_core import (
 from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v5"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v6"
 WAVE_SCHEMA = "task-implementer/wave-v4"
 ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
 RESULT_SCHEMA = "task-implementer/worker-result-v3"
@@ -473,10 +473,11 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         "task-implementer/coordinator-v2",
         "task-implementer/coordinator-v3",
         "task-implementer/coordinator-v4",
+        "task-implementer/coordinator-v5",
     }:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "legacy coordinator state is unsupported; start a new v5 run",
+            "legacy coordinator state is unsupported; start a new v6 run",
         )
     required = {
         "schema",
@@ -511,16 +512,27 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator status is invalid"
         )
-    if (
-        value.get("default_remote") != "origin"
-        or not isinstance(value.get("default_branch"), str)
-        or not value["default_branch"]
-        or value.get("default_ref") != f"origin/{value['default_branch']}"
-        or not isinstance(value.get("default_head"), str)
-        or SHA_RE.fullmatch(str(value["default_head"])) is None
-        or value.get("promotion_source") not in {"existing", "auto-created"}
-        or value.get("base_branch") == value.get("default_branch")
-    ):
+    managed_local = value.get("promotion_source") == "managed-local"
+    remote_identity_valid = (
+        value.get("default_remote") == "origin"
+        and isinstance(value.get("default_branch"), str)
+        and bool(value["default_branch"])
+        and value.get("default_ref") == f"origin/{value['default_branch']}"
+        and isinstance(value.get("default_head"), str)
+        and SHA_RE.fullmatch(str(value["default_head"])) is not None
+        and value.get("promotion_source") in {"existing", "auto-created"}
+        and value.get("base_branch") != value.get("default_branch")
+    )
+    local_identity_valid = managed_local and all(
+        value.get(field) is None
+        for field in (
+            "default_remote",
+            "default_branch",
+            "default_ref",
+            "default_head",
+        )
+    )
+    if not (remote_identity_valid or local_identity_valid):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
         )

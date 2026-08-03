@@ -31,9 +31,19 @@ correction tail found by integration review before finalization.
 When initialized inside a linked worktree created by the `worktree` skill, the
 entire task run is nested under that outer branch. The exact current outer
 `HEAD` becomes the worker base, all wave promotions return to that branch, and
-a private v3 lease with owner kind `task-implementer` blocks outer push, PR creation, and removal through final
-alignment. The task coordinator never bases workers on the remote default in this
-case.
+a private v4 lease with owner kind `task-implementer` blocks outer integration
+and removal through final alignment. The task coordinator never fetches or
+bases workers on the remote default in this case. After release, the managed
+child is handed to `$worktree integrate`; it is never pushed or used as a PR
+head.
+
+Resume, promotion, and release reconcile local `interop.json` against the exact
+durable lease token and live clean outer Git head. Release persists a terminal
+receipt; only an exact receipt can repair an interrupted local state write, and
+any missing, contradictory, or different-SHA state fails closed. Each wave
+promotion advances the lease's ordered history with an expected-head
+compare-and-set, so a later wave cannot overwrite or skip durable promotion
+proof.
 
 ## Dependency Waves
 
@@ -148,24 +158,25 @@ workflow never runs broad prune/gc, cherry-picks, rebases, squashes, pushes, or
 force-removes.
 
 After the last wave cleanup, final changed-surface `$align` evidence is sealed
-before a managed outer lease is released. An interruption after the handoff is
-marked done remains recoverable: repeating `run` finishes the same private
-release instead of starting a new task run.
+before a managed outer lease is released. The result is an exact local
+`$worktree integrate <generated-name>` handoff. An interruption after the
+handoff is marked done remains recoverable: repeating `run` finishes the same
+private release instead of starting a new task run.
 
 ## Private State And Recovery
 
-Coordinator v5, wave v4, mutable task-plane v5, immutable assignment v7/result v3,
+Coordinator v6, wave v4, mutable task-plane v5, immutable assignment v7/result v3,
 incoming-handoff, and journal records live with the run
 under the private prompt workspace. Every Git mutation is journaled before
 execution and re-observed afterward. A repeated `run` resumes durable v5 truth
 without recreating branches, worktrees, assignments, commits, or merges.
 
-`orchestration/interop.json` binds a nested run to the exact managed outer
-identity and its worktree-owned lease. Completed prompt history is archive-only
+`orchestration/interop.json` uses schema v3 and binds a nested run to the exact
+managed outer identity and its worktree-owned lease. Completed prompt history is archive-only
 after the outer worktree has itself been removed; it is never migrated to a
 different workspace identity.
 
-Every execution-plane-v1 or coordinator-v1/v2/v3/v4 run returns
+Every execution-plane-v1 or coordinator-v1/v2/v3/v4/v5 run returns
 `WORKFLOW_UPGRADE_REQUIRED`, including completed records. There is no legacy
 read path, compatibility execution path, or migration command.
 

@@ -2,18 +2,16 @@
 
 ## Should Trigger
 
-- `$worktree Create an isolated worktree for the current skills project to fix
-  trigger validation.`
+- `$worktree Create an isolated worktree from my current clean feature branch
+  for the skills project.`
 - `$worktree add --project services/example-api prepare the migration report
   changes.`
 - `$worktree add --project services/example-api --reuse
   project-migration-report-a7c2f9 and preserve its unfinished changes.`
-- `$worktree push Commit the managed worktree changes as "fix(skills): tighten
-  trigger validation" and push them.`
-- `$worktree create-pr Open or reuse the PR for this managed worktree with title
-  "Harden worktree cleanup".`
-- `$worktree remove project-fix-trigger-validation-a7c2f9 after verifying its PR
-  was merged.`
+- `$worktree integrate project-fix-trigger-validation-a7c2f9 after validating
+  the combined result.`
+- `$worktree remove project-fix-trigger-validation-a7c2f9 after its exact local
+  merge is present on the source branch.`
 
 ## Should Not Trigger
 
@@ -27,14 +25,15 @@
 
 - The skill requires an explicit `$worktree` invocation.
 - No action means `add`; no compatibility aliases are accepted.
-- An existing active scope/task lifecycle blocks duplicate creation and is
-  reusable only by its exact generated name.
-- `push` and `create-pr` compose with their existing sibling skills only after
-  an action-bound private publication reservation plus managed identity and
-  project-scope checks.
-- A nested `task-implementer` run owns the outer branch until its internal
-  resources are cleaned and final alignment releases the lease; while active,
-  `push`, `create-pr`, and `remove` fail closed.
-- Repeating an interrupted publication action resumes its reservation; a
-  different action cannot clear or replace it.
-- `remove` does not merge PRs or abandon unproved work.
+- `add` requires the complete primary checkout to be clean and captures the
+  exact current named non-default local source branch and `HEAD` without fetch.
+- `--project` selects the initial directory and label only; it is not a
+  checkout, staging, or changed-path boundary.
+- A nested Task Implementer or Agentic SDLC lease blocks outer integration and
+  removal until final alignment and internal cleanup release it.
+- Direct managed-child push or PR creation is rejected; publication happens
+  only from the accumulated source branch.
+- `integrate` uses one durable private candidate, preserves conflict recovery,
+  requires non-mutating combined validation, and advances the source only by
+  ff-only promotion of the exact two-parent candidate.
+- `remove` does not discard unproved, dirty, advanced, or rewritten work.

@@ -7,6 +7,9 @@ PRs, change branches, merge, rebase, or repair remote divergence.
 
 ## What It Does
 
+- Rejects publication from every state-classified managed child, integration
+  candidate, nested worker, or inconsistent ownership claim and routes it to
+  its local owner; only the accumulated source branch may be pushed.
 - Verifies the current Git state is safe for a branch-local commit and push.
 - Stages the complete repository diff with repo-root `git add -A`, regardless
   of the project or subdirectory where the agent started.

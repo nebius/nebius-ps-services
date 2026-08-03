@@ -147,7 +147,7 @@ bodies.
   },
   "repair": null,
   "execution": {
-    "schema": "agentic-sdlc/execution-coordinator-v5",
+    "schema": "agentic-sdlc/execution-coordinator-v6",
     "feature_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -202,7 +202,7 @@ immutable classification plus a completed successful dispatch. `resolved` is
 valid only when the cursor is complete; the Stop hook rejects UAT, PR, or
 publication routing while any invalidated gate remains.
 
-Coordinator v5 binds the exact initialized folder through `git_root`,
+Coordinator v6 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
 Execution wave v2 enforces an active capacity-batch cursor. Mutable task v3
 records store append-only hashed worker-session history plus attempt count;
@@ -214,8 +214,9 @@ to the exact diagnosis, oracle, and worker commit. Atomic private
 one session identity across tasks. A private execution transition lock and
 expected-attempt recovery guard make each task ownership transfer exclusive.
 Optional `execution/interop.json` uses
-`agentic-sdlc/worktree-interop-v1` for a managed outer-worktree lease.
-Every coordinator v1/v2/v3/v4 record fails with `WORKFLOW_UPGRADE_REQUIRED` and is
+`agentic-sdlc/worktree-interop-v2` for a managed outer-worktree lease and
+source-integration handoff. Every coordinator v1 through v5 record fails with
+`WORKFLOW_UPGRADE_REQUIRED` and is
 not mutated, including completed records.
 
 ## Minimum checkpoint
@@ -288,11 +289,12 @@ without conversation history.
 }
 ```
 
-Execution coordinator v5 is the only supported execution schema. If an
+Execution coordinator v6 is the only supported execution schema. If an
 `agentic-sdlc/execution-coordinator-v1` or
 `agentic-sdlc/execution-coordinator-v2` or
 `agentic-sdlc/execution-coordinator-v3` or
-`agentic-sdlc/execution-coordinator-v4` record exists, stop with
+`agentic-sdlc/execution-coordinator-v4` or
+`agentic-sdlc/execution-coordinator-v5` record exists, stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate its
 resources. This applies to completed records; there is no legacy read path.
 
@@ -396,9 +398,10 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 14. sdlc-align-specs, in the integration worktree
 15. sdlc-commit: final seal, ff-only promotion, and integration cleanup
 16. uat, from the promoted project checkout
-17. create-pr
-18. review-pr
-19. sdlc-merge-pr, only after explicit user request
+17. managed child only: outer-integration-pending, then `$worktree integrate`
+18. create-pr, from the final unmanaged source branch only
+19. review-pr
+20. sdlc-merge-pr, only after explicit user request
 
 `troubleshoot` is a conditional diagnostic branch, not an additional
 golden-path phase. A proven cause routes directly from
@@ -425,8 +428,11 @@ integration tip under the common-Git-directory lock with
 `git merge --ff-only`.
 
 After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
-before `create-pr` when UAT or final steering changes require project-facing
-documentation updates. Once routed forward, `create-pr` is publication-only
+before final handoff when UAT or final steering changes require project-facing
+documentation updates. In a managed child, lease release enters
+`outer-integration-pending`; `$worktree integrate <generated-name>` must record
+the exact source merge proof before the run is complete. The child is never
+published. In an unmanaged source checkout, `create-pr` is publication-only
 for the clean exact promoted SHA and `review-pr` is
 findings-and-readiness-only; branch-changing findings return through
 `sdlc-classify-failure` and `sdlc-start`. `sdlc-merge-pr` then requires the

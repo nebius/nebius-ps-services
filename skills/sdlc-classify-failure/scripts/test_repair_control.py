@@ -256,15 +256,15 @@ class RepairControlTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def record_event(self, payload: dict[str, object] | None = None) -> dict[str, object]:
+    def record_event(
+        self, payload: dict[str, object] | None = None
+    ) -> dict[str, object]:
         result = repair_control.record_failure_event(
             self.run_dir, payload or failure_payload()
         )
         return result["event"]
 
-    def record_localized(
-        self, event: dict[str, object]
-    ) -> dict[str, object]:
+    def record_localized(self, event: dict[str, object]) -> dict[str, object]:
         return repair_control.record_diagnosis(
             self.run_dir, localized_diagnosis(event)
         )["diagnosis"]
@@ -319,13 +319,13 @@ class RepairControlTests(unittest.TestCase):
 
     def test_commit_changes_event_id_not_blocker_key(self) -> None:
         first = repair_control.build_failure_event(failure_payload())
-        second = repair_control.build_failure_event(
-            failure_payload(commit="b" * 40)
-        )
+        second = repair_control.build_failure_event(failure_payload(commit="b" * 40))
         self.assertNotEqual(first["event_id"], second["event_id"])
         self.assertEqual(first["blocker_key"], second["blocker_key"])
 
-    def test_failed_direct_repair_requires_troubleshooting_before_attempt_two(self) -> None:
+    def test_failed_direct_repair_requires_troubleshooting_before_attempt_two(
+        self,
+    ) -> None:
         event = self.record_event()
         classification = self.classify(event)
         first = repair_control.begin_remediation(
@@ -443,9 +443,7 @@ class RepairControlTests(unittest.TestCase):
             self.classify(event, fabricated_diagnosis)
         self.assertEqual(unbound.exception.code, "STATE_INVALID")
 
-        approval_statement = (
-            "I approve this broader public-contract design change."
-        )
+        approval_statement = "I approve this broader public-contract design change."
         approval_input = self.run_dir / "inputs" / "r0002" / "prompt.md"
         approval_input.parent.mkdir(parents=True)
         approval_input.write_text(approval_statement, encoding="utf-8")
@@ -456,13 +454,11 @@ class RepairControlTests(unittest.TestCase):
         authorized_gate = design_gate(broader=True)
         authorized_gate["human_approval_id"] = approval["approval_id"]
         authorized["design_gate"] = authorized_gate
-        diagnosis = repair_control.record_diagnosis(
-            self.run_dir, authorized
-        )["diagnosis"]
+        diagnosis = repair_control.record_diagnosis(self.run_dir, authorized)[
+            "diagnosis"
+        ]
         classification = self.classify(event, diagnosis)
-        self.assertEqual(
-            classification["design_admission"]["approval_mode"], "human"
-        )
+        self.assertEqual(classification["design_admission"]["approval_mode"], "human")
         approval_input.write_text(
             "I revoke this broader design approval.", encoding="utf-8"
         )
@@ -487,7 +483,9 @@ class RepairControlTests(unittest.TestCase):
             repair_control.build_diagnosis(diagnosis, event)
         self.assertEqual(blocked.exception.code, "DIAGNOSIS_INCOMPLETE")
 
-    def test_taxonomy_routes_test_spec_evaluator_environment_policy_and_human(self) -> None:
+    def test_taxonomy_routes_test_spec_evaluator_environment_policy_and_human(
+        self,
+    ) -> None:
         cases = (
             ("TEST_DEFECT", "sdlc-tdd", "routed"),
             ("SPEC_GAP", "sdlc-create-requirements", "routed"),
@@ -625,9 +623,7 @@ class RepairControlTests(unittest.TestCase):
             },
         )
 
-        integration = (
-            self.run_dir / "worktrees" / "FEAT-001" / "integration"
-        )
+        integration = self.run_dir / "worktrees" / "FEAT-001" / "integration"
         integration.mkdir(parents=True)
         subprocess.run(
             ["git", "init", "-b", "main"],
@@ -660,17 +656,12 @@ class RepairControlTests(unittest.TestCase):
             capture_output=True,
             text=True,
         ).stdout.strip()
-        coordinator_path = (
-            self.run_dir
-            / "execution"
-            / "FEAT-001"
-            / "coordinator.json"
-        )
+        coordinator_path = self.run_dir / "execution" / "FEAT-001" / "coordinator.json"
         coordinator_path.parent.mkdir(parents=True)
         coordinator_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v5",
+                    "schema": "agentic-sdlc/execution-coordinator-v6",
                     "integration_worktree": str(integration),
                 }
             ),
@@ -745,16 +736,12 @@ class RepairControlTests(unittest.TestCase):
                     fingerprints=current_fingerprints,
                 ),
             )
-        self.assertEqual(
-            out_of_order.exception.code, "REVALIDATION_OUT_OF_ORDER"
-        )
+        self.assertEqual(out_of_order.exception.code, "REVALIDATION_OUT_OF_ORDER")
 
         first_payload = None
         first_revalidation_id = None
         promoted_project = Path(self.temporary.name) / "promoted-project"
-        for index, required in enumerate(
-            control["revalidation"]["required"], start=1
-        ):
+        for index, required in enumerate(control["revalidation"]["required"], start=1):
             if required["surface"] == "commit":
                 subprocess.run(
                     ["git", "clone", str(integration), str(promoted_project)],
@@ -765,7 +752,7 @@ class RepairControlTests(unittest.TestCase):
                 coordinator_path.write_text(
                     json.dumps(
                         {
-                            "schema": "agentic-sdlc/execution-coordinator-v5",
+                            "schema": "agentic-sdlc/execution-coordinator-v6",
                             "status": "done",
                             "base_branch": "main",
                             "project_root": str(promoted_project),
@@ -793,9 +780,7 @@ class RepairControlTests(unittest.TestCase):
                     check=True,
                     capture_output=True,
                 )
-                with self.assertRaises(
-                    repair_control.RepairControlError
-                ) as detached:
+                with self.assertRaises(repair_control.RepairControlError) as detached:
                     repair_control.record_revalidation(self.run_dir, payload)
                 self.assertEqual(detached.exception.code, "REVALIDATION_INVALID")
                 subprocess.run(
@@ -824,9 +809,7 @@ class RepairControlTests(unittest.TestCase):
         self.assertEqual(result["control"]["revalidation"]["status"], "complete")
         assert first_payload is not None
         assert first_revalidation_id is not None
-        journal_path = (
-            self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
-        )
+        journal_path = self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
         lines = [
             line
             for line in journal_path.read_text(encoding="utf-8").splitlines()
@@ -857,9 +840,7 @@ class RepairControlTests(unittest.TestCase):
             "evidence/FEAT-001/evaluate.md#AC-001",
         )
         first = repair_control.begin_remediation(*arguments)
-        journal_path = (
-            self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
-        )
+        journal_path = self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
         lines = [
             line
             for line in journal_path.read_text(encoding="utf-8").splitlines()
@@ -912,9 +893,7 @@ class RepairControlTests(unittest.TestCase):
         )
         failure_replay = repair_control.record_failure_event(self.run_dir, payload)
         self.assertFalse(failure_replay["created"])
-        journal_path = (
-            self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
-        )
+        journal_path = self.run_dir / "repairs" / "FEAT-001" / "repair-journal.jsonl"
         self.assertIn(
             '"event":"failure-recorded"',
             journal_path.read_text(encoding="utf-8"),
@@ -997,13 +976,11 @@ class RepairControlTests(unittest.TestCase):
                 "Third localized hypothesis.",
                 "evidence/third",
             )
-        self.assertEqual(
-            localized_block.exception.code, "REPAIR_BUDGET_EXHAUSTED"
-        )
+        self.assertEqual(localized_block.exception.code, "REPAIR_BUDGET_EXHAUSTED")
 
-        design = repair_control.record_diagnosis(
-            self.run_dir, design_diagnosis(event)
-        )["diagnosis"]
+        design = repair_control.record_diagnosis(self.run_dir, design_diagnosis(event))[
+            "diagnosis"
+        ]
         design_classification = self.classify(event, design)
         third = repair_control.begin_remediation(
             self.run_dir,
@@ -1076,9 +1053,7 @@ class RepairControlTests(unittest.TestCase):
                         f"Independent hypothesis {index}.",
                         f"evidence/independent-{index}",
                     )
-                self.assertEqual(
-                    blocked.exception.code, "REPAIR_BUDGET_EXHAUSTED"
-                )
+                self.assertEqual(blocked.exception.code, "REPAIR_BUDGET_EXHAUSTED")
                 break
             attempt = repair_control.begin_remediation(
                 self.run_dir,
@@ -1126,9 +1101,7 @@ class RepairControlTests(unittest.TestCase):
             "decision_changing",
             model_rebuilt=True,
         )
-        self.assertFalse(
-            rebuilt["control"]["active_blocker"]["model_rebuild_required"]
-        )
+        self.assertFalse(rebuilt["control"]["active_blocker"]["model_rebuild_required"])
 
     def test_semantic_a_b_a_cycle_without_new_evidence_stops(self) -> None:
         event = self.record_event()

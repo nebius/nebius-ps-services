@@ -58,7 +58,6 @@ from prompt_workspace_interop import (
     acquire_interop,
     inspect_anchor,
     load_interop,
-    managed,
     record_promotion,
     record_resource,
     release_interop,
@@ -543,9 +542,7 @@ def _task_record(task: TaskPlan) -> dict[str, object]:
     }
 
 
-def _coordinator_claims(
-    workspace: dict[str, object], *, managed_outer: bool
-) -> list[dict[str, str]]:
+def _coordinator_claims(workspace: dict[str, object]) -> list[dict[str, str]]:
     scope = required_string(workspace, "scope", "workspace manifest")
     prefix = "" if scope == "." else f"{scope}/"
     claims = [
@@ -554,7 +551,7 @@ def _coordinator_claims(
         {"kind": "exact", "path": f"{prefix}README.md"},
         {"kind": "exact", "path": f"{prefix}CHANGELOG.md"},
     ]
-    if scope != "." and not managed_outer:
+    if scope != ".":
         claims.extend(
             (
                 {"kind": "exact", "path": "README.md"},
@@ -564,21 +561,19 @@ def _coordinator_claims(
     return claims
 
 
-def _validate_managed_claims(tasks: list[TaskPlan], interop: dict[str, object]) -> None:
-    if not managed(interop):
+def _verify_coordinator_remote(repo: Path, coordinator: dict[str, object]) -> None:
+    if coordinator.get("promotion_source") == "managed-local":
         return
-    task_scope = str(interop["task_scope"])
-    scope_path = PurePosixPath(task_scope)
-    for task in tasks:
-        for claim in task.write_claims:
-            claim_path = PurePosixPath(claim.path)
-            if task_scope != "." and not (
-                claim_path == scope_path or scope_path in claim_path.parents
-            ):
-                raise PromptWorkspaceError(
-                    "REPLAN_REQUIRED",
-                    f"{task.task_id} write claim escapes the managed outer scope",
-                )
+    try:
+        verify_remote_default(
+            repo,
+            expected_remote=str(coordinator["default_remote"]),
+            expected_branch=str(coordinator["default_branch"]),
+            expected_ref=str(coordinator["default_ref"]),
+            expected_head=str(coordinator["default_head"]),
+        )
+    except GitPromotionError as error:
+        raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
 
 
 def _existing_run_interop(
@@ -589,7 +584,12 @@ def _existing_run_interop(
 ) -> dict[str, object]:
     state = load_interop(run_dir, required=False)
     if state is not None:
-        return state
+        return acquire_interop(
+            workspace,
+            run_dir,
+            manifest_path,
+            str(coordinator["initial_head"]),
+        )
     if inspect_anchor(workspace).get("status") != "unmanaged":
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -962,14 +962,26 @@ def plan_waves(
             )
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         _common_dir(repo)
-        try:
-            promotion = ensure_promotion_branch(
-                repo,
-                lifecycle_id=run_id,
-                task_slug="task",
-            )
-        except GitPromotionError as error:
-            raise PromptWorkspaceError("WORKTREE_CONFLICT", str(error)) from error
+        anchor = inspect_anchor(workspace)
+        if anchor.get("status") == "managed":
+            promotion: dict[str, object] = {
+                "promotion_branch": str(anchor["branch"]),
+                "promotion_initial_head": str(anchor["head"]),
+                "promotion_source": "managed-local",
+                "remote": None,
+                "default_branch": None,
+                "default_ref": None,
+                "default_head": None,
+            }
+        else:
+            try:
+                promotion = ensure_promotion_branch(
+                    repo,
+                    lifecycle_id=run_id,
+                    task_slug="task",
+                )
+            except GitPromotionError as error:
+                raise PromptWorkspaceError("WORKTREE_CONFLICT", str(error)) from error
         branch = str(promotion["promotion_branch"])
         base = str(promotion["promotion_initial_head"])
         tasks = parse_task_plans(text)
@@ -979,8 +991,7 @@ def plan_waves(
                 "EXECUTION_STATE_INVALID", "no pending tasks can be planned"
             )
         plan = [[_task_record(task) for task in wave] for wave in waves]
-        interop = acquire_interop(workspace, run_dir, manifest_path, base)
-        _validate_managed_claims(tasks, interop)
+        acquire_interop(workspace, run_dir, manifest_path, base)
         created = _utc(clock)
         wave_ids = [f"wave-{index:03d}" for index in range(1, len(waves) + 1)]
         root = _worktree_root(manifest_path, workspace, run_id)
@@ -999,9 +1010,7 @@ def plan_waves(
                 "base_commit": None,
                 "contract_commit": None,
                 "integrated_head": None,
-                "coordinator_write_claims": _coordinator_claims(
-                    workspace, managed_outer=managed(interop)
-                ),
+                "coordinator_write_claims": _coordinator_claims(workspace),
                 "integration_branch": None,
                 "integration_worktree": str(wave_root / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
@@ -1089,7 +1098,7 @@ def replan_waves(
         coordinator = load_coordinator_state(run_dir)
         if coordinator is None:
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "run has no v5 coordinator"
+                "EXECUTION_STATE_INVALID", "run has no v6 coordinator"
             )
         active_wave = coordinator.get("active_wave")
         if coordinator["status"] == "running" and isinstance(active_wave, str):
@@ -1104,7 +1113,7 @@ def replan_waves(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "run has no replannable wave boundary"
             )
-        interop = _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
+        _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
         append_after_done = active["status"] == "done"
         if active["status"] not in {"planned", "done"}:
@@ -1148,7 +1157,6 @@ def replan_waves(
         if text is None:
             raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
         tasks = parse_task_plans(text)
-        _validate_managed_claims(tasks, interop)
         waves = build_dependency_waves(tasks)
         if not waves:
             raise PromptWorkspaceError(
@@ -1182,9 +1190,7 @@ def replan_waves(
                 "base_commit": None,
                 "contract_commit": None,
                 "integrated_head": None,
-                "coordinator_write_claims": _coordinator_claims(
-                    workspace, managed_outer=managed(interop)
-                ),
+                "coordinator_write_claims": _coordinator_claims(workspace),
                 "integration_branch": None,
                 "integration_worktree": str(root / wave_id / "integration"),
                 "task_ids": [task.task_id for task in tasks_in_wave],
@@ -2994,16 +3000,7 @@ def promote_wave(
                 "PROMOTION_BLOCKED",
                 "primary checkout moved or became dirty before promotion",
             )
-        try:
-            verify_remote_default(
-                repo,
-                expected_remote=str(coordinator["default_remote"]),
-                expected_branch=str(coordinator["default_branch"]),
-                expected_ref=str(coordinator["default_ref"]),
-                expected_head=str(coordinator["default_head"]),
-            )
-        except GitPromotionError as error:
-            raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
+        _verify_coordinator_remote(repo, coordinator)
         retained_workers: list[str] = []
         for task_id in wave["task_ids"]:
             assignment = _validated_assignment(
@@ -3042,16 +3039,7 @@ def promote_wave(
                 "CLEANUP_BLOCKED",
                 "worker worktrees or branches could not be removed after combined validation",
             )
-        try:
-            verify_remote_default(
-                repo,
-                expected_remote=str(coordinator["default_remote"]),
-                expected_branch=str(coordinator["default_branch"]),
-                expected_ref=str(coordinator["default_ref"]),
-                expected_head=str(coordinator["default_head"]),
-            )
-        except GitPromotionError as error:
-            raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
+        _verify_coordinator_remote(repo, coordinator)
         try:
             promotion = promote_ff_only(
                 repo,

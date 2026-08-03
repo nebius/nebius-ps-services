@@ -97,10 +97,15 @@ EXTERNAL_CHANGE_FLAGS = {
 }
 SENSITIVE_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", re.IGNORECASE),
-    re.compile(r"\b(?:password|passwd|api[_-]?key|access[_-]?token)\s*[:=]", re.IGNORECASE),
+    re.compile(
+        r"\b(?:password|passwd|api[_-]?key|access[_-]?token)\s*[:=]", re.IGNORECASE
+    ),
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"https?://(?:localhost|127\.0\.0\.1|[^/\s]*\.(?:internal|local))\b", re.IGNORECASE),
+    re.compile(
+        r"https?://(?:localhost|127\.0\.0\.1|[^/\s]*\.(?:internal|local))\b",
+        re.IGNORECASE,
+    ),
 )
 
 RESULT_TO_CLASSIFICATION = {
@@ -176,10 +181,14 @@ def _digest(value: Any) -> str:
 
 def _bounded_string(value: Any, label: str, *, maximum: int = 2048) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise RepairControlError("RECORD_INVALID", f"{label} must be a non-empty string")
+        raise RepairControlError(
+            "RECORD_INVALID", f"{label} must be a non-empty string"
+        )
     result = value.strip()
     if len(result) > maximum or any(ord(character) < 32 for character in result):
-        raise RepairControlError("RECORD_INVALID", f"{label} is not a bounded text field")
+        raise RepairControlError(
+            "RECORD_INVALID", f"{label} is not a bounded text field"
+        )
     return result
 
 
@@ -188,10 +197,7 @@ def _string_list(
 ) -> list[str]:
     if not isinstance(value, list) or len(value) > maximum:
         raise RepairControlError("RECORD_INVALID", f"{label} must be a bounded list")
-    result = [
-        _bounded_string(item, f"{label} item", maximum=1024)
-        for item in value
-    ]
+    result = [_bounded_string(item, f"{label} item", maximum=1024) for item in value]
     if required and not result:
         raise RepairControlError("RECORD_INVALID", f"{label} must not be empty")
     return result
@@ -205,7 +211,8 @@ def _contains_sensitive(value: Any) -> bool:
 def _reject_sensitive(value: Any) -> None:
     if _contains_sensitive(value):
         raise RepairControlError(
-            "SECURITY_BLOCKER", "structured failure evidence contains sensitive material"
+            "SECURITY_BLOCKER",
+            "structured failure evidence contains sensitive material",
         )
 
 
@@ -224,7 +231,9 @@ def _normalize_blocker_field(value: Any, label: str) -> str:
         )
     candidate = re.sub(r":\d+\b", "", candidate)
     candidate = re.sub(r"\b\d{4}-\d{2}-\d{2}t[^\s|]+", "", candidate)
-    candidate = re.sub(r"\b(?:request|run|job|attempt)[-_ ]?[0-9a-f]{6,}\b", "", candidate)
+    candidate = re.sub(
+        r"\b(?:request|run|job|attempt)[-_ ]?[0-9a-f]{6,}\b", "", candidate
+    )
     candidate = re.sub(r"\s+", "-", candidate).strip("-| ")
     if not candidate:
         raise RepairControlError("RECORD_INVALID", f"{label} has no stable content")
@@ -240,7 +249,9 @@ def _feature_id(value: Any) -> str:
 
 def _validate_digests(value: Any, label: str) -> dict[str, str]:
     if not isinstance(value, dict) or not value or len(value) > 32:
-        raise RepairControlError("RECORD_INVALID", f"{label} must be a non-empty object")
+        raise RepairControlError(
+            "RECORD_INVALID", f"{label} must be a non-empty object"
+        )
     result: dict[str, str] = {}
     for raw_key, raw_digest in value.items():
         key = _bounded_string(raw_key, f"{label} key", maximum=128)
@@ -308,9 +319,7 @@ def build_failure_event(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "reproduction": _bounded_string(payload.get("reproduction"), "reproduction"),
         "integration_commit": integration_commit,
-        "fingerprints": _validate_digests(
-            payload.get("fingerprints"), "fingerprints"
-        ),
+        "fingerprints": _validate_digests(payload.get("fingerprints"), "fingerprints"),
         "component": component,
         "operation": operation,
         "error_class": error_class,
@@ -336,9 +345,7 @@ def build_failure_event(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": _now(payload.get("created_at")),
     }
     if result["execution_lifecycle"] not in EXECUTION_LIFECYCLES:
-        raise RepairControlError(
-            "RECORD_INVALID", "execution_lifecycle is unsupported"
-        )
+        raise RepairControlError("RECORD_INVALID", "execution_lifecycle is unsupported")
     _reject_sensitive(result)
     result["event_id"] = _digest(_identity_payload(result, "event_id", "blocker_key"))
     return result
@@ -362,7 +369,9 @@ def _validate_design_gate(
             raise RepairControlError(
                 "DESIGN_ADMISSION_DENIED", f"design_gate.{field} must be true"
             )
-    changes = _string_list(value.get("system_contract_changes"), "system_contract_changes")
+    changes = _string_list(
+        value.get("system_contract_changes"), "system_contract_changes"
+    )
     unknown = sorted(set(changes) - SYSTEM_CONTRACT_CHANGES)
     if unknown:
         raise RepairControlError(
@@ -388,9 +397,7 @@ def _validate_design_gate(
         "estimated_work": _bounded_string(
             value.get("estimated_work"), "estimated_work", maximum=512
         ),
-        "rollback_path": _bounded_string(
-            value.get("rollback_path"), "rollback_path"
-        ),
+        "rollback_path": _bounded_string(value.get("rollback_path"), "rollback_path"),
         "external_change_flags": value.get("external_change_flags", {}),
         "human_approval_id": value.get("human_approval_id"),
     }
@@ -435,17 +442,23 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
     if payload.get("schema") != DIAGNOSIS_SCHEMA:
         raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis schema is invalid")
     if _feature_id(payload.get("feature_id")) != event["feature_id"]:
-        raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis feature does not match")
+        raise RepairControlError(
+            "DIAGNOSIS_INVALID", "diagnosis feature does not match"
+        )
     if payload.get("event_id") != event["event_id"]:
         raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis event does not match")
     if payload.get("blocker_key") != event["blocker_key"]:
-        raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis blocker does not match")
+        raise RepairControlError(
+            "DIAGNOSIS_INVALID", "diagnosis blocker does not match"
+        )
     result_name = _bounded_string(payload.get("result"), "result", maximum=64)
     if result_name not in DIAGNOSIS_RESULTS:
         raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis result is unsupported")
     confidence = _bounded_string(payload.get("confidence"), "confidence", maximum=32)
     if confidence not in CONFIDENCE:
-        raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis confidence is unsupported")
+        raise RepairControlError(
+            "DIAGNOSIS_INVALID", "diagnosis confidence is unsupported"
+        )
     authorizes_change = result_name not in {
         "blocked_missing_evidence",
         "unresolved",
@@ -498,7 +511,9 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
                 "DIAGNOSIS_INCOMPLETE", "earliest_divergence must be structured"
             )
         diagnosis["earliest_divergence"] = {
-            field: _bounded_string(divergence.get(field), f"earliest_divergence.{field}")
+            field: _bounded_string(
+                divergence.get(field), f"earliest_divergence.{field}"
+            )
             for field in ("component", "operation", "source_boundary")
         }
         diagnosis["violated_invariant"] = _bounded_string(
@@ -519,9 +534,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
         diagnosis["evidence_references"] = _string_list(
             diagnosis["evidence_references"], "evidence_references"
         )
-        diagnosis["constraints"] = _string_list(
-            diagnosis["constraints"], "constraints"
-        )
+        diagnosis["constraints"] = _string_list(diagnosis["constraints"], "constraints")
     if result_name == "localized_implementation_defect":
         diagnosis["bounded_repair_target"] = _bounded_string(
             diagnosis["bounded_repair_target"], "bounded_repair_target"
@@ -535,9 +548,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
     if result_name == "design_defect":
         diagnosis["design_gate"] = _validate_design_gate(diagnosis["design_gate"])
     _reject_sensitive(diagnosis)
-    diagnosis["diagnosis_id"] = _digest(
-        _identity_payload(diagnosis, "diagnosis_id")
-    )
+    diagnosis["diagnosis_id"] = _digest(_identity_payload(diagnosis, "diagnosis_id"))
     return diagnosis
 
 
@@ -563,7 +574,10 @@ def build_design_approval(
             "DESIGN_APPROVAL_INVALID", "design approval schema is invalid"
         )
     feature_id = _feature_id(payload.get("feature_id"))
-    if feature_id != event["feature_id"] or payload.get("event_id") != event["event_id"]:
+    if (
+        feature_id != event["feature_id"]
+        or payload.get("event_id") != event["event_id"]
+    ):
         raise RepairControlError(
             "DESIGN_APPROVAL_INVALID", "design approval failure identity changed"
         )
@@ -645,20 +659,12 @@ def _classification_path(
 
 
 def _approval_path(run_dir: Path, feature_id: str, approval_id: str) -> Path:
-    return (
-        _repair_root(run_dir, feature_id)
-        / "approvals"
-        / f"{approval_id}.json"
-    )
+    return _repair_root(run_dir, feature_id) / "approvals" / f"{approval_id}.json"
 
 
-def _revalidation_path(
-    run_dir: Path, feature_id: str, revalidation_id: str
-) -> Path:
+def _revalidation_path(run_dir: Path, feature_id: str, revalidation_id: str) -> Path:
     return (
-        _repair_root(run_dir, feature_id)
-        / "revalidations"
-        / f"{revalidation_id}.json"
+        _repair_root(run_dir, feature_id) / "revalidations" / f"{revalidation_id}.json"
     )
 
 
@@ -783,10 +789,7 @@ def _append_journal(
     try:
         descriptor = os.open(
             path,
-            os.O_APPEND
-            | os.O_CREAT
-            | os.O_WRONLY
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
             0o600,
         )
     except OSError as exc:
@@ -892,9 +895,7 @@ def _record_failure_event_unlocked(
     else:
         created = _store_immutable(path, event, "failure event")
     control_path = _control_path(run_dir, event["feature_id"])
-    transition_id = _digest(
-        {"action": "record-failure", "event_id": event["event_id"]}
-    )
+    transition_id = _digest({"action": "record-failure", "event_id": event["event_id"]})
     if control_path.exists():
         control = _load_control(run_dir, event["feature_id"])
         current_key = control["active_blocker"]["blocker_key"]
@@ -946,9 +947,7 @@ def _load_event(run_dir: Path, feature_id: str, event_id: str) -> dict[str, Any]
     return event
 
 
-def _verify_human_approval_source(
-    run_dir: Path, approval: dict[str, Any]
-) -> None:
+def _verify_human_approval_source(run_dir: Path, approval: dict[str, Any]) -> None:
     canonical_run = run_dir.expanduser().absolute().resolve()
     inputs_root = canonical_run / "inputs"
     if inputs_root.is_symlink():
@@ -990,7 +989,10 @@ def _verify_human_approval_source(
             "DESIGN_APPROVAL_INVALID", "approval input snapshot is not UTF-8"
         ) from exc
     statement = approval["approval_statement"]
-    if statement not in text or re.search(r"\bapprov(?:e|ed|es|al)\b", statement, re.I) is None:
+    if (
+        statement not in text
+        or re.search(r"\bapprov(?:e|ed|es|al)\b", statement, re.I) is None
+    ):
         raise RepairControlError(
             "DESIGN_APPROVAL_INVALID",
             "approval statement is not an explicit excerpt from the user input",
@@ -1003,11 +1005,7 @@ def _verify_revalidation_evidence_source(
     canonical_run = run_dir.expanduser().absolute().resolve()
     evidence_root = canonical_run / "evidence"
     reference = Path(record["evidence_reference"])
-    if (
-        evidence_root.is_symlink()
-        or reference.is_absolute()
-        or ".." in reference.parts
-    ):
+    if evidence_root.is_symlink() or reference.is_absolute() or ".." in reference.parts:
         raise RepairControlError(
             "REVALIDATION_INVALID",
             "revalidation evidence must be a relative private evidence file",
@@ -1074,7 +1072,9 @@ def _load_private_state_json(path: Path, label: str) -> dict[str, Any]:
 
 
 def _current_fingerprints(run_dir: Path) -> dict[str, str]:
-    state = _load_private_state_json(run_dir.resolve() / "current-state.json", "current state")
+    state = _load_private_state_json(
+        run_dir.resolve() / "current-state.json", "current state"
+    )
     identifiers = state.get("fingerprint_ids")
     if not isinstance(identifiers, list) or not identifiers:
         raise RepairControlError(
@@ -1110,7 +1110,9 @@ def _git_output(project: Path, arguments: list[str], label: str) -> str:
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RepairControlError("REVALIDATION_INVALID", f"{label} is unavailable") from exc
+        raise RepairControlError(
+            "REVALIDATION_INVALID", f"{label} is unavailable"
+        ) from exc
     if result.returncode != 0:
         raise RepairControlError("REVALIDATION_INVALID", f"{label} is unavailable")
     return result.stdout.strip()
@@ -1200,9 +1202,10 @@ def _current_promoted_head(run_dir: Path, coordinator: dict[str, Any]) -> str:
         raise RepairControlError(
             "REVALIDATION_INVALID", "promoted project HEAD drifted"
         )
-    if _git_output(
-        project, ["branch", "--show-current"], "promoted project branch"
-    ) != base_branch:
+    if (
+        _git_output(project, ["branch", "--show-current"], "promoted project branch")
+        != base_branch
+    ):
         raise RepairControlError(
             "REVALIDATION_INVALID", "promoted project branch drifted"
         )
@@ -1223,7 +1226,8 @@ def _current_promoted_head(run_dir: Path, coordinator: dict[str, Any]) -> str:
         integration.resolve(strict=False).relative_to(run_dir.resolve())
     except ValueError as exc:
         raise RepairControlError(
-            "REVALIDATION_INVALID", "integration worktree identity escapes the private run"
+            "REVALIDATION_INVALID",
+            "integration worktree identity escapes the private run",
         ) from exc
     try:
         branch_result = subprocess.run(
@@ -1252,14 +1256,12 @@ def _current_promoted_head(run_dir: Path, coordinator: dict[str, Any]) -> str:
     return promoted.lower()
 
 
-def _current_revalidation_commit(
-    run_dir: Path, feature_id: str, surface: str
-) -> str:
+def _current_revalidation_commit(run_dir: Path, feature_id: str, surface: str) -> str:
     coordinator = _load_private_state_json(
         run_dir.resolve() / "execution" / feature_id / "coordinator.json",
         "execution coordinator",
     )
-    if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v5":
+    if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v6":
         raise RepairControlError(
             "REVALIDATION_INVALID", "current execution coordinator is unsupported"
         )
@@ -1280,9 +1282,8 @@ def _verify_revalidation_authority(
         run_dir, control["feature_id"], revalidation["classification_id"]
     )
     invalidates = classification.get("invalidates")
-    if (
-        not isinstance(invalidates, list)
-        or any(surface not in REVALIDATION_ROUTES for surface in invalidates)
+    if not isinstance(invalidates, list) or any(
+        surface not in REVALIDATION_ROUTES for surface in invalidates
     ):
         raise RepairControlError(
             "STATE_TAMPERED", "classification invalidation route is invalid"
@@ -1311,8 +1312,7 @@ def _verify_revalidation_authority(
     if (
         classification.get("feature_id") != control["feature_id"]
         or classification.get("event_id") != control["current_event_id"]
-        or classification.get("blocker_key")
-        != control["active_blocker"]["blocker_key"]
+        or classification.get("blocker_key") != control["active_blocker"]["blocker_key"]
         or revalidation.get("required") != expected_required
         or revalidation.get("cursor_id") != _digest(projection)
         or attempt is None
@@ -1378,9 +1378,7 @@ def _load_design_approval(
     approval = _read_json(_approval_path(run_dir, feature_id, approval_id))
     rebuilt = build_design_approval(approval, event)
     if rebuilt != approval or rebuilt["approval_id"] != approval_id:
-        raise RepairControlError(
-            "STATE_TAMPERED", "design approval digest is invalid"
-        )
+        raise RepairControlError("STATE_TAMPERED", "design approval digest is invalid")
     _verify_human_approval_source(run_dir, approval)
     if approval["design_gate_digest"] != _design_gate_digest(gate):
         raise RepairControlError(
@@ -1429,7 +1427,9 @@ def _record_diagnosis_unlocked(
         _write_failure_log(run_dir, feature_id, control)
         return {"created": False, "diagnosis": diagnosis, "control": control}
     if control["active_blocker"]["blocker_key"] != diagnosis["blocker_key"]:
-        raise RepairControlError("STATE_INVALID", "diagnosis is not for the active blocker")
+        raise RepairControlError(
+            "STATE_INVALID", "diagnosis is not for the active blocker"
+        )
     control["current_event_id"] = event_id
     control["current_diagnosis_id"] = diagnosis["diagnosis_id"]
     control["current_classification_id"] = None
@@ -1578,9 +1578,11 @@ def _classification_from(
         route, corrective_mode = "sdlc-evaluate", "evaluator_repair_same_commit"
         invalidates = ["evaluation"]
     elif classification == "ENVIRONMENT_DEFECT":
-        route, corrective_mode, invalidates = None, "rerun_gate_same_commit", [
-            event["phase"]
-        ]
+        route, corrective_mode, invalidates = (
+            None,
+            "rerun_gate_same_commit",
+            [event["phase"]],
+        )
     else:
         route = DIRECT_ROUTES.get(classification)
         corrective_mode = None
@@ -1624,9 +1626,7 @@ def _classify_failure_unlocked(
             "human_approval_id",
             maximum=256,
         )
-        _load_design_approval(
-            run_dir, feature_id, approval_id, event, design_admission
-        )
+        _load_design_approval(run_dir, feature_id, approval_id, event, design_admission)
     record = {
         "schema": CLASSIFICATION_SCHEMA,
         "feature_id": feature_id,
@@ -1653,7 +1653,9 @@ def _classify_failure_unlocked(
             "STATE_INVALID", "classification event is not the current failure event"
         )
     if control["active_blocker"]["blocker_key"] != event["blocker_key"]:
-        raise RepairControlError("STATE_INVALID", "classification is not for active blocker")
+        raise RepairControlError(
+            "STATE_INVALID", "classification is not for active blocker"
+        )
     history = control["route_history"]
     semantic_key = "|".join(
         (
@@ -1678,7 +1680,9 @@ def _classify_failure_unlocked(
             record = dict(record)
             record["next_recommended_skill"] = None
             record["status"] = "blocked_semantic_cycle"
-            record["reason"] = "A-to-B-to-A routing repeated without semantic evidence progress"
+            record["reason"] = (
+                "A-to-B-to-A routing repeated without semantic evidence progress"
+            )
             record["classification_id"] = _digest(
                 _identity_payload(record, "classification_id")
             )
@@ -1731,7 +1735,11 @@ def _classify_failure_unlocked(
             blocker_key=event["blocker_key"],
         )
     _write_failure_log(run_dir, feature_id, control)
-    return {"created": created and duplicate is None, "classification": record, "control": control}
+    return {
+        "created": created and duplicate is None,
+        "classification": record,
+        "control": control,
+    }
 
 
 def _load_classification(
@@ -1807,7 +1815,10 @@ def _begin_remediation_unlocked(
         raise RepairControlError(
             "DESIGN_ADMISSION_DENIED", "only DESIGN_DEFECT can dispatch design repair"
         )
-    if remedy_scale == "localized" and classification["classification"] == "DESIGN_DEFECT":
+    if (
+        remedy_scale == "localized"
+        and classification["classification"] == "DESIGN_DEFECT"
+    ):
         raise RepairControlError(
             "REPAIR_NOT_AUTHORIZED", "design defect cannot dispatch localized repair"
         )
@@ -1820,7 +1831,9 @@ def _begin_remediation_unlocked(
     control = _load_control(run_dir, feature_id)
     blocker = control["active_blocker"]
     if blocker["blocker_key"] != classification["blocker_key"]:
-        raise RepairControlError("STATE_INVALID", "classification blocker is not active")
+        raise RepairControlError(
+            "STATE_INVALID", "classification blocker is not active"
+        )
     duplicate = next(
         (
             attempt
@@ -1861,8 +1874,13 @@ def _begin_remediation_unlocked(
         _budget_stop(blocker, "attempt_limit")
         control["status"] = "exhausted"
         _write_json_atomic(_control_path(run_dir, feature_id), control)
-        raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "three-attempt ceiling reached")
-    if remedy_scale == "localized" and blocker["localized_attempts"] >= blocker["localized_limit"]:
+        raise RepairControlError(
+            "REPAIR_BUDGET_EXHAUSTED", "three-attempt ceiling reached"
+        )
+    if (
+        remedy_scale == "localized"
+        and blocker["localized_attempts"] >= blocker["localized_limit"]
+    ):
         raise RepairControlError(
             "REPAIR_BUDGET_EXHAUSTED", "two-localized-remediation ceiling reached"
         )
@@ -1871,9 +1889,14 @@ def _begin_remediation_unlocked(
         or blocker["design_remediated"]
     ):
         raise RepairControlError(
-            "REPAIR_BUDGET_EXHAUSTED", "design remediation cannot repeat for this blocker"
+            "REPAIR_BUDGET_EXHAUSTED",
+            "design remediation cannot repeat for this blocker",
         )
-    failed = [item for item in blocker["attempts"] if item.get("result") == "failed_same_blocker"]
+    failed = [
+        item
+        for item in blocker["attempts"]
+        if item.get("result") == "failed_same_blocker"
+    ]
     if failed:
         current_diagnosis = classification.get("diagnosis_id")
         if not current_diagnosis or current_diagnosis == failed[-1].get("diagnosis_id"):
@@ -1991,7 +2014,9 @@ def _complete_remediation_unlocked(
             )
             return {"updated": False, "attempt": attempt, "control": control}
         raise RepairControlError("STATE_TAMPERED", "completed remediation changed")
-    transition_id = _digest({"action": "complete", "dispatch_id": dispatch_id, "result": result})
+    transition_id = _digest(
+        {"action": "complete", "dispatch_id": dispatch_id, "result": result}
+    )
     _append_journal(
         run_dir,
         feature_id,
@@ -2055,9 +2080,7 @@ def _build_revalidation_evidence(
         )
     feature_id = _feature_id(payload.get("feature_id"))
     if feature_id != control["feature_id"]:
-        raise RepairControlError(
-            "REVALIDATION_INVALID", "revalidation feature changed"
-        )
+        raise RepairControlError("REVALIDATION_INVALID", "revalidation feature changed")
     revalidation = control.get("revalidation")
     if not isinstance(revalidation, dict):
         raise RepairControlError(
@@ -2108,9 +2131,7 @@ def _build_revalidation_evidence(
         "surface": surface,
         "next_recommended_skill": matching["next_recommended_skill"],
         "integration_commit": integration_commit,
-        "fingerprints": _validate_digests(
-            payload.get("fingerprints"), "fingerprints"
-        ),
+        "fingerprints": _validate_digests(payload.get("fingerprints"), "fingerprints"),
         "evidence_reference": _bounded_string(
             payload.get("evidence_reference"),
             "evidence_reference",
@@ -2120,9 +2141,7 @@ def _build_revalidation_evidence(
         "recorded_at": _now(payload.get("recorded_at")),
     }
     _reject_sensitive(record)
-    record["revalidation_id"] = _digest(
-        _identity_payload(record, "revalidation_id")
-    )
+    record["revalidation_id"] = _digest(_identity_payload(record, "revalidation_id"))
     return record
 
 
@@ -2235,9 +2254,7 @@ def _record_experiment_unlocked(
     experiment = {
         "question": _bounded_string(question, "question"),
         "hypothesis": _bounded_string(hypothesis, "hypothesis"),
-        "evidence_reference": _bounded_string(
-            evidence_reference, "evidence_reference"
-        ),
+        "evidence_reference": _bounded_string(evidence_reference, "evidence_reference"),
         "information_gain": information_gain,
         "model_rebuilt": bool(model_rebuilt),
     }
@@ -2287,9 +2304,7 @@ def record_failure_event(run_dir: Path, payload: dict[str, Any]) -> dict[str, An
         return _record_failure_event_unlocked(run_dir, payload)
 
 
-def record_design_approval(
-    run_dir: Path, payload: dict[str, Any]
-) -> dict[str, Any]:
+def record_design_approval(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     feature_id = _feature_id(payload.get("feature_id"))
     with _transition_lock(run_dir, feature_id):
         return _record_design_approval_unlocked(run_dir, payload)
@@ -2308,9 +2323,7 @@ def classify_failure(
     diagnosis_id: str | None = None,
 ) -> dict[str, Any]:
     with _transition_lock(run_dir, feature_id):
-        return _classify_failure_unlocked(
-            run_dir, feature_id, event_id, diagnosis_id
-        )
+        return _classify_failure_unlocked(run_dir, feature_id, event_id, diagnosis_id)
 
 
 def begin_remediation(
@@ -2377,17 +2390,13 @@ def record_experiment(
         )
 
 
-def record_revalidation(
-    run_dir: Path, payload: dict[str, Any]
-) -> dict[str, Any]:
+def record_revalidation(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     feature_id = _feature_id(payload.get("feature_id"))
     with _transition_lock(run_dir, feature_id):
         return _record_revalidation_unlocked(run_dir, payload)
 
 
-def _write_failure_log(
-    run_dir: Path, feature_id: str, control: dict[str, Any]
-) -> None:
+def _write_failure_log(run_dir: Path, feature_id: str, control: dict[str, Any]) -> None:
     path = run_dir.resolve() / "evidence" / feature_id / "failure-log.md"
     blocker = control["active_blocker"]
     lines = [
@@ -2505,7 +2514,9 @@ def _parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--run-dir", type=Path, required=True)
     dispatch.add_argument("--feature", required=True)
     dispatch.add_argument("--classification", required=True)
-    dispatch.add_argument("--remedy-scale", choices=("localized", "design"), required=True)
+    dispatch.add_argument(
+        "--remedy-scale", choices=("localized", "design"), required=True
+    )
     dispatch.add_argument("--hypothesis", required=True)
     dispatch.add_argument("--evidence-reference", required=True)
     dispatch.add_argument("--active-seconds", type=int, default=0)

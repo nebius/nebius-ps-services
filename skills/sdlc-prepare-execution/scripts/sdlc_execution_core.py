@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -22,6 +23,8 @@ import sys
 from sdlc_execution_interop import (
     ExecutionInteropError,
     acquire as acquire_outer_lease,
+    inspect_anchor as inspect_outer_anchor,
+    reconcile_promotion as reconcile_outer_promotion,
     record_promotion as record_outer_promotion,
     record_resource as record_outer_resource,
 )
@@ -38,7 +41,7 @@ from git_promotion import (  # noqa: E402
 )
 
 
-COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v5"
+COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v6"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
 TASK_SCHEMA = "agentic-sdlc/execution-task-v3"
 ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v2"
@@ -155,11 +158,7 @@ def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
         )
         or (
             current is not None
-            and (
-                not isinstance(current, str)
-                or not history
-                or history[-1] != current
-            )
+            and (not isinstance(current, str) or not history or history[-1] != current)
         )
     ):
         raise ExecutionError(
@@ -224,9 +223,7 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 @contextmanager
-def _execution_transition_lock(
-    run_dir: Path, feature_id: str
-) -> Iterator[None]:
+def _execution_transition_lock(run_dir: Path, feature_id: str) -> Iterator[None]:
     directory = execution_dir(run_dir, feature_id)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
@@ -310,12 +307,27 @@ def _claim_worker_session(
         "task_id": task_id,
         "worker_session_hash": session_hash,
     }
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".claim", dir=directory
+    )
+    temporary = Path(temporary_name)
     try:
-        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(claim, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
     except FileExistsError:
+        try:
+            temporary.unlink()
+            _fsync_directory(directory)
+        except OSError as exc:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID",
+                "worker session claim cleanup could not be persisted",
+            ) from exc
         if (
             path.is_symlink()
             or not path.is_file()
@@ -327,14 +339,40 @@ def _claim_worker_session(
             )
         return
     except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+            _fsync_directory(directory)
+        except OSError:
+            pass
         raise ExecutionError(
-            "EXECUTION_STATE_INVALID", "worker session claim could not be created"
+            "EXECUTION_STATE_INVALID", "worker session claim could not be published"
         ) from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(claim, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    try:
+        _fsync_directory(directory)
+        temporary.unlink()
+        _fsync_directory(directory)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID",
+            "worker session claim publication could not be persisted",
+        ) from exc
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(f"directory sync target is not a directory: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def append_journal(path: Path, event: dict[str, Any]) -> None:
@@ -595,9 +633,10 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 "PLAN_INVALID",
                 f"{task_id} must bind both Diagnosis and Regression oracle",
             )
-        if diagnosis_id is not None and re.fullmatch(
-            r"[0-9a-f]{64}", diagnosis_id
-        ) is None:
+        if (
+            diagnosis_id is not None
+            and re.fullmatch(r"[0-9a-f]{64}", diagnosis_id) is None
+        ):
             raise ExecutionError(
                 "PLAN_INVALID", f"{task_id} has malformed diagnosis ID"
             )
@@ -812,6 +851,7 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "agentic-sdlc/execution-coordinator-v2",
         "agentic-sdlc/execution-coordinator-v3",
         "agentic-sdlc/execution-coordinator-v4",
+        "agentic-sdlc/execution-coordinator-v5",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -819,15 +859,27 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
         )
     if value.get("schema") != COORDINATOR_SCHEMA:
         raise ExecutionError("EXECUTION_STATE_INVALID", "coordinator schema is invalid")
-    if (
-        value.get("state_version") != 5
-        or value.get("default_remote") != "origin"
-        or not isinstance(value.get("default_branch"), str)
-        or not value["default_branch"]
-        or value.get("default_ref") != f"origin/{value['default_branch']}"
-        or SHA_RE.fullmatch(str(value.get("default_head") or "")) is None
-        or value.get("promotion_source") not in {"existing", "auto-created"}
-        or value.get("base_branch") == value.get("default_branch")
+    managed_local = value.get("promotion_source") == "managed-local"
+    remote_identity_valid = (
+        value.get("default_remote") == "origin"
+        and isinstance(value.get("default_branch"), str)
+        and bool(value["default_branch"])
+        and value.get("default_ref") == f"origin/{value['default_branch']}"
+        and SHA_RE.fullmatch(str(value.get("default_head") or "")) is not None
+        and value.get("promotion_source") in {"existing", "auto-created"}
+        and value.get("base_branch") != value.get("default_branch")
+    )
+    local_identity_valid = managed_local and all(
+        value.get(field) is None
+        for field in (
+            "default_remote",
+            "default_branch",
+            "default_ref",
+            "default_head",
+        )
+    )
+    if value.get("state_version") != 6 or not (
+        remote_identity_valid or local_identity_valid
     ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
@@ -904,15 +956,31 @@ def prepare_execution(
     tasks = parse_locked_plan(plan_text)
     _verify_claim_paths(project_root, project_scope, tasks)
     waves = build_dependency_waves(tasks)
-    try:
-        promotion = ensure_promotion_branch(
-            project_root,
-            lifecycle_id=run_dir.name,
-            task_slug="sdlc",
-        )
-    except GitPromotionError as exc:
-        code = "WORKTREE_CONFLICT" if "must be clean" in str(exc) else "POLICY_BLOCK"
-        raise ExecutionError(code, str(exc)) from exc
+    anchor = _interop(
+        "outer worktree inspection", inspect_outer_anchor, selected_project_root
+    )
+    if anchor.get("status") == "managed":
+        promotion: dict[str, object] = {
+            "promotion_branch": str(anchor["branch"]),
+            "promotion_initial_head": str(anchor["head"]),
+            "promotion_source": "managed-local",
+            "remote": None,
+            "default_branch": None,
+            "default_ref": None,
+            "default_head": None,
+        }
+    else:
+        try:
+            promotion = ensure_promotion_branch(
+                project_root,
+                lifecycle_id=run_dir.name,
+                task_slug="sdlc",
+            )
+        except GitPromotionError as exc:
+            code = (
+                "WORKTREE_CONFLICT" if "must be clean" in str(exc) else "POLICY_BLOCK"
+            )
+            raise ExecutionError(code, str(exc)) from exc
     current_branch = str(promotion["promotion_branch"])
     base_head = str(promotion["promotion_initial_head"])
     state_path = coordinator_path(run_dir, feature_id)
@@ -966,7 +1034,7 @@ def prepare_execution(
             )
         coordinator = {
             "schema": COORDINATOR_SCHEMA,
-            "state_version": 5,
+            "state_version": 6,
             "feature_id": feature_id,
             "run_id": run_dir.name,
             "project_root": str(project_root),
@@ -1114,9 +1182,7 @@ def prepare_execution(
                 for batch in capacity_batches(wave_tasks, capacity)
             ],
             "active_batch_index": None,
-            "batch_states": [
-                "pending" for _ in capacity_batches(wave_tasks, capacity)
-            ],
+            "batch_states": ["pending" for _ in capacity_batches(wave_tasks, capacity)],
             "base_head": None,
             "merged_task_ids": [],
             "integration_head": None,
@@ -1567,9 +1633,7 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
         )
 
 
-def _validate_result_record(
-    result: dict[str, Any], assignment: dict[str, Any]
-) -> None:
+def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) -> None:
     unsigned = dict(result)
     recorded = unsigned.pop("result_digest", None)
     if (
@@ -1705,9 +1769,7 @@ def _build_incoming_handoff(
         if dependency not in predecessor_ids
     )
     for dependency in predecessor_ids:
-        dependency_wave = _find_task_wave(
-            run_dir, feature_id, coordinator, dependency
-        )
+        dependency_wave = _find_task_wave(run_dir, feature_id, coordinator, dependency)
         if dependency_wave is None:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "dependency task state is missing"
@@ -1792,10 +1854,8 @@ def _validate_assignment_handoff(
         str(assignment["base_head"]),
         str(handoff.get("created_at")),
     )
-    if (
-        handoff != expected
-        or handoff.get("handoff_digest")
-        != assignment.get("incoming_handoff_digest")
+    if handoff != expected or handoff.get("handoff_digest") != assignment.get(
+        "incoming_handoff_digest"
     ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "incoming handoff context is invalid"
@@ -1884,9 +1944,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             )
             assignments.append(existing)
             continue
-        handoff_file = incoming_handoff_path(
-            run_dir, feature_id, wave_id, task_id
-        )
+        handoff_file = incoming_handoff_path(run_dir, feature_id, wave_id, task_id)
         existing_handoff = (
             _read_incoming_handoff(handoff_file) if handoff_file.exists() else None
         )
@@ -2060,9 +2118,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     return assignments
 
 
-def advance_batch(
-    run_dir: Path, feature_id: str, wave_id: str
-) -> list[dict[str, Any]]:
+def advance_batch(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
     _load_coordinator(run_dir, feature_id)
     wave_file = wave_path(run_dir, feature_id, wave_id)
     wave = read_json(wave_file)
@@ -2142,9 +2198,7 @@ def _start_task_locked(
     task_record = read_json(task_record_path)
     _validated_session_history(task_record)
     task = _task_plan_from_state(task_record)
-    _validate_assignment_handoff(
-        run_dir, feature_id, coordinator, assignment, task
-    )
+    _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
     wave = read_json(wave_path(run_dir, feature_id, wave_id))
     active_index = wave.get("active_batch_index")
     if (
@@ -2164,9 +2218,7 @@ def _start_task_locked(
             raise ExecutionError(
                 "WORKSPACE_BUSY", "task belongs to another worker session"
             )
-        _claim_worker_session(
-            run_dir, feature_id, wave_id, task_id, session_hash
-        )
+        _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
         return assignment
     for other in execution_dir(run_dir, feature_id).glob("tasks/*/*.json"):
         if other == task_record_path:
@@ -2324,9 +2376,7 @@ def _recover_task_locked(
     task_record = read_json(task_record_path)
     history = _validated_session_history(task_record)
     task = _task_plan_from_state(task_record)
-    _validate_assignment_handoff(
-        run_dir, feature_id, coordinator, assignment, task
-    )
+    _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
     if task_record.get("status") != "running":
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "only a running task can recover"
@@ -2477,7 +2527,9 @@ def finish_task(
     risk_values = list(open_risks)
     if (
         not summary_value.strip()
-        or any(not isinstance(item, str) or not item.strip() for item in decision_values)
+        or any(
+            not isinstance(item, str) or not item.strip() for item in decision_values
+        )
         or any(not isinstance(item, str) or not item.strip() for item in risk_values)
     ):
         raise ExecutionError(
@@ -2511,7 +2563,10 @@ def finish_task(
             "INTEGRATION_VALIDATION_FAILED",
             "corrective task requires structured regression-oracle evidence",
         )
-    if not assignment.get("regression_oracle") and regression_oracle_evidence is not None:
+    if (
+        not assignment.get("regression_oracle")
+        and regression_oracle_evidence is not None
+    ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID",
             "non-corrective task supplied regression-oracle evidence",
@@ -2882,7 +2937,9 @@ def _cleanup_internal_resource(
         )
         return True
     branch_tip = branch_result.stdout.strip()
-    if branch_tip != expected_tip or not _is_ancestor(repo, expected_tip, reachable_tip):
+    if branch_tip != expected_tip or not _is_ancestor(
+        repo, expected_tip, reachable_tip
+    ):
         return False
     if path_present and registration is None:
         return False
@@ -3023,6 +3080,19 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     coordinator = _load_coordinator(run_dir, feature_id)
+    if coordinator["status"] in {"promoted", "cleanup", "done"}:
+        promoted_head = coordinator.get("promoted_head")
+        if not isinstance(promoted_head, str):
+            raise ExecutionError(
+                "PROMOTION_BLOCKED", "promoted coordinator is missing its exact head"
+            )
+        _interop(
+            "outer promotion reconciliation",
+            reconcile_outer_promotion,
+            run_dir,
+            Path(str(coordinator["selected_project_root"])),
+            promoted_head,
+        )
     if coordinator["status"] == "done":
         return coordinator
     if coordinator["status"] not in {"sealed", "promoted", "cleanup"}:
@@ -3050,16 +3120,17 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
             raise ExecutionError(
                 "PROMOTION_BLOCKED", "project HEAD is neither the base nor promoted tip"
             )
-        try:
-            verify_remote_default(
-                project,
-                expected_remote=str(coordinator["default_remote"]),
-                expected_branch=str(coordinator["default_branch"]),
-                expected_ref=str(coordinator["default_ref"]),
-                expected_head=str(coordinator["default_head"]),
-            )
-        except GitPromotionError as exc:
-            raise ExecutionError("PROMOTION_BLOCKED", str(exc)) from exc
+        if coordinator.get("promotion_source") != "managed-local":
+            try:
+                verify_remote_default(
+                    project,
+                    expected_remote=str(coordinator["default_remote"]),
+                    expected_branch=str(coordinator["default_branch"]),
+                    expected_ref=str(coordinator["default_ref"]),
+                    expected_head=str(coordinator["default_head"]),
+                )
+            except GitPromotionError as exc:
+                raise ExecutionError("PROMOTION_BLOCKED", str(exc)) from exc
         append_journal(
             journal_path(run_dir, feature_id, "coordinator"),
             {
@@ -3082,17 +3153,17 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
                 else "PROMOTION_BLOCKED"
             )
             raise ExecutionError(code, str(exc)) from exc
-        coordinator["promoted_head"] = coordinator["integration_head"]
-        coordinator["promotion_evidence"] = evidence.strip()
-        coordinator["status"] = "promoted"
-        _save_coordinator(run_dir, feature_id, coordinator)
         _interop(
             "outer promotion registration",
             record_outer_promotion,
             run_dir,
             Path(str(coordinator["selected_project_root"])),
-            str(coordinator["promoted_head"]),
+            str(coordinator["integration_head"]),
         )
+        coordinator["promoted_head"] = coordinator["integration_head"]
+        coordinator["promotion_evidence"] = evidence.strip()
+        coordinator["status"] = "promoted"
+        _save_coordinator(run_dir, feature_id, coordinator)
     if (
         branch(project) != coordinator["base_branch"]
         or head(project) != coordinator["promoted_head"]

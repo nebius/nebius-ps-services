@@ -178,14 +178,14 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `execution/FEAT-*/coordinator.json`: schema-v5 feature execution identity,
+- `execution/FEAT-*/coordinator.json`: schema-v6 feature execution identity,
   exact base/integration SHAs, wave pointers, and promotion state.
 - `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `incoming-handoffs/`,
   `sessions/`, `results/`, and `journals/`: separate private records for
   authoritative capacity batches, immutable prior-task context, exclusive
   session ownership, and parallel result isolation.
 - `execution/interop.json`: optional run-level managed-outer-worktree lease
-  identity, promoted head, and release state.
+  identity, promoted head, release state, and source-integration proof.
 - `repairs/FEAT-*/events/`, `diagnoses/`, and `classifications/`: immutable
   commit-bound failure records, causal handoffs, and deterministic routes.
 - `repairs/FEAT-*/repair-control.json`: atomic projection of the active stable
@@ -538,9 +538,9 @@ The preflight must verify and record:
 - deterministic failure-event, diagnosis, repair-control, design-admission,
   corrective-plan, full task-definition digest, and Stop-hook route contracts
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs schema-v5 execution through promotion, proves the v3 outer
-  lease blocks publication, releases after final evidence, and then acquires
-  the create-PR reservation
+  worktree, runs schema-v6 execution through promotion, proves the v3 outer
+  lease blocks outer integration, releases after final evidence, integrates
+  the child locally, and records exact source proof
 - duplicate SDLC skill-name detection
 - optional PreToolUse and Stop registration; absence is WARN/PARTIAL, while
   malformed configuration, a non-canonical configured entrypoint, source/
@@ -915,14 +915,21 @@ history cannot be preserved, the workflow stops for human direction.
 Runs after plan lock and before TDD. It requires a clean project checkout. A
 named non-default branch is reused; a checkout on the verified symbolic
 `origin` default is switched to a deterministic `feature/sdlc-*` promotion
-branch. It validates the locked task graph and prepares or resumes the feature
+branch in unmanaged mode. A managed child instead retains its exact local
+branch and `HEAD` without fetching or resolving a remote default. It validates
+the locked task graph and prepares or resumes the feature
 integration branch/worktree at the exact project base SHA. The exact folder
 selected by `workspace init` is enforced as the claim, worker-cwd, and
-changed-path boundary even in a monorepo. It records schema-v5 private
+changed-path boundary even in a monorepo. It records schema-v6 private
 execution state, supports confirmed interrupted-worker transfer and
-resource-free future-wave replanning, and acquires an `agentic-sdlc` v3 lease
+resource-free future-wave replanning, and acquires an `agentic-sdlc` v4 lease
 when nested in a managed outer worktree. It never implements behavior,
 promotes, or force-cleans resources.
+Managed promotion records the exact Git fast-forward in the lease before
+persisting coordinator `promoted` state. Resume reconciles the durable lease,
+local interop, clean outer Git head, and coordinator through promotion, cleanup,
+and done. Release leaves a terminal receipt until the outer worktree lifecycle
+is removed.
 `replan-future` serializes the transition, compares full canonical definitions
 and definition digests for every resource-owning wave, and replaces only
 resource-free planned future waves.
@@ -1080,15 +1087,17 @@ Runs product-level UAT after all feature commits are complete. It builds a UAT
 matrix from requirements, validates cross-feature user journeys and negative
 criteria, may use the confirmed safe Live Experiment Environment within its
 recorded allowed operations and reset rules, records evidence, and marks the
-product ready for `create-pr` only on pass. For a managed outer worktree, final
+product ready for final handoff only on pass. For a managed outer worktree, final
 alignment, UAT, and documentation evidence plus a clean exact promoted head and
-zero internal resources release the Agentic SDLC lease before PR publication.
+zero internal resources release the Agentic SDLC lease into
+`outer-integration-pending`; `$worktree integrate` then merges locally and the
+workflow records exact source-integration proof. The child is never published.
 
 ### `create-pr`
 
-Reuses the existing PR creation skill as the SDLC PR handoff. In an SDLC run,
-it uses publication-only mode after UAT passes and the Agentic SDLC lease
-releases. Current clean `HEAD`, commit/execution evidence, the exact promoted
+Reuses the existing PR creation skill only for an unmanaged final source
+branch. In that SDLC publication-only mode, it publishes only after UAT passes.
+Current clean `HEAD`, commit/execution evidence, the exact promoted
 SHA, and any existing remote PR head must agree. It does not stage, edit,
 commit, merge the base, resolve conflicts, repair checks, switch branches, or
 publish another SHA. Any required branch change routes through
@@ -1180,7 +1189,7 @@ Typical routes are:
 - ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
 - unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
 - moved project/integration state -> `PROMOTION_BLOCKED`
-- any execution coordinator schema v1/v2/v3 record ->
+- any execution coordinator schema v1 through v5 record ->
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
@@ -1302,7 +1311,7 @@ Stable IDs are part of the design:
   whether to resume, retain, or block.
 - Worker and merge commits are retained. No rebase, squash, amend, reset,
   cherry-pick, or force cleanup is used by the execution plane.
-- Every execution coordinator schema v1, v2, or v3 record fails closed with
+- Every execution coordinator schema v1 through v5 record fails closed with
   `WORKFLOW_UPGRADE_REQUIRED` without mutation, including completed records.
 - An unfinished pre-prompt run also fails with `WORKFLOW_UPGRADE_REQUIRED`;
   completed unbound history remains readable without an adoption shim.

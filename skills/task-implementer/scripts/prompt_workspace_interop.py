@@ -20,7 +20,7 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import orchestration_dir
 
 
-SCHEMA = 2
+SCHEMA = 3
 NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?")
 LEASE_ID_RE = re.compile(r"[0-9a-f]{32}")
 OBJECT_ID_RE = re.compile(r"[0-9a-f]{40,64}")
@@ -83,14 +83,6 @@ def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, objec
 
 def _interop_path(run_dir: Path) -> Path:
     return orchestration_dir(run_dir) / "interop.json"
-
-
-def _scope_contains(outer: str, inner: str) -> bool:
-    if outer == ".":
-        return True
-    outer_path = PurePosixPath(outer)
-    inner_path = PurePosixPath(inner)
-    return inner_path == outer_path or outer_path in inner_path.parents
 
 
 def _safe_scope(value: object) -> str | None:
@@ -158,10 +150,10 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
         "promoted_head",
         "released",
     }
-    if value.get("schema") == 1:
+    if value.get("schema") in {1, 2}:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "worktree interop schema v1 is unsupported; start a new run",
+            "older worktree interop state is unsupported; start a new run",
         )
     if set(value) != required or value.get("schema") != SCHEMA:
         raise PromptWorkspaceError(
@@ -199,7 +191,6 @@ def _validate_state(value: dict[str, object], run_id: str) -> dict[str, object]:
             or not Path(str(value["worktree"])).is_absolute()
             or outer_scope is None
             or task_scope is None
-            or not _scope_contains(outer_scope, task_scope)
             or (
                 promoted is not None
                 and (
@@ -249,6 +240,110 @@ def load_interop(run_dir: Path, *, required: bool = True) -> dict[str, object] |
     return _validate_state(load_json_object(path, "worktree interop"), run_dir.name)
 
 
+def _inspect_managed_lease(
+    workspace: dict[str, object], interop: dict[str, object]
+) -> dict[str, object]:
+    inspected = _call(
+        workspace,
+        [
+            "task-lease-inspect",
+            "--owner-kind",
+            "task-implementer",
+            "--name",
+            str(interop["name"]),
+            "--lease-id",
+            str(interop["lease_id"]),
+        ],
+    )
+    expected = {
+        "owner_kind": "task-implementer",
+        "name": interop["name"],
+        "branch": interop["branch"],
+        "worktree": interop["worktree"],
+        "run_id": interop["run_id"],
+        "scope": interop["outer_scope"],
+        "task_scope": interop["task_scope"],
+        "token": interop["lease_id"],
+    }
+    if any(inspected.get(key) != value for key, value in expected.items()):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer lease identity changed"
+        )
+    if inspected.get("state") not in {"active", "released"}:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer lease state is invalid"
+        )
+    if inspected.get("outer_clean") is not True:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer worktree must remain clean"
+        )
+    return inspected
+
+
+def _reconcile_managed_state(
+    workspace: dict[str, object],
+    run_dir: Path,
+    interop: dict[str, object],
+    *,
+    initial_head: str | None = None,
+    workspace_path: Path | None = None,
+) -> dict[str, object]:
+    inspected = _inspect_managed_lease(workspace, interop)
+    if initial_head is not None and inspected.get("initial_head") != initial_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer initial head changed"
+        )
+    if workspace_path is not None and inspected.get("workspace") != str(
+        workspace_path.resolve()
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer workspace identity changed"
+        )
+    lease_promoted = inspected.get("promoted_head")
+    local_promoted = interop.get("promoted_head")
+    repair_promoted = local_promoted is None and lease_promoted is not None
+    if (
+        lease_promoted is not None
+        and local_promoted is not None
+        and lease_promoted != local_promoted
+    ):
+        history = inspected.get("promotion_heads")
+        if (
+            not isinstance(history, list)
+            or len(history) < 2
+            or history[-2:] != [local_promoted, lease_promoted]
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "managed outer promoted head changed"
+            )
+        repair_promoted = True
+    if local_promoted is not None and lease_promoted is None:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "local promotion is missing from the outer lease"
+        )
+    expected_head = lease_promoted or inspected.get("initial_head")
+    if inspected.get("outer_head") != expected_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer Git head disagrees with its lease"
+        )
+    lease_released = inspected["state"] == "released"
+    if interop.get("released") is True and not lease_released:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "local release is missing from the outer lease"
+        )
+    changed = False
+    if repair_promoted:
+        interop["promoted_head"] = lease_promoted
+        changed = True
+    if lease_released and interop.get("released") is False:
+        interop["released"] = True
+        changed = True
+    if changed:
+        _validate_state(interop, run_dir.name)
+        write_atomic(_interop_path(run_dir), stable_json(interop))
+    return inspected
+
+
 def acquire_interop(
     workspace: dict[str, object],
     run_dir: Path,
@@ -257,6 +352,24 @@ def acquire_interop(
 ) -> dict[str, object]:
     existing = load_interop(run_dir, required=False)
     if existing is not None:
+        anchor = inspect_anchor(workspace)
+        if not managed(existing):
+            if anchor.get("status") != "unmanaged":
+                raise PromptWorkspaceError(
+                    "WORKTREE_CONFLICT", "managed outer worktree mode changed"
+                )
+            return existing
+        if anchor.get("status") != "managed":
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "managed outer worktree disappeared"
+            )
+        _reconcile_managed_state(
+            workspace,
+            run_dir,
+            existing,
+            initial_head=initial_head,
+            workspace_path=workspace_path,
+        )
         return existing
     anchor = inspect_anchor(workspace)
     task_scope = required_string(workspace, "scope", "workspace manifest")
@@ -276,12 +389,10 @@ def acquire_interop(
         }
     else:
         outer_scope = str(anchor.get("scope"))
-        if anchor.get("task_scope") != task_scope or not _scope_contains(
-            outer_scope, task_scope
-        ):
+        if anchor.get("task_scope") != task_scope:
             raise PromptWorkspaceError(
                 "REPLAN_REQUIRED",
-                "task scope must be equal to or nested under the managed outer scope",
+                "task scope must match the current directory inside the managed worktree",
             )
         acquired = _call(
             workspace,
@@ -300,7 +411,27 @@ def acquire_interop(
             ],
         )
         lease_id = acquired.get("token")
-        if not isinstance(lease_id, str) or not lease_id:
+        expected_acquisition = {
+            "owner_kind": "task-implementer",
+            "name": anchor.get("name"),
+            "branch": anchor.get("branch"),
+            "worktree": anchor.get("worktree"),
+            "scope": outer_scope,
+            "task_scope": task_scope,
+            "run_id": run_dir.name,
+            "workspace": str(workspace_path.resolve()),
+            "initial_head": initial_head,
+        }
+        if (
+            not isinstance(lease_id, str)
+            or not lease_id
+            or acquired.get("state") != "active"
+            or acquired.get("promoted_head") is not None
+            or any(
+                acquired.get(key) != value
+                for key, value in expected_acquisition.items()
+            )
+        ):
             raise PromptWorkspaceError(
                 "WORKTREE_CONFLICT", "worktree task lease identity is missing"
             )
@@ -368,7 +499,53 @@ def record_promotion(
     assert interop is not None
     if not managed(interop):
         return
-    _call(
+    if interop.get("released") is True:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "released worktree interop cannot be promoted"
+        )
+    inspected = _inspect_managed_lease(workspace, interop)
+    if inspected.get("state") != "active":
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "released worktree interop cannot be promoted"
+        )
+    lease_promoted = inspected.get("promoted_head")
+    history = inspected.get("promotion_heads")
+    local_promoted = interop.get("promoted_head")
+    if lease_promoted == promoted_head:
+        expected_head = promoted_head
+    else:
+        expected_head = lease_promoted or inspected.get("initial_head")
+    if not isinstance(expected_head, str):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer promotion baseline is invalid"
+        )
+    predecessor_matches = (
+        lease_promoted == promoted_head
+        and local_promoted not in {None, promoted_head}
+        and isinstance(history, list)
+        and len(history) >= 2
+        and history[-2:] == [local_promoted, promoted_head]
+    )
+    if (
+        local_promoted not in {None, lease_promoted, promoted_head}
+        and not predecessor_matches
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "worktree promotion changed after it was recorded"
+        )
+    if (
+        lease_promoted == promoted_head
+        and local_promoted not in {None, promoted_head}
+        and not predecessor_matches
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "worktree promotion history is inconsistent"
+        )
+    if inspected.get("outer_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "managed outer Git head is not the promotion"
+        )
+    result = _call(
         workspace,
         [
             "task-lease-promote",
@@ -380,8 +557,14 @@ def record_promotion(
             str(interop["lease_id"]),
             "--promoted-head",
             promoted_head,
+            "--expected-head",
+            expected_head,
         ],
     )
+    if result.get("state") != "active" or result.get("promoted_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "outer lease did not record the exact promotion"
+        )
     interop["promoted_head"] = promoted_head
     write_atomic(_interop_path(run_dir), stable_json(interop))
 
@@ -393,22 +576,35 @@ def release_interop(
     assert interop is not None
     if not managed(interop):
         return {"status": "unmanaged"}
-    if interop["released"] is True:
-        return {"status": "released", "promoted_head": promoted_head}
-    result = _call(
-        workspace,
-        [
-            "task-lease-release",
-            "--owner-kind",
-            "task-implementer",
-            "--name",
-            str(interop["name"]),
-            "--lease-id",
-            str(interop["lease_id"]),
-            "--promoted-head",
-            promoted_head,
-        ],
-    )
+    if interop.get("promoted_head") != promoted_head:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "release head does not match the recorded promotion"
+        )
+    inspected = _reconcile_managed_state(workspace, run_dir, interop)
+    if inspected["state"] == "active":
+        result = _call(
+            workspace,
+            [
+                "task-lease-release",
+                "--owner-kind",
+                "task-implementer",
+                "--name",
+                str(interop["name"]),
+                "--lease-id",
+                str(interop["lease_id"]),
+                "--promoted-head",
+                promoted_head,
+            ],
+        )
+    else:
+        result = {**inspected, "status": "already-released"}
+    if (
+        result.get("state") != "released"
+        or result.get("promoted_head") != promoted_head
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "outer lease release receipt is inconsistent"
+        )
     interop["released"] = True
     write_atomic(_interop_path(run_dir), stable_json(interop))
     return result

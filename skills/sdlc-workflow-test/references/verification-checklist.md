@@ -64,7 +64,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-start run <prompt-path-or-unique-filename>`
 - `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
   `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
-- schema-v5 execution, exact initialized-folder scope, `task-recover`,
+- schema-v6 execution, exact initialized-folder scope, `task-recover`,
   `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
@@ -259,10 +259,13 @@ For a nested monorepo project, verify all claims, worker `scope_cwd`, staged
 paths, and committed paths remain inside the initialized folder. Exercise a
 confirmed interrupted-worker transfer, a resource-free future-wave replan, a
 rejected staged-secret attempt, and the fake-process sequential fallback. In a
-managed outer worktree, verify the `agentic-sdlc` v3 lease blocks publication,
-tracks all internal resources and promoted heads, releases only after final
-alignment/UAT/docs with a clean exact head, and allows the create-PR reservation
-only afterward. Keep live Codex execution `PARTIAL` when binary/auth/capacity is
+managed outer worktree, verify the `agentic-sdlc` v4 lease blocks outer
+integration, tracks all internal resources and promoted heads, survives every
+external-first promotion persistence boundary, rejects stale local
+promoted/released state, releases to an exact terminal receipt only after final
+alignment/UAT/docs with a clean exact head, then allows only the exact local
+`$worktree integrate` handoff and records source-integration proof afterward.
+Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
 
 ## Opt-In Three-Tier Live Profile

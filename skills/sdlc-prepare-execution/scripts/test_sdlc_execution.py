@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -20,6 +21,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import sdlc_execution_core as execution_core  # noqa: E402
+import sdlc_execution_interop as execution_interop  # noqa: E402
 from sdlc_execution_core import (  # noqa: E402
     ExecutionError,
     _claim_worker_session,
@@ -46,7 +48,13 @@ from sdlc_execution_core import (  # noqa: E402
     wave_path,
     worktrees,
 )
-from sdlc_execution_interop import ExecutionInteropError, release  # noqa: E402
+from sdlc_execution_interop import (  # noqa: E402
+    ExecutionInteropError,
+    acquire as acquire_outer_interop,
+    complete_source_integration,
+    load as load_outer_interop,
+    release,
+)
 
 
 PLAN = """# FEAT-001 Plan v1
@@ -281,6 +289,74 @@ class GitLifecycleTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as executor:
             outcomes = sorted(executor.map(claim, ("TASK-001", "TASK-002")))
         self.assertEqual(outcomes, ["FRESH_SESSION_REQUIRED", "claimed"])
+
+    def test_session_claim_is_complete_before_atomic_publication(self) -> None:
+        ready = threading.Event()
+        publish = threading.Event()
+        original_link = execution_core.os.link
+        session_hash = "b" * 64
+        claim_path = (
+            execution_core.execution_dir(self.run_dir, "FEAT-001")
+            / "sessions"
+            / f"{session_hash}.json"
+        )
+
+        def paused_link(source: Path, target: Path, **kwargs: object) -> None:
+            ready.set()
+            if not publish.wait(timeout=5):
+                raise OSError("timed out waiting to publish session claim")
+            original_link(source, target, **kwargs)
+
+        with mock.patch.object(execution_core.os, "link", side_effect=paused_link):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    _claim_worker_session,
+                    self.run_dir,
+                    "FEAT-001",
+                    "WAVE-001",
+                    "TASK-001",
+                    session_hash,
+                )
+                self.assertTrue(ready.wait(timeout=5))
+                self.assertFalse(claim_path.exists())
+                publish.set()
+                future.result(timeout=5)
+
+        self.assertEqual(
+            execution_core.read_json(claim_path),
+            {
+                "feature_id": "FEAT-001",
+                "wave_id": "WAVE-001",
+                "task_id": "TASK-001",
+                "worker_session_hash": session_hash,
+            },
+        )
+
+    def test_failed_session_claim_publication_leaves_no_partial_claim(self) -> None:
+        session_hash = "c" * 64
+        claim_path = (
+            execution_core.execution_dir(self.run_dir, "FEAT-001")
+            / "sessions"
+            / f"{session_hash}.json"
+        )
+        with (
+            mock.patch.object(
+                execution_core.os,
+                "link",
+                side_effect=OSError("simulated publication crash"),
+            ),
+            self.assertRaises(ExecutionError) as raised,
+        ):
+            _claim_worker_session(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                "TASK-001",
+                session_hash,
+            )
+        self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
+        self.assertFalse(claim_path.exists())
+        self.assertEqual(list(claim_path.parent.glob(f".{claim_path.name}.*")), [])
 
     def test_parallel_task_start_has_one_owner(self) -> None:
         self.prepare()
@@ -580,9 +656,7 @@ class GitLifecycleTests(unittest.TestCase):
         self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
         first, second = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        second_path = task_path(
-            self.run_dir, "FEAT-001", "WAVE-001", second["task_id"]
-        )
+        second_path = task_path(self.run_dir, "FEAT-001", "WAVE-001", second["task_id"])
         state = json.loads(second_path.read_text(encoding="utf-8"))
         state["worker_session_hash_history"] = ["malformed"]
         second_path.write_text(json.dumps(state), encoding="utf-8")
@@ -614,16 +688,12 @@ class GitLifecycleTests(unittest.TestCase):
         self.assertEqual(Path(coordinator["integration_worktree"]).name, "integration")
 
     def test_capacity_batches_create_only_active_assignments(self) -> None:
-        prepare_execution(
-            self.run_dir, self.project, "FEAT-001", self.plan, capacity=1
-        )
+        prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, capacity=1)
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
         first_batch = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
         self.assertEqual([item["task_id"] for item in first_batch], ["TASK-001"])
         self.assertFalse(
-            assignment_path(
-                self.run_dir, "FEAT-001", "WAVE-001", "TASK-002"
-            ).exists()
+            assignment_path(self.run_dir, "FEAT-001", "WAVE-001", "TASK-002").exists()
         )
         with self.assertRaises(ExecutionError) as incomplete:
             advance_batch(self.run_dir, "FEAT-001", "WAVE-001")
@@ -750,9 +820,9 @@ class GitLifecycleTests(unittest.TestCase):
         self.complete_first_wave()
         original_task_records = {
             task_id: json.loads(
-                task_path(
-                    self.run_dir, "FEAT-001", "WAVE-001", task_id
-                ).read_text(encoding="utf-8")
+                task_path(self.run_dir, "FEAT-001", "WAVE-001", task_id).read_text(
+                    encoding="utf-8"
+                )
             )
             for task_id in ("TASK-001", "TASK-002")
         }
@@ -779,16 +849,12 @@ class GitLifecycleTests(unittest.TestCase):
         replacement.with_suffix(replacement.suffix + ".lock").write_text(
             "locked\n", encoding="utf-8"
         )
-        replanned = replan_future(
-            self.run_dir, "FEAT-001", replacement, capacity=2
-        )
-        self.assertEqual(
-            replanned["wave_ids"], ["WAVE-001", "WAVE-002", "WAVE-003"]
-        )
+        replanned = replan_future(self.run_dir, "FEAT-001", replacement, capacity=2)
+        self.assertEqual(replanned["wave_ids"], ["WAVE-001", "WAVE-002", "WAVE-003"])
         corrective = json.loads(
-            task_path(
-                self.run_dir, "FEAT-001", "WAVE-003", "TASK-004"
-            ).read_text(encoding="utf-8")
+            task_path(self.run_dir, "FEAT-001", "WAVE-003", "TASK-004").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(corrective["task"]["diagnosis_id"], "d" * 64)
         self.assertEqual(
@@ -797,9 +863,9 @@ class GitLifecycleTests(unittest.TestCase):
         )
         for task_id, original in original_task_records.items():
             preserved = json.loads(
-                task_path(
-                    self.run_dir, "FEAT-001", "WAVE-001", task_id
-                ).read_text(encoding="utf-8")
+                task_path(self.run_dir, "FEAT-001", "WAVE-001", task_id).read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(preserved["task"], original["task"])
             self.assertEqual(
@@ -952,9 +1018,7 @@ class GitLifecycleTests(unittest.TestCase):
         git(self.project, "switch", "main")
         coordinator = self.prepare()
         self.assertTrue(coordinator["base_branch"].startswith("feature/sdlc-"))
-        self.assertNotEqual(
-            coordinator["base_branch"], coordinator["default_branch"]
-        )
+        self.assertNotEqual(coordinator["base_branch"], coordinator["default_branch"])
         self.assertEqual(coordinator["promotion_source"], "auto-created")
         self.assertEqual(
             git(self.project, "branch", "--show-current"),
@@ -1132,8 +1196,8 @@ class GitLifecycleTests(unittest.TestCase):
         state_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v5",
-                    "state_version": 5,
+                    "schema": "agentic-sdlc/execution-coordinator-v6",
+                    "state_version": 6,
                     "feature_id": "FEAT-001",
                     "run_id": "run-1",
                     "project_root": str(self.project.resolve()),
@@ -1360,9 +1424,7 @@ class GitLifecycleTests(unittest.TestCase):
         missing.rename(missing.with_name(f"{missing.name}-moved"))
 
         with self.assertRaises(ExecutionError) as raised:
-            complete_wave(
-                self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
-            )
+            complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
         self.assertEqual(raised.exception.code, "CLEANUP_BLOCKED")
         self.assertTrue(local_branch_exists(self.project, assignments[0]["branch"]))
         self.assertIn(missing.resolve(), worktrees(Path(coordinator["project_root"])))
@@ -1404,9 +1466,7 @@ class GitLifecycleTests(unittest.TestCase):
                 git(self.project, "update-ref", ref, advanced_tip, expected_tip)
             return original_run(argv, cwd, action, check=check)
 
-        with mock.patch.object(
-            execution_core, "_run", side_effect=race_before_delete
-        ):
+        with mock.patch.object(execution_core, "_run", side_effect=race_before_delete):
             cleaned = execution_core._cleanup_internal_resource(
                 run_dir=self.run_dir,
                 coordinator=coordinator,
@@ -1466,15 +1526,14 @@ class GitLifecycleTests(unittest.TestCase):
     def test_legacy_coordinators_always_require_workflow_upgrade(self) -> None:
         state = coordinator_path(self.run_dir, "FEAT-001")
         state.parent.mkdir(parents=True, exist_ok=True)
-        for version in (1, 2, 3, 4):
+        for version in (1, 2, 3, 4, 5):
             for status in ("running", "done"):
                 with self.subTest(version=version, status=status):
                     state.write_text(
                         json.dumps(
                             {
                                 "schema": (
-                                    "agentic-sdlc/execution-coordinator-"
-                                    f"v{version}"
+                                    f"agentic-sdlc/execution-coordinator-v{version}"
                                 ),
                                 "status": status,
                             }
@@ -1483,13 +1542,11 @@ class GitLifecycleTests(unittest.TestCase):
                     )
                     with self.assertRaises(ExecutionError) as raised:
                         self.prepare()
-                    self.assertEqual(
-                        raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED"
-                    )
+                    self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
 
 
 class ManagedOuterLifecycleTests(unittest.TestCase):
-    def test_managed_outer_execution_releases_before_publication(self) -> None:
+    def test_managed_outer_execution_releases_to_local_source_integration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "workspace with spaces"
             root.mkdir()
@@ -1508,6 +1565,13 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             git(repository, "push", "-qu", "origin", "main")
             git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
             git(repository, "fetch", "-q", "origin")
+            git(
+                repository,
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            )
+            git(repository, "switch", "-qc", "local-source")
 
             manager_path = (
                 SCRIPT_DIR.parents[1] / "worktree" / "scripts" / "worktree_manager.py"
@@ -1536,10 +1600,19 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
 
             prepare_execution(run_dir, outer_selected, "FEAT-001", plan, capacity=1)
             with self.assertRaisesRegex(manager.WorktreeError, "still owns"):
-                manager.publication_begin(cwd=outer_selected, action="create-pr")
+                manager.integrate_worktree(
+                    cwd=repository,
+                    name=str(outer["name"]),
+                    validated_head=None,
+                    restart=False,
+                )
 
             seal_tdd_base(run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
             assignment = prepare_wave(run_dir, "FEAT-001", "WAVE-001")[0]
+            with self.assertRaisesRegex(manager.WorktreeError, "must not push"):
+                manager.publication_guard(
+                    cwd=Path(str(assignment["worktree"])), action="push"
+                )
             start_task(
                 run_dir,
                 "FEAT-001",
@@ -1563,6 +1636,14 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 summary="selected-scope handoff",
             )
             integrate_wave(run_dir, "FEAT-001", "WAVE-001")
+            coordinator = json.loads(
+                coordinator_path(run_dir, "FEAT-001").read_text(encoding="utf-8")
+            )
+            with self.assertRaisesRegex(manager.WorktreeError, "must not create-pr"):
+                manager.publication_guard(
+                    cwd=Path(str(coordinator["integration_worktree"])),
+                    action="create-pr",
+                )
             complete_wave(run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
             seal_feature(
                 run_dir,
@@ -1570,9 +1651,188 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 "final alignment passed",
                 "feat(FEAT-001): seal selected scope",
             )
+            with (
+                mock.patch.object(
+                    execution_core,
+                    "record_outer_promotion",
+                    side_effect=ExecutionInteropError(
+                        "simulated crash before lease promotion"
+                    ),
+                ),
+                self.assertRaises(ExecutionError) as git_only_crash,
+            ):
+                promote_feature(run_dir, "FEAT-001", "promotion checks passed")
+            self.assertEqual(git_only_crash.exception.code, "WORKTREE_CONFLICT")
+            git_only_interop = load_outer_interop(run_dir)
+            assert git_only_interop is not None
+            git_only_lease = manager.task_lease_inspect(
+                cwd=outer_selected,
+                name=str(git_only_interop["name"]),
+                lease_id=str(git_only_interop["lease_id"]),
+                owner_kind="agentic-sdlc",
+            )
+            self.assertIsNone(git_only_lease["promoted_head"])
+            self.assertEqual(
+                git_only_lease["outer_head"], git(outer_root, "rev-parse", "HEAD")
+            )
+
+            with (
+                mock.patch.object(
+                    execution_interop,
+                    "_write",
+                    side_effect=ExecutionInteropError(
+                        "simulated crash after lease promotion"
+                    ),
+                ),
+                self.assertRaises(ExecutionError) as lease_only_crash,
+            ):
+                promote_feature(run_dir, "FEAT-001", "promotion checks passed")
+            self.assertEqual(lease_only_crash.exception.code, "WORKTREE_CONFLICT")
+            lease_only_interop = load_outer_interop(run_dir)
+            assert lease_only_interop is not None
+            self.assertIsNone(lease_only_interop["promoted_head"])
+            lease_only_lease = manager.task_lease_inspect(
+                cwd=outer_selected,
+                name=str(lease_only_interop["name"]),
+                lease_id=str(lease_only_interop["lease_id"]),
+                owner_kind="agentic-sdlc",
+            )
+            self.assertEqual(
+                lease_only_lease["promoted_head"],
+                git(outer_root, "rev-parse", "HEAD"),
+            )
+
+            original_save = execution_core._save_coordinator
+
+            def interrupt_promoted_save(
+                target_run_dir: Path,
+                target_feature: str,
+                coordinator: dict[str, object],
+            ) -> None:
+                if coordinator.get("status") == "promoted":
+                    raise RuntimeError(
+                        "simulated crash before coordinator promotion save"
+                    )
+                original_save(target_run_dir, target_feature, coordinator)
+
+            with (
+                mock.patch.object(
+                    execution_core,
+                    "_save_coordinator",
+                    side_effect=interrupt_promoted_save,
+                ),
+                self.assertRaisesRegex(RuntimeError, "simulated crash"),
+            ):
+                promote_feature(run_dir, "FEAT-001", "promotion checks passed")
+            crash_interop = load_outer_interop(run_dir)
+            assert crash_interop is not None
+            crash_lease = manager.task_lease_inspect(
+                cwd=outer_selected,
+                name=str(crash_interop["name"]),
+                lease_id=str(crash_interop["lease_id"]),
+                owner_kind="agentic-sdlc",
+            )
+            self.assertEqual(
+                crash_lease["promoted_head"], git(outer_root, "rev-parse", "HEAD")
+            )
+            self.assertEqual(
+                json.loads(
+                    coordinator_path(run_dir, "FEAT-001").read_text(encoding="utf-8")
+                )["status"],
+                "sealed",
+            )
+
             promoted = promote_feature(run_dir, "FEAT-001", "promotion checks passed")
             promoted_head = str(promoted["promoted_head"])
             self.assertEqual(git(outer_root, "rev-parse", "HEAD"), promoted_head)
+
+            second_plan = run_dir / "plans" / "FEAT-002.plan.v1.md"
+            second_plan.write_text(
+                MANAGED_PLAN.replace("FEAT-001", "FEAT-002").replace(
+                    "services/example/src/value.py",
+                    "services/example/src/value-two.py",
+                ),
+                encoding="utf-8",
+            )
+            second_plan.with_suffix(second_plan.suffix + ".lock").write_text(
+                "locked\n", encoding="utf-8"
+            )
+            prepare_execution(
+                run_dir, outer_selected, "FEAT-002", second_plan, capacity=1
+            )
+            seal_tdd_base(run_dir, "FEAT-002", "test(FEAT-002): no-op TDD base")
+            second_assignment = prepare_wave(run_dir, "FEAT-002", "WAVE-001")[0]
+            start_task(
+                run_dir,
+                "FEAT-002",
+                "WAVE-001",
+                "TASK-001",
+                second_assignment["assignment_digest"],
+                "managed-worker-session-two",
+                Path(second_assignment["scope_cwd"]),
+            )
+            second_value = Path(second_assignment["scope_cwd"]) / "src" / "value-two.py"
+            second_value.parent.mkdir(parents=True, exist_ok=True)
+            second_value.write_text("VALUE = 2\n", encoding="utf-8")
+            finish_task(
+                run_dir,
+                "FEAT-002",
+                "WAVE-001",
+                "TASK-001",
+                "focused test passed",
+                "review passed",
+                "feat(FEAT-002): add second selected-scope value",
+                summary="second selected-scope handoff",
+            )
+            integrate_wave(run_dir, "FEAT-002", "WAVE-001")
+            complete_wave(run_dir, "FEAT-002", "WAVE-001", "combined tests passed")
+            seal_feature(
+                run_dir,
+                "FEAT-002",
+                "final alignment passed",
+                "feat(FEAT-002): seal selected scope",
+            )
+
+            with (
+                mock.patch.object(
+                    execution_interop,
+                    "_write",
+                    side_effect=ExecutionInteropError(
+                        "simulated second promotion crash after lease CAS"
+                    ),
+                ),
+                self.assertRaises(ExecutionError) as second_lease_only_crash,
+            ):
+                promote_feature(run_dir, "FEAT-002", "promotion checks passed")
+            self.assertEqual(
+                second_lease_only_crash.exception.code, "WORKTREE_CONFLICT"
+            )
+            second_crash_interop = load_outer_interop(run_dir)
+            assert second_crash_interop is not None
+            self.assertEqual(second_crash_interop["promoted_head"], promoted_head)
+            second_crash_lease = manager.task_lease_inspect(
+                cwd=outer_selected,
+                name=str(second_crash_interop["name"]),
+                lease_id=str(second_crash_interop["lease_id"]),
+                owner_kind="agentic-sdlc",
+            )
+            self.assertEqual(
+                second_crash_lease["promotion_heads"][-2:],
+                [promoted_head, git(outer_root, "rev-parse", "HEAD")],
+            )
+
+            promoted = promote_feature(run_dir, "FEAT-002", "promotion checks passed")
+            promoted_head = str(promoted["promoted_head"])
+            reconciled_interop = load_outer_interop(run_dir)
+            assert reconciled_interop is not None
+            self.assertEqual(reconciled_interop["promoted_head"], promoted_head)
+            reconciled_lease = manager.task_lease_inspect(
+                cwd=outer_selected,
+                name=str(reconciled_interop["name"]),
+                lease_id=str(reconciled_interop["lease_id"]),
+                owner_kind="agentic-sdlc",
+            )
+            self.assertEqual(reconciled_lease["promotion_heads"][-1], promoted_head)
 
             complete_evidence = {
                 "final_alignment": "passed",
@@ -1591,8 +1851,11 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                             **incomplete,
                         )
                     with self.assertRaisesRegex(manager.WorktreeError, "still owns"):
-                        manager.publication_begin(
-                            cwd=outer_selected, action="create-pr"
+                        manager.integrate_worktree(
+                            cwd=repository,
+                            name=str(outer["name"]),
+                            validated_head=None,
+                            restart=False,
                         )
 
             released = release(
@@ -1602,10 +1865,50 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 **complete_evidence,
             )
             self.assertEqual(released["status"], "released")
-            reservation = manager.publication_begin(
-                cwd=outer_selected, action="create-pr"
+            pending = load_outer_interop(run_dir)
+            assert pending is not None
+            self.assertEqual(pending["outer_integration_status"], "pending")
+            interop_path = run_dir / "execution" / "interop.json"
+            stale = dict(pending)
+            stale["promoted_head"] = "f" * 40
+            interop_path.write_text(json.dumps(stale), encoding="utf-8")
+            with self.assertRaisesRegex(ExecutionInteropError, "promoted head changed"):
+                acquire_outer_interop(
+                    run_dir,
+                    outer_selected,
+                    str(pending["project_scope"]),
+                    promoted_head,
+                )
+            interop_path.write_text(json.dumps(pending), encoding="utf-8")
+            resumed = acquire_outer_interop(
+                run_dir,
+                outer_selected,
+                str(pending["project_scope"]),
+                promoted_head,
             )
-            self.assertEqual(reservation["status"], "acquired")
+            self.assertTrue(resumed["released"])
+            candidate = manager.integrate_worktree(
+                cwd=repository,
+                name=str(outer["name"]),
+                validated_head=None,
+                restart=False,
+            )
+            self.assertEqual(candidate["status"], "validation-required")
+            integrated = manager.integrate_worktree(
+                cwd=repository,
+                name=str(outer["name"]),
+                validated_head=str(candidate["candidate_head"]),
+                restart=False,
+            )
+            git(repository, "reset", "--hard", str(candidate["source_head"]))
+            with self.assertRaises(ExecutionInteropError):
+                complete_source_integration(run_dir, outer_selected)
+            git(repository, "reset", "--hard", str(integrated["source_head"]))
+            proof = complete_source_integration(run_dir, outer_selected)
+            self.assertEqual(proof["status"], "integrated")
+            self.assertEqual(
+                proof["source_integration_head"], integrated["source_head"]
+            )
 
 
 if __name__ == "__main__":

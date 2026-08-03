@@ -107,12 +107,13 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - For `run`, invoke private `prompt_workspace.py intake` before reading or
   changing phase state. Trust only its validated bound run, revision, digest,
   and snapshot; never use the editable prompt directly after intake.
-- When the workspace is Git-backed, intake resolves the actual `origin`
-  default through its symbolic `HEAD`. A new run on that clean default
-  automatically creates and switches to `feature/sdlc-<run-hash>` from the
-  verified remote SHA. A recorded run reuses that exact promotion branch and
-  preserves existing dirty changes; identity drift blocks instead of creating
-  another branch or worktree.
+- When the workspace is Git-backed and unmanaged, intake resolves the actual
+  `origin` default through its symbolic `HEAD`. A new run on that clean default
+  creates and switches to `feature/sdlc-<run-hash>` from the verified remote
+  SHA. In a managed `worktree` child, execution instead retains the exact local
+  child branch and `HEAD` without fetching or consulting a remote default. A
+  recorded run reuses its exact promotion identity; drift blocks instead of
+  creating another branch or worktree.
 - Route `new` into normal run initialization, `resume` through checkpoint
   reconciliation, `steering` only to `sdlc-auto-steering`, and `done` to
   `ALREADY_COMPLETE`. A different prompt cannot replace an unfinished run.
@@ -221,14 +222,19 @@ $sdlc-start run <prompt-path-or-unique-filename>
 - After evaluation passes, route to `sdlc-update-documents` before
   `sdlc-align-specs` when feature-facing docs, changelog, examples, or
   documentation steering need updates.
-- After UAT, route back to `sdlc-update-documents` before PR creation when UAT
+- After UAT, route back to `sdlc-update-documents` before final handoff when UAT
   or final steering requires run-level documentation updates.
 - In a managed outer worktree, invoke the private `release-outer-lease`
   transition only after final alignment, UAT, and documentation evidence are
-  recorded, the exact promoted HEAD is clean, and all Agentic SDLC integration
-  and worker resources are absent. Route to `create-pr` only after release.
-- Treat the shared PR skills as restricted SDLC modes after that handoff:
-  `create-pr` may publish only the clean exact promoted SHA, and `review-pr`
+  recorded, the exact promoted child HEAD is clean, and all Agentic SDLC
+  integration and worker resources are absent. Record phase
+  `outer-integration-pending` and route to the exact
+  `$worktree integrate <generated-name>` action. After local integration,
+  invoke private `complete-outer-integration` to bind the source merge proof;
+  never push the child or open a PR from it.
+- In an unmanaged final source checkout, treat the shared PR skills as
+  restricted SDLC modes: `create-pr` may publish only the clean exact promoted
+  SHA, and `review-pr`
   may record findings/readiness without changing the PR head. Any required
   branch change returns through `sdlc-classify-failure` and this coordinator.
   `sdlc-merge-pr` may merge only after an explicit user request and only while
@@ -278,7 +284,7 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `WORKFLOW_UPGRADE_REQUIRED`. Completed unbound history remains readable; do
   not adopt or migrate it.
 - If plan lock conflicts exist, stop and report.
-- If any execution coordinator schema v1, v2, or v3 record exists, stop with
+- If any execution coordinator schema v1 through v5 record exists, stop with
   `WORKFLOW_UPGRADE_REQUIRED`, including for completed records. If registered Git identity, plan digest, or
   exact HEAD drifts, stop with the execution-plane failure code rather than
   routing around the coordinator.

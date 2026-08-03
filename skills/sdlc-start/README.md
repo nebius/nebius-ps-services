@@ -16,9 +16,12 @@ feature while safe implementation tasks run in dependency waves, and returns
 to the project checkout only after exact promotion. In a managed outer
 worktree, it releases Agentic SDLC ownership only after final alignment, UAT,
 documentation evidence, exact promoted-HEAD validation, and internal-resource
-cleanup; PR publication begins afterward in exact-SHA publication-only mode,
-followed by findings-and-readiness-only review. Any required branch change
-returns through failure classification and the coordinator.
+cleanup; it then routes the child through local `$worktree integrate` and
+records the exact source merge proof. Managed children are never pushed or
+used as PR heads. Unmanaged final source branches may continue through
+exact-SHA publication-only mode and findings-and-readiness-only review. Any
+required branch change returns through failure classification and the
+coordinator.
 
 Gate failures use one private, deterministic repair-control contract.
 Already-proven mechanical causes take the shortest route to their owning
@@ -44,11 +47,12 @@ An exact manual rename is repaired, while rename-plus-edit or duplicate copies
 fail closed so prompt history and Stop continuation cannot drift.
 There is no bare `$sdlc-start` resume action.
 
-For a Git-backed workspace, intake resolves the actual symbolic `origin`
-default. A new run on that clean branch is moved automatically to a
-deterministic `feature/sdlc-<run-hash>` promotion branch. Resumes reuse the
-recorded branch, including preserving unfinished dirty changes; they never
-silently create a replacement worktree.
+For an unmanaged Git-backed workspace, intake resolves the actual symbolic
+`origin` default. A new run on that clean branch moves to a deterministic
+`feature/sdlc-<run-hash>` promotion branch. A managed child instead keeps its
+exact local branch and `HEAD` without a fetch or remote-default decision.
+Resumes reuse the recorded identity and never silently create a replacement
+worktree.
 
 ## Main Boundaries
 

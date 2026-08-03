@@ -257,7 +257,7 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
     },
     "sdlc-implement-plan": {
         "execution.sequential-fallback",
-        "interop.outer-lease-v3",
+        "interop.outer-lease-v4",
         "interop.task-implementer-compatibility",
         "interop.task-implementer-promotion",
     },
@@ -1127,7 +1127,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "replan-future",
                 "git merge --no-ff --no-edit",
                 "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v5",
+                "agentic-sdlc/execution-coordinator-v6",
             ],
         ),
         "locked plan task graph": (
@@ -1155,11 +1155,11 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "workspace-write",
             ],
         ),
-        "workflow state v2 with execution coordinator v5": (
+        "workflow state v2 with execution coordinator v6": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v5",
+                "agentic-sdlc/execution-coordinator-v6",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "sessions/<session-hash>.json",
@@ -1167,6 +1167,8 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "expected_head",
                 "base_head",
                 'uat_status: "passed"',
+                "outer-integration-pending",
+                "$worktree integrate",
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
         ),
@@ -1183,6 +1185,22 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 'uat_status: "passed"',
                 "gh pr create --base <origin-default> --head <branch>",
                 "Do not use a shell wrapper",
+            ],
+        ),
+        "commit-push managed publication guard": (
+            ctx.skills_root / "commit-push" / "SKILL.md",
+            [
+                "publication-guard --publication-action push",
+                "before staging, committing, fetching, or pushing",
+                "Publish only from the accumulated source branch",
+            ],
+        ),
+        "create-pr managed publication guard": (
+            ctx.skills_root / "create-pr" / "SKILL.md",
+            [
+                "publication-guard --publication-action create-pr",
+                "Before staging, committing, fetching for publication",
+                "Only a genuinely unmanaged manual worktree may pass as `unmanaged`",
             ],
         ),
         "active SDLC PR review mode": (
@@ -1242,7 +1260,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             [
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
-                "coordinator schema v1, v2, v3, or v4",
+                "coordinator schema v1 through v5",
                 "sdlc-update-documents, then sdlc-align-specs",
             ],
         ),
@@ -1262,10 +1280,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
 def check_repair_loop_contract(ctx: Context) -> None:
     checks = {
         "repair-control helper": (
-            ctx.skills_root
-            / "sdlc-classify-failure"
-            / "scripts"
-            / "repair_control.py",
+            ctx.skills_root / "sdlc-classify-failure" / "scripts" / "repair_control.py",
             [
                 "agentic-sdlc/failure-event-v1",
                 "agentic-sdlc/diagnosis-v1",
@@ -2556,6 +2571,15 @@ def check_capability_regressions(ctx: Context) -> None:
                     "test_interrupted_worker_recovery_accepts_one_clean_direct_child",
                 ),
                 ("execution", "test_one_worker_session_cannot_own_two_tasks"),
+                ("execution", "test_parallel_session_claim_is_atomic"),
+                (
+                    "execution",
+                    "test_session_claim_is_complete_before_atomic_publication",
+                ),
+                (
+                    "execution",
+                    "test_failed_session_claim_publication_leaves_no_partial_claim",
+                ),
             ),
         ),
         "execution.replan": (
@@ -2588,7 +2612,7 @@ def check_capability_regressions(ctx: Context) -> None:
             ),
         ),
         "git.promotion-safety": (
-            "Verified remote-default and exact promotion safety",
+            "Verified remote-default, local-source, and exact promotion safety",
             (
                 (
                     "git-promotion",
@@ -2608,28 +2632,32 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "worktree",
-                    "test_add_uses_recorded_sha_when_remote_tracking_ref_advances",
+                    "test_add_uses_clean_local_source_branch_and_exact_head",
                 ),
             ),
         ),
-        "interop.outer-lease-v3": (
+        "interop.outer-lease-v4": (
             "Managed outer-worktree lease lifecycle",
             (
                 (
                     "worktree",
-                    "test_agentic_sdlc_owner_uses_v3_lease_and_releases_before_publication",
+                    "test_task_lease_blocks_integration_until_release",
                 ),
                 (
                     "worktree",
-                    "test_unfinished_legacy_leases_require_workflow_upgrade",
+                    "test_old_manifest_and_reservation_schemas_fail_closed",
                 ),
                 (
                     "worktree",
-                    "test_publication_reservation_v1_requires_workflow_upgrade",
+                    "test_remove_deletes_terminal_lease_receipt",
+                ),
+                (
+                    "worktree",
+                    "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
                 ),
                 (
                     "execution",
-                    "test_managed_outer_execution_releases_before_publication",
+                    "test_managed_outer_execution_releases_to_local_source_integration",
                 ),
             ),
         ),
@@ -2642,7 +2670,15 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "task-implementer",
-                    "test_managed_write_claim_cannot_escape_outer_scope",
+                    "test_managed_write_claim_may_span_the_full_checkout",
+                ),
+                (
+                    "task-implementer",
+                    "test_resume_repairs_exact_terminal_receipt_and_rejects_stale_sha",
+                ),
+                (
+                    "task-implementer",
+                    "test_successive_promotions_advance_the_outer_lease_history",
                 ),
             ),
         ),
@@ -3842,7 +3878,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Future-wave replan", "execution.replan"),
         ("Secret persistence gate", "execution.secret-gate"),
         ("Sequential fallback", "execution.sequential-fallback"),
-        ("Managed outer lease", "interop.outer-lease-v3"),
+        ("Managed outer lease", "interop.outer-lease-v4"),
         ("Task Implementer interoperability", "interop.task-implementer-compatibility"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),

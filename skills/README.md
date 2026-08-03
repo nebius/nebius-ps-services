@@ -72,7 +72,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
-| `worktree` | Explicit only | Create or exactly reuse one project-scoped full-repository worktree from the verified `origin` default, with serialized publication, nested task ownership, and proof-gated cleanup. |
+| `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
 
 ### Project Engineering
 
@@ -174,11 +174,11 @@ $create-pr Create a PR for the current local work, using a new prep branch if I 
 
 $create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
 
-$worktree Create an isolated worktree from the verified origin default for the current monorepo project to fix trigger validation.
+$worktree Create an isolated worktree from my current clean feature branch for the current monorepo project.
 
-$worktree create-pr Open or reuse the PR for this managed worktree, then leave cleanup for a separate remove action after merge.
+$worktree integrate project-fix-trigger-validation-a7c2f9 after validating the combined result.
 
-$worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact PR head was merged.
+$worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -584,21 +584,25 @@ The coordinator verifies worker commits and changed paths, merges task branches
 into a temporary integration branch in stable task-ID order, runs combined
 validation and review, reconciles steering, then removes clean worker
 worktrees and deletes their refs at exact expected SHAs. It advances the
-unchanged primary promotion branch only after the recorded remote-default
-branch and HEAD are reverified and under the shared lock with
+unchanged primary promotion branch under the shared lock with
 `git merge --ff-only`; tasks become done after promotion. Integration cleanup
 then removes its worktree before exact-SHA ref deletion. Any failure retains
 exact recovery resources and leaves unverified work intact.
 
-At wave planning, the actual symbolic `origin` default is resolved and
-verified. A clean checkout on it is automatically switched to a deterministic
+At unmanaged wave planning, the actual symbolic `origin` default is resolved
+and verified. A clean checkout on it is switched to a deterministic
 `feature/task-<run-hash>` branch; an existing non-default branch is reused.
+Managed children retain their exact local branch and `HEAD` without fetching.
 
 When the project checkout is itself managed by `worktree`, the exact outer
 branch `HEAD` is the task base and sole promotion target. A private lease keeps
-all worker and integration branches internal, blocks outer push/PR/removal,
-and remains through per-wave cleanup plus final changed-surface `align`. Only a
-clean final promoted head with no internal resources can release it.
+all worker and integration branches internal, blocks outer integration and
+removal, and remains through per-wave cleanup plus final changed-surface
+`align`. Lease schema v4 reconciles every resume against the clean outer Git
+head and persists an exact terminal release receipt. Only a clean final
+promoted head with no internal resources can release it, after which
+`$worktree integrate` merges the child locally. The managed child and its
+private nested branches are never pushed or used as PR heads.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
@@ -832,7 +836,7 @@ only when the evidence gate requires it, a provenance-owned project-root
 conditional decision after design and before auto-steering or planning.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-Each active feature also has schema-v5 execution state and private worktrees
+Each active feature also has schema-v6 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
 claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in enforced
@@ -842,8 +846,9 @@ predecessor handoffs, retains worker and ordered
 merge commits, and cleans only proven reachable resources without force. The
 project promotion branch stays unchanged until `sdlc-commit` seals the final
 integration tip and promotes it under the shared Git lock with
-`git merge --ff-only`, after reverifying the recorded remote-default branch
-and HEAD.
+`git merge --ff-only`. Unmanaged runs reverify the recorded remote-default
+branch and HEAD; managed children instead retain their exact local identity and
+later hand off to `$worktree integrate` without child publication.
 Project-level managed prompts and immutable run revisions also remain under
 `~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while
@@ -1031,26 +1036,23 @@ change returns through `sdlc-classify-failure` and `sdlc-start`.
 
 ### `worktree`
 
-`worktree` isolates one selected monorepo project in a sibling
-`<repo-name>-worktrees/` directory while retaining a full-repository checkout.
-`add` is the default action and starts a generated `feature/<task-and-suffix>`
-branch at the verified symbolic `origin` default; dirty or branch-divergent work in
-the selected project blocks creation, while unrelated primary-checkout changes
-are preserved. `add --reuse <exact-name>` returns only that matching active
-managed worktree and reports its dirty paths plus any remote-default HEAD drift
-without changing them. `push` and
-`create-pr` acquire action-bound private publication
-reservations, verify managed identity and project-scope containment, then reuse
-`commit-push` and `create-pr`. A changed remote-default branch or HEAD blocks
-publication without altering the retained worktree. Nested `task-implementer`
-and Agentic SDLC runs
-use owner-bound v3 leases on the outer branch until internal cleanup and final
-alignment. `remove` runs from the
-primary checkout with an exact generated name and requires durable ownership
-state plus a clean worktree and exact merged-PR/head proof, or an unused
-never-published branch. It never force-removes a worktree, atomically deletes
-the local ref only at its verified SHA, and deletes a surviving remote branch
-only when an exact expected-SHA lease still matches.
+`worktree` creates full-repository children in a sibling
+`<repo-name>-worktrees/` directory. `add` is the default action and requires the
+complete primary checkout to be clean on a named non-default branch. It freezes
+that exact local `HEAD` and creates a generated no-upstream child without
+fetching. `--project` selects the returned starting directory and label only;
+it does not restrict changed paths or staging.
+
+`integrate` requires clean committed child work and released nested workflow
+leases. It builds one durable private candidate from the current source head,
+retains merge conflicts for recovery, exposes the exact candidate for
+non-mutating combined validation, and fast-forwards the source checkout only
+to that validated two-parent merge. Direct managed-child push and PR creation
+are rejected. Task Implementer and Agentic SDLC release into this local
+integration handoff. `remove` is a separate exact-proof action for unchanged
+unused children or children whose recorded merge remains reachable from the
+source branch. It never fetches for lifecycle decisions, force-removes, mutates
+remote refs, rebases, or cherry-picks.
 
 ### `merge-pr`
 

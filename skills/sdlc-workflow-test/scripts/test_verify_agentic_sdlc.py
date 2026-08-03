@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 from dataclasses import replace
@@ -463,6 +464,100 @@ class VerifierContractTests(unittest.TestCase):
                 "runtime.observability-dependency": "PASS",
                 "runtime.project-agent-instructions-dependency": "PASS",
             },
+        )
+
+    def test_managed_publication_guard_contract_covers_both_consumers(self) -> None:
+        contracts = {
+            "commit-push": "\n".join(
+                [
+                    "publication-guard --publication-action push",
+                    "before staging, committing, fetching, or pushing",
+                    "Publish only from the accumulated source branch",
+                ]
+            ),
+            "create-pr": "\n".join(
+                [
+                    "publication-guard --publication-action create-pr",
+                    "Before staging, committing, fetching for publication",
+                    "Only a genuinely unmanaged manual worktree may pass as `unmanaged`",
+                ]
+            ),
+        }
+        for skill, content in contracts.items():
+            path = self.ctx.skills_root / skill / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content + "\n", encoding="utf-8")
+
+        verifier.check_execution_plane_contract(self.ctx)
+        names = {
+            check.name: check.status
+            for check in self.ctx.checks
+            if check.name
+            in {
+                "commit-push managed publication guard",
+                "create-pr managed publication guard",
+            }
+        }
+        self.assertEqual(
+            names,
+            {
+                "commit-push managed publication guard": "PASS",
+                "create-pr managed publication guard": "PASS",
+            },
+        )
+
+        create_pr = self.ctx.skills_root / "create-pr" / "SKILL.md"
+        create_pr.write_text(
+            contracts["create-pr"].replace(
+                "publication-guard --publication-action create-pr",
+                "publication guard omitted",
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.ctx.checks.clear()
+        verifier.check_execution_plane_contract(self.ctx)
+        names = {
+            check.name: check.status
+            for check in self.ctx.checks
+            if check.name
+            in {
+                "commit-push managed publication guard",
+                "create-pr managed publication guard",
+            }
+        }
+        self.assertEqual(names["commit-push managed publication guard"], "PASS")
+        self.assertEqual(names["create-pr managed publication guard"], "FAIL")
+
+    def test_critical_capabilities_require_crash_and_history_regressions(
+        self,
+    ) -> None:
+        source = inspect.getsource(verifier.check_capability_regressions)
+        session_recovery = source.split('"execution.sessions-recovery":', 1)[1].split(
+            '"execution.replan":', 1
+        )[0]
+        outer_lease = source.split('"interop.outer-lease-v4":', 1)[1].split(
+            '"interop.task-implementer-compatibility":', 1
+        )[0]
+        task_compatibility = source.split(
+            '"interop.task-implementer-compatibility":', 1
+        )[1].split('"interop.task-implementer-promotion":', 1)[0]
+        self.assertIn(
+            "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
+            outer_lease,
+        )
+        self.assertIn(
+            "test_successive_promotions_advance_the_outer_lease_history",
+            task_compatibility,
+        )
+        self.assertIn("test_parallel_session_claim_is_atomic", session_recovery)
+        self.assertIn(
+            "test_session_claim_is_complete_before_atomic_publication",
+            session_recovery,
+        )
+        self.assertIn(
+            "test_failed_session_claim_publication_leaves_no_partial_claim",
+            session_recovery,
         )
 
     def test_project_agent_instructions_is_runtime_support_and_golden_phase(

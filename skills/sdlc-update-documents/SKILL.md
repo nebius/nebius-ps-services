@@ -16,7 +16,7 @@ after feature evaluation or UAT.
   need to match the implemented behavior.
 - `sdlc-auto-steering` classified an entry as `docs-update`.
 - UAT or final run review found README, changelog, examples, or usage docs that
-  must be refreshed before PR creation.
+  must be refreshed before final source integration or PR creation.
 - `sdlc-start` routes a documentation phase before `sdlc-align-specs`.
 
 ## When Not To Use
@@ -69,7 +69,7 @@ after feature evaluation or UAT.
   promotion, and record the resulting integration HEAD in document evidence.
 - Reload active run state and evidence before editing any documentation.
 - Determine whether the scope is `feature` or `run`: feature scope runs after
-  evaluation; run scope runs after UAT or before PR creation.
+  evaluation; run scope runs after UAT or before final handoff.
 - Compare implemented behavior and evidence against existing docs. Update only
   documentation that describes the active feature, run-level product behavior,
   commands, configuration, examples, or usage that actually changed.
@@ -83,7 +83,7 @@ after feature evaluation or UAT.
 - Route requirements or design drift back to `sdlc-create-requirements` or
   `sdlc-create-design` instead of editing product-truth docs here.
 - Return to `sdlc-start` so the coordinator can continue to
-  `sdlc-align-specs`, UAT, or PR handoff.
+  `sdlc-align-specs`, UAT, managed source integration, or unmanaged PR handoff.
 
 ## Idempotency
 

@@ -97,7 +97,8 @@ class SdlcStartContractTests(unittest.TestCase):
             "sdlc-start/references/state-schema.md",
             [
                 "4. project-agent-instructions",
-                "19. sdlc-merge-pr",
+                "17. managed child only: outer-integration-pending",
+                "20. sdlc-merge-pr",
                 '"project-agent-instructions": 0',
             ],
         )
@@ -113,6 +114,26 @@ class SdlcStartContractTests(unittest.TestCase):
         hook = self.text("sdlc-start/assets/hooks/stop_sdlc_continue.py")
         self.assertIn("run {shlex.quote(prompt_filename)}", hook)
         self.assertNotIn('f"Use ${COORDINATOR_SKILL}."', hook)
+
+    def test_managed_outer_handoff_is_exact_and_local(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "`outer-integration-pending`",
+                "`$worktree integrate <generated-name>`",
+                "never push the child or open a PR from it",
+                "private `complete-outer-integration`",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/references/state-schema.md",
+            [
+                "outer-integration-pending, then `$worktree integrate`",
+                "`$worktree integrate <generated-name>` must record",
+                "The child is never\npublished",
+                "create-pr` is publication-only",
+            ],
+        )
 
     def test_private_completion_helpers_do_not_expand_public_surface(self) -> None:
         skill = self.text("sdlc-start/SKILL.md")

@@ -1,6 +1,6 @@
 ---
 name: commit-push
-description: Commit all current local changes across the whole Git repository on the active non-default feature branch with repo-root git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
+description: Commit all current local changes across the whole Git repository on an unmanaged active non-default feature branch with repo-root git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Reject worktree-managed children and route them to local integration. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
 ---
 
 # Commit Push
@@ -40,13 +40,21 @@ the workflow narrow: commit, push, verify status, and report blockers.
 
 ## Workflow
 
-1. Enter the repository root.
+1. Reject direct managed-child publication.
+   - Resolve the installed `worktree` skill and invoke its Python manager's
+     `publication-guard --publication-action push` action from the current
+     checkout before staging, committing, fetching, or pushing.
+   - If it reports any managed child, integration candidate, nested worker, or
+     inconsistent ownership claim, stop and route to the owning local workflow.
+     Publish only from the accumulated source branch. Only a genuinely
+     unmanaged manual worktree may pass as `unmanaged`.
+2. Enter the repository root.
    - Use `git rev-parse --show-toplevel`, then run all Git commands from that
      root.
    - Treat that Git root as the commit scope even when the current working
      directory is a nested service, chart, app, package, or project folder.
      Never infer a narrower staging scope from the starting directory.
-2. Inspect branch and repository safety.
+3. Inspect branch and repository safety.
    - Stop on detached `HEAD`.
    - Stop if there is no `origin` remote.
    - Determine the remote default branch before staging. Prefer
@@ -57,7 +65,7 @@ the workflow narrow: commit, push, verify status, and report blockers.
    - Stop if the current branch is the default branch.
    - Stop if a merge, rebase, cherry-pick, revert, or bisect is in progress.
    - Stop if unresolved conflicts exist.
-3. Refresh the current branch's remote tracking context.
+4. Refresh the current branch's remote tracking context.
    - Check whether `origin/<branch>` exists, then fetch the current branch ref
      into `refs/remotes/origin/<branch>` when it exists. Use the full remote
      source ref `refs/heads/<branch>:refs/remotes/origin/<branch>` instead of
@@ -70,7 +78,7 @@ the workflow narrow: commit, push, verify status, and report blockers.
      the upstream is missing but a same-named remote branch exists.
    - Stop if the local branch is behind or diverged. Do not pull, merge,
      rebase, or force-push without a separate explicit request.
-4. Handle idempotent no-op cases.
+5. Handle idempotent no-op cases.
    - If the worktree is clean and the branch has no unpublished commits, report
      that nothing needed to be committed or pushed.
    - If the worktree is clean but the branch is ahead, skip committing and push
@@ -81,7 +89,7 @@ the workflow narrow: commit, push, verify status, and report blockers.
    - If the worktree is clean, no upstream exists, no same-named remote branch
      exists, and the branch has no commits or diff against the default branch,
      report that there is nothing to push.
-5. Commit dirty work.
+6. Commit dirty work.
    - Inspect `git status --short` before staging.
    - Run `git add -A` from the repository root. Do not pass a pathspec, current
      project directory, or service directory.
@@ -102,11 +110,11 @@ the workflow narrow: commit, push, verify status, and report blockers.
    - Use the user's exact commit message if provided. Otherwise generate a
      concise imperative message from the staged diff.
    - Run `git commit -m "<message>"` with normal hooks enabled.
-6. Push the current branch.
+7. Push the current branch.
    - If the branch has no upstream, use `git push -u origin HEAD:<branch>`.
    - If the branch already tracks `origin/<branch>`, use
      `git push origin HEAD:<branch>`.
-7. Verify and report.
+8. Verify and report.
    - Run `git status --short --branch`.
    - Report the branch name, commit hash if a new commit was created, push
      target, final ahead/behind state, and whether the worktree is clean.

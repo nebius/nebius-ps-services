@@ -65,10 +65,11 @@ Seal and promote one completed feature locally without pushing.
    `FEAT-*`/`REQ-*` message. It creates at most one final integration commit and
    records the new exact tip. Do not squash, amend, or rewrite worker/merge
    history.
-4. Verify the original project checkout still has the recorded non-default
-   base branch, exact base HEAD, and a clean status. Re-resolve the symbolic
-   remote default and require its branch and HEAD to equal the recorded
-   default identity; remote-default drift blocks promotion without cleanup.
+4. Verify the original project checkout still has the recorded named base
+   branch, exact base HEAD, and a clean status. In unmanaged mode, re-resolve
+   the symbolic remote default and require its branch and HEAD to equal the
+   recorded default identity. In managed-child mode, verify only the exact
+   recorded local child identity; do not fetch or consult a remote default.
 5. Run the private helper `promote`. A common-Git-directory lock covers the
    exact branch/base precheck, `git merge --ff-only` to the sealed tip, and
    postcheck. It then unlocks and removes only the clean registered integration
@@ -79,6 +80,10 @@ Seal and promote one completed feature locally without pushing.
    checkout HEAD on the recorded base branch and verified absence of the
    integration worktree and branch. Advance any repair revalidation cursor
    with that evidence, then move state to `committed`.
+
+This phase never performs the outer managed-child merge. After final
+alignment, UAT, and documentation release the outer lease, `sdlc-start` routes
+that child to `$worktree integrate` and records the exact source merge proof.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use
@@ -95,7 +100,7 @@ the private transition helper and action-scoped execution state.
 ## Failure Handling
 
 - Dirty unrelated files map to a blocker.
-- Default branch maps to `POLICY_BLOCK`.
+- A default branch in unmanaged mode maps to `POLICY_BLOCK`.
 - Missing evidence maps to workflow blocker.
 - Hook denial maps to `POLICY_BLOCK`.
 - Missing or expired `commit-authorization.json` maps to `POLICY_BLOCK`.

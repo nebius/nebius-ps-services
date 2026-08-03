@@ -10,10 +10,11 @@ private SDLC run directory. Later implementation workers receive separate
 branches and worktrees from that integration line; the project branch does not
 advance again until the final evidence-gated fast-forward promotion.
 
-Preparation resolves the actual `origin` default and records it in coordinator
-v5. If the clean project checkout is still on that default, it automatically
-creates the deterministic run promotion branch; an existing non-default branch
-is reused.
+Preparation writes coordinator v6. In unmanaged mode it resolves the actual
+`origin` default and creates the deterministic run promotion branch when the
+clean checkout is still on that default. In a managed `worktree` child it uses
+the exact local child branch and `HEAD` without fetching or resolving a remote
+default.
 
 The exact folder initialized by `sdlc-start` is an enforced monorepo boundary:
 Git worktrees contain the full repository, but claims, worker cwd, and changes
@@ -24,13 +25,20 @@ Corrective replanning holds the transition lock, preserves full definitions and
 digests for every active or completed task, and appends only resource-free
 future waves. Sealed, promoted, or completed execution cannot be reopened.
 
+The shared lease is schema v4 with `active` and terminal `released` states.
+Promotion persists Git, lease, local interop, then coordinator state in that
+order; resume reconciles exact durable identity across every boundary. Release
+requires a clean exact outer head and absent internal resources and leaves a
+receipt until the outer worktree is removed.
+
 The phase never implements product behavior, pushes internal branches, or
 force-cleans resources. Interrupted or unsafe resources remain recorded for
 exact recovery.
 
 The private helper exposes `prepare`, `seal-tdd`, `replan-future`,
 `wave-prepare`, `batch-advance`, `task-start`, `task-recover`, `task-finish`, `wave-integrate`,
-`wave-complete`, `seal-feature`, `promote`, `release-outer-lease`, and `status`.
+`wave-complete`, `seal-feature`, `promote`, `release-outer-lease`,
+`complete-outer-integration`, and `status`.
 It is an internal state-transition surface, not a public SDLC CLI.
 
 For a corrective assignment, `task-finish --oracle-evidence-json` must name

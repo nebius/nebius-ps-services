@@ -10,11 +10,12 @@ interface:
     create a deterministic promotion branch when starting on the actual remote
     default;
     when nested in a worktree-managed checkout, base on and promote only to
-    that exact outer branch while its private lease blocks publication;
+    that exact local child while its schema-v4 lease blocks outer integration
+    and every resume reconciles durable lease plus clean Git truth;
     integrate in stable order; validate and review the combined result;
     reconcile steering; promote only by ff-only merge; clean up internal
     worker resources after combined evidence, clean integration resources only
     after promotion, use exact-SHA ref deletion without force, and release the
-    outer lease only after final alignment."
+    outer lease only after final alignment, then hand off to $worktree integrate."
 policy:
   allow_implicit_invocation: false

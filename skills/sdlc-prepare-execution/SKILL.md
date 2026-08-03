@@ -28,9 +28,10 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 ## Inputs
 
 - Active run directory, current `FEAT-*`, and locked plan.
-- Canonical project checkout, verified `origin` default identity, named
-  promotion branch, exact `HEAD`, and Git common directory, plus the exact
-  initialized project folder and repo-relative scope.
+- Canonical project checkout, named promotion branch, exact `HEAD`, and Git
+  common directory, plus the exact initialized project folder and repo-relative
+  scope. Unmanaged mode also requires a verified `origin` default identity;
+  managed-child mode binds the exact local worktree identity instead.
 - Current requirements, design, project-instruction decision, context,
   steering, and checkpoint state.
 
@@ -53,10 +54,12 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 ## Process
 
-1. Resolve and verify the actual `origin` default. If the clean checkout is on
-   it, automatically create and switch to the deterministic run promotion
-   branch; otherwise reuse the current non-default branch. Reject unrelated
-   dirt or private state inside the repository.
+1. Require a clean named checkout. In unmanaged mode, resolve and verify the
+   actual `origin` default; if on it, create and switch to the deterministic run
+   promotion branch, otherwise reuse the current non-default branch. In a
+   managed child, keep the exact local branch and `HEAD` without fetching or
+   resolving a remote default. Reject unrelated dirt or private state inside
+   the repository.
 2. If current requirements/design changes and an optional
    `project-agent-instructions`-owned project-root `AGENTS.md` are the only
    tracked changes, stage from the repository root with `git add -A`, create
@@ -68,8 +71,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
    exact contract `HEAD`. Git operations use the repository root, but every
    claim and worker `scope_cwd` must remain inside the initialized folder.
    Acquire the Agentic SDLC owner lease first when the checkout is managed by
-   `worktree`; register integration and worker resource intent before creation.
-   Persist a canonical full-definition digest with every task record.
+   `worktree`; require lease schema v4 and register integration and worker
+   resource intent before creation. Persist a canonical full-definition digest
+   with every task record.
 4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
    cleanliness, plan digest, and private state before recording completion.
 5. Return the integration cwd and route the next phase to `sdlc-tdd` there.
@@ -79,7 +83,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Repeated preparation returns the same verified integration identity.
 - Never recreate a recorded branch, worktree, wave, task, or contract commit.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
-  closed. Every execution coordinator schema v1, v2, v3, or v4 record returns
+  closed. Every execution coordinator schema v1 through v5 record returns
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,
@@ -103,6 +107,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   current tasks are committed. `task-start` derives worker identity from
   `CODEX_THREAD_ID`; never accept a caller-invented session token.
 - Retain every observed partial resource in recovery state; never force-delete it.
+- For managed-outer promotion, persist the Git fast-forward, exact lease CAS,
+  local interop, and coordinator state in that order. Resume must reconcile the
+  lease and clean live outer head; stale or missing proof fails closed.
 
 ## Must Not
 

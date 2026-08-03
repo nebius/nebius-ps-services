@@ -26,6 +26,7 @@ from sdlc_execution_core import (
     start_task,
 )
 from sdlc_execution_interop import (
+    complete_source_integration,
     ExecutionInteropError,
     release as release_outer_lease,
 )
@@ -190,6 +191,10 @@ def parser() -> argparse.ArgumentParser:
     release.add_argument("--uat", required=True)
     release.add_argument("--docs", required=True)
 
+    complete_outer = sub.add_parser("complete-outer-integration")
+    complete_outer.add_argument("--run-dir", type=Path, required=True)
+    complete_outer.add_argument("--project-root", type=Path, required=True)
+
     status = sub.add_parser("status")
     status.add_argument("--run-dir", type=Path, required=True)
     status.add_argument("--feature", required=True)
@@ -263,6 +268,8 @@ def execute(args: argparse.Namespace) -> Any:
             uat=args.uat,
             docs=args.docs,
         )
+    if args.command == "complete-outer-integration":
+        return complete_source_integration(args.run_dir, args.project_root)
     if args.command == "status":
         return describe_status(args.run_dir, args.feature)
     raise AssertionError(args.command)

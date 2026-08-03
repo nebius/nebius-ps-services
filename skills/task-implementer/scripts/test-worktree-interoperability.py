@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 import prompt_workspace as pw
+import prompt_workspace_interop as task_interop
 import prompt_workspace_waves as waves
 from prompt_workspace_core import PromptWorkspaceError
 from prompt_workspace_execution import RESULT_SCHEMA, sha256_json
@@ -64,6 +65,13 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         git("push", "-qu", "origin", "main", cwd=self.primary)
         git("symbolic-ref", "HEAD", "refs/heads/main", cwd=self.origin)
         git("fetch", "-q", "origin", cwd=self.primary)
+        git(
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            cwd=self.primary,
+        )
+        git("switch", "-qc", "local-source", cwd=self.primary)
         with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
             outer = wm.add_worktree(
                 cwd=scope,
@@ -175,12 +183,17 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 self.run_dir / "orchestration" / "waves" / f"{plan['active_wave']}.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertNotIn(
+        self.assertIn(
             {"kind": "exact", "path": "README.md"},
             wave["coordinator_write_claims"],
         )
         with self.assertRaisesRegex(wm.WorktreeError, "still owns"):
-            wm.publication_begin(cwd=self.outer_scope, action="push")
+            wm.integrate_worktree(
+                cwd=self.primary,
+                name=self.outer_name,
+                validated_head=None,
+                restart=False,
+            )
 
         prepared = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         dispatched = pw.dispatch_wave(
@@ -189,6 +202,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         assignment_path = Path(str(dispatched["assignments"][0]))
         assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
         worker = Path(str(assignment["worktree"]))
+        with self.assertRaisesRegex(wm.WorktreeError, "must not push"):
+            wm.publication_guard(cwd=worker, action="push")
         pw.arm_task(self.workspace, self.run_id, "task-1", clock=lambda: FIXED)
         previous = Path.cwd()
         os.chdir(Path(str(assignment["scope_cwd"])))
@@ -286,9 +301,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             (self.run_dir / "handoff.md").read_text(encoding="utf-8"),
         )
         with self.assertRaisesRegex(wm.WorktreeError, "still owns"):
-            wm.inspect_worktree(
-                cwd=self.outer_scope, name=None, require_scope_clean=True
-            )
+            wm.inspect_worktree(cwd=self.outer_scope, name=None, require_clean=True)
         routed = pw.route_project_prompt(
             self.outer_scope,
             self.codex_home,
@@ -305,9 +318,16 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         )
         self.assertEqual(finalized["interop"]["status"], "released")
         inspected = wm.inspect_worktree(
-            cwd=self.outer_scope, name=None, require_scope_clean=True
+            cwd=self.outer_scope, name=None, require_clean=True
         )
         self.assertEqual(inspected["head"], promoted["promoted_head"])
+        ready = wm.integrate_worktree(
+            cwd=self.primary,
+            name=self.outer_name,
+            validated_head=None,
+            restart=False,
+        )
+        self.assertEqual(ready["status"], "validation-required")
         remote_branches = git("ls-remote", "--heads", "origin", cwd=self.outer)
         self.assertEqual(remote_branches.count("refs/heads/"), 1)
         self.assertIn("refs/heads/main", remote_branches)
@@ -316,7 +336,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         self.assertIn("- Overall status: done", handoff)
         self.assertIn("## Final Alignment", handoff)
 
-    def test_managed_write_claim_cannot_escape_outer_scope(self) -> None:
+    def test_managed_write_claim_may_span_the_full_checkout(self) -> None:
         handoff_path = self.run_dir / "handoff.md"
         handoff_path.write_text(
             handoff_path.read_text(encoding="utf-8").replace(
@@ -325,12 +345,92 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             encoding="utf-8",
         )
         handoff_path.chmod(0o600)
-        with self.assertRaises(PromptWorkspaceError) as raised:
-            pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        self.assertEqual(raised.exception.code, "REPLAN_REQUIRED")
-        self.assertIn("escapes", raised.exception.message)
-        with self.assertRaisesRegex(wm.WorktreeError, "still owns"):
-            wm.publication_begin(cwd=self.outer_scope, action="create-pr")
+        planned = pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        self.assertEqual(planned["promotion_source"], "managed-local")
+        self.assertIn(
+            {"kind": "exact", "path": "README.md"},
+            planned["waves"][0]["tasks"][0]["write_claims"],
+        )
+
+    def test_successive_promotions_advance_the_outer_lease_history(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        first_path = self.outer_scope / "feature.txt"
+        first_path.write_text("first promotion\n", encoding="utf-8")
+        git("add", "-A", cwd=self.outer)
+        git("commit", "-qm", "first outer promotion", cwd=self.outer)
+        first = git("rev-parse", "HEAD", cwd=self.outer)
+        task_interop.record_promotion(workspace, self.run_dir, first)
+
+        first_path.write_text("second promotion\n", encoding="utf-8")
+        git("add", "-A", cwd=self.outer)
+        git("commit", "-qm", "second outer promotion", cwd=self.outer)
+        second = git("rev-parse", "HEAD", cwd=self.outer)
+        task_interop.record_promotion(workspace, self.run_dir, second)
+
+        local = task_interop.load_interop(self.run_dir)
+        assert local is not None
+        inspected = wm.task_lease_inspect(
+            cwd=self.outer,
+            name=self.outer_name,
+            lease_id=str(local["lease_id"]),
+            owner_kind="task-implementer",
+        )
+        self.assertEqual(local["promoted_head"], second)
+        self.assertEqual(inspected["promotion_heads"], [self.initial, first, second])
+
+    def test_resume_repairs_exact_terminal_receipt_and_rejects_stale_sha(self) -> None:
+        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        interop_path = self.run_dir / "orchestration" / "interop.json"
+        local = json.loads(interop_path.read_text(encoding="utf-8"))
+        wm.task_lease_promote(
+            cwd=self.outer,
+            name=self.outer_name,
+            lease_id=str(local["lease_id"]),
+            promoted_head=self.initial,
+            expected_head=self.initial,
+            owner_kind="task-implementer",
+        )
+        with (
+            mock.patch.object(
+                wm,
+                "_record_manifest_lease",
+                side_effect=wm.WorktreeError(
+                    "simulated crash before manifest release marker"
+                ),
+            ),
+            self.assertRaisesRegex(wm.WorktreeError, "simulated crash"),
+        ):
+            wm.task_lease_release(
+                cwd=self.outer,
+                name=self.outer_name,
+                lease_id=str(local["lease_id"]),
+                promoted_head=self.initial,
+                owner_kind="task-implementer",
+            )
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        reconciled = task_interop.acquire_interop(
+            workspace,
+            self.run_dir,
+            self.workspace,
+            self.initial,
+        )
+        self.assertEqual(reconciled["promoted_head"], self.initial)
+        self.assertTrue(reconciled["released"])
+        ownership = wm.load_manifest(self.primary, self.outer_name)
+        assert ownership is not None
+        self.assertEqual(ownership.lease_state, "released")
+
+        stale = dict(reconciled)
+        stale["promoted_head"] = "f" * 40
+        interop_path.write_text(json.dumps(stale), encoding="utf-8")
+        with self.assertRaisesRegex(PromptWorkspaceError, "promoted head changed"):
+            task_interop.acquire_interop(
+                workspace,
+                self.run_dir,
+                self.workspace,
+                self.initial,
+            )
 
 
 if __name__ == "__main__":

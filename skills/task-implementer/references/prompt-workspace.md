@@ -108,10 +108,13 @@ history, assignment digest, result digest, and commit.
 
 `interop.json` is strict private run state. For a `worktree`-managed outer
 checkout it binds the run to the exact outer name, branch, path, outer/task
-scope, v2 `task-implementer` owner lease identity, promoted head, and release
-status. For an unmanaged
+scope, v4 `task-implementer` owner lease identity, promoted head, release
+status, and local source-integration handoff. For an unmanaged
 checkout it records only the unmanaged mode. Any malformed or mismatched state
-fails closed.
+fails closed. Existing managed state is never authoritative by itself: resume,
+promotion, and release inspect the exact durable lease and live clean outer Git
+head, repair only exact external-first crash windows, and reject stale local
+promoted/released values.
 
 Assignments are immutable and bind:
 
@@ -197,6 +200,14 @@ An interrupted release is retried idempotently. Unfinished pre-interop runs in
 a managed outer checkout return `WORKFLOW_UPGRADE_REQUIRED`; there is no
 migration, stale timeout, PID recovery, or force-clear path.
 
+Lease release persists a schema-v4 `released` terminal receipt rather than
+deleting ownership. Exact owner/token/promoted-head replay is accepted; missing
+or different state is a conflict. Successive wave promotions append to the
+lease's ordered head history through expected-head compare-and-set. The
+schema-v4 outer ownership manifest independently retains lease participation
+and identity, and the receipt remains until `$worktree remove` revalidates
+absent resources and deletes the outer lifecycle.
+
 Completed private prompt/run history may be archived only after the outer
 worktree lifecycle has also been removed. Archive is history retention, not a
 workspace identity migration; never rebind it to a primary or different linked
@@ -206,8 +217,8 @@ checkout.
 
 Workspace, prompt, and run-manifest schemas are unchanged. The execution state
 machine has no compatibility path: every
-`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4 run returns
-`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v5 resources,
+`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4/v5 run returns
+`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v6 resources,
 including completed records. Do not add a legacy read path, migration, or
 upgrade command.
 

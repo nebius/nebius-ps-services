@@ -48,7 +48,7 @@ batches; batches do not change logical dependencies or wave IDs.
 
 ## State And Resources
 
-Private execution state uses `agentic-sdlc/execution-coordinator-v5`,
+Private execution state uses `agentic-sdlc/execution-coordinator-v6`,
 `execution-wave-v2`, `execution-task-v3`, `worker-assignment-v2`, and
 `worker-result-v4`. Wave, task, assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
@@ -60,7 +60,7 @@ retain append-only hashes of every
 worker session that has owned the task. A process-safe execution transition
 lock serializes task ownership, atomic private session claims prevent one
 identity from owning multiple tasks, and recovery requires the exact current
-attempt. Every coordinator v1/v2/v3/v4 record fails
+attempt. Every coordinator v1 through v5 record fails
 with `WORKFLOW_UPGRADE_REQUIRED` and retains resources, including completed
 records.
 
@@ -112,13 +112,19 @@ assignments, worktrees, branches, results, commits, or active journals.
 Completed and current waves remain immutable, and every task in them must match
 both its full canonical definition and recorded definition digest.
 
-When execution starts inside a managed outer worktree, acquire the shared v3
+When execution starts inside a managed outer worktree, acquire the shared v4
 lease as owner `agentic-sdlc`, register integration/worker resources, and record
-each promoted feature head. Release only after all resources are absent and
-final alignment, UAT, and documentation evidence exists; PR publication begins
-after release.
+each promoted feature head. Promotion ordering is Git fast-forward, exact lease
+compare-and-set, local interop write, then coordinator `promoted` persistence.
+Resume reconciles `promoted`, `cleanup`, and `done` coordinators against the
+durable lease and clean outer Git head before continuing. Release only after all
+resources are absent and final alignment, UAT, and documentation evidence
+exists. It persists a schema-v4 `released` receipt and enters outer integration
+pending; `$worktree integrate` must merge the child locally and
+`complete-outer-integration` must record exact source proof. Never publish the
+managed child.
 
-Execution coordinator schema v1/v2/v3/v4 is unsupported. Return
+Execution coordinator schema v1 through v5 is unsupported. Return
 `WORKFLOW_UPGRADE_REQUIRED` without changing its resources, including for
 completed records. There is no legacy read path or migration.
 

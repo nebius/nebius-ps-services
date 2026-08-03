@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. In an active Agentic SDLC run, switch to publication-only mode and publish only the clean exact promoted SHA after passing UAT. Do not use for direct commit-and-push only."
+description: "Use for GitHub PR creation from unmanaged local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. In an active unmanaged Agentic SDLC run, publish only the clean exact promoted SHA after passing UAT. Reject worktree-managed children and route them to local integration. Do not use for direct commit-and-push only."
 ---
 
 # Create PR
@@ -50,19 +50,35 @@ branch, and report the order the user should merge the PRs manually.
   remote PR branches. If local work is dirty on the active branch, move or
   commit it before updating other branches.
 
+## Managed Worktree Guard
+
+Before staging, committing, fetching for publication, pushing, or creating a
+PR, resolve the installed `worktree` skill and invoke its Python manager's
+`publication-guard --publication-action create-pr` action from the current
+checkout.
+If it reports any managed child, integration candidate, nested worker, or
+inconsistent ownership claim, stop and route to its owning local workflow.
+Only a genuinely unmanaged manual worktree may pass as `unmanaged`. This guard
+also overrides active SDLC publication mode: managed children integrate
+locally, while only an unmanaged final source branch may use the PR workflow
+below.
+
 ## Active Agentic SDLC Publication Mode
 
 When the current project has a matching active Agentic SDLC run, this mode
 overrides the generic branch-preparation, repair, and base-merge steps below.
-`create-pr` is then a publication handoff, not another implementation gate.
+This is publication-only mode: `create-pr` is a handoff, not another
+implementation gate.
 
 Before any push or PR creation/reuse:
 
 - Reload the active run, current checkpoint, feature evidence, execution
   coordinator, commit evidence, and UAT evidence.
-- Require the run to route to `create-pr`, the outer project lease to be
-  released, UAT to have passed, and the current named non-default branch to be
-  clean.
+- Require the run to route to `create-pr`, have no managed outer-integration
+  state, have passed UAT, and have a clean current named non-default branch.
+- If managed interop is `leased`, `pending`, or `integrated`, do not publish the
+  child. Route `leased` back through the active SDLC run and route `pending` or
+  `integrated` through `$worktree integrate`/source-branch publication.
 - Resolve one canonical `promoted_head` from execution and commit evidence.
   Require current `HEAD`, the recorded promoted HEAD, and any existing remote
   PR head to equal that exact SHA.

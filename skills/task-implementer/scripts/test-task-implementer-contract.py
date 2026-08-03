@@ -64,7 +64,7 @@ def main() -> int:
             "task-start` is single-use",
             "replacement worker invokes private `task-recover",
             "isolated correction tail",
-            "coordinator-v1/v2/v3/v4 runs are unsupported",
+            "coordinator-v1/v2/v3/v4/v5 runs are unsupported",
             "$project-agent-instructions",
             "spec owner",
         ),

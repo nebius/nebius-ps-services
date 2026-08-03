@@ -199,9 +199,7 @@ class HookTestCase(unittest.TestCase):
             else None
         )
         event_path = run_dir / "repairs" / "FEAT-001" / "events" / f"{event_id}.json"
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         write_json(
             event_path,
             {
@@ -247,11 +245,7 @@ class HookTestCase(unittest.TestCase):
         }
         if with_diagnosis:
             diagnosis_path = (
-                run_dir
-                / "repairs"
-                / "FEAT-001"
-                / "diagnoses"
-                / f"{diagnosis_id}.json"
+                run_dir / "repairs" / "FEAT-001" / "diagnoses" / f"{diagnosis_id}.json"
             )
             write_json(
                 diagnosis_path,
@@ -303,9 +297,7 @@ class HookTestCase(unittest.TestCase):
         *,
         complete: bool,
     ) -> None:
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
         blocker_key = control["active_blocker"]["blocker_key"]
         surface = "commit" if complete else "validation"
@@ -378,9 +370,9 @@ class HookTestCase(unittest.TestCase):
                 "fingerprints": fingerprints,
                 "evidence": ["promotion and cleanup passed"],
             }
-            content = (
-                json.dumps(gate, sort_keys=True, indent=2) + "\n"
-            ).encode("utf-8")
+            content = (json.dumps(gate, sort_keys=True, indent=2) + "\n").encode(
+                "utf-8"
+            )
             source = run_dir / "evidence" / "FEAT-001" / "commit.json"
             source.write_bytes(content)
             git(self.project, "worktree", "remove", str(integration))
@@ -388,7 +380,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v5",
+                    "schema": "agentic-sdlc/execution-coordinator-v6",
                     "status": "done",
                     "base_branch": "main",
                     "project_root": str(self.project),
@@ -483,7 +475,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v5",
+                "schema": "agentic-sdlc/execution-coordinator-v6",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -2001,9 +1993,7 @@ class HookTestCase(unittest.TestCase):
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["next_recommended_skill"] = "sdlc-validate-codes"
         write_json(state_path, state)
-        control_path = (
-            run_dir / "repairs" / "FEAT-001" / "repair-control.json"
-        )
+        control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
         control["revalidation"]["repair_dispatch_id"] = "foreign-dispatch"
         projection = {
@@ -2048,9 +2038,7 @@ class HookTestCase(unittest.TestCase):
         self.assertIn("still has invalidated evidence", result["stopReason"])
 
         self.write_revalidation_cursor(run_dir, complete=True)
-        self.assertFalse(
-            (run_dir / "worktrees" / "FEAT-001" / "integration").exists()
-        )
+        self.assertFalse((run_dir / "worktrees" / "FEAT-001" / "integration").exists())
         self.assertEqual(git(self.project, "status", "--porcelain"), "")
         control = json.loads(control_path.read_text(encoding="utf-8"))
         control["status"] = "resolved"
