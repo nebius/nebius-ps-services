@@ -685,6 +685,8 @@ def _add_worktree_unlocked(
             current_cwd=cwd,
         )
         managed = _managed_from_record(primary, record)
+        if not managed.scope_cwd.is_dir():
+            raise WorktreeError("reused project scope is not a directory")
         dirty = status_paths(managed.path)
         source_head = _git(primary, "rev-parse", source_ref)
         return {

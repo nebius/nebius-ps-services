@@ -1,8 +1,9 @@
 interface:
   display_name: "Worktree"
-  short_description: "Create and locally integrate monorepo worktrees"
+  short_description: "Create, work from, and integrate monorepo worktrees"
   default_prompt: "Use $worktree to create full-repository child worktrees from
-    the exact clean local feature branch, validate and integrate committed child
+    the exact clean local feature branch, adopt the returned project directory
+    for subsequent development commands, validate and integrate committed child
     work back into that source branch, block publication from every managed
     private branch, and remove children only with exact proof."
 policy:

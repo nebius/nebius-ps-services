@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: "Requires explicit invocation to create, locally integrate, exactly reuse, or safely remove a full-repository linked Git worktree for monorepo work. Use `$worktree add` from a clean named non-default source branch, `$worktree integrate` to merge committed child work back into that local source through a recoverable candidate, and `$worktree remove` after exact local proof. Do not use for push, PR creation, publication, or parallel-agent orchestration."
+description: "Requires explicit invocation to create, locally integrate, exactly reuse, or safely remove a full-repository linked Git worktree for monorepo work. Use `$worktree add` from a clean named non-default source branch and continue local work from its returned project directory, `$worktree integrate` to merge committed child work back into that local source through a recoverable candidate, and `$worktree remove` after exact local proof. Do not use for push, PR creation, publication, or parallel-agent orchestration."
 ---
 
 # Worktree
@@ -43,7 +43,9 @@ $worktree remove <generated-worktree-name>
 - Never pass raw prompt text, secrets, or a full project path into generated
   identities.
 - `--project` selects an existing starting directory and descriptive label. It
-  never creates a partial checkout or restricts changed paths.
+  never creates a partial checkout or restricts changed paths. After successful
+  creation or reuse, that returned directory becomes the operational directory
+  for subsequent development commands.
 - `--reuse` and lifecycle actions require the exact generated name.
 
 ## Required Reads
@@ -89,6 +91,16 @@ $worktree remove <generated-worktree-name>
 3. Treat the returned source SHA as immutable creation evidence. Return the
    resolved task slug, generated name, branch, full worktree path, and selected
    starting directory.
+4. Adopt the returned `scope_cwd` as the active operational directory for
+   subsequent development work. Set each tool call's working-directory field to
+   that exact path, or run `cd -- "$scope_cwd"` only inside an interactive shell
+   whose state the agent owns. From that directory, re-observe `pwd`, the child
+   branch, exact `HEAD`, and cleanliness before reporting readiness.
+5. Keep later lifecycle actions anchored to the clean primary checkout. A
+   helper subprocess cannot change its parent process, the Codex workspace, or
+   an editor window, so never claim a persistent shell/editor switch unless it
+   is independently observed. Never launch or reopen an editor unless the user
+   explicitly asks.
 
 ### Integrate
 
@@ -175,6 +187,10 @@ $worktree remove <generated-worktree-name>
   must route to the owning local promotion and integration workflow.
 - Never treat `--project` as a staging or changed-path boundary. Git operations
   see the full linked checkout.
+- Never treat a subprocess-local `cd` as proof that the parent shell, Codex
+  workspace, or editor changed directories or selected the child branch.
+- Never launch, reopen, or retarget an editor as an implicit side effect of
+  `add` or `--reuse`.
 - Never auto-commit dirty child work or silently discard conflict resolutions.
 - Never report integration or cleanup complete without re-observing exact Git
   identity, ancestry, parents, index, and cleanliness.
@@ -182,7 +198,8 @@ $worktree remove <generated-worktree-name>
 ## Completion Criteria
 
 - `add`: a clean child exists on a generated no-upstream branch at the exact
-  captured local source SHA.
+  captured local source SHA, and a read-only command run with `scope_cwd` as its
+  working directory confirms that child identity.
 - `integrate`: the source checkout is clean at the exact validated two-parent
   merge SHA, durable proof is recorded, and the private candidate is absent.
 - `remove`: the child worktree, local child ref, and manifest are absent; remote
@@ -200,5 +217,6 @@ URLs, customer data, raw logs, or one-off local state.
 ## Output Contract
 
 Return the action, resolved task slug, generated name, child/source branches
-and exact SHAs, worktree/start-directory paths, candidate or recovery path when
-applicable, validation status, retained resources, and precise next action.
+and exact SHAs, worktree/start-directory paths, adopted operational directory,
+editor-switch status, candidate or recovery path when applicable, validation
+status, retained resources, and precise next action.

@@ -1049,6 +1049,12 @@ creates `project-skills-<6-hex>` on `feature/skills-<6-hex>` and returns the
 child's `skills/` directory. Explicit task descriptions continue to produce
 their own public-safe slugs.
 
+After creation or exact reuse, Codex verifies the child from that returned
+directory and adopts it for subsequent development commands. This does not
+change a parent shell, the Codex workspace, or an editor window; editor
+retargeting remains explicit, and lifecycle actions still run from the primary
+checkout.
+
 `integrate` requires clean committed child work and released nested workflow
 leases. It builds one durable private candidate from the current source head,
 retains merge conflicts for recovery, exposes the exact candidate for

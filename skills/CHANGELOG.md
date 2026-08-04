@@ -79,6 +79,13 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Made successful `$worktree add` and exact `--reuse` hand off directly into
+  the returned project directory for subsequent development commands, with a
+  read-only child identity check. The skill now distinguishes command workdir
+  routing from a persistent parent-shell, Codex-workspace, or editor switch;
+  editor retargeting remains explicit and lifecycle actions remain anchored to
+  the primary checkout. Exact reuse also fails closed when the selected project
+  scope is no longer a directory.
 - Made description-less `$worktree` creation derive its public-safe task slug
   from the resolved project directory basename instead of the generic `work`
   label. The helper now reports that resolved slug with created, reused, and

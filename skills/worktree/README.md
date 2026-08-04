@@ -34,6 +34,31 @@ sibling worktree parent and returns `<worktree>/skills` as the starting
 directory. An explicit task keeps using its derived public-safe slug; a
 basename that normalizes to empty falls back to `work`.
 
+After `add` or exact `--reuse`, Codex verifies the child from that returned
+directory and uses it as the working directory for subsequent development
+commands. This is command routing, not a promise that a subprocess changed the
+parent shell, Codex workspace, or editor window. Opening or retargeting an
+editor remains an explicit user action; integration and removal still run from
+the primary checkout.
+
+## VS Code Worktree Discovery
+
+VS Code users can enable automatic Git worktree discovery in their user or
+workspace settings:
+
+```json
+{
+  "git.detectWorktrees": true
+}
+```
+
+VS Code then lists detected worktrees in the Source Control Repositories view,
+where each worktree can be opened in the current or a new window. This optional
+editor setting is separate from the skill: `worktree` does not change VS Code
+settings or open an editor. See [Git branches and worktrees in VS Code][1].
+
+[1]: https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees
+
 Integration creates a durable private merge candidate from the current source
 head, merges the exact clean child head with `--no-ff`, retains conflicts for
 developer resolution, and exposes the exact candidate for non-mutating

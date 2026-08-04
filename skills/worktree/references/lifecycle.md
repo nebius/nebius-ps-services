@@ -34,6 +34,11 @@ may change in the same child.
   through planned state, Git worktree creation, and active-state verification.
 - Re-observe the shared common Git directory, generated branch, exact HEAD,
   clean index/worktree, and selected starting directory.
+- After successful creation or exact reuse, route subsequent development
+  commands through the selected starting directory and verify the child branch
+  there. This changes the agent's command workdir, not a parent shell, Codex
+  workspace, or editor window; lifecycle actions still run from the primary
+  checkout.
 
 ## Integration Attempt
 

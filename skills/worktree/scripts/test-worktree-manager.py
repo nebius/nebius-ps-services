@@ -170,9 +170,7 @@ class WorktreeManagerTest(unittest.TestCase):
         self.assertEqual(result["name"], "project-skills-a7c2f9")
         self.assertEqual(result["branch"], "feature/skills-a7c2f9")
         self.assertEqual(Path(str(result["scope_cwd"])), worktree / "skills")
-        manifest = ownership_state.load_manifest(
-            self.repo, "project-skills-a7c2f9"
-        )
+        manifest = ownership_state.load_manifest(self.repo, "project-skills-a7c2f9")
         self.assertIsNotNone(manifest)
         assert manifest is not None
         self.assertEqual(manifest.task_slug, "skills")
@@ -185,9 +183,7 @@ class WorktreeManagerTest(unittest.TestCase):
         self.assertEqual(result["task_slug"], "example")
         self.assertEqual(result["name"], "project-example-a7c2f9")
         self.assertEqual(result["branch"], "feature/example-a7c2f9")
-        self.assertEqual(
-            Path(str(result["scope_cwd"])), worktree / "services/example"
-        )
+        self.assertEqual(Path(str(result["scope_cwd"])), worktree / "services/example")
 
     def test_add_defaults_task_slug_to_repository_basename_at_root(self) -> None:
         with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
@@ -228,12 +224,33 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertEqual(reused["status"], "reused")
         self.assertEqual(reused["task_slug"], "skills")
+        self.assertEqual(
+            Path(str(reused["scope_cwd"])),
+            Path(str(created["worktree"])) / "skills",
+        )
 
         with self.assertRaisesRegex(wm.WorktreeError, "does not match"):
             wm.add_worktree(
                 cwd=self.repo / "skills",
                 project=None,
                 task_slug="different-task",
+                reuse=str(created["name"]),
+            )
+
+    def test_exact_reuse_rejects_scope_replaced_by_file(self) -> None:
+        created = self.add(task_slug=None, project="services/example")
+        scope_cwd = Path(str(created["scope_cwd"]))
+        (scope_cwd / "service.txt").unlink()
+        scope_cwd.rmdir()
+        scope_cwd.write_text("not a directory\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            wm.WorktreeError, "reused project scope is not a directory"
+        ):
+            wm.add_worktree(
+                cwd=self.repo / "skills",
+                project="services/example",
+                task_slug=None,
                 reuse=str(created["name"]),
             )
 

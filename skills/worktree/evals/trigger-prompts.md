@@ -34,6 +34,10 @@
   exact current named non-default local source branch and `HEAD` without fetch.
 - `--project` selects the initial directory and label only; it is not a
   checkout, staging, or changed-path boundary.
+- After `add` or exact `--reuse`, the agent sets subsequent development tool
+  calls to the returned `scope_cwd` and re-observes the child branch there.
+  It does not claim that a subprocess changed the parent shell, Codex workspace,
+  or editor window, and it does not launch an editor implicitly.
 - A nested Task Implementer or Agentic SDLC lease blocks outer integration and
   removal until final alignment and internal cleanup release it.
 - Direct managed-child push or PR creation is rejected; publication happens
