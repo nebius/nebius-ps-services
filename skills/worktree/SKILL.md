@@ -27,6 +27,10 @@ branch without publishing child branches.
   accumulated source branch through the standalone Git/PR skills.
 - Do not use as Task Implementer or Agentic SDLC's internal worker manager;
   those workflows may nest privately inside one managed child.
+- A caller or coordinator reaching an outer-lifecycle handoff must return the
+  exact `$worktree ...` command and stop. A recorded next skill, hook
+  continuation, or internal phase transition is not the fresh explicit user
+  invocation required to run this skill.
 
 ## Inputs
 

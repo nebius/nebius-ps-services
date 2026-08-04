@@ -24,6 +24,16 @@ SCHEMA = 3
 NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?")
 LEASE_ID_RE = re.compile(r"[0-9a-f]{32}")
 OBJECT_ID_RE = re.compile(r"[0-9a-f]{40,64}")
+PRIVATE_WORKTREE_ACTIONS = frozenset(
+    {
+        "anchor-inspect",
+        "task-lease-acquire",
+        "task-lease-inspect",
+        "task-lease-promote",
+        "task-lease-release",
+        "task-lease-resource",
+    }
+)
 
 
 def _helper_path(*, required: bool = True) -> Path | None:
@@ -46,6 +56,11 @@ def _source_root(workspace: dict[str, object]) -> Path:
 
 
 def _call(workspace: dict[str, object], arguments: list[str]) -> dict[str, object]:
+    if not arguments or arguments[0] not in PRIVATE_WORKTREE_ACTIONS:
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT",
+            "Task Implementer private worktree interop rejects public lifecycle actions",
+        )
     helper = _helper_path()
     assert helper is not None
     try:

@@ -228,10 +228,12 @@ $sdlc-start run <prompt-path-or-unique-filename>
   transition only after final alignment, UAT, and documentation evidence are
   recorded, the exact promoted child HEAD is clean, and all Agentic SDLC
   integration and worker resources are absent. Record phase
-  `outer-integration-pending` and route to the exact
-  `$worktree integrate <generated-name>` action. After local integration,
-  invoke private `complete-outer-integration` to bind the source merge proof;
-  never push the child or open a PR from it.
+  `outer-integration-pending`, return the exact
+  `$worktree integrate <generated-name>` command, and stop. Do not invoke or
+  auto-continue the explicit-only `worktree` skill; wait for a fresh user
+  invocation. After independently observing local integration, invoke private
+  `complete-outer-integration` to bind the source merge proof; never push the
+  child or open a PR from it.
 - In an unmanaged final source checkout, treat the shared PR skills as
   restricted SDLC modes: `create-pr` may publish only the clean exact promoted
   SHA, and `review-pr`

@@ -67,6 +67,7 @@ def main() -> int:
             "coordinator-v1/v2/v3/v4/v5 runs are unsupported",
             "$project-agent-instructions",
             "spec owner",
+            "never invoke it internally",
         ),
         "README.md": common
         + (
@@ -83,6 +84,7 @@ def main() -> int:
             "WORKER_SCOPE_VIOLATION",
             "project-agent-instructions",
             "workspace init",
+            "fresh explicit user invocation",
         ),
         "prompt workspace": (
             "coordinator.json",
@@ -112,6 +114,7 @@ def main() -> int:
             "first private transition",
             "$project-agent-instructions",
             "selected project root `AGENTS.md`",
+            "fresh explicit user invocation",
         ),
         "handoff": (
             "## Dependency Waves",
@@ -130,6 +133,7 @@ def main() -> int:
             "allow_implicit_invocation: false",
             "isolated full-repository worktrees",
             "ff-only merge",
+            "fresh explicit user invocation",
         ),
         "evals": (
             "five completely disjoint tasks",
@@ -137,6 +141,7 @@ def main() -> int:
             "STEERING_QUEUED_AFTER_WAVE",
             "$task-implementer parallel",
             "generic parallel requests do not trigger",
+            "fresh explicit user invocation",
         ),
         "repo README": (
             "deterministic dependency waves",
@@ -144,6 +149,8 @@ def main() -> int:
             "git merge --ff-only",
             "WORKFLOW_UPGRADE_REQUIRED",
             "project-agent-instructions",
+            "exact `$worktree integrate <generated-name>`",
+            "fresh explicit user invocation",
         ),
         "changelog": (
             "coordinator state to v5",

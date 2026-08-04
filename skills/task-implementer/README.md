@@ -34,8 +34,9 @@ entire task run is nested under that outer branch. The exact current outer
 a private v4 lease with owner kind `task-implementer` blocks outer integration
 and removal through final alignment. The task coordinator never fetches or
 bases workers on the remote default in this case. After release, the managed
-child is handed to `$worktree integrate`; it is never pushed or used as a PR
-head.
+child returns an exact `$worktree integrate <generated-name>` handoff and the
+coordinator stops for a fresh explicit user invocation; it is never pushed or
+used as a PR head.
 
 Resume, promotion, and release reconcile local `interop.json` against the exact
 durable lease token and live clean outer Git head. Release persists a terminal
@@ -159,9 +160,10 @@ force-removes.
 
 After the last wave cleanup, final changed-surface `$align` evidence is sealed
 before a managed outer lease is released. The result is an exact local
-`$worktree integrate <generated-name>` handoff. An interruption after the
-handoff is marked done remains recoverable: repeating `run` finishes the same
-private release instead of starting a new task run.
+`$worktree integrate <generated-name>` handoff, followed by a stop for a fresh
+explicit user invocation instead of an internal call to that public lifecycle.
+An interruption after the handoff is marked done remains recoverable: repeating
+`run` finishes the same private release instead of starting a new task run.
 
 ## Private State And Recovery
 

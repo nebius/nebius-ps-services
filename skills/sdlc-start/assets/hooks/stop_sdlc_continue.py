@@ -808,6 +808,18 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "WORKFLOW_UPGRADE_REQUIRED: unfinished SDLC run has no valid managed prompt binding."
         )
 
+    next_skill = _normalize_skill_name(
+        str(current_state.get("next_recommended_skill") or "").strip()
+    )
+    if (
+        current_state.get("current_phase") == "outer-integration-pending"
+        or next_skill == "worktree"
+    ):
+        return stop(
+            "Local worktree integration requires a fresh explicit user invocation "
+            "and will not be continued automatically."
+        )
+
     steering_reason = _steering_reason(active)
     if steering_reason:
         prompt = _continuation_prompt(
@@ -834,8 +846,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
 
-    next_skill = str(current_state.get("next_recommended_skill") or "").strip()
-    next_skill = _normalize_skill_name(next_skill)
     if next_skill == "sdlc-merge-pr":
         return stop(
             "Merge requires an explicit user request and will not be continued automatically."

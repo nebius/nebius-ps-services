@@ -121,15 +121,18 @@ class SdlcStartContractTests(unittest.TestCase):
             [
                 "`outer-integration-pending`",
                 "`$worktree integrate <generated-name>`",
-                "never push the child or open a PR from it",
-                "private `complete-outer-integration`",
+                "wait for a fresh user",
+                "auto-continue the explicit-only",
+                "never push the\n  child or open a PR from it",
+                "`complete-outer-integration` to bind",
             ],
         )
         self.assert_terms(
             "sdlc-start/references/state-schema.md",
             [
-                "outer-integration-pending, then `$worktree integrate`",
-                "`$worktree integrate <generated-name>` must record",
+                "stop and await a fresh",
+                "explicit user invocation of `$worktree integrate`",
+                "`$worktree integrate <generated-name>` command and stops",
                 "The child is never\npublished",
                 "create-pr` is publication-only",
             ],

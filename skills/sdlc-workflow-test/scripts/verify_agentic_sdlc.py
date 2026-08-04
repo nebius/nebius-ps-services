@@ -1169,6 +1169,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 'uat_status: "passed"',
                 "outer-integration-pending",
                 "$worktree integrate",
+                "fresh explicit user invocation",
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
         ),
@@ -2656,8 +2657,24 @@ def check_capability_regressions(ctx: Context) -> None:
                     "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
                 ),
                 (
+                    "worktree",
+                    "test_internal_coordinators_do_not_call_public_lifecycle_actions",
+                ),
+                (
                     "execution",
                     "test_managed_outer_execution_releases_to_local_source_integration",
+                ),
+                (
+                    "execution",
+                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
+                ),
+                (
+                    "hooks",
+                    "test_stop_does_not_continue_worktree_integration",
+                ),
+                (
+                    "hooks",
+                    "test_stop_does_not_continue_worktree_next_skill",
                 ),
             ),
         ),
@@ -2667,6 +2684,10 @@ def check_capability_regressions(ctx: Context) -> None:
                 (
                     "task-implementer",
                     "test_workers_remain_internal_to_the_outer_worktree_branch",
+                ),
+                (
+                    "task-implementer",
+                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
                 ),
                 (
                     "task-implementer",

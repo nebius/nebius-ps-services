@@ -398,7 +398,8 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 14. sdlc-align-specs, in the integration worktree
 15. sdlc-commit: final seal, ff-only promotion, and integration cleanup
 16. uat, from the promoted project checkout
-17. managed child only: outer-integration-pending, then `$worktree integrate`
+17. managed child only: outer-integration-pending, then stop and await a fresh
+    explicit user invocation of `$worktree integrate`
 18. create-pr, from the final unmanaged source branch only
 19. review-pr
 20. sdlc-merge-pr, only after explicit user request
@@ -430,8 +431,10 @@ integration tip under the common-Git-directory lock with
 After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
 before final handoff when UAT or final steering changes require project-facing
 documentation updates. In a managed child, lease release enters
-`outer-integration-pending`; `$worktree integrate <generated-name>` must record
-the exact source merge proof before the run is complete. The child is never
+`outer-integration-pending`; `sdlc-start` returns the exact
+`$worktree integrate <generated-name>` command and stops. Only a fresh explicit
+user invocation may run it. After that separate action, the exact source merge
+proof must be recorded before the run is complete. The child is never
 published. In an unmanaged source checkout, `create-pr` is publication-only
 for the clean exact promoted SHA and `review-pr` is
 findings-and-readiness-only; branch-changing findings return through

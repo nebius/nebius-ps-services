@@ -16,6 +16,7 @@ interface:
     reconcile steering; promote only by ff-only merge; clean up internal
     worker resources after combined evidence, clean integration resources only
     after promotion, use exact-SHA ref deletion without force, and release the
-    outer lease only after final alignment, then hand off to $worktree integrate."
+    outer lease only after final alignment, then return the exact $worktree
+    integrate command and stop for a fresh explicit user invocation."
 policy:
   allow_implicit_invocation: false

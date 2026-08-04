@@ -112,6 +112,20 @@ MANAGED_PLAN = """# FEAT-001 Plan v1
 """
 
 
+class WorktreeInteropBoundaryTests(unittest.TestCase):
+    def test_private_interop_rejects_public_lifecycle_before_subprocess(self) -> None:
+        for action in ("add", "integrate", "remove"):
+            with (
+                self.subTest(action=action),
+                mock.patch.object(execution_interop.subprocess, "run") as run,
+                self.assertRaisesRegex(
+                    ExecutionInteropError, "rejects public lifecycle actions"
+                ),
+            ):
+                execution_interop._call(Path.cwd(), [action])
+            run.assert_not_called()
+
+
 def git(cwd: Path, *args: str, check: bool = True) -> str:
     result = subprocess.run(
         ["git", *args],

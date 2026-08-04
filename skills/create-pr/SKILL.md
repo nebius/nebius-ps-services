@@ -77,8 +77,10 @@ Before any push or PR creation/reuse:
 - Require the run to route to `create-pr`, have no managed outer-integration
   state, have passed UAT, and have a clean current named non-default branch.
 - If managed interop is `leased`, `pending`, or `integrated`, do not publish the
-  child. Route `leased` back through the active SDLC run and route `pending` or
-  `integrated` through `$worktree integrate`/source-branch publication.
+  child. Route `leased` back through the active SDLC run. For `pending`, stop
+  and tell the user to invoke the exact `$worktree integrate` handoff; for
+  `integrated`, stop and publish only from the separately selected final source
+  branch. Never invoke the explicit-only `worktree` skill from `create-pr`.
 - Resolve one canonical `promoted_head` from execution and commit evidence.
   Require current `HEAD`, the recorded promoted HEAD, and any existing remote
   PR head to equal that exact SHA.

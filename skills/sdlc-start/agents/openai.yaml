@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Start"
   short_description: "Run prompt-bound Agentic SDLC"
-  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-path-or-unique-filename> to continue the prompt-bound workflow. Preserve exact execution identity through validation and promotion; when nested in a managed child, finish through local $worktree integration instead of publishing that child."
+  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-path-or-unique-filename> to continue the prompt-bound workflow. Preserve exact execution identity through validation and promotion; when nested in a managed child, return the exact local $worktree integration command and stop for a fresh explicit user invocation instead of publishing that child."
 policy:
   allow_implicit_invocation: false

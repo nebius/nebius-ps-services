@@ -167,6 +167,19 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_private_interop_rejects_public_lifecycle_before_subprocess(self) -> None:
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        for action in ("add", "integrate", "remove"):
+            with (
+                self.subTest(action=action),
+                mock.patch.object(task_interop.subprocess, "run") as run,
+                self.assertRaisesRegex(
+                    PromptWorkspaceError, "rejects public lifecycle actions"
+                ),
+            ):
+                task_interop._call(workspace, [action])
+            run.assert_not_called()
+
     def test_workers_remain_internal_to_the_outer_worktree_branch(self) -> None:
         plan = pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
         self.assertEqual(plan["initial_head"], self.initial)

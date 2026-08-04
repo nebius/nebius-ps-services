@@ -264,7 +264,9 @@ integration, tracks all internal resources and promoted heads, survives every
 external-first promotion persistence boundary, rejects stale local
 promoted/released state, releases to an exact terminal receipt only after final
 alignment/UAT/docs with a clean exact head, then allows only the exact local
-`$worktree integrate` handoff and records source-integration proof afterward.
+`$worktree integrate` handoff. Verify the coordinator and Stop hook stop for a
+fresh explicit user invocation, then record source-integration proof only after
+that separate action.
 Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
 

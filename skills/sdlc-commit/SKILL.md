@@ -82,8 +82,10 @@ Seal and promote one completed feature locally without pushing.
    with that evidence, then move state to `committed`.
 
 This phase never performs the outer managed-child merge. After final
-alignment, UAT, and documentation release the outer lease, `sdlc-start` routes
-that child to `$worktree integrate` and records the exact source merge proof.
+alignment, UAT, and documentation release the outer lease, `sdlc-start` returns
+the exact `$worktree integrate <generated-name>` command and stops for a fresh
+explicit user invocation. It records the exact source merge proof only after
+that separate action.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use

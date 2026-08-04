@@ -16,6 +16,17 @@ from typing import Any
 SCHEMA = "agentic-sdlc/worktree-interop-v2"
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 TOKEN_RE = re.compile(r"[0-9a-f]{32}")
+PRIVATE_WORKTREE_ACTIONS = frozenset(
+    {
+        "anchor-inspect",
+        "inspect",
+        "task-lease-acquire",
+        "task-lease-inspect",
+        "task-lease-promote",
+        "task-lease-release",
+        "task-lease-resource",
+    }
+)
 
 
 class ExecutionInteropError(RuntimeError):
@@ -35,6 +46,10 @@ def _helper() -> Path:
 
 
 def _call(cwd: Path, arguments: list[str]) -> dict[str, object]:
+    if not arguments or arguments[0] not in PRIVATE_WORKTREE_ACTIONS:
+        raise ExecutionInteropError(
+            "Agentic SDLC private worktree interop rejects public lifecycle actions"
+        )
     try:
         completed = subprocess.run(
             [sys.executable, str(_helper()), *arguments],

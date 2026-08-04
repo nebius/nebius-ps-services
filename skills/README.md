@@ -601,8 +601,10 @@ removal, and remains through per-wave cleanup plus final changed-surface
 `align`. Lease schema v4 reconciles every resume against the clean outer Git
 head and persists an exact terminal release receipt. Only a clean final
 promoted head with no internal resources can release it, after which
-`$worktree integrate` merges the child locally. The managed child and its
-private nested branches are never pushed or used as PR heads.
+the coordinator returns the exact `$worktree integrate <generated-name>`
+command and stops for a fresh explicit user invocation. That separate action
+merges the child locally. The managed child and its private nested branches are
+never pushed or used as PR heads.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
@@ -848,7 +850,8 @@ project promotion branch stays unchanged until `sdlc-commit` seals the final
 integration tip and promotes it under the shared Git lock with
 `git merge --ff-only`. Unmanaged runs reverify the recorded remote-default
 branch and HEAD; managed children instead retain their exact local identity and
-later hand off to `$worktree integrate` without child publication.
+later return the exact `$worktree integrate` handoff and stop for a fresh
+explicit user invocation, without child publication.
 Project-level managed prompts and immutable run revisions also remain under
 `~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while

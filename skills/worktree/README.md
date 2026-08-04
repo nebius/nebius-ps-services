@@ -68,7 +68,11 @@ source branch. Cleanup remains a separate proof-gated action.
 Task Implementer and Agentic SDLC may use private nested worktrees inside one
 child. Their lease blocks outer integration until internal promotion, cleanup,
 alignment, and evidence gates finish. Managed Agentic SDLC remains pending
-until exact source-integration proof is recorded. Ownership-manifest schema v4
+until exact source-integration proof is recorded. At that boundary the caller
+returns the exact `$worktree integrate <generated-name>` command and stops;
+only a fresh explicit user invocation may start outer integration. A workflow
+continuation or recorded next skill must not invoke it automatically.
+Ownership-manifest schema v4
 records whether a nested lease is `active` or `released` plus its exact owner
 and token, so a missing lease record cannot silently unlock the outer lifecycle.
 Lease schema v4 retains ordered promotion heads and persists an exact

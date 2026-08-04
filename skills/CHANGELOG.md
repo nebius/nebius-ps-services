@@ -79,6 +79,13 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Aligned every Task Implementer and Agentic SDLC `worktree` composition
+  boundary with the explicit-only outer lifecycle. Coordinators now return the
+  exact integration command and stop for a fresh user invocation; the Agentic
+  Stop hook refuses to auto-continue `outer-integration-pending`; publication
+  skills keep managed children local; and runtime allowlists plus a canonical
+  static test reject public `add`, `integrate`, or `remove` calls from private
+  coordinator interop.
 - Made successful `$worktree add` and exact `--reuse` hand off directly into
   the returned project directory for subsequent development commands, with a
   read-only child identity check. The skill now distinguishes command workdir

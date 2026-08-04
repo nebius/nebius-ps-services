@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -441,6 +442,60 @@ class WorktreeManagerTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("usage:", result.stdout)
+
+    def test_internal_coordinators_do_not_call_public_lifecycle_actions(self) -> None:
+        skills_root = Path(__file__).resolve().parents[2]
+        expected_callers = {
+            skills_root
+            / "task-implementer"
+            / "scripts"
+            / "prompt_workspace_interop.py",
+            skills_root
+            / "sdlc-prepare-execution"
+            / "scripts"
+            / "sdlc_execution_interop.py",
+        }
+        callers = {
+            path
+            for path in skills_root.glob("*/scripts/**/*.py")
+            if not path.name.startswith("test")
+            and "tests" not in path.parts
+            and "worktree_manager.py" in path.read_text(encoding="utf-8")
+        }
+        self.assertEqual(callers, expected_callers)
+        public_actions = {"add", "integrate", "remove"}
+        allowed_actions = {
+            "anchor-inspect",
+            "inspect",
+            "task-lease-acquire",
+            "task-lease-inspect",
+            "task-lease-promote",
+            "task-lease-release",
+            "task-lease-resource",
+        }
+        for caller in sorted(callers):
+            tree = ast.parse(caller.read_text(encoding="utf-8"), filename=str(caller))
+            actions: set[str] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(
+                    node.func, ast.Name
+                ):
+                    continue
+                if node.func.id not in {"_call", "_managed_call"}:
+                    continue
+                for argument in node.args:
+                    if (
+                        isinstance(argument, ast.List)
+                        and argument.elts
+                        and isinstance(argument.elts[0], ast.Constant)
+                        and isinstance(argument.elts[0].value, str)
+                    ):
+                        actions.add(argument.elts[0].value)
+                        break
+            with self.subTest(caller=caller.name):
+                self.assertTrue(actions, "expected private worktree interop actions")
+                self.assertTrue(actions.isdisjoint(public_actions), actions)
+                self.assertEqual(actions - allowed_actions, set())
 
     def test_project_is_a_starting_directory_not_a_path_restriction(self) -> None:
         result = self.add()

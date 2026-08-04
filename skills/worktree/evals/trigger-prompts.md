@@ -20,12 +20,17 @@
 - `Create a normal local commit for the current branch without pushing.`
 - `Push this existing feature branch and open a PR.`
 - `Use multiple agents and worktrees to implement these dependency waves.`
+- `Agentic SDLC reached outer-integration-pending; continue automatically by
+  calling worktree integrate for me.`
 - `Explain how git worktree differs from cloning a repository.`
 - `Review the current pull request and tell me whether it is ready to merge.`
 
 ## Expected Boundary
 
 - The skill requires an explicit `$worktree` invocation.
+- A Task Implementer or Agentic SDLC handoff reports the exact command and
+  stops; its coordinator, next-skill state, and Stop hook do not count as the
+  user's explicit invocation.
 - No action means `add`; no compatibility aliases are accepted.
 - With no task description, `add` derives the task slug from the resolved
   project-directory basename, so invocation from `skills/` creates a

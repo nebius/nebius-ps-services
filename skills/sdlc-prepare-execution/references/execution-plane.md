@@ -120,9 +120,11 @@ Resume reconciles `promoted`, `cleanup`, and `done` coordinators against the
 durable lease and clean outer Git head before continuing. Release only after all
 resources are absent and final alignment, UAT, and documentation evidence
 exists. It persists a schema-v4 `released` receipt and enters outer integration
-pending; `$worktree integrate` must merge the child locally and
-`complete-outer-integration` must record exact source proof. Never publish the
-managed child.
+pending. The coordinator returns the exact
+`$worktree integrate <generated-name>` command and stops for a fresh explicit
+user invocation; it never invokes that public lifecycle internally. After the
+separate local merge, `complete-outer-integration` must record exact source
+proof. Never publish the managed child.
 
 Execution coordinator schema v1 through v5 is unsupported. Return
 `WORKFLOW_UPGRADE_REQUIRED` without changing its resources, including for
