@@ -5,6 +5,18 @@ description: "Use for reviewing, hardening, validating, aligning, and improving 
 
 # Align Skill
 
+## Help
+
+For `$align-skill --help` or `$align-skill -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Use this skill to inspect, review, align, harden, validate, and improve one or
@@ -29,6 +41,9 @@ alignment.
   scope, workflow clarity, output contract, and progressive disclosure.
 - Standardizing skill folders against a canonical skill structure.
 - Adding or repairing the standard `## Learning Loop` rule on target skills.
+- Adding or repairing the standard side-effect-free `## Help` contract so
+  `$skill-name --help` and `$skill-name -h` report only the public skill
+  surface.
 - Reviewing trigger/evaluation prompts stored under `evals/`.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
@@ -128,8 +143,8 @@ newly scaffolded skill folder:
    - OpenAI optional metadata: `agents/openai.yaml` for UI metadata, invocation
      policy, and tool dependencies.
    - This repository's source-owned standard: keep `agents/openai.yaml` on
-     every skill, keep the standard `## Learning Loop`, and add other resource
-     folders only when useful.
+     every skill, keep the standard `## Help` and `## Learning Loop` sections,
+     and add other resource folders only when useful.
 6. Create or repair `agents/openai.yaml` when the target repository convention
    expects OpenAI metadata. Use `agents/openai.yaml`, not `agents.openai.yaml`.
    Add `interface.default_prompt` and a `policy.allow_implicit_invocation`
@@ -143,6 +158,16 @@ newly scaffolded skill folder:
 9. Run the mandatory review lanes for the target skill scope, then validate
    locally with the narrowest relevant checks. Broaden only when the contract or
    shared validator changed.
+
+## Help Interface Enforcement
+
+Every repo-owned skill must treat `$skill-name --help` and `$skill-name -h` as
+report-only requests that, after the selected `SKILL.md` loads, stop before
+workflow reads, additional tools, or mutation. Help must summarize purpose and
+invocation policy, show only skill-level public usage/actions and options, state
+when no additional public flags exist, and never expose private helper commands
+or transitions. Internal or coordinator-only skills must state that boundary
+and that they have no standalone public workflow action.
 
 ## Learning Loop Enforcement
 
@@ -262,8 +287,8 @@ not be forced onto simple instruction-only skills.
    GitHub source.
 2. Inspect nearby repository conventions before editing.
 3. Read the target `SKILL.md` files and supporting folders.
-4. Add or repair the standard `## Learning Loop` section in target `SKILL.md`
-   files when missing or unsafe.
+4. Add or repair the standard `## Help` and `## Learning Loop` sections in
+   target `SKILL.md` files when missing or unsafe.
 5. Identify products, CLIs, APIs, clouds, frameworks, package managers, and
    external services the skill references.
 6. Verify vendor-specific behavior against current official documentation.

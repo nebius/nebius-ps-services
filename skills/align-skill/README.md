@@ -17,7 +17,8 @@ validation, or validation evidence aligned.
 - Creates or repairs `agents/openai.yaml` metadata when the repository
   convention requires it, including the correct
   `policy.allow_implicit_invocation` value for the skill contract.
-- Adds or repairs the standard `## Learning Loop` rule on target skills.
+- Adds or repairs the standard side-effect-free `## Help` contract and
+  `## Learning Loop` rule on target skills.
 - Verifies vendor-specific claims against official documentation when needed.
 - Adds guardrails for destructive actions, secrets, live systems, and external
   services.
@@ -51,7 +52,7 @@ align-skill checks structure, safety, docs, and validation
 1. Detect the target skill scope.
 2. Inspect current skill files and nearby repository conventions.
 3. Verify relevant product or API claims against official docs.
-4. Add or repair the target skill's `## Learning Loop` section.
+4. Add or repair the target skill's `## Help` and `## Learning Loop` sections.
 5. Apply focused updates to metadata, instructions, references, assets, or
    scripts.
 6. For stateful workflow skills, use
@@ -85,6 +86,11 @@ align-skill checks structure, safety, docs, and validation
   only when implicit work is read-only and explicit current-turn confirmation
   follows a displayed mutation plan.
 - Do not broaden a skill until its trigger becomes hard to reason about.
+- Treat `$skill-name --help` and `$skill-name -h` as report-only: show purpose,
+  invocation policy, public usage/actions, and documented options, then stop
+  after the selected `SKILL.md` loads, without additional tools or mutation.
+- For internal or coordinator-only skills, report that boundary and no
+  standalone public workflow action instead of exposing private phases.
 - Capture durable knowledge in reusable skill sources, not in ad hoc notes or
   final-answer-only summaries.
 - Do not claim runtime activation unless the target Codex surface proves it.
@@ -116,6 +122,6 @@ stateful if it only inspects files, edits `.gitignore`, and reports the result.
 - `assets/`: report, plan, OpenAI metadata, and stateful-workflow skill
   templates.
 - `scripts/validate-skill-structure.py`: static skill folder validator,
-  including `policy.allow_implicit_invocation` checks.
+  including help-contract and `policy.allow_implicit_invocation` checks.
 - `scripts/test-validate-skill-structure.py`: local fixture self-test for the
   validator.

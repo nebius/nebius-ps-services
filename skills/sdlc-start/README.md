@@ -16,10 +16,11 @@ feature while safe implementation tasks run in dependency waves, and returns
 to the project checkout only after exact promotion. In a managed outer
 worktree, it releases Agentic SDLC ownership only after final alignment, UAT,
 documentation evidence, exact promoted-HEAD validation, and internal-resource
-cleanup; it then returns the exact local `$worktree integrate` command and
-stops for a fresh explicit user invocation. After that separate action it
-records the exact source merge proof. Managed children are never pushed or used
-as PR heads. Unmanaged final source branches may continue through
+cleanup; it then returns the recorded primary path/source branch plus the exact
+local `$worktree integrate` command and stops for a fresh explicit user
+invocation from that primary checkout. After that separate action it records
+the exact source merge proof. Managed children are never pushed or used as PR
+heads. Unmanaged final source branches may continue through
 exact-SHA publication-only mode and findings-and-readiness-only review. Any
 required branch change returns through failure classification and the
 coordinator.

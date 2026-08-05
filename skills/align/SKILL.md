@@ -5,6 +5,20 @@ description: "Use for project-wide alignment or post-change validation: reconcil
 
 # Align
 
+## Help
+
+For `$align --help` or `$align -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Use this skill for safe, end-to-end project alignment and post-change
 validation. It coordinates code review as one validation lane; it is not a
 replacement for focused `code-review` requests.

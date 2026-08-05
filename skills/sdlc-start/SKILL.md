@@ -5,6 +5,18 @@ description: "Use only as part of the Agentic SDLC workflow; use when the user e
 
 # Start SDLC
 
+## Help
+
+For `$sdlc-start --help` or `$sdlc-start -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Coordinate the SDLC loop by reading specs, checkpoints, steering input, and
@@ -228,10 +240,11 @@ $sdlc-start run <prompt-path-or-unique-filename>
   transition only after final alignment, UAT, and documentation evidence are
   recorded, the exact promoted child HEAD is clean, and all Agentic SDLC
   integration and worker resources are absent. Record phase
-  `outer-integration-pending`, return the exact
-  `$worktree integrate <generated-name>` command, and stop. Do not invoke or
-  auto-continue the explicit-only `worktree` skill; wait for a fresh user
-  invocation. After independently observing local integration, invoke private
+  `outer-integration-pending`, return the recorded primary path/source branch
+  plus the exact `$worktree integrate <generated-name>` command, and stop. Do
+  not invoke or auto-continue the explicit-only `worktree` skill; wait for a
+  fresh user invocation from that primary checkout. After independently
+  observing local integration, invoke private
   `complete-outer-integration` to bind the source merge proof; never push the
   child or open a PR from it.
 - In an unmanaged final source checkout, treat the shared PR skills as

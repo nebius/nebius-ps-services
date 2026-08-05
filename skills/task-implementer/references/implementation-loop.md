@@ -284,8 +284,9 @@ managed specification state, record final evidence, and invoke the private run
 finalizer. The finalizer sets the handoff to `done` and releases a managed outer
 worktree lease only when the outer branch is clean at the final promoted head
 and all internal resources are absent. In managed mode, completion hands the
-exact child identity back as a `$worktree integrate <generated-name>` command,
-then stops for a fresh explicit user invocation; it never invokes that public
-lifecycle or publishes the child. If release is interrupted, repeat the same
-finalizer; do not start a new run or clear state. Static validation and observed
-live/runtime proof must be reported separately.
+exact child identity and recorded primary path back with a
+`$worktree integrate <generated-name>` command. It then stops for a
+fresh explicit user invocation from the primary checkout; it never invokes that
+public lifecycle or publishes the child. If release is interrupted, repeat the
+same finalizer; do not start a new run or clear state. Static validation and
+observed live/runtime proof must be reported separately.

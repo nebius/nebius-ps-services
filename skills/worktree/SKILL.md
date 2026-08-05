@@ -1,9 +1,21 @@
 ---
 name: worktree
-description: "Requires explicit invocation to create, locally integrate, exactly reuse, or safely remove a full-repository linked Git worktree for monorepo work. Use `$worktree add` from a clean named non-default source branch and continue local work from its returned project directory, `$worktree integrate` to merge committed child work back into that local source through a recoverable candidate, and `$worktree remove` after exact local proof. Do not use for push, PR creation, publication, or parallel-agent orchestration."
+description: "Requires explicit invocation to create, locally integrate, exactly reuse, or safely remove a full-repository linked Git worktree for monorepo work. Use `$worktree add` from a clean named non-default source branch, `$worktree integrate` from the primary checkout to safely commit eligible ordinary child/source dirt before exact candidate validation, and `$worktree remove` after exact local proof. Do not use for push, PR creation, publication, or parallel-agent orchestration."
 ---
 
 # Worktree
+
+## Help
+
+For `$worktree --help` or `$worktree -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
 
 ## Purpose
 
@@ -21,8 +33,9 @@ branch without publishing child branches.
 ## When Not To Use
 
 - Do not invoke implicitly.
-- Do not use from the default branch, detached HEAD, or a dirty primary
-  checkout.
+- Do not use from the default branch or detached HEAD. `add`, `remove`, restart,
+  and active-attempt recovery require a clean primary checkout; only a fresh
+  `integrate` may commit eligible primary dirt.
 - Do not use child worktrees for push or PR publication. Publish only the
   accumulated source branch through the standalone Git/PR skills.
 - Do not use as Task Implementer or Agentic SDLC's internal worker manager;
@@ -56,9 +69,9 @@ $worktree remove <generated-worktree-name>
 
 - Read [references/lifecycle.md](references/lifecycle.md) before integration,
   recovery, restart, or cleanup.
-- For `integrate`, load `$align` for changed-surface validation. Load the
-  relevant Task Implementer or Agentic SDLC handoff when that workflow produced
-  the child head.
+- For `integrate`, load `$commit` before an eligible automatic commit and load
+  `$align` for candidate validation. Load the relevant Task Implementer or
+  Agentic SDLC handoff when that workflow produced the child head.
 
 ## Writes
 
@@ -68,11 +81,23 @@ $worktree remove <generated-worktree-name>
 - Integration creates a private candidate branch/worktree, one exact merge
   commit, and advances the checked-out source branch only by verified
   fast-forward.
+- A fresh explicit integration may create one whole-repository local commit in
+  an eligible ordinary dirty child and then one in the dirty primary source.
+  It retains either commit if a later step fails.
+- The first delegated commit creates a durable source-scoped preparation claim
+  under private state. That claim blocks competing source integration,
+  coordinator lease acquisition, removal, and source publication until the
+  exact candidate reservation consumes it or an explicit reviewed restart
+  drops only the claim while retaining every commit.
 - Removal non-forcibly removes the child worktree, deletes its unchanged local
   ref with an expected-old SHA, deletes any exact released nested-lease
   receipt, and deletes its private manifest.
-- Never commits user changes, fetches for lifecycle decisions, pushes, creates
-  PRs, deletes remote branches, or writes private workflow state into the repo.
+- The deterministic helper classifies dirt and freezes exact heads. For an
+  eligible delegated `$commit`, its private integration-commit action binds the
+  reviewed staged tree, holds the durable preparation claim, runs the exact
+  normal-hook commit, and records its direct-child/tree proof. Neither layer
+  fetches for lifecycle decisions, pushes, creates PRs, deletes remote branches,
+  or writes private workflow state into the repo.
 
 ## Process
 
@@ -108,33 +133,86 @@ $worktree remove <generated-worktree-name>
 
 ### Integrate
 
-1. Require child and primary source checkouts to be fully clean, the child work
-   already committed, and every nested Task Implementer/Agentic SDLC lease
-   released.
-2. Start or resume the exact integration:
+1. Run only from the primary checkout on the recorded source branch. Invoke the
+   read-only preflight, adding `--restart` only for an explicit restart:
 
    ```bash
-   python3 <skill-dir>/scripts/worktree_manager.py integrate --name <exact-name>
+   python3 <skill-dir>/scripts/worktree_manager.py integration-preflight \
+     --name <exact-name> [--restart]
    ```
 
-3. If the helper reports `conflict`, preserve the returned recovery worktree.
+2. For a fresh `commit-required` result, inspect both complete checkout diffs
+   before staging. Stop on conflicts, active Git operations, suspected secrets
+   or private endpoints, unclear generated files, incoherent changes, nested
+   lease participation, any reservation, or orphan candidate resources.
+   Otherwise use delegated `$commit` in the returned `commit_order`:
+   ordinary child first, primary source second. Set the exact checkout as the
+   working directory, run repo-root `git add -A`, validate
+   and inspect the full staged diff, generate a truthful message, and record
+   the reviewed staged tree with `git write-tree`.
+3. Return to the primary checkout and create the exact normal-hook commit
+   through the private helper. The first call omits the preparation token; each
+   later call repeats the token returned by preflight or the prior commit:
+
+   ```bash
+   python3 <skill-dir>/scripts/worktree_manager.py integration-commit \
+     --name <exact-name> --target <child-or-source> \
+     --expected-head <pre-commit-sha> \
+     --expected-tree <reviewed-staged-tree> \
+     --message <truthful-message> \
+     [--preparation-token <exact-token>]
+   ```
+
+   The helper atomically claims the source lifecycle before committing and
+   rechecks lease/reservation/candidate ownership, branch, head, complete
+   staging, and the reviewed tree. It records one direct-child commit and
+   compares `HEAD^{tree}` with the reviewed tree. If a hook changed the commit
+   tree, inspect the complete actual commit, then bind that exact head/tree with
+   `integration-commit-review --name <exact-name> --target <target>
+   --preparation-token <exact-token> --commit-head <sha> --commit-tree <tree>`.
+   Retain every successful commit if any later step fails; never reset, revert,
+   amend, or discard it.
+4. Re-observe the same branches, exact direct-child commit transitions, and
+   complete cleanliness after each commit. Rerun preflight until it returns
+   `ready-clean`; do not create a candidate from a `blocked` or
+   `commit-required` result.
+5. Start or resume the exact integration with the clean heads and optional
+   preparation token returned by the final preflight:
+
+   ```bash
+   python3 <skill-dir>/scripts/worktree_manager.py integrate \
+     --name <exact-name> \
+     --expected-source-head <source-sha> \
+     --expected-child-head <child-sha> \
+     [--preparation-token <exact-token>] [--restart]
+   ```
+
+6. If the helper reports `conflict`, preserve the returned recovery worktree.
    The developer resolves the conflict there and stages the resolution, then
-   repeats the same command. Never merge or resolve in the primary or child.
-4. If the helper reports `validation-required`, bind all checks to the returned
+   reruns preflight and repeats the exact integration. Never merge or resolve
+   in the primary or child.
+7. If the helper reports `validation-required`, bind all checks to the returned
    candidate SHA and worktree. Run changed-surface `$align`, relevant tests,
    and any managed Agentic SDLC combined UAT non-mutatingly. If source changes
    are required, make and commit them in the child, then restart; do not repair
    the candidate outside conflict resolution.
-5. Promote only the exact validated candidate:
+8. Promote only the exact validated candidate, repeating the exact expected
+   heads returned by the resume preflight:
 
    ```bash
    python3 <skill-dir>/scripts/worktree_manager.py integrate \
-     --name <exact-name> --validated-head <candidate-sha>
+     --name <exact-name> \
+     --expected-source-head <source-sha> \
+     --expected-child-head <child-sha> \
+     --validated-head <candidate-sha>
    ```
 
-6. If the source moved, preserve the attempt. After review, explicitly use
+9. If the source moved, preserve the attempt. After review, explicitly use
    `--restart` to abort and remove only the exact owned candidate and rebuild
-   from the current source head.
+   from the current clean source and child heads. Restart and any active
+   attempt never auto-commit. If restart instead finds only a commit-preparation
+   claim, use its exact private `integration-preparation-abort` action; this
+   removes no Git commit and preflight must be repeated from the retained heads.
 
 ### Remove
 
@@ -157,7 +235,11 @@ $worktree remove <generated-worktree-name>
   exact generated name is supplied with `--reuse`.
 - Repeating `integrate` resumes the same durable `(source head, child head,
   candidate ref/path)` attempt. A promoted-but-unrecorded candidate reconciles
-  from Git proof before cleanup.
+  from Git proof before cleanup. If an interrupted handoff leaves both the
+  exact preparation and its reservation, a token-bound retry consumes the
+  preparation before candidate work resumes.
+- Repeating a fresh integration after a retained automatic commit observes that
+  checkout as clean and does not create a duplicate commit.
 - Repeating `remove` resumes from remaining exact local resources. Missing
   resources are accepted only when the durable manifest proves their identity.
 - Nested lease release persists a schema-v4 terminal receipt. Replays require
@@ -172,6 +254,9 @@ $worktree remove <generated-worktree-name>
 ## Failure Handling
 
 - Preflight failure creates no branch or worktree.
+- Integration preflight is read-only. A blocked automatic commit creates no
+  candidate; a successful earlier child or source commit remains local and is
+  reported for an exact retry.
 - Partial creation retains a recovery manifest only for exact clean resources
   at the recorded base.
 - Merge conflict retains the private candidate and integration reservation;
@@ -195,7 +280,9 @@ $worktree remove <generated-worktree-name>
   workspace, or editor changed directories or selected the child branch.
 - Never launch, reopen, or retarget an editor as an implicit side effect of
   `add` or `--reuse`.
-- Never auto-commit dirty child work or silently discard conflict resolutions.
+- Never auto-commit a nested/coordinated child, candidate, restart, active
+  attempt, conflict resolution, or unsafe/unclear diff. Only a fresh ordinary
+  child and then its primary source are eligible.
 - Never report integration or cleanup complete without re-observing exact Git
   identity, ancestry, parents, index, and cleanliness.
 
@@ -222,5 +309,6 @@ URLs, customer data, raw logs, or one-off local state.
 
 Return the action, resolved task slug, generated name, child/source branches
 and exact SHAs, worktree/start-directory paths, adopted operational directory,
-editor-switch status, candidate or recovery path when applicable, validation
+editor-switch status, preflight classification and commit order, every retained
+automatic commit SHA, candidate or recovery path when applicable, validation
 status, retained resources, and precise next action.

@@ -7,6 +7,17 @@ Generic parallel requests do not trigger it.
 ## Should Trigger
 
 ```text
+$task-implementer --help
+$task-implementer -h
+```
+
+Return concise, report-only help with purpose, explicit invocation policy,
+exactly two workflow actions (`workspace init` and `run`), their arguments, and
+`-h, --help`, then stop. After the selected `SKILL.md` loads, do not initialize
+a workspace, inspect the project, call additional tools, change private state,
+or start either workflow action.
+
+```text
 $task-implementer workspace init
 ```
 
@@ -77,9 +88,10 @@ Bind the run to the exact outer worktree branch and current `HEAD`; never create
 a replacement outer worktree merely because one already exists. Keep every
 worker/integration branch private and temporary, promote only back to the outer
 branch, and block outer integration and removal until final alignment and
-lease release. Then return the exact `$worktree integrate` command and stop for
-a fresh explicit user invocation; never invoke it internally, push it, or use
-it as a PR head. Never use the remote default as the nested worker base.
+lease release. Then return the recorded primary path and exact
+`$worktree integrate` command and stop for a fresh explicit user invocation
+from the primary checkout; never invoke it internally, push it, or use it as a
+PR head. Never use the remote default as the nested worker base.
 
 ```text
 $task-implementer run <same-completed-prompt-after-an-interrupted-final-release>

@@ -144,6 +144,20 @@ For deterministic explicit invocation, use the exact skill name with a leading
 describe explicit invocation as including the skill directly in the prompt;
 using `$skill-name` remains the clearest repo convention.
 
+Append `--help` or `-h` to any repo-owned skill for concise, report-only help:
+
+```text
+$task-implementer --help
+```
+
+Help reports the skill's purpose, invocation policy, public usage/actions, and
+supported skill-level options. It says when no additional public flags exist,
+never exposes private helper options, and identifies internal or
+coordinator-only skills as having no standalone public workflow action. It
+stops after Codex loads the selected `SKILL.md`, before project inspection,
+additional tools, workflow execution, or mutation. A help request is not
+authorization to run the skill's workflow.
+
 OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
 invocation policy, and dependencies. In this repository, every source skill
 must keep that file so invocation policy and useful interface metadata can be
@@ -160,8 +174,9 @@ or require a plan digest. Read-only implicit triage belongs to
 For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
 containing front matter `name` and `description`. This repository uses a
 stricter source-owned standard: `agents/openai.yaml` for metadata and
-invocation policy, a standard `## Learning Loop`, and optional `references/`,
-`scripts/`, `assets/`, and `evals/` only when they serve the skill.
+invocation policy, standard `## Help` and `## Learning Loop` sections, and
+optional `references/`, `scripts/`, `assets/`, and `evals/` only when they
+serve the skill.
 
 ### Prompt Examples
 
@@ -176,7 +191,7 @@ $create-pr Resolve conflicts for the current branch against main, open or reuse 
 
 $worktree Create an isolated worktree from my current clean feature branch for the current monorepo project.
 
-$worktree integrate project-fix-trigger-validation-a7c2f9 after validating the combined result.
+$worktree integrate project-fix-trigger-validation-a7c2f9 from the primary checkout; safely commit eligible ordinary child and source dirt before validating the combined result.
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
 
@@ -600,11 +615,12 @@ all worker and integration branches internal, blocks outer integration and
 removal, and remains through per-wave cleanup plus final changed-surface
 `align`. Lease schema v4 reconciles every resume against the clean outer Git
 head and persists an exact terminal release receipt. Only a clean final
-promoted head with no internal resources can release it, after which
-the coordinator returns the exact `$worktree integrate <generated-name>`
-command and stops for a fresh explicit user invocation. That separate action
-merges the child locally. The managed child and its private nested branches are
-never pushed or used as PR heads.
+promoted head with no internal resources can release it, after which the
+coordinator returns the recorded primary path plus the exact
+`$worktree integrate <generated-name>` command and stops for a fresh explicit
+user invocation from that primary checkout. That separate action merges the
+child locally. The managed child and its private nested branches are never
+pushed or used as PR heads.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
@@ -850,8 +866,9 @@ project promotion branch stays unchanged until `sdlc-commit` seals the final
 integration tip and promotes it under the shared Git lock with
 `git merge --ff-only`. Unmanaged runs reverify the recorded remote-default
 branch and HEAD; managed children instead retain their exact local identity and
-later return the exact `$worktree integrate` handoff and stop for a fresh
-explicit user invocation, without child publication.
+later return the recorded primary path plus the exact `$worktree integrate`
+handoff, then stop for a fresh explicit user invocation from that primary
+checkout without child publication.
 Project-level managed prompts and immutable run revisions also remain under
 `~/.codex/sdlc-runs/<project-id>/`. `STEERING.md` is the active-run inbox and
 steering ledger for accepted prompt revisions, while
@@ -1058,16 +1075,21 @@ change a parent shell, the Codex workspace, or an editor window; editor
 retargeting remains explicit, and lifecycle actions still run from the primary
 checkout.
 
-`integrate` requires clean committed child work and released nested workflow
-leases. It builds one durable private candidate from the current source head,
-retains merge conflicts for recovery, exposes the exact candidate for
-non-mutating combined validation, and fast-forwards the source checkout only
-to that validated two-parent merge. Direct managed-child push and PR creation
-are rejected. Task Implementer and Agentic SDLC release into this local
-integration handoff. `remove` is a separate exact-proof action for unchanged
-unused children or children whose recorded merge remains reachable from the
-source branch. It never fetches for lifecycle decisions, force-removes, mutates
-remote refs, rebases, or cherry-picks.
+`integrate` runs only from the primary checkout. Its read-only preflight may
+delegate one guarded whole-repository commit for an ordinary dirty child and
+then one for a dirty source before freezing their exact clean heads. The first
+commit creates a durable source-scoped preparation claim, and every resulting
+commit tree must match the reviewed staged tree. Nested workflow participation,
+competing attempts, orphan candidates, conflicts, Git operations, and unsafe
+or unclear diffs block automatic commits. It builds one durable private
+candidate, retains merge conflicts for recovery, exposes the exact candidate
+for non-mutating combined validation, and fast-forwards the source checkout
+only to that validated two-parent merge. Successful preparatory commits remain
+local history if a later step fails. Direct managed-child push and PR creation
+are rejected. Task Implementer and Agentic SDLC release into this explicit
+primary-checkout handoff. `remove` remains a separate exact-proof action. The
+skill never fetches for lifecycle decisions, force-removes, mutates remote
+refs, rebases, or cherry-picks.
 
 ### `merge-pr`
 

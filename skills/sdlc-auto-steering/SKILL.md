@@ -5,6 +5,18 @@ description: "Use only as part of the Agentic SDLC workflow; use when an active 
 
 # SDLC Auto Steering
 
+## Help
+
+For `$sdlc-auto-steering --help` or `$sdlc-auto-steering -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Refresh private runtime steering for an active Agentic SDLC run without

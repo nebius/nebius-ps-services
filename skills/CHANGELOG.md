@@ -79,6 +79,21 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Standardized side-effect-free `$skill-name --help` and `$skill-name -h`
+  behavior across all repo-owned skills. Help now reports concise purpose,
+  invocation policy, public usage/actions, and documented skill-level options
+  while keeping private helper flags private. Internal and coordinator-only
+  skills report that they have no standalone public workflow action; the shared
+  skill validator enforces this contract for existing and future skills.
+- Added primary-anchored `worktree integrate` preflight and exact-head guards.
+  Fresh explicit integration may now delegate safe whole-repository commits for
+  an ordinary dirty child and then its dirty source before candidate creation;
+  durable source-scoped preparation claims serialize competing lifecycle
+  owners, reviewed-tree proof detects hook-added content, and nested ownership,
+  orphan candidates, relocated-source publication, lease-acquisition races,
+  interrupted handoffs, active attempts, unsafe dirt, and head races fail closed.
+  Successful preparatory commits are retained for retry. Documented the serial
+  child-integration topology and source-only publication boundary.
 - Aligned every Task Implementer and Agentic SDLC `worktree` composition
   boundary with the explicit-only outer lifecycle. Coordinators now return the
   exact integration command and stop for a fresh user invocation; the Agentic

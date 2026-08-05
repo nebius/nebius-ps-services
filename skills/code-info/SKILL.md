@@ -5,6 +5,20 @@ description: "Read-only project information gathering: summarize a local project
 
 # Code Info
 
+## Help
+
+For `$code-info --help` or `$code-info -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Generate a concise Markdown report for the project folder the user is working
 in. This skill is inspection-only: using it is not permission to edit code,
 update docs, run tests, generate coverage, build artifacts, install packages,

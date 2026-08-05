@@ -5,6 +5,20 @@ description: "Use for GitHub PR creation from unmanaged local work or named bran
 
 # Create PR
 
+## Help
+
+For `$create-pr --help` or `$create-pr -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Use this skill to turn local repository work or named branches into GitHub pull
 requests with a safe default-branch workflow. It can prepare a single PR or one
 PR per branch, resolve straightforward merge conflicts against the default
@@ -78,9 +92,10 @@ Before any push or PR creation/reuse:
   state, have passed UAT, and have a clean current named non-default branch.
 - If managed interop is `leased`, `pending`, or `integrated`, do not publish the
   child. Route `leased` back through the active SDLC run. For `pending`, stop
-  and tell the user to invoke the exact `$worktree integrate` handoff; for
-  `integrated`, stop and publish only from the separately selected final source
-  branch. Never invoke the explicit-only `worktree` skill from `create-pr`.
+  and tell the user to switch to the recorded primary checkout and invoke the
+  exact `$worktree integrate` handoff; for `integrated`, stop and publish only
+  from the separately selected final source branch. Never invoke the
+  explicit-only `worktree` skill from `create-pr`.
 - Resolve one canonical `promoted_head` from execution and commit evidence.
   Require current `HEAD`, the recorded promoted HEAD, and any existing remote
   PR head to equal that exact SHA.

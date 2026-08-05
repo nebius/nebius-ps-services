@@ -1090,10 +1090,10 @@ recorded allowed operations and reset rules, records evidence, and marks the
 product ready for final handoff only on pass. For a managed outer worktree, final
 alignment, UAT, and documentation evidence plus a clean exact promoted head and
 zero internal resources release the Agentic SDLC lease into
-`outer-integration-pending`. The coordinator returns the exact
-`$worktree integrate` command and stops for a fresh explicit user invocation;
-after that separate local merge, the workflow records exact source-integration
-proof. The child is never published.
+`outer-integration-pending`. The coordinator returns the recorded primary path
+plus the exact `$worktree integrate` command and stops for a fresh explicit user
+invocation from that primary checkout; after that separate local merge, the
+workflow records exact source-integration proof. The child is never published.
 
 ### `create-pr`
 

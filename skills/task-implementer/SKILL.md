@@ -5,6 +5,18 @@ description: "Requires explicit invocation to initialize a private prompt worksp
 
 # Task Implementer
 
+## Help
+
+For `$task-implementer --help` or `$task-implementer -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Coordinate a complex brownfield request from one durable private Markdown
@@ -169,9 +181,10 @@ and private result record.
    the last cleanup, run final changed-surface `$align`, then invoke private
    `run-finalize` with its concise evidence. Only that transition marks the
    handoff done and releases a managed outer lease. For a managed child, report
-   the exact `$worktree integrate <generated-name>` handoff and stop for a fresh
-   explicit user invocation; never invoke it internally, push the child, or
-   open a PR from it. An unchanged completed prompt returns
+   the recorded primary path/source branch plus the exact
+   `$worktree integrate <generated-name>` handoff, and stop for a fresh explicit
+   user invocation from that primary checkout; never invoke it internally,
+   push the child, or open a PR from it. An unchanged completed prompt returns
    `ALREADY_COMPLETE`; an interrupted lease release returns a private
    finalization-pending outcome and repeats the same final transition. Edited
    completed content starts a new internal run only after release.
@@ -331,9 +344,10 @@ For each wave:
 - A managed outer lease spans every wave and final `$align`. While held it
   blocks outer integration and removal. It releases only from a clean outer
   branch at the final promoted head with every internal resource absent. The
-  released child then returns the exact `$worktree integrate` handoff and stops
-  for a fresh explicit user invocation; publication remains a source-branch
-  action. Missing or malformed coordination state fails closed.
+  released child then returns the primary path plus the exact
+  `$worktree integrate` handoff and stops for a fresh explicit user invocation
+  from the primary checkout; publication remains a source-branch action.
+  Missing or malformed coordination state fails closed.
 - Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.

@@ -30,14 +30,18 @@ from worktree_state import (
 
 LEASE_SCHEMA = 4
 RESERVATION_SCHEMA = 3
+PREPARATION_SCHEMA = 1
 LEASE_KIND = "coordinator"
 LEASE_REMOVAL_SCHEMA = 1
 LEASE_REMOVAL_KIND = "coordinator-removal"
+PREPARATION_KIND = "integration-commit-preparation"
 OWNER_KINDS = {"task-implementer", "agentic-sdlc"}
 LEASE_RECORD_STATES = {"active", "released"}
 RESOURCE_STATES = {"planned", "present", "absent"}
 RESOURCE_KINDS = {"integration", "worker"}
 INTEGRATION_STATES = {"planned", "present", "ready"}
+PREPARATION_TARGETS = {"child", "source"}
+PREPARATION_COMMIT_STATES = {"verified", "review-required"}
 OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40,64}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -193,6 +197,12 @@ def lease_removal_path(primary: Path, name: str) -> Path:
 
 def reservation_path(primary: Path, name: str) -> Path:
     directory = _root(primary) / "reservations"
+    _private_dir(directory, create=False)
+    return directory / f"{name}.json"
+
+
+def preparation_path(primary: Path, name: str) -> Path:
+    directory = _root(primary) / "integration-preparations"
     _private_dir(directory, create=False)
     return directory / f"{name}.json"
 
@@ -526,6 +536,295 @@ def all_leases(primary: Path) -> list[dict[str, object]]:
     return [leases[name] for name in sorted(leases)]
 
 
+def validate_preparation(
+    value: dict[str, object], name: str
+) -> dict[str, object]:
+    required = {
+        "schema",
+        "kind",
+        "name",
+        "branch",
+        "worktree",
+        "source_branch",
+        "source_ref",
+        "source_head",
+        "child_head",
+        "commit_order",
+        "commits",
+        "token",
+    }
+    if (
+        set(value) != required
+        or value.get("schema") != PREPARATION_SCHEMA
+        or value.get("kind") != PREPARATION_KIND
+        or value.get("name") != name
+        or value.get("branch") != _outer_branch(name)
+    ):
+        raise InteropError("integration preparation fields or identity are invalid")
+    source_branch = value.get("source_branch")
+    if (
+        not isinstance(source_branch, str)
+        or not source_branch
+        or value.get("source_ref") != f"refs/heads/{source_branch}"
+    ):
+        raise InteropError("integration preparation source identity is invalid")
+    order = value.get("commit_order")
+    if (
+        not isinstance(order, list)
+        or not order
+        or any(target not in PREPARATION_TARGETS for target in order)
+        or len(order) != len(set(order))
+        or order not in (["child"], ["source"], ["child", "source"])
+    ):
+        raise InteropError("integration preparation commit order is invalid")
+    commits = value.get("commits")
+    if not isinstance(commits, list) or len(commits) > len(order):
+        raise InteropError("integration preparation commits are invalid")
+    normalized_commits: list[dict[str, object]] = []
+    initial_heads = {
+        "child": _sha(value.get("child_head"), "preparation child head"),
+        "source": _sha(value.get("source_head"), "preparation source head"),
+    }
+    for index, commit in enumerate(commits):
+        if (
+            not isinstance(commit, dict)
+            or set(commit)
+            != {
+                "target",
+                "before_head",
+                "after_head",
+                "reviewed_tree",
+                "commit_tree",
+                "status",
+            }
+            or commit.get("target") != order[index]
+            or commit.get("target") not in PREPARATION_TARGETS
+            or commit.get("before_head") != initial_heads[str(commit.get("target"))]
+            or commit.get("status") not in PREPARATION_COMMIT_STATES
+        ):
+            raise InteropError("integration preparation commit record is invalid")
+        normalized_commits.append(
+            {
+                **commit,
+                "before_head": _sha(
+                    commit.get("before_head"), "preparation commit base"
+                ),
+                "after_head": _sha(
+                    commit.get("after_head"), "preparation commit head"
+                ),
+                "reviewed_tree": _sha(
+                    commit.get("reviewed_tree"), "preparation reviewed tree"
+                ),
+                "commit_tree": _sha(
+                    commit.get("commit_tree"), "preparation commit tree"
+                ),
+            }
+        )
+    return {
+        **value,
+        "worktree": _absolute(
+            value.get("worktree"), "integration preparation child worktree"
+        ),
+        "source_head": initial_heads["source"],
+        "child_head": initial_heads["child"],
+        "commit_order": list(order),
+        "commits": normalized_commits,
+        "token": _token(value.get("token"), "integration preparation token"),
+    }
+
+
+def load_preparation(primary: Path, name: str) -> dict[str, object] | None:
+    value = _load_json(preparation_path(primary, name), "integration preparation")
+    return validate_preparation(value, name) if value is not None else None
+
+
+def active_preparations(primary: Path) -> list[dict[str, object]]:
+    directory = _root(primary) / "integration-preparations"
+    _private_dir(directory, create=False)
+    if not directory.exists():
+        return []
+    preparations: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.json")):
+        value = load_preparation(primary, path.stem)
+        if value is not None:
+            preparations.append(value)
+    return preparations
+
+
+def _delete_preparation(primary: Path, name: str) -> None:
+    path = preparation_path(primary, name)
+    try:
+        path.unlink()
+        fsync_directory(path.parent)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise InteropError("could not remove integration preparation") from error
+
+
+def begin_integration_preparation(
+    primary: Path,
+    *,
+    name: str,
+    branch: str,
+    worktree: Path,
+    source_branch: str,
+    source_ref: str,
+    source_head: str,
+    child_head: str,
+    commit_order: list[str],
+    preparation_token: str | None,
+) -> dict[str, object]:
+    """Claim one source and child before a delegated integration commit."""
+
+    with interop_lock(primary):
+        lease = lifecycle_lease(primary, name)
+        if lease is not None and lease["state"] == "active":
+            raise InteropError(
+                "a nested coordinator still owns the outer worktree; commit preparation is blocked"
+            )
+        if lease is not None and "child" in commit_order:
+            raise InteropError(
+                "nested workflow participation binds the child to an exact head"
+            )
+        if load_reservation(primary, name) is not None:
+            raise InteropError("the integration already has a durable reservation")
+        expected = {
+            "branch": branch,
+            "worktree": str(worktree.resolve()),
+            "source_branch": source_branch,
+            "source_ref": source_ref,
+            "source_head": _sha(source_head, "preparation source head"),
+            "child_head": _sha(child_head, "preparation child head"),
+            "commit_order": list(commit_order),
+        }
+        existing = load_preparation(primary, name)
+        if existing is not None:
+            if preparation_token is None or existing["token"] != _token(
+                preparation_token, "integration preparation token"
+            ):
+                raise InteropError("integration preparation token does not match")
+            if any(existing.get(key) != value for key, value in expected.items()):
+                raise InteropError("integration preparation identity changed")
+            return {**existing, "status": "resumed"}
+        if preparation_token is not None:
+            raise InteropError("integration preparation no longer exists")
+        for reservation in active_reservations(primary):
+            if reservation["source_ref"] == source_ref:
+                raise InteropError(
+                    "another managed child has an active integration into this source branch"
+                )
+        for preparation in active_preparations(primary):
+            if preparation["source_ref"] == source_ref:
+                raise InteropError(
+                    "another managed child is preparing commits for this source branch"
+                )
+        preparation: dict[str, object] = {
+            "schema": PREPARATION_SCHEMA,
+            "kind": PREPARATION_KIND,
+            "name": name,
+            **expected,
+            "commits": [],
+            "token": secrets.token_hex(16),
+        }
+        validated = validate_preparation(preparation, name)
+        _atomic_json(preparation_path(primary, name), validated)
+        return {**validated, "status": "acquired"}
+
+
+def record_integration_preparation_commit(
+    primary: Path,
+    *,
+    name: str,
+    preparation_token: str,
+    target: str,
+    before_head: str,
+    after_head: str,
+    reviewed_tree: str,
+    commit_tree: str,
+) -> dict[str, object]:
+    with interop_lock(primary):
+        preparation = load_preparation(primary, name)
+        if preparation is None or preparation["token"] != _token(
+            preparation_token, "integration preparation token"
+        ):
+            raise InteropError("integration preparation token does not match")
+        commits = list(preparation["commits"])
+        order = list(preparation["commit_order"])
+        if len(commits) >= len(order) or target != order[len(commits)]:
+            raise InteropError("integration preparation commit order changed")
+        expected_before = preparation[f"{target}_head"]
+        if before_head != expected_before:
+            raise InteropError("integration preparation commit base changed")
+        commit = {
+            "target": target,
+            "before_head": _sha(before_head, "preparation commit base"),
+            "after_head": _sha(after_head, "preparation commit head"),
+            "reviewed_tree": _sha(reviewed_tree, "preparation reviewed tree"),
+            "commit_tree": _sha(commit_tree, "preparation commit tree"),
+            "status": (
+                "verified" if reviewed_tree == commit_tree else "review-required"
+            ),
+        }
+        updated = validate_preparation(
+            {**preparation, "commits": [*commits, commit]}, name
+        )
+        _atomic_json(preparation_path(primary, name), updated)
+        return updated
+
+
+def approve_integration_preparation_commit(
+    primary: Path,
+    *,
+    name: str,
+    preparation_token: str,
+    target: str,
+    commit_head: str,
+    commit_tree: str,
+) -> dict[str, object]:
+    with interop_lock(primary):
+        preparation = load_preparation(primary, name)
+        if preparation is None or preparation["token"] != _token(
+            preparation_token, "integration preparation token"
+        ):
+            raise InteropError("integration preparation token does not match")
+        commits = [dict(value) for value in preparation["commits"]]
+        if not commits:
+            raise InteropError("integration preparation has no commit to review")
+        commit = commits[-1]
+        if (
+            commit["target"] != target
+            or commit["after_head"] != _sha(commit_head, "preparation commit head")
+            or commit["commit_tree"] != _sha(commit_tree, "preparation commit tree")
+            or commit["status"] != "review-required"
+        ):
+            raise InteropError("integration preparation review identity changed")
+        commit["reviewed_tree"] = commit_tree
+        commit["status"] = "verified"
+        updated = validate_preparation(
+            {**preparation, "commits": commits}, name
+        )
+        _atomic_json(preparation_path(primary, name), updated)
+        return updated
+
+
+def abort_integration_preparation(
+    primary: Path, *, name: str, preparation_token: str
+) -> dict[str, object]:
+    with interop_lock(primary):
+        preparation = load_preparation(primary, name)
+        if preparation is None:
+            return {"status": "already-absent", "name": name}
+        if preparation["token"] != _token(
+            preparation_token, "integration preparation token"
+        ):
+            raise InteropError("integration preparation token does not match")
+        if load_reservation(primary, name) is not None:
+            raise InteropError("integration reservation already exists")
+        _delete_preparation(primary, name)
+        return {"status": "aborted", "name": name}
+
+
 def validate_reservation(value: dict[str, object], name: str) -> dict[str, object]:
     if value.get("schema") in {1, 2}:
         raise InteropError(
@@ -617,6 +916,10 @@ def assert_idle(primary: Path, name: str) -> None:
             "a prior worktree integration must be repeated to reconcile its "
             "durable reservation"
         )
+    if load_preparation(primary, name) is not None:
+        raise InteropError(
+            "a prior integration commit preparation must be resumed or aborted"
+        )
 
 
 def acquire_task_lease(
@@ -641,6 +944,10 @@ def acquire_task_lease(
         except StateError as error:
             raise InteropError(str(error)) from error
         assert manifest is not None
+        if load_preparation(primary, name) is not None:
+            raise InteropError(
+                "the outer worktree has an active integration commit preparation"
+            )
         if load_reservation(primary, name) is not None:
             raise InteropError(
                 "the outer worktree has an active integration reservation"
@@ -689,6 +996,36 @@ def acquire_task_lease(
         validate_lease(lease, name)
         _atomic_json(lease_path(primary, name), lease)
         return {**lease, "status": "acquired"}
+
+
+def rollback_task_lease_acquisition(
+    primary: Path, *, name: str, token: str
+) -> dict[str, object]:
+    """Remove only an unused lease whose post-acquisition Git check failed."""
+
+    with interop_lock(primary):
+        lease = load_lease(primary, name)
+        if lease is None:
+            return {"status": "already-absent", "name": name}
+        if lease["token"] != _token(token):
+            raise InteropError("task lease rollback token does not match")
+        manifest = load_manifest(primary, name)
+        assert manifest is not None
+        if (
+            lease["state"] != "active"
+            or lease["promoted_head"] is not None
+            or lease["promotion_heads"] != [lease["initial_head"]]
+            or lease["resources"]
+            or manifest.lease_state != "none"
+        ):
+            raise InteropError("task lease is no longer safe to roll back")
+        path = lease_path(primary, name)
+        try:
+            path.unlink()
+            fsync_directory(path.parent)
+        except OSError as error:
+            raise InteropError(f"could not roll back task lease: {path}") from error
+        return {"status": "rolled-back", "name": name}
 
 
 def inspect_task_lease(
@@ -912,6 +1249,7 @@ def begin_integration(
     child_head: str,
     integration_branch: str,
     integration_worktree: Path,
+    preparation_token: str | None = None,
 ) -> dict[str, object]:
     with interop_lock(primary):
         lease = lifecycle_lease(primary, name)
@@ -919,6 +1257,47 @@ def begin_integration(
             raise InteropError(
                 "a nested coordinator still owns the outer worktree; integration is blocked"
             )
+        preparation = load_preparation(primary, name)
+        if preparation is None and preparation_token is not None:
+            raise InteropError("integration preparation no longer exists")
+        if preparation is not None:
+            if preparation_token is None or preparation["token"] != _token(
+                preparation_token, "integration preparation token"
+            ):
+                raise InteropError("integration preparation token does not match")
+            expected_preparation = {
+                "branch": branch,
+                "worktree": str(worktree.resolve()),
+                "source_branch": source_branch,
+                "source_ref": source_ref,
+            }
+            if any(
+                preparation.get(key) != value
+                for key, value in expected_preparation.items()
+            ):
+                raise InteropError("integration preparation identity changed")
+            commits = list(preparation["commits"])
+            if len(commits) != len(preparation["commit_order"]) or any(
+                commit["status"] != "verified" for commit in commits
+            ):
+                raise InteropError("integration preparation is not fully verified")
+            committed_heads = {
+                str(commit["target"]): str(commit["after_head"])
+                for commit in commits
+            }
+            expected_source = committed_heads.get(
+                "source", str(preparation["source_head"])
+            )
+            expected_child = committed_heads.get(
+                "child", str(preparation["child_head"])
+            )
+            if source_head != expected_source or child_head != expected_child:
+                raise InteropError("integration preparation heads changed")
+        for other in active_preparations(primary):
+            if other["name"] != name and other["source_ref"] == source_ref:
+                raise InteropError(
+                    "another managed child is preparing commits for this source branch"
+                )
         existing = load_reservation(primary, name)
         if existing is not None:
             expected = {
@@ -935,6 +1314,8 @@ def begin_integration(
                 raise InteropError(
                     "the worktree integration identity changed before resume"
                 )
+            if preparation is not None:
+                _delete_preparation(primary, name)
             return {**existing, "status": "resumed"}
         for reservation in active_reservations(primary):
             if reservation["source_ref"] == source_ref:
@@ -958,6 +1339,8 @@ def begin_integration(
         }
         validate_reservation(reservation, name)
         _atomic_json(reservation_path(primary, name), reservation)
+        if preparation is not None:
+            _delete_preparation(primary, name)
         return {**reservation, "status": "acquired"}
 
 

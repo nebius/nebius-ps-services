@@ -12,6 +12,9 @@
   project-migration-report-a7c2f9 and preserve its unfinished changes.`
 - `$worktree integrate project-fix-trigger-validation-a7c2f9 after validating
   the combined result.`
+- `$worktree integrate project-fix-trigger-validation-a7c2f9 from my primary
+  checkout; safely commit its ordinary dirty child and then my dirty source
+  before creating the candidate.`
 - `$worktree remove project-fix-trigger-validation-a7c2f9 after its exact local
   merge is present on the source branch.`
 
@@ -22,6 +25,8 @@
 - `Use multiple agents and worktrees to implement these dependency waves.`
 - `Agentic SDLC reached outer-integration-pending; continue automatically by
   calling worktree integrate for me.`
+- `I am inside the managed child; silently integrate it into the source from
+  here.`
 - `Explain how git worktree differs from cloning a repository.`
 - `Review the current pull request and tell me whether it is ready to merge.`
 
@@ -44,7 +49,20 @@
   It does not claim that a subprocess changed the parent shell, Codex workspace,
   or editor window, and it does not launch an editor implicitly.
 - A nested Task Implementer or Agentic SDLC lease blocks outer integration and
-  removal until final alignment and internal cleanup release it.
+  removal until final alignment and internal cleanup release it. Any recorded
+  lease participation also makes later child dirt ineligible for auto-commit.
+- `integrate` runs only from the primary checkout. Its read-only preflight may
+  order one eligible ordinary child commit followed by one source commit before
+  it freezes exact clean heads; active attempts and restart never auto-commit.
+- The first delegated commit creates a durable source-scoped preparation claim.
+  Competing reservations, preparations, nested lease acquisition, removal, and
+  source publication block until exact candidate reservation or explicit claim
+  abort. Orphan candidate resources always block.
+- Each commit binds the reviewed staged tree to the resulting commit tree. A
+  hook-modified tree requires complete actual-commit review and exact head/tree
+  acknowledgement before candidate creation.
+- A successful automatic commit remains local history if a later step fails;
+  retry observes it instead of resetting or duplicating it.
 - Direct managed-child push or PR creation is rejected; publication happens
   only from the accumulated source branch.
 - `integrate` uses one durable private candidate, preserves conflict recovery,

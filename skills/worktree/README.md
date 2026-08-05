@@ -41,6 +41,87 @@ parent shell, Codex workspace, or editor window. Opening or retargeting an
 editor remains an explicit user action; integration and removal still run from
 the primary checkout.
 
+## Parallel Development, Serial Integration
+
+After creation, the source branch and its children may advance independently
+until integration starts. Later source commits do not appear automatically in
+existing children, and exact `--reuse` never rebases or refreshes a child.
+
+```text
+<source-branch> advances independently
+           +
+child A / child B / child C advance independently
+           |
+           v
+integrate each child serially into <source-branch>
+           |
+           v
+publish the accumulated <source-branch> once
+```
+
+Run `$worktree integrate <exact-name>` from the primary checkout. A fresh
+integration follows one canonical order:
+
+```text
+primary checkout on <source-branch>
+           |
+           v
+read-only child and source preflight
+           |
+           v
+safely commit eligible ordinary child dirt
+           |
+           v
+safely commit eligible source dirt
+           |
+           v
+revalidate exact clean source and child heads
+           |
+           v
+create and validate the private candidate
+           |
+           v
+fast-forward <source-branch> to that candidate
+```
+
+Use these boundaries:
+
+- `add` still requires a clean primary checkout. A fresh `integrate` may create
+  one whole-repository local child commit and then one source commit when the
+  complete diffs are coherent and safe, no Git operation or conflict exists,
+  and no integration reservation or orphan candidate exists.
+- Automatic child commits apply only to ordinary children. Any Task Implementer
+  or Agentic SDLC lease participation binds an exact child head, so a dirty
+  nested/coordinated child blocks and returns to its owning workflow.
+- Each automatic commit uses repo-root `git add -A`, a truthful message, and
+  normal hooks. The reviewed staged tree is bound to the resulting commit tree;
+  hook-added content requires complete actual-commit review before integration.
+  A durable source-scoped preparation claim blocks competing integration,
+  nested lease acquisition, removal, and publication while ordered commits are
+  created. A successful commit is retained if a later step fails; retry uses
+  the same preparation evidence instead of resetting or duplicating it.
+- The final preflight freezes exact clean source and child SHAs. Candidate
+  creation compares those SHAs and the private preparation token again while
+  atomically consuming the claim into its durable reservation.
+- If an interrupted handoff leaves both the exact preparation and its
+  reservation, a token-bound retry validates both records and consumes the
+  preparation before candidate work resumes.
+- Integrate one child at a time. The next child therefore starts from all
+  source commits and previously integrated children.
+- Once an integration attempt starts, keep both source and child heads stable.
+  Neither checkout is auto-committed during resume, validation, conflict
+  recovery, or restart. Source movement makes the retained attempt stale and
+  requires an explicit reviewed `--restart`; child movement also fails closed.
+- Explicitly aborting only a preparation claim preserves all Git commits and
+  requires a fresh preflight. Orphan candidate branches, paths, symlinks, and
+  registered worktrees always block instead of being adopted.
+- Resolve merge conflicts only in the returned recovery candidate, then repeat
+  the same integration command. Never resolve them in the primary or child
+  checkout.
+- After all children are integrated, publish only the accumulated source
+  branch. Remove each child separately after its exact local integration proof
+  is recorded.
+
 ## VS Code Worktree Discovery
 
 VS Code users can enable automatic Git worktree discovery in their user or
@@ -59,19 +140,21 @@ settings or open an editor. See [Git branches and worktrees in VS Code][1].
 
 [1]: https://code.visualstudio.com/docs/sourcecontrol/branches-worktrees
 
-Integration creates a durable private merge candidate from the current source
-head, merges the exact clean child head with `--no-ff`, retains conflicts for
-developer resolution, and exposes the exact candidate for non-mutating
-alignment/tests. Only that validated SHA may fast-forward the clean checked-out
-source branch. Cleanup remains a separate proof-gated action.
+After the guarded commit phase, integration creates a durable private merge
+candidate from the exact preflight source head, merges the exact child head with
+`--no-ff`, retains conflicts for developer resolution, and exposes the exact
+candidate for non-mutating alignment/tests. Only that validated SHA may
+fast-forward the clean checked-out source branch. Cleanup remains a separate
+proof-gated action.
 
 Task Implementer and Agentic SDLC may use private nested worktrees inside one
 child. Their lease blocks outer integration until internal promotion, cleanup,
 alignment, and evidence gates finish. Managed Agentic SDLC remains pending
 until exact source-integration proof is recorded. At that boundary the caller
-returns the exact `$worktree integrate <generated-name>` command and stops;
-only a fresh explicit user invocation may start outer integration. A workflow
-continuation or recorded next skill must not invoke it automatically.
+returns the recorded primary path plus the exact
+`$worktree integrate <generated-name>` command and stops; only a fresh explicit
+user invocation from that primary checkout may start outer integration. A
+workflow continuation or recorded next skill must not invoke it automatically.
 Ownership-manifest schema v4
 records whether a nested lease is `active` or `released` plus its exact owner
 and token, so a missing lease record cannot silently unlock the outer lifecycle.

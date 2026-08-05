@@ -16,8 +16,10 @@
 - Optional folders present:
 - Repository conventions:
 
-## Learning Loop Coverage
+## Required Contract Coverage
 
+- Skills missing `## Help`:
+- Skills with non-canonical or unsafe Help behavior:
 - Skills missing `## Learning Loop`:
 - Skills with equivalent wording:
 - Skills needing repair:

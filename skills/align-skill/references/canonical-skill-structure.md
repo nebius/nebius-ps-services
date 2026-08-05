@@ -119,6 +119,8 @@ description: Use this skill when...
 
 # Skill Name
 
+## Help
+
 ## Purpose
 
 ## Use This Skill For
@@ -269,6 +271,12 @@ For this profile:
 
 - Put always-needed routing, scope, workflow, guardrails, and output contract in
   `SKILL.md`.
+- Put the standard `## Help` section in every repo-owned `SKILL.md`. After the
+  selected `SKILL.md` loads, Help must short-circuit before workflow reads,
+  additional tools, or mutation; report purpose, invocation policy, public
+  usage/actions, and documented options; and keep private helper flags private.
+  Internal or coordinator-only skills must say they have no standalone public
+  workflow action.
 - Put the standard `## Learning Loop` section in every `SKILL.md` so durable
   public-safe source learning is active whenever that skill loads.
 - Put long rubrics, policy details, vendor research rules, troubleshooting, and

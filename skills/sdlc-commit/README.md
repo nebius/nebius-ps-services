@@ -12,8 +12,9 @@ The promotion precheck, ff-only merge, and postcheck run under the shared Git
 common-directory lock. Cleanup removes the integration worktree first and then
 deletes its branch only at the exact expected promoted SHA.
 In a managed child, this is an inner local promotion only. The later outer
-handoff returns the exact `$worktree integrate <generated-name>` command and
-stops for a fresh explicit user invocation; the child is never pushed or used
+handoff returns the recorded primary path and exact
+`$worktree integrate <generated-name>` command and stops for a fresh explicit
+user invocation from that primary checkout; the child is never pushed or used
 as a PR head.
 
 ## Main Boundaries

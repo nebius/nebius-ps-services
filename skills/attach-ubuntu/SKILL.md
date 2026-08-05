@@ -5,6 +5,20 @@ description: Launch or reuse an Ubuntu Docker container for the current project,
 
 # Attach Ubuntu
 
+## Help
+
+For `$attach-ubuntu --help` or `$attach-ubuntu -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Use this skill when the user wants a quick Ubuntu test container for the current
 project without adding a repo-local `.devcontainer/` as the primary path.
 

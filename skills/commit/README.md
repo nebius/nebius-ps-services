@@ -2,11 +2,15 @@
 
 `commit` creates a fast local Git commit on the current branch without pushing.
 It is intentionally smaller than `commit-push`, `create-pr`, and
-`sdlc-commit`: it only stages, validates, commits, and reports status.
+`sdlc-commit`: it only inspects, stages, validates, commits, and reports status.
+It may also execute one exact commit delegated by a fresh explicit
+`$worktree integrate` after that workflow proves the checkout is eligible.
 
 ## What It Does
 
 - Resolves the Git repository root and runs Git commands from there.
+- Inspects the complete tracked and untracked diff before staging and stops on
+  obvious unsafe or incoherent content.
 - Stages the complete repository diff with repo-root `git add -A`.
 - Runs lightweight staged validation with `git diff --cached --check`.
 - Uses a provided commit message or generates a concise imperative one.
@@ -20,6 +24,9 @@ Current git branch
   |
   v
 Fast safety checks
+  |
+  v
+Complete diff inspection
   |
   v
 Full repository staging
@@ -43,6 +50,12 @@ Final status report
 - The skill never pushes, opens PRs, repairs branches, or writes Agentic SDLC
   run state.
 - Commit hooks should run normally.
+- Delegated worktree commits remain local, require the exact preflight branch
+  and head, bind the reviewed staged tree to the resulting commit tree, and
+  return a clean direct-descendant commit to the integration workflow. A
+  durable source-scoped preparation claim blocks competing lifecycle owners
+  while the commit runs. Delegation is never permitted for nested/coordinated
+  children or active integration attempts.
 
 ## Files
 

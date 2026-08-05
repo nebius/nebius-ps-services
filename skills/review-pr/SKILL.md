@@ -5,6 +5,20 @@ description: "Use for GitHub PR review by number, URL, or current branch: inspec
 
 # Review PR
 
+## Help
+
+For `$review-pr --help` or `$review-pr -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Use this skill for GitHub-backed pull request review work when the goal is to
 inspect any provided PR, identify real issues, fix safe problems when branch
 permissions allow, and leave it closer to merge-ready.

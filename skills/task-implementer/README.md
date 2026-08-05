@@ -12,6 +12,13 @@ $task-implementer workspace init [project-folder]
 $task-implementer run <prompt-path-or-unique-filename>
 ```
 
+Use `$task-implementer --help` or `$task-implementer -h` to display the
+purpose, explicit invocation policy, these two workflow actions, their
+arguments, and the help option itself. After the selected `SKILL.md` loads, Help
+performs no workspace initialization, project inspection, additional tool
+calls, or private-state changes; it is not a third workflow action and does not
+authorize `workspace init` or `run`.
+
 Initialization creates or verifies the private `CODE` + `PROMPTS` workspace
 and one starter prompt when needed. Edit that prompt, then invoke `run` once.
 The run continues every dependency wave until completion or a precise blocker;
@@ -21,6 +28,19 @@ Steer active work by editing the same prompt and repeating `run`. Steering
 received after a wave starts remains queued until the next safe boundary. An
 unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
 prompt starts a new run.
+
+## Recommended Monorepo Entry Point
+
+For one coherent brownfield deliverable, run Task Implementer directly from a
+clean non-default base branch. Do not create one outer worktree for every
+project folder by default.
+
+Task Implementer already creates private full-repository worktrees for
+parallel-capable tasks and coordinates dependencies through ordered waves.
+Adding one managed outer worktree per project folder duplicates isolation and
+adds serial `$worktree integrate` steps. Use a managed outer worktree when a
+separate deliverable must advance independently or concurrently before serial
+integration into the base branch.
 
 Before resources exist, replanning replaces the resource-free planned tail.
 The coordinator index keeps completed waves plus the replacement schedule;
@@ -34,9 +54,10 @@ entire task run is nested under that outer branch. The exact current outer
 a private v4 lease with owner kind `task-implementer` blocks outer integration
 and removal through final alignment. The task coordinator never fetches or
 bases workers on the remote default in this case. After release, the managed
-child returns an exact `$worktree integrate <generated-name>` handoff and the
-coordinator stops for a fresh explicit user invocation; it is never pushed or
-used as a PR head.
+child returns its recorded primary path/source branch plus an exact
+`$worktree integrate <generated-name>` handoff, and the coordinator stops for a
+fresh explicit user invocation from that primary checkout; it is never pushed
+or used as a PR head.
 
 Resume, promotion, and release reconcile local `interop.json` against the exact
 durable lease token and live clean outer Git head. Release persists a terminal
@@ -159,9 +180,10 @@ workflow never runs broad prune/gc, cherry-picks, rebases, squashes, pushes, or
 force-removes.
 
 After the last wave cleanup, final changed-surface `$align` evidence is sealed
-before a managed outer lease is released. The result is an exact local
-`$worktree integrate <generated-name>` handoff, followed by a stop for a fresh
-explicit user invocation instead of an internal call to that public lifecycle.
+before a managed outer lease is released. The result is the recorded primary
+path plus an exact local `$worktree integrate <generated-name>` handoff,
+followed by a stop for a fresh explicit user invocation from that primary
+checkout instead of an internal call to that public lifecycle.
 An interruption after the handoff is marked done remains recoverable: repeating
 `run` finishes the same private release instead of starting a new task run.
 

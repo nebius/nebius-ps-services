@@ -330,6 +330,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             clock=lambda: FIXED,
         )
         self.assertEqual(finalized["interop"]["status"], "released")
+        self.assertEqual(finalized["interop"]["primary"], str(self.primary.resolve()))
+        self.assertEqual(finalized["interop"]["source_branch"], "local-source")
         inspected = wm.inspect_worktree(
             cwd=self.outer_scope, name=None, require_clean=True
         )
@@ -339,6 +341,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             name=self.outer_name,
             validated_head=None,
             restart=False,
+            expected_source_head=git("rev-parse", "HEAD", cwd=self.primary),
+            expected_child_head=git("rev-parse", "HEAD", cwd=self.outer),
         )
         self.assertEqual(ready["status"], "validation-required")
         remote_branches = git("ls-remote", "--heads", "origin", cwd=self.outer)

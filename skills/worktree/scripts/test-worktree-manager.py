@@ -100,6 +100,26 @@ class WorktreeManagerTest(unittest.TestCase):
         git("commit", "-qm", f"change {relative}", cwd=worktree)
         return git("rev-parse", "HEAD", cwd=worktree)
 
+    def integrate(
+        self,
+        result: dict[str, object],
+        *,
+        validated_head: str | None = None,
+        restart: bool = False,
+        cwd: Path | None = None,
+        preparation_token: str | None = None,
+    ) -> dict[str, object]:
+        worktree = Path(str(result["worktree"]))
+        return wm.integrate_worktree(
+            cwd=cwd or self.repo,
+            name=str(result["name"]),
+            validated_head=validated_head,
+            restart=restart,
+            expected_source_head=git("rev-parse", "HEAD", cwd=self.repo),
+            expected_child_head=git("rev-parse", "HEAD", cwd=worktree),
+            preparation_token=preparation_token,
+        )
+
     def test_parse_worktree_porcelain_z(self) -> None:
         data = (
             b"worktree /tmp/repo with spaces\0"
@@ -421,6 +441,10 @@ class WorktreeManagerTest(unittest.TestCase):
         actions = (
             "add",
             "inspect",
+            "integration-preflight",
+            "integration-commit",
+            "integration-commit-review",
+            "integration-preparation-abort",
             "integrate",
             "remove",
             "anchor-inspect",
@@ -443,6 +467,17 @@ class WorktreeManagerTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("usage:", result.stdout)
 
+        missing_heads = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "integrate", "--name", "example"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(missing_heads.returncode, 2)
+        self.assertIn("--expected-source-head", missing_heads.stderr)
+        self.assertIn("--expected-child-head", missing_heads.stderr)
+
     def test_internal_coordinators_do_not_call_public_lifecycle_actions(self) -> None:
         skills_root = Path(__file__).resolve().parents[2]
         expected_callers = {
@@ -463,7 +498,15 @@ class WorktreeManagerTest(unittest.TestCase):
             and "worktree_manager.py" in path.read_text(encoding="utf-8")
         }
         self.assertEqual(callers, expected_callers)
-        public_actions = {"add", "integrate", "remove"}
+        public_actions = {
+            "add",
+            "integration-preflight",
+            "integration-commit",
+            "integration-commit-review",
+            "integration-preparation-abort",
+            "integrate",
+            "remove",
+        }
         allowed_actions = {
             "anchor-inspect",
             "inspect",
@@ -512,12 +555,7 @@ class WorktreeManagerTest(unittest.TestCase):
         with self.assertRaisesRegex(wm.WorktreeError, "must not push"):
             wm.publication_guard(cwd=Path(str(result["worktree"])), action="push")
         self.commit_child(result, "skills/skill.txt", "candidate\n")
-        prepared = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        prepared = self.integrate(result)
         with self.assertRaisesRegex(wm.WorktreeError, "must not create-pr"):
             wm.publication_guard(
                 cwd=Path(str(prepared["candidate_worktree"])), action="create-pr"
@@ -573,21 +611,11 @@ class WorktreeManagerTest(unittest.TestCase):
     def test_integrate_records_two_parent_merge_and_promotes_source(self) -> None:
         result = self.add()
         child = self.commit_child(result, "skills/skill.txt", "child\n")
-        prepared = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        prepared = self.integrate(result)
         self.assertEqual(prepared["status"], "validation-required")
         candidate = str(prepared["candidate_head"])
         self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.source)
-        integrated = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=candidate,
-            restart=False,
-        )
+        integrated = self.integrate(result, validated_head=candidate)
         self.assertEqual(integrated["status"], "integrated")
         self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), candidate)
         self.assertEqual(
@@ -596,24 +624,410 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertEqual(git("status", "--porcelain", cwd=self.repo), "")
 
-    def test_integrate_requires_clean_committed_child(self) -> None:
+    def test_integration_preflight_classifies_child_then_source_commits(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        (worktree / "skills/skill.txt").write_text("unstaged child\n", encoding="utf-8")
+        (worktree / "staged.txt").write_text("staged child\n", encoding="utf-8")
+        git("add", "staged.txt", cwd=worktree)
+        git("mv", "source.txt", "renamed-source.txt", cwd=worktree)
+        (worktree / "services/example/service.txt").unlink()
+        (self.repo / "source-dirty.txt").write_text("dirty\n", encoding="utf-8")
+        (self.repo / "source-staged.txt").write_text(
+            "staged source\n", encoding="utf-8"
+        )
+        git("add", "source-staged.txt", cwd=self.repo)
+        preflight = wm.integration_preflight(
+            cwd=self.repo / "skills", name=str(result["name"])
+        )
+        self.assertEqual(preflight["status"], "commit-required")
+        self.assertEqual(preflight["commit_order"], ["child", "source"])
+        self.assertTrue(
+            {
+                "dirty.txt",
+                "skills/skill.txt",
+                "staged.txt",
+                "source.txt",
+                "renamed-source.txt",
+                "services/example/service.txt",
+            }.issubset(set(preflight["child_dirty_paths"]))
+        )
+        self.assertEqual(
+            set(preflight["source_dirty_paths"]),
+            {"source-dirty.txt", "source-staged.txt"},
+        )
+        self.assertIsNone(wm.load_reservation(self.repo, str(result["name"])))
+
+        git("add", "-A", cwd=worktree)
+        child_tree = git("write-tree", cwd=worktree)
+        child_commit = wm.integration_commit(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="child",
+            expected_head=str(preflight["child_head"]),
+            expected_tree=child_tree,
+            message="Prepare child integration",
+        )
+        self.assertEqual(child_commit["status"], "committed")
+        child = str(child_commit["commit_head"])
+        git("add", "-A", cwd=self.repo)
+        source_tree = git("write-tree", cwd=self.repo)
+        source_commit = wm.integration_commit(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="source",
+            expected_head=str(preflight["source_head"]),
+            expected_tree=source_tree,
+            message="Prepare source integration",
+            preparation_token=str(child_commit["preparation_token"]),
+        )
+        self.assertEqual(source_commit["status"], "committed")
+        source = str(source_commit["commit_head"])
+        ready = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(ready["status"], "ready-clean")
+        self.assertEqual(ready["source_head"], source)
+        self.assertEqual(ready["child_head"], child)
+        candidate = self.integrate(
+            result, preparation_token=str(ready["preparation_token"])
+        )
+        self.assertEqual(candidate["source_head"], source)
+        self.assertEqual(candidate["child_head"], child)
+        self.assertIsNone(wm.load_preparation(self.repo, str(result["name"])))
+
+    def test_low_level_integrate_remains_clean_only(self) -> None:
         result = self.add()
         worktree = Path(str(result["worktree"]))
         with self.assertRaisesRegex(wm.WorktreeError, "no committed work"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(result)
         (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
         with self.assertRaisesRegex(wm.WorktreeError, "completely clean"):
+            self.integrate(result)
+
+    def test_preparation_claim_blocks_lease_publication_and_other_integration(
+        self,
+    ) -> None:
+        first = self.add("first")
+        with mock.patch.object(wm.secrets, "token_hex", return_value="b8d3e0"):
+            second = wm.add_worktree(
+                cwd=self.repo / "skills", project=None, task_slug="second"
+            )
+        first_worktree = Path(str(first["worktree"]))
+        (first_worktree / "first.txt").write_text("first\n", encoding="utf-8")
+        preflight = wm.integration_preflight(
+            cwd=self.repo, name=str(first["name"])
+        )
+        git("add", "-A", cwd=first_worktree)
+        committed = wm.integration_commit(
+            cwd=self.repo,
+            name=str(first["name"]),
+            target="child",
+            expected_head=str(preflight["child_head"]),
+            expected_tree=git("write-tree", cwd=first_worktree),
+            message="Prepare first child",
+        )
+        with self.assertRaisesRegex(wm.WorktreeError, "commit preparation"):
+            wm.task_lease_acquire(
+                cwd=first_worktree / "skills",
+                workspace=self.root / "workspace",
+                run_id="run-preparation-race",
+                task_scope="skills",
+                initial_head=str(committed["commit_head"]),
+                owner_kind="task-implementer",
+            )
+        with self.assertRaisesRegex(wm.WorktreeError, "must not create-pr"):
+            wm.publication_guard(cwd=self.repo, action="create-pr")
+
+        self.commit_child(second, "second.txt", "second\n")
+        with self.assertRaisesRegex(wm.WorktreeError, "preparing commits"):
+            self.integrate(second)
+        aborted = wm.integration_preparation_abort(
+            cwd=self.repo,
+            name=str(first["name"]),
+            preparation_token=str(committed["preparation_token"]),
+        )
+        self.assertEqual(aborted["status"], "aborted")
+        self.assertEqual(
+            wm.publication_guard(cwd=self.repo, action="create-pr")["status"],
+            "allowed",
+        )
+
+    def test_preparation_blocks_publication_after_source_branch_relocation(
+        self,
+    ) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        preflight = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        git("add", "-A", cwd=worktree)
+        committed = wm.integration_commit(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="child",
+            expected_head=str(preflight["child_head"]),
+            expected_tree=git("write-tree", cwd=worktree),
+            message="Prepare relocated source",
+        )
+        self.assertEqual(committed["status"], "committed")
+        git("switch", "-qc", "other-primary", cwd=self.repo)
+        relocated = self.root / "relocated-source"
+        git(
+            "worktree",
+            "add",
+            "-q",
+            str(relocated),
+            str(result["source_branch"]),
+            cwd=self.repo,
+        )
+        with self.assertRaisesRegex(wm.WorktreeError, "partially matches"):
+            wm.publication_guard(cwd=relocated, action="push")
+
+    def test_reservation_write_preparation_delete_failure_reconciles(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        preflight = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        git("add", "-A", cwd=worktree)
+        committed = wm.integration_commit(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="child",
+            expected_head=str(preflight["child_head"]),
+            expected_tree=git("write-tree", cwd=worktree),
+            message="Prepare crash recovery",
+        )
+        token = str(committed["preparation_token"])
+        with mock.patch.object(
+            interop_state,
+            "_delete_preparation",
+            side_effect=wm.InteropError("injected preparation delete failure"),
+        ):
+            with self.assertRaisesRegex(
+                wm.WorktreeError, "injected preparation delete failure"
+            ):
+                self.integrate(result, preparation_token=token)
+        self.assertIsNotNone(wm.load_reservation(self.repo, str(result["name"])))
+        self.assertIsNotNone(wm.load_preparation(self.repo, str(result["name"])))
+        resumed = self.integrate(result, preparation_token=token)
+        self.assertEqual(resumed["status"], "validation-required")
+        self.assertIsNone(wm.load_preparation(self.repo, str(result["name"])))
+        integrated = self.integrate(
+            result,
+            validated_head=str(resumed["candidate_head"]),
+        )
+        self.assertEqual(integrated["status"], "integrated")
+        self.assertEqual(
+            wm.publication_guard(cwd=self.repo, action="create-pr")["status"],
+            "allowed",
+        )
+
+    def test_task_lease_rolls_back_when_outer_changes_during_acquisition(self) -> None:
+        result = self.add()
+        child = self.commit_child(result, "child.txt", "child\n")
+        worktree = Path(str(result["worktree"]))
+        original_acquire = wm.acquire_task_lease
+
+        def racing_acquire(*args: object, **kwargs: object) -> dict[str, object]:
+            (worktree / "racing.txt").write_text("racing\n", encoding="utf-8")
+            return original_acquire(*args, **kwargs)
+
+        with mock.patch.object(wm, "acquire_task_lease", side_effect=racing_acquire):
+            with self.assertRaisesRegex(wm.WorktreeError, "changed during"):
+                wm.task_lease_acquire(
+                    cwd=worktree / "skills",
+                    workspace=self.root / "workspace-race",
+                    run_id="run-lease-race",
+                    task_scope="skills",
+                    initial_head=child,
+                    owner_kind="task-implementer",
+                )
+        self.assertIsNone(wm.load_lease(self.repo, str(result["name"])))
+        manifest = wm.load_manifest(self.repo, str(result["name"]))
+        assert manifest is not None
+        self.assertEqual(manifest.lease_state, "none")
+
+    def test_other_reservation_wins_race_before_preparatory_commit(self) -> None:
+        first = self.add("first")
+        with mock.patch.object(wm.secrets, "token_hex", return_value="b8d3e0"):
+            second = wm.add_worktree(
+                cwd=self.repo / "skills", project=None, task_slug="second"
+            )
+        first_worktree = Path(str(first["worktree"]))
+        (first_worktree / "first.txt").write_text("first\n", encoding="utf-8")
+        preflight = wm.integration_preflight(
+            cwd=self.repo, name=str(first["name"])
+        )
+        self.assertEqual(preflight["status"], "commit-required")
+        self.commit_child(second, "second.txt", "second\n")
+        self.integrate(second)
+        git("add", "-A", cwd=first_worktree)
+        before = git("rev-parse", "HEAD", cwd=first_worktree)
+        with self.assertRaisesRegex(wm.WorktreeError, "active integration"):
+            wm.integration_commit(
+                cwd=self.repo,
+                name=str(first["name"]),
+                target="child",
+                expected_head=str(preflight["child_head"]),
+                expected_tree=git("write-tree", cwd=first_worktree),
+                message="Prepare first child",
+            )
+        self.assertEqual(git("rev-parse", "HEAD", cwd=first_worktree), before)
+        self.assertTrue(wm.status_paths(first_worktree))
+
+    def test_preflight_blocks_orphan_candidate_resources_before_commit(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        branch = wm._integration_branch(str(result["name"]))
+        git("branch", branch, self.source, cwd=self.repo)
+        branch_blocked = wm.integration_preflight(
+            cwd=self.repo, name=str(result["name"])
+        )
+        self.assertEqual(branch_blocked["status"], "blocked")
+        self.assertIn(
+            "an orphan integration candidate branch already exists",
+            branch_blocked["blockers"],
+        )
+        git("branch", "-D", branch, cwd=self.repo)
+
+        candidate_path = wm._integration_path(self.repo, str(result["name"]))
+        candidate_path.mkdir(parents=True)
+        path_blocked = wm.integration_preflight(
+            cwd=self.repo, name=str(result["name"])
+        )
+        self.assertEqual(path_blocked["status"], "blocked")
+        self.assertIn(
+            "an orphan integration candidate path already exists",
+            path_blocked["blockers"],
+        )
+
+    def test_hook_modified_commit_requires_actual_tree_review(self) -> None:
+        result = self.add()
+        worktree = Path(str(result["worktree"]))
+        (worktree / "reviewed.txt").write_text("reviewed\n", encoding="utf-8")
+        preflight = wm.integration_preflight(
+            cwd=self.repo, name=str(result["name"])
+        )
+        git("add", "-A", cwd=worktree)
+        reviewed_tree = git("write-tree", cwd=worktree)
+        hook_value = git("rev-parse", "--git-path", "hooks/pre-commit", cwd=worktree)
+        hook = Path(hook_value)
+        if not hook.is_absolute():
+            hook = worktree / hook
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text(
+            "#!/bin/sh\nprintf 'hook-added\\n' > hook-added.txt\ngit add hook-added.txt\n",
+            encoding="utf-8",
+        )
+        hook.chmod(0o755)
+        committed = wm.integration_commit(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="child",
+            expected_head=str(preflight["child_head"]),
+            expected_tree=reviewed_tree,
+            message="Prepare reviewed child",
+        )
+        self.assertEqual(committed["status"], "review-required")
+        self.assertFalse(committed["tree_verified"])
+        blocked = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "preparatory child commit requires actual-commit review",
+            blocked["blockers"],
+        )
+        reviewed = wm.integration_commit_review(
+            cwd=self.repo,
+            name=str(result["name"]),
+            target="child",
+            preparation_token=str(committed["preparation_token"]),
+            commit_head=str(committed["commit_head"]),
+            commit_tree=str(committed["commit_tree"]),
+        )
+        self.assertEqual(reviewed["status"], "verified")
+        ready = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(ready["status"], "ready-clean")
+
+    def test_preflight_rejects_missing_participating_lease_before_source_commit(
+        self,
+    ) -> None:
+        result = self.add()
+        child = self.commit_child(result, "child.txt", "child\n")
+        worktree = Path(str(result["worktree"]))
+        lease = wm.task_lease_acquire(
+            cwd=worktree / "skills",
+            workspace=self.root / "workspace",
+            run_id="run-missing-receipt",
+            task_scope="skills",
+            initial_head=child,
+            owner_kind="task-implementer",
+        )
+        self.assertEqual(lease["status"], "acquired")
+        lease_path = (
+            wm.state_directory(self.repo)
+            / "leases"
+            / f"{result['name']}.json"
+        )
+        lease_path.unlink()
+        (self.repo / "source-dirty.txt").write_text("dirty\n", encoding="utf-8")
+        with self.assertRaisesRegex(wm.WorktreeError, "participating task lease is missing"):
+            wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+
+    def test_integration_requires_primary_checkout_before_mutation(self) -> None:
+        result = self.add()
+        child = self.commit_child(result, "skills/skill.txt", "child\n")
+        worktree = Path(str(result["worktree"]))
+        with self.assertRaisesRegex(wm.WorktreeError, "primary checkout"):
+            wm.integration_preflight(cwd=worktree, name=str(result["name"]))
+        with self.assertRaisesRegex(wm.WorktreeError, "primary checkout"):
+            self.integrate(result, cwd=worktree)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=worktree), child)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.source)
+        self.assertIsNone(wm.load_reservation(self.repo, str(result["name"])))
+
+    def test_expected_heads_reject_post_preflight_source_movement(self) -> None:
+        result = self.add()
+        child = self.commit_child(result, "skills/skill.txt", "child\n")
+        preflight = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(preflight["status"], "ready-clean")
+        with self.assertRaisesRegex(wm.WorktreeError, "integration-preflight"):
             wm.integrate_worktree(
                 cwd=self.repo,
                 name=str(result["name"]),
                 validated_head=None,
                 restart=False,
             )
+        self.assertIsNone(wm.load_reservation(self.repo, str(result["name"])))
+        (self.repo / "later.txt").write_text("later\n", encoding="utf-8")
+        git("add", "-A", cwd=self.repo)
+        git("commit", "-qm", "move source after preflight", cwd=self.repo)
+        with self.assertRaisesRegex(wm.WorktreeError, "changed after"):
+            wm.integrate_worktree(
+                cwd=self.repo,
+                name=str(result["name"]),
+                validated_head=None,
+                restart=False,
+                expected_source_head=str(preflight["source_head"]),
+                expected_child_head=child,
+            )
+        self.assertIsNone(wm.load_reservation(self.repo, str(result["name"])))
+
+    def test_expected_heads_reject_post_preflight_child_movement(self) -> None:
+        result = self.add()
+        child = self.commit_child(result, "skills/skill.txt", "child\n")
+        preflight = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(preflight["status"], "ready-clean")
+        self.commit_child(result, "later-child.txt", "later\n")
+        with self.assertRaisesRegex(wm.WorktreeError, "child HEAD changed after"):
+            wm.integrate_worktree(
+                cwd=self.repo,
+                name=str(result["name"]),
+                validated_head=None,
+                restart=False,
+                expected_source_head=str(preflight["source_head"]),
+                expected_child_head=child,
+            )
+        self.assertIsNone(wm.load_reservation(self.repo, str(result["name"])))
 
     def test_conflict_is_retained_and_resumable(self) -> None:
         result = self.add()
@@ -622,23 +1036,13 @@ class WorktreeManagerTest(unittest.TestCase):
         git("add", "-A", cwd=self.repo)
         git("commit", "-qm", "source overlap", cwd=self.repo)
         source_start = git("rev-parse", "HEAD", cwd=self.repo)
-        conflicted = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        conflicted = self.integrate(result)
         self.assertEqual(conflicted["status"], "conflict")
         self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), source_start)
         recovery = Path(str(conflicted["recovery_worktree"]))
         (recovery / "skills/skill.txt").write_text("resolved\n", encoding="utf-8")
         git("add", "-A", cwd=recovery)
-        ready = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        ready = self.integrate(result)
         self.assertEqual(ready["status"], "validation-required")
         candidate = str(ready["candidate_head"])
         self.assertEqual(
@@ -649,26 +1053,22 @@ class WorktreeManagerTest(unittest.TestCase):
     def test_source_movement_requires_explicit_restart(self) -> None:
         result = self.add()
         self.commit_child(result, "skills/skill.txt", "child\n")
-        prepared = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        prepared = self.integrate(result)
         (self.repo / "later.txt").write_text("later\n", encoding="utf-8")
+        blocked = wm.integration_preflight(
+            cwd=self.repo, name=str(result["name"]), restart=True
+        )
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "source is dirty during an active integration attempt",
+            blocked["blockers"],
+        )
         git("add", "-A", cwd=self.repo)
         git("commit", "-qm", "source moved", cwd=self.repo)
         with self.assertRaisesRegex(wm.WorktreeError, "--restart"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=str(prepared["candidate_head"]),
-                restart=False,
-            )
-        restarted = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
+            self.integrate(result, validated_head=str(prepared["candidate_head"]))
+        restarted = self.integrate(
+            result,
             restart=True,
         )
         self.assertEqual(restarted["status"], "validation-required")
@@ -677,12 +1077,7 @@ class WorktreeManagerTest(unittest.TestCase):
     def test_restart_retains_unexpected_candidate_branch_advance(self) -> None:
         result = self.add()
         self.commit_child(result, "skills/skill.txt", "child\n")
-        prepared = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        prepared = self.integrate(result)
         candidate_path = Path(str(prepared["candidate_worktree"]))
         (candidate_path / "unexpected.txt").write_text(
             "preserve me\n", encoding="utf-8"
@@ -692,12 +1087,7 @@ class WorktreeManagerTest(unittest.TestCase):
         unexpected_head = git("rev-parse", "HEAD", cwd=candidate_path)
 
         with self.assertRaisesRegex(wm.WorktreeError, "advanced"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=True,
-            )
+            self.integrate(result, restart=True)
 
         self.assertTrue(candidate_path.is_dir())
         self.assertEqual(git("rev-parse", "HEAD", cwd=candidate_path), unexpected_head)
@@ -705,12 +1095,7 @@ class WorktreeManagerTest(unittest.TestCase):
     def test_integrate_rejects_clean_candidate_advance_after_validation(self) -> None:
         result = self.add()
         self.commit_child(result, "skills/skill.txt", "child\n")
-        prepared = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        prepared = self.integrate(result)
         candidate = str(prepared["candidate_head"])
         candidate_path = Path(str(prepared["candidate_worktree"]))
         (candidate_path / "unvalidated.txt").write_text(
@@ -720,12 +1105,7 @@ class WorktreeManagerTest(unittest.TestCase):
         git("commit", "-qm", "unvalidated candidate advance", cwd=candidate_path)
 
         with self.assertRaisesRegex(wm.WorktreeError, "exact verification"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=candidate,
-                restart=False,
-            )
+            self.integrate(result, validated_head=candidate)
 
         self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.source)
 
@@ -739,19 +1119,9 @@ class WorktreeManagerTest(unittest.TestCase):
             )
         self.commit_child(first, "skills/skill.txt", "first\n")
         self.commit_child(second, "services/example/service.txt", "second\n")
-        wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(first["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        self.integrate(first)
         with self.assertRaisesRegex(wm.WorktreeError, "active integration"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(second["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(second)
 
     def test_task_lease_blocks_integration_until_release(self) -> None:
         result = self.add()
@@ -767,12 +1137,7 @@ class WorktreeManagerTest(unittest.TestCase):
             owner_kind="task-implementer",
         )
         with self.assertRaisesRegex(wm.WorktreeError, "still owns"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(result)
         wm.task_lease_promote(
             cwd=worktree,
             name=str(anchor["name"]),
@@ -852,12 +1217,7 @@ class WorktreeManagerTest(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(wm.WorktreeError, "outer identity"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(result)
         with self.assertRaisesRegex(wm.WorktreeError, "outer identity"):
             wm.remove_worktree(cwd=self.repo, name=str(result["name"]))
         lease_path.write_text(
@@ -866,12 +1226,7 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         git("branch", internal_branch, child, cwd=self.repo)
         with self.assertRaisesRegex(wm.WorktreeError, "resources reappeared"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(result)
         with self.assertRaisesRegex(wm.WorktreeError, "resources reappeared"):
             wm.task_lease_inspect(
                 cwd=worktree,
@@ -880,6 +1235,14 @@ class WorktreeManagerTest(unittest.TestCase):
                 owner_kind="task-implementer",
             )
         git("branch", "-D", internal_branch, cwd=self.repo)
+        (worktree / "after-release.txt").write_text("dirty\n", encoding="utf-8")
+        blocked = wm.integration_preflight(cwd=self.repo, name=str(result["name"]))
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "nested workflow ownership binds the child to an exact head",
+            blocked["blockers"],
+        )
+        (worktree / "after-release.txt").unlink()
         with self.assertRaisesRegex(wm.WorktreeError, "terminal released"):
             wm.task_lease_acquire(
                 cwd=worktree / "skills",
@@ -889,12 +1252,7 @@ class WorktreeManagerTest(unittest.TestCase):
                 initial_head=child,
                 owner_kind="task-implementer",
             )
-        ready = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(result["name"]),
-            validated_head=None,
-            restart=False,
-        )
+        ready = self.integrate(result)
         self.assertEqual(ready["status"], "validation-required")
 
     def test_remove_revalidates_released_resources_before_cleanup(self) -> None:
@@ -1080,12 +1438,7 @@ class WorktreeManagerTest(unittest.TestCase):
         lease_path = wm.state_directory(self.repo) / "leases" / f"{result['name']}.json"
         lease_path.unlink()
         with self.assertRaisesRegex(wm.WorktreeError, "lease is missing"):
-            wm.integrate_worktree(
-                cwd=self.repo,
-                name=str(result["name"]),
-                validated_head=None,
-                restart=False,
-            )
+            self.integrate(result)
         with self.assertRaisesRegex(wm.WorktreeError, "lease is missing"):
             wm.remove_worktree(cwd=self.repo, name=str(result["name"]))
 
@@ -1099,18 +1452,8 @@ class WorktreeManagerTest(unittest.TestCase):
                 cwd=self.repo / "skills", project=None, task_slug="used"
             )
         self.commit_child(used, "skills/skill.txt", "used\n")
-        ready = wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(used["name"]),
-            validated_head=None,
-            restart=False,
-        )
-        wm.integrate_worktree(
-            cwd=self.repo,
-            name=str(used["name"]),
-            validated_head=str(ready["candidate_head"]),
-            restart=False,
-        )
+        ready = self.integrate(used)
+        self.integrate(used, validated_head=str(ready["candidate_head"]))
         removed = wm.remove_worktree(cwd=self.repo, name=str(used["name"]))
         self.assertEqual(removed["status"], "removed")
 

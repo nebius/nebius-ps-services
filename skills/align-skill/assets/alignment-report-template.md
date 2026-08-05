@@ -10,8 +10,10 @@
 
 - TBD
 
-## Learning Loop Coverage
+## Required Contract Coverage
 
+- Skills with compliant `## Help`:
+- Skills with Help updated, skipped, or uncertain:
 - Skills updated:
 - Skills already compliant:
 - Skills skipped or uncertain:

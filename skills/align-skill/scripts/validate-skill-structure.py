@@ -18,6 +18,31 @@ LOCAL_REF_RE = re.compile(
     r")"
 )
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)]+)\)")
+FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
+HELP_HEADING = "## Help"
+HELP_REQUIRED_SNIPPETS = (
+    "return concise help and stop",
+    "before any workflow step",
+    "purpose",
+    "invocation policy",
+    "public usage/actions",
+    "-h, --help",
+    "documented skill-level options",
+    "no additional public flags",
+    "internal or coordinator-only skills",
+    "no standalone public workflow action exists",
+    "selected `skill.md` is loaded",
+    "report-only",
+    "do not call any additional tools",
+    "inspect project state",
+    "modify files",
+    "private state",
+    "git",
+    "external systems",
+    "private helper actions",
+    "workflow authorization",
+)
+HELP_MAX_WORDS = 100
 LEARNING_LOOP_HEADING = "\n## Learning Loop\n"
 LEARNING_LOOP_REQUIRED_SNIPPETS = (
     "capture durable, reusable, public-safe learnings",
@@ -82,6 +107,8 @@ EXPLICIT_ONLY_SKILL_NAMES = {
     "publish-release",
     "review-pr",
 }
+
+
 @dataclass
 class SkillResult:
     path: Path
@@ -190,9 +217,7 @@ def clean_reference(raw: str) -> str | None:
         return None
     if "#" in target:
         target = target.split("#", 1)[0]
-    if target.startswith(
-        ("agents/", "assets/", "evals/", "references/", "scripts/")
-    ):
+    if target.startswith(("agents/", "assets/", "evals/", "references/", "scripts/")):
         name = target.rstrip("/").rsplit("/", 1)[-1]
         if not target.endswith("/") and "." not in name:
             return None
@@ -228,6 +253,164 @@ def extract_learning_loop_section(skill_text: str) -> str | None:
     return skill_text[section_start:next_heading]
 
 
+def canonical_help_body(name: str) -> str:
+    return f"""For `${name} --help` or `${name} -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never expose private helper actions or treat help as workflow
+authorization."""
+
+
+def scan_markdown_sections(
+    markdown_text: str,
+    heading: str,
+) -> tuple[list[str], list[tuple[int, str]], list[int]]:
+    lines = markdown_text.splitlines()
+    sections: list[str] = []
+    headings: list[tuple[int, str]] = []
+    heading_indexes: list[int] = []
+    current_section: list[str] | None = None
+    in_fence = False
+    fence_character = ""
+    fence_length = 0
+
+    for index, line in enumerate(lines):
+        fence_match = FENCE_RE.match(line)
+        if in_fence:
+            if current_section is not None:
+                current_section.append(line)
+            if fence_match:
+                marker = fence_match.group("marker")
+                if (
+                    marker[0] == fence_character
+                    and len(marker) >= fence_length
+                    and not fence_match.group("rest").strip()
+                ):
+                    in_fence = False
+                    fence_character = ""
+                    fence_length = 0
+            continue
+
+        if fence_match:
+            marker = fence_match.group("marker")
+            rest = fence_match.group("rest")
+            if marker[0] == "`" and "`" in rest:
+                if current_section is not None:
+                    current_section.append(line)
+                continue
+            in_fence = True
+            fence_character = marker[0]
+            fence_length = len(marker)
+            if current_section is not None:
+                current_section.append(line)
+            continue
+
+        if line.startswith("## "):
+            headings.append((index, line))
+            if current_section is not None:
+                sections.append("\n".join(current_section).strip())
+                current_section = None
+            if line == heading:
+                heading_indexes.append(index)
+                current_section = []
+            continue
+
+        if current_section is not None:
+            current_section.append(line)
+
+    if current_section is not None:
+        sections.append("\n".join(current_section).strip())
+
+    return sections, headings, heading_indexes
+
+
+def content_before_help(markdown_text: str, help_index: int) -> list[str]:
+    lines = markdown_text.splitlines()
+    body_start = 0
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                body_start = index + 1
+                break
+
+    significant: list[str] = []
+    in_comment = False
+    for line in lines[body_start:help_index]:
+        stripped = line.strip()
+        if in_comment:
+            if "-->" in stripped:
+                in_comment = False
+            continue
+        if stripped.startswith("<!--"):
+            if "-->" not in stripped:
+                in_comment = True
+            continue
+        if stripped:
+            significant.append(stripped)
+
+    if not significant:
+        return ["missing skill title"]
+    if not significant[0].startswith("# "):
+        return ["first body element is not the skill title"]
+    return significant[1:]
+
+
+def normalize_help_body(text: str) -> str:
+    return " ".join(text.split())
+
+
+def validate_help_contract(
+    skill_text: str,
+    *,
+    name: str,
+    result: SkillResult,
+) -> None:
+    sections, headings, heading_indexes = scan_markdown_sections(
+        skill_text,
+        HELP_HEADING,
+    )
+    if not sections:
+        result.failures.append("SKILL.md is missing ## Help")
+        return
+    if len(sections) != 1:
+        result.failures.append("SKILL.md must contain exactly one ## Help section")
+        return
+    if headings and headings[0][1] != HELP_HEADING:
+        result.failures.append(
+            "## Help must be the first top-level section so help short-circuits "
+            "before workflow instructions"
+        )
+    if heading_indexes and content_before_help(skill_text, heading_indexes[0]):
+        result.failures.append(
+            "## Help must immediately follow the skill title; executable prose or "
+            "lower-level headings are not allowed before it"
+        )
+
+    help_section = sections[0]
+    help_lower = " ".join(help_section.casefold().split())
+    for invocation in (f"${name} --help", f"${name} -h"):
+        if f"`{invocation}`" not in help_section:
+            result.failures.append(f"## Help is missing exact invocation: {invocation}")
+    for snippet in HELP_REQUIRED_SNIPPETS:
+        if snippet not in help_lower:
+            result.failures.append(f"## Help is missing required text: {snippet}")
+    if normalize_help_body(help_section) != normalize_help_body(
+        canonical_help_body(name)
+    ):
+        result.failures.append(
+            "## Help must match the canonical report-only contract for this skill"
+        )
+    word_count = len(help_section.split())
+    if word_count > HELP_MAX_WORDS:
+        result.failures.append(
+            f"## Help must stay concise: {word_count} words exceeds {HELP_MAX_WORDS}"
+        )
+
+
 def validate_stateful_workflow_profile(skill_text: str, result: SkillResult) -> None:
     for heading in STATEFUL_WORKFLOW_REQUIRED_HEADINGS:
         if f"\n{heading}\n" not in f"\n{skill_text}\n":
@@ -251,7 +434,10 @@ def extract_markdown_section(markdown_text: str, heading: str) -> str | None:
 
 def skill_declares_explicit_invocation(description: str, skill_text: str) -> bool:
     description_lower = description.lower()
-    if any(marker in description_lower for marker in EXPLICIT_INVOCATION_DESCRIPTION_MARKERS):
+    if any(
+        marker in description_lower
+        for marker in EXPLICIT_INVOCATION_DESCRIPTION_MARKERS
+    ):
         return True
 
     invocation_policy = extract_markdown_section(skill_text, "## Invocation Policy")
@@ -398,6 +584,8 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
             skill_text=skill_text,
             result=result,
         )
+        if skill_text:
+            validate_help_contract(skill_text, name=name, result=result)
 
     learning_loop = extract_learning_loop_section(skill_text)
     if skill_text and learning_loop is None:
@@ -477,7 +665,9 @@ def main(argv: list[str]) -> int:
     for target in args.targets:
         skills, warnings = discover_skills(target)
         discovery_warnings.extend(warnings)
-        all_results.extend(validate_skill(skill, profile=args.profile) for skill in skills)
+        all_results.extend(
+            validate_skill(skill, profile=args.profile) for skill in skills
+        )
 
     for warning in discovery_warnings:
         print(f"WARN: {warning}")

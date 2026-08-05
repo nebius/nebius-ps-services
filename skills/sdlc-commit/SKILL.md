@@ -5,6 +5,18 @@ description: "Use only as part of the Agentic SDLC workflow; use after one featu
 
 # SDLC Commit
 
+## Help
+
+For `$sdlc-commit --help` or `$sdlc-commit -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Seal and promote one completed feature locally without pushing.
@@ -83,9 +95,10 @@ Seal and promote one completed feature locally without pushing.
 
 This phase never performs the outer managed-child merge. After final
 alignment, UAT, and documentation release the outer lease, `sdlc-start` returns
-the exact `$worktree integrate <generated-name>` command and stops for a fresh
-explicit user invocation. It records the exact source merge proof only after
-that separate action.
+the recorded primary path plus the exact `$worktree integrate <generated-name>`
+command and stops for a fresh explicit user invocation from that primary
+checkout. It records the exact source merge proof only after that separate
+action.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use

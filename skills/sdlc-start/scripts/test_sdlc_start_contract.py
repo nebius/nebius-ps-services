@@ -121,7 +121,8 @@ class SdlcStartContractTests(unittest.TestCase):
             [
                 "`outer-integration-pending`",
                 "`$worktree integrate <generated-name>`",
-                "wait for a fresh user",
+                "recorded primary path/source branch",
+                "fresh user invocation from that primary checkout",
                 "auto-continue the explicit-only",
                 "never push the\n  child or open a PR from it",
                 "`complete-outer-integration` to bind",
@@ -130,9 +131,9 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/references/state-schema.md",
             [
-                "stop and await a fresh",
-                "explicit user invocation of `$worktree integrate`",
-                "`$worktree integrate <generated-name>` command and stops",
+                "recorded\n    primary path and await a fresh",
+                "`$worktree integrate` from that primary checkout",
+                "recorded primary path plus\nthe exact `$worktree integrate <generated-name>` command and stops",
                 "The child is never\npublished",
                 "create-pr` is publication-only",
             ],

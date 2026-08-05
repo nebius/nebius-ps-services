@@ -2133,12 +2133,14 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertFalse(result["continue"])
         self.assertIn("fresh explicit user invocation", result["stopReason"])
+        self.assertIn("recorded primary checkout", result["stopReason"])
 
     def test_stop_does_not_continue_worktree_next_skill(self) -> None:
         self.active_run(next_skill="worktree")
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertFalse(result["continue"])
         self.assertIn("fresh explicit user invocation", result["stopReason"])
+        self.assertIn("recorded primary checkout", result["stopReason"])
 
 
 if __name__ == "__main__":

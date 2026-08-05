@@ -5,6 +5,18 @@ description: "Use only as part of the Agentic SDLC workflow; use when an Agentic
 
 # Gather Context
 
+## Help
+
+For `$sdlc-gather-context --help` or `$sdlc-gather-context -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
 ## Purpose
 
 Gather only the context needed for one feature and produce a compact context pack for design and planning.

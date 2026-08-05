@@ -42,6 +42,46 @@ may change in the same child.
 
 ## Integration Attempt
 
+Run every integration lifecycle action from the primary checkout on the
+recorded non-default source branch. The helper rejects child or candidate
+checkout invocation before it writes a reservation or candidate.
+
+Before a fresh attempt, run the read-only integration preflight. It validates
+the primary and child identities, branches, ancestry, Git operations, complete
+dirt, nested lease participation, and existing reservations without writing
+state. Its result is one of:
+
+- `ready-clean`: invoke the clean-only integration helper with the returned
+  exact source and child SHAs.
+- `commit-required`: inspect the complete checkout diffs, safely commit the
+  ordinary child first and source second through the delegated `$commit`
+  workflow, then rerun preflight.
+- `blocked`: preserve all resources and resolve the reported owner or recovery
+  boundary before retrying.
+
+Automatic commits exist only before a reservation. Each stages the full linked
+checkout from its repository root and records the reviewed staged tree. Before
+the first normal-hook commit, the helper atomically creates a durable
+source-scoped preparation claim. Competing source reservations, preparations,
+nested lease acquisition, removal, and source publication honor that claim and
+fail closed. Each commit must be one direct descendant on the same branch,
+leave a completely clean checkout, and have a commit tree equal to the reviewed
+staged tree. A hook-modified tree remains review-required until the complete
+actual commit is inspected and bound by exact head/tree proof. Nested Task
+Implementer or Agentic SDLC participation makes child dirt ineligible because
+its terminal receipt binds an exact promoted head. Conflicts, active Git
+operations, unsafe or unclear content, orphan candidate resources, and
+concurrent movement also block before candidate creation.
+
+Successful commits are never rolled back when a later commit, revalidation, or
+candidate step fails. The preparation record makes a crash or retry reconcile
+the same ordered commits without duplication. The final preflight SHAs and
+preparation token are compared again while the preparation is atomically
+consumed into the integration reservation.
+If the reservation write succeeds but preparation cleanup is interrupted, the
+next exact token-bound retry validates both records and consumes the stale
+preparation before it may resume candidate work.
+
 The durable reservation binds:
 
 - managed child name, branch, worktree, and exact child SHA;
@@ -52,6 +92,12 @@ The durable reservation binds:
 One source ref may have only one active reservation. A transient file lock
 protects individual transitions; the durable reservation protects the
 human-resolution interval.
+
+Only the exact source ref named by a preparation may be claimed, and only one
+preparation or reservation may own that source at a time. Explicit preparation
+abort deletes the private claim only; it never resets or removes a retained Git
+commit. Orphan candidate branches, paths, symlinks, or registered worktrees are
+never adopted as a new attempt.
 
 Create the candidate from source-start, then merge the child using `--no-ff`.
 The source checkout is never the conflict workspace. A resolved candidate must
@@ -72,6 +118,10 @@ inside the primary checkout.
 - `present` plus `MERGE_HEAD` resumes conflict resolution. The developer edits
   and stages only the resolution; the helper seals the merge on retry.
 - `ready` returns the same candidate until its exact SHA is validated.
+- Dirt in the source or child after any reservation blocks all automatic
+  commits. Preserve the attempt; clean without moving its frozen heads to
+  resume, or explicitly commit reviewed repairs and use `--restart` when a head
+  must move.
 - If source moves, the attempt is stale. Preserve it until explicit
   `--restart`; restart aborts only the exact owned merge, requires the candidate
   clean after abort, removes it non-forcibly, deletes its ref by expected SHA,

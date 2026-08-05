@@ -5,6 +5,20 @@ description: Read-only diagnosis for current-session Nebius project discovery an
 
 # Agent Nebius Auth Diagnose
 
+## Help
+
+For `$agent-nebius-auth-diagnose --help` or `$agent-nebius-auth-diagnose -h`, return concise help and stop before
+any workflow step. Include the purpose, invocation policy, public usage/actions,
+and `-h, --help` plus only documented skill-level options; say "No additional
+public flags" when none exist. For internal or coordinator-only skills, state
+that boundary and that no standalone public workflow action exists. After the
+selected `SKILL.md` is loaded, help is report-only: do not call any additional
+tools, inspect project state, or modify files, private state, Git, or external
+systems. Never
+expose private helper actions or treat help as workflow authorization.
+
+## Purpose
+
 Diagnose current-session project and agent-auth state without mutation. Do not
 write files, change permissions, update profiles, generate credentials, change
 IAM, create repair leases, install hooks, or launch interactive authentication.

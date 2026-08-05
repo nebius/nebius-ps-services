@@ -95,6 +95,22 @@ this reference:
   them into `SKILL.md`.
 - Do not duplicate the same rule across files. Link to the owner file.
 
+## Help Interfaces
+
+- Treat `$skill-name --help` and `$skill-name -h` as report-only requests that
+  stop after the selected `SKILL.md` loads and before required reads, project
+  inspection, additional tools, delegation, workflow execution, or mutation.
+- Return concise purpose, invocation policy, public usage/actions, and only
+  documented skill-level options. Include `-h, --help` and say when no
+  additional public flags exist.
+- For an internal or coordinator-only skill, state that boundary and that no
+  standalone public workflow action exists instead of synthesizing one from
+  private inputs or phases.
+- Never expose flags or transitions belonging only to private scripts or
+  workflow helpers.
+- Keep this contract in `SKILL.md`, which is the portable runtime authority;
+  do not add unsupported custom help fields to `agents/openai.yaml`.
+
 ## Stateful Workflow Skills
 
 Use the optional stateful-workflow profile when a skill is part of a

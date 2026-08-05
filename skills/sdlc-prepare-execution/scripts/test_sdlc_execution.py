@@ -1879,6 +1879,8 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 **complete_evidence,
             )
             self.assertEqual(released["status"], "released")
+            self.assertEqual(released["primary"], str(repository.resolve()))
+            self.assertEqual(released["source_branch"], "local-source")
             pending = load_outer_interop(run_dir)
             assert pending is not None
             self.assertEqual(pending["outer_integration_status"], "pending")
@@ -1906,6 +1908,8 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 name=str(outer["name"]),
                 validated_head=None,
                 restart=False,
+                expected_source_head=git(repository, "rev-parse", "HEAD"),
+                expected_child_head=git(outer_root, "rev-parse", "HEAD"),
             )
             self.assertEqual(candidate["status"], "validation-required")
             integrated = manager.integrate_worktree(
@@ -1913,6 +1917,8 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 name=str(outer["name"]),
                 validated_head=str(candidate["candidate_head"]),
                 restart=False,
+                expected_source_head=str(candidate["source_head"]),
+                expected_child_head=str(candidate["child_head"]),
             )
             git(repository, "reset", "--hard", str(candidate["source_head"]))
             with self.assertRaises(ExecutionInteropError):

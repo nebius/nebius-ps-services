@@ -817,7 +817,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         return stop(
             "Local worktree integration requires a fresh explicit user invocation "
-            "and will not be continued automatically."
+            "from the recorded primary checkout and will not be continued "
+            "automatically."
         )
 
     steering_reason = _steering_reason(active)

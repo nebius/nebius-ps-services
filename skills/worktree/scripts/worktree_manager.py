@@ -3,7 +3,9 @@
 
 The public interface is the ``worktree`` Codex skill. This helper owns only
 deterministic discovery, creation, inspection, integration, and cleanup
-mechanics. It never commits user changes, pushes, or creates pull requests.
+mechanics. Its private integration-commit action creates only a preflight-
+authorized, reviewed-tree commit behind a durable preparation claim. It never
+pushes or creates pull requests.
 """
 
 from __future__ import annotations
@@ -39,10 +41,14 @@ from worktree_state import (
 )
 from worktree_interop import (
     InteropError,
+    abort_integration_preparation,
     acquire_task_lease,
+    active_preparations,
     active_reservations,
     all_leases,
+    approve_integration_preparation_commit,
     assert_idle,
+    begin_integration_preparation,
     begin_integration,
     delete_lease_removal,
     delete_released_lease,
@@ -54,9 +60,12 @@ from worktree_interop import (
     lifecycle_creation_lock,
     load_lease,
     load_lease_removal,
+    load_preparation,
     load_reservation,
-    release_task_lease,
     prepare_lease_removal,
+    record_integration_preparation_commit,
+    release_task_lease,
+    rollback_task_lease_acquisition,
     update_integration,
     update_task_lease,
     validate_released_resources,
@@ -1100,6 +1109,25 @@ def publication_guard(*, cwd: Path, action: str) -> dict[str, Any]:
                         f"private {label} branches must not {action}; publish only "
                         "the locally integrated source branch"
                     )
+        for preparation in active_preparations(primary):
+            if classify_claim(
+                str(primary),
+                str(preparation["source_branch"]),
+                "integration preparation source",
+            ):
+                raise WorktreeError(
+                    f"the source branch must not {action} while an integration "
+                    "commit preparation is active"
+                )
+            if classify_claim(
+                str(preparation["worktree"]),
+                str(preparation["branch"]),
+                "integration preparation child",
+            ):
+                raise WorktreeError(
+                    f"integration preparation child branches must not {action}; "
+                    "finish local integration first"
+                )
         for lease in all_leases(primary):
             if Path(str(lease["common_dir"])) != current_common:
                 raise WorktreeError(
@@ -1305,33 +1333,90 @@ def task_lease_acquire(
     anchor = inspect_managed_anchor(cwd=cwd)
     if anchor["status"] == "unmanaged":
         return {"action": "task-lease-acquire", "status": "unmanaged"}
-    if anchor["task_scope"] != task_scope or anchor["head"] != initial_head:
-        raise WorktreeError(
-            "managed outer identity changed before task lease acquisition"
-        )
+    primary = Path(str(anchor["primary"]))
+    name = str(anchor["name"])
     try:
-        result = acquire_task_lease(
-            Path(str(anchor["primary"])),
-            name=str(anchor["name"]),
-            branch=str(anchor["branch"]),
-            worktree=Path(str(anchor["worktree"])),
-            scope=str(anchor["scope"]),
-            common_dir=Path(str(anchor["common_dir"])),
-            workspace=workspace,
-            run_id=run_id,
-            task_scope=task_scope,
-            initial_head=initial_head,
-            owner_kind=owner_kind,
-        )
+        with integration_transition_lock(primary, name):
+            locked_anchor = inspect_managed_anchor(cwd=cwd)
+            expected_identity = {
+                key: anchor[key]
+                for key in (
+                    "status",
+                    "name",
+                    "branch",
+                    "worktree",
+                    "scope",
+                    "task_scope",
+                    "head",
+                    "common_dir",
+                    "primary",
+                )
+            }
+            identity_changed = any(
+                locked_anchor.get(key) != value
+                for key, value in expected_identity.items()
+            )
+            if (
+                identity_changed
+                or locked_anchor["task_scope"] != task_scope
+                or locked_anchor["head"] != initial_head
+            ):
+                raise WorktreeError(
+                    "managed outer identity changed before task lease acquisition"
+                )
+            outer_worktree = Path(str(locked_anchor["worktree"]))
+            operation = _operation_in_progress(outer_worktree)
+            if operation:
+                raise WorktreeError(
+                    "managed outer operation is in progress before lease "
+                    f"acquisition: {operation}"
+                )
+            if status_paths(outer_worktree):
+                raise WorktreeError(
+                    "managed outer worktree must be completely clean before "
+                    "lease acquisition"
+                )
+            result = acquire_task_lease(
+                primary,
+                name=name,
+                branch=str(locked_anchor["branch"]),
+                worktree=outer_worktree,
+                scope=str(locked_anchor["scope"]),
+                common_dir=Path(str(locked_anchor["common_dir"])),
+                workspace=workspace,
+                run_id=run_id,
+                task_scope=task_scope,
+                initial_head=initial_head,
+                owner_kind=owner_kind,
+            )
+            final_anchor = inspect_managed_anchor(cwd=cwd)
+            final_changed = any(
+                final_anchor.get(key) != value
+                for key, value in expected_identity.items()
+            )
+            if (
+                _operation_in_progress(outer_worktree)
+                or status_paths(outer_worktree)
+                or final_changed
+            ):
+                if result["status"] == "acquired":
+                    rollback_task_lease_acquisition(
+                        primary,
+                        name=name,
+                        token=str(result["token"]),
+                    )
+                raise WorktreeError(
+                    "managed outer checkout changed during task lease acquisition"
+                )
+            _record_manifest_lease(
+                primary,
+                name=name,
+                owner_kind=owner_kind,
+                token=str(result["token"]),
+                state="active",
+            )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
-    _record_manifest_lease(
-        Path(str(anchor["primary"])),
-        name=str(anchor["name"]),
-        owner_kind=owner_kind,
-        token=str(result["token"]),
-        state="active",
-    )
     return {"action": "task-lease-acquire", **result}
 
 
@@ -1339,6 +1424,8 @@ def task_lease_inspect(
     *, cwd: Path, name: str, lease_id: str, owner_kind: str
 ) -> dict[str, Any]:
     primary, managed = _leased_anchor(cwd, name)
+    manifest = load_manifest(primary, name)
+    assert manifest is not None
     common_dir = _canonical(
         Path(
             _git(
@@ -1395,6 +1482,8 @@ def task_lease_inspect(
         "action": "task-lease-inspect",
         "status": "valid",
         **lease,
+        "primary": str(primary),
+        "source_branch": manifest.source_branch,
         "outer_head": managed.head,
         "outer_clean": not status_paths(managed.path),
     }
@@ -1472,6 +1561,8 @@ def task_lease_release(
     *, cwd: Path, name: str, lease_id: str, promoted_head: str, owner_kind: str
 ) -> dict[str, Any]:
     primary, managed = _leased_anchor(cwd, name)
+    manifest = load_manifest(primary, name)
+    assert manifest is not None
     if managed.head != promoted_head:
         raise WorktreeError("outer worktree is not at the promoted task head")
     if status_paths(managed.path):
@@ -1502,7 +1593,12 @@ def task_lease_release(
         token=lease_id,
         state="released",
     )
-    return {"action": "task-lease-release", **result}
+    return {
+        "action": "task-lease-release",
+        **result,
+        "primary": str(primary),
+        "source_branch": manifest.source_branch,
+    }
 
 
 def _remove_local_branch(primary: Path, branch: str, *, expected_head: str) -> str:
@@ -1550,13 +1646,25 @@ def _integration_path(primary: Path, name: str) -> Path:
 
 
 def _source_snapshot(primary: Path, manifest: Manifest) -> str:
+    head = _source_identity_snapshot(primary, manifest)
+    if status_paths(primary):
+        raise WorktreeError("the primary source worktree must be completely clean")
+    return head
+
+
+def _source_identity_snapshot(primary: Path, manifest: Manifest) -> str:
+    operation = _operation_in_progress(primary)
+    if operation:
+        raise WorktreeError(f"primary source operation is in progress: {operation}")
     branch = _git(primary, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
     if branch != manifest.source_branch:
         raise WorktreeError(
             "the primary checkout is no longer on the recorded source branch"
         )
-    if status_paths(primary):
-        raise WorktreeError("the primary source worktree must be completely clean")
+    if branch == _configured_default_branch(primary):
+        raise WorktreeError(
+            "integration requires the recorded non-default source branch"
+        )
     head = _git(primary, "rev-parse", "HEAD")
     ref_head = _git(primary, "rev-parse", "--verify", manifest.source_ref)
     if head != ref_head:
@@ -1566,6 +1674,550 @@ def _source_snapshot(primary: Path, manifest: Manifest) -> str:
             "the source branch no longer descends from the recorded creation base"
         )
     return head
+
+
+def _integration_primary(cwd: Path) -> Path:
+    primary, current_root = discover_repository(cwd)
+    if current_root != primary:
+        raise WorktreeError(
+            "integration must be invoked from the primary checkout: " + str(primary)
+        )
+    return primary
+
+
+def _direct_child_commit(repository: Path, before: str, after: str) -> bool:
+    parents = _git(repository, "rev-list", "--parents", "-n", "1", after).split()
+    return parents == [after, before]
+
+
+def _orphan_candidate_blockers(primary: Path, name: str) -> list[str]:
+    branch = _integration_branch(name)
+    path = _integration_path(primary, name)
+    branch_head = _branch_head(primary, branch)
+    records = list_worktrees(primary)
+    matching_records = [
+        record
+        for record in records
+        if record.branch == branch or Path(record.path) == path
+    ]
+    blockers: list[str] = []
+    if branch_head is not None:
+        blockers.append("an orphan integration candidate branch already exists")
+    if path.exists() or path.is_symlink():
+        blockers.append("an orphan integration candidate path already exists")
+    if matching_records:
+        blockers.append("an orphan integration candidate worktree is registered")
+    return blockers
+
+
+def integration_preflight(
+    *, cwd: Path, name: str, restart: bool = False
+) -> dict[str, Any]:
+    """Classify one integration without creating commits or lifecycle state."""
+
+    primary = _integration_primary(cwd)
+    _validate_name(name)
+    try:
+        manifest = load_manifest(primary, name)
+    except StateError as error:
+        raise WorktreeError(str(error)) from error
+    assert manifest is not None
+    if manifest.status not in {"active", "integrated"}:
+        raise WorktreeError(
+            f"managed worktree cannot integrate from status {manifest.status}"
+        )
+
+    record = _find_record(primary, primary, name=name, current_cwd=cwd)
+    managed = _managed_from_record(primary, record)
+    source_head = _source_identity_snapshot(primary, manifest)
+    source_dirty = status_paths(primary)
+    child_dirty = status_paths(managed.path)
+    child_operation = _operation_in_progress(managed.path)
+    reservation = load_reservation(primary, name)
+    preparation = load_preparation(primary, name)
+    blockers: list[str] = []
+
+    try:
+        lease = lifecycle_lease(primary, name)
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    nested_participation = lease is not None or manifest.lease_state != "none"
+    if lease is not None:
+        if lease["state"] == "active":
+            blockers.append(f"{lease['owner_kind']} still owns the child worktree")
+        else:
+            _validate_outer_lease_receipt(
+                primary,
+                name=name,
+                manifest=manifest,
+                observed_head=managed.head,
+            )
+
+    if child_operation:
+        blockers.append(f"child operation is in progress: {child_operation}")
+    if not _is_ancestor(primary, manifest.base, managed.head):
+        blockers.append("child branch no longer descends from its creation base")
+
+    other_source_attempts = [
+        item
+        for item in active_reservations(primary)
+        if item["name"] != name and item["source_ref"] == manifest.source_ref
+    ]
+    if other_source_attempts:
+        blockers.append(
+            "another managed child has an active integration into this source branch"
+        )
+    other_source_preparations = [
+        item
+        for item in active_preparations(primary)
+        if item["name"] != name and item["source_ref"] == manifest.source_ref
+    ]
+    if other_source_preparations:
+        blockers.append(
+            "another managed child is preparing commits for this source branch"
+        )
+    if reservation is None:
+        blockers.extend(_orphan_candidate_blockers(primary, name))
+
+    mode = "fresh"
+    if manifest.status == "integrated":
+        mode = "reconcile"
+        if source_dirty or child_dirty:
+            blockers.append("an integrated lifecycle must be clean for reconciliation")
+        if preparation is not None:
+            blockers.append(
+                "an integrated lifecycle retains an unexpected commit preparation"
+            )
+    elif reservation is not None:
+        mode = "restart" if restart else "resume"
+        if source_dirty:
+            blockers.append("source is dirty during an active integration attempt")
+        if child_dirty:
+            blockers.append("child is dirty during an active integration attempt")
+        source_already_promoted = reservation.get(
+            "state"
+        ) == "ready" and source_head == reservation.get("integration_head")
+        if restart and source_already_promoted:
+            blockers.append(
+                "the ready candidate is already source HEAD and must be reconciled"
+            )
+        if not restart:
+            if (
+                source_head != reservation["source_head"]
+                and not source_already_promoted
+            ):
+                blockers.append("source moved during the active integration attempt")
+            if managed.head != reservation["child_head"]:
+                blockers.append("child moved during the active integration attempt")
+    elif preparation is not None:
+        mode = "prepare"
+        expected_identity = {
+            "branch": managed.branch,
+            "worktree": str(managed.path),
+            "source_branch": manifest.source_branch,
+            "source_ref": manifest.source_ref,
+        }
+        if any(
+            preparation.get(key) != value for key, value in expected_identity.items()
+        ):
+            blockers.append("integration preparation identity changed")
+        commits = {
+            str(commit["target"]): commit for commit in preparation["commits"]
+        }
+        repositories = {"child": managed.path, "source": primary}
+        observed_heads = {"child": managed.head, "source": source_head}
+        dirty_paths = {"child": child_dirty, "source": source_dirty}
+        for target, commit in commits.items():
+            repository = repositories[target]
+            if (
+                observed_heads[target] != commit["after_head"]
+                or not _direct_child_commit(
+                    repository,
+                    str(commit["before_head"]),
+                    str(commit["after_head"]),
+                )
+                or _git(repository, "rev-parse", f"{commit['after_head']}^{{tree}}")
+                != commit["commit_tree"]
+            ):
+                blockers.append(f"recorded preparatory {target} commit changed")
+            if commit["status"] != "verified":
+                blockers.append(
+                    f"preparatory {target} commit requires actual-commit review"
+                )
+            if dirty_paths[target]:
+                blockers.append(
+                    f"{target} changed after its preparatory commit was created"
+                )
+        completed_targets = set(commits)
+        remaining_targets = [
+            target
+            for target in preparation["commit_order"]
+            if target not in completed_targets
+        ]
+        for target in remaining_targets:
+            if observed_heads[target] != preparation[f"{target}_head"]:
+                blockers.append(
+                    f"unrecorded preparatory {target} commit requires review"
+                )
+            elif not dirty_paths[target]:
+                blockers.append(
+                    f"prepared {target} changes disappeared before commit"
+                )
+        for target in {"child", "source"} - set(preparation["commit_order"]):
+            if dirty_paths[target]:
+                blockers.append(
+                    f"new {target} changes appeared after commit preparation"
+                )
+        if restart:
+            blockers.append(
+                "commit preparation must be explicitly aborted before restart"
+            )
+    elif restart:
+        blockers.append("there is no active integration attempt to restart")
+
+    commit_order: list[str] = []
+    if preparation is not None and not blockers:
+        completed_targets = {
+            str(commit["target"]) for commit in preparation["commits"]
+        }
+        commit_order = [
+            target
+            for target in preparation["commit_order"]
+            if target not in completed_targets
+        ]
+    elif manifest.status == "active" and reservation is None and not blockers:
+        if child_dirty:
+            if nested_participation:
+                blockers.append(
+                    "nested workflow ownership binds the child to an exact head"
+                )
+            else:
+                commit_order.append("child")
+        elif managed.head == manifest.base:
+            blockers.append("child branch has no committed work to integrate")
+        if source_dirty:
+            commit_order.append("source")
+
+    status = (
+        "blocked" if blockers else "commit-required" if commit_order else "ready-clean"
+    )
+    if status == "ready-clean":
+        next_action = "run the clean-only integration with these exact expected heads"
+    elif status == "commit-required":
+        next_action = (
+            "commit the eligible checkouts in commit_order, then rerun this preflight"
+        )
+    else:
+        next_action = "resolve the reported blockers without creating a candidate"
+
+    return {
+        "action": "integration-preflight",
+        "status": status,
+        "mode": mode,
+        "name": name,
+        "primary": str(primary),
+        "source_branch": manifest.source_branch,
+        "source_ref": manifest.source_ref,
+        "source_head": source_head,
+        "source_dirty_paths": source_dirty,
+        "child_branch": managed.branch,
+        "child_worktree": str(managed.path),
+        "child_head": managed.head,
+        "child_dirty_paths": child_dirty,
+        "nested_participation": nested_participation,
+        "active_reservation": reservation is not None,
+        "active_preparation": preparation is not None,
+        "preparation_token": preparation["token"] if preparation is not None else None,
+        "preparation_commits": (
+            preparation["commits"] if preparation is not None else []
+        ),
+        "commit_order": commit_order,
+        "blockers": blockers,
+        "next_action": next_action,
+    }
+
+
+def _preparation_checkout(
+    primary: Path, manifest: Manifest, managed: ManagedWorktree, target: str
+) -> tuple[Path, str]:
+    if target == "child":
+        return managed.path, managed.branch
+    if target == "source":
+        return primary, manifest.source_branch
+    raise WorktreeError("integration commit target must be child or source")
+
+
+def _integration_commit_unlocked(
+    *,
+    cwd: Path,
+    name: str,
+    target: str,
+    expected_head: str,
+    expected_tree: str,
+    message: str,
+    preparation_token: str | None = None,
+) -> dict[str, Any]:
+    """Create one exact reviewed preparatory commit behind a durable claim."""
+
+    primary = _integration_primary(cwd)
+    _validate_name(name)
+    if re.fullmatch(r"[0-9a-f]{40,64}", expected_head) is None:
+        raise WorktreeError("expected integration commit head is invalid")
+    if re.fullmatch(r"[0-9a-f]{40,64}", expected_tree) is None:
+        raise WorktreeError("reviewed staged tree is invalid")
+    if not message.strip() or "\n" in message or "\r" in message:
+        raise WorktreeError("integration commit message must be one non-empty line")
+    if len(message) > 200:
+        raise WorktreeError("integration commit message is too long")
+
+    preflight = integration_preflight(cwd=primary, name=name)
+    if preflight["status"] != "commit-required" or not preflight["commit_order"]:
+        blockers = "; ".join(str(value) for value in preflight["blockers"])
+        raise WorktreeError(
+            blockers or "integration preflight does not permit a commit"
+        )
+    if preflight["commit_order"][0] != target:
+        raise WorktreeError("integration commits must follow the preflight commit order")
+    current_preparation = load_preparation(primary, name)
+    if current_preparation is None:
+        initial_source = str(preflight["source_head"])
+        initial_child = str(preflight["child_head"])
+        claim_order = list(preflight["commit_order"])
+    else:
+        initial_source = str(current_preparation["source_head"])
+        initial_child = str(current_preparation["child_head"])
+        claim_order = list(current_preparation["commit_order"])
+    try:
+        preparation = begin_integration_preparation(
+            primary,
+            name=name,
+            branch=str(preflight["child_branch"]),
+            worktree=Path(str(preflight["child_worktree"])),
+            source_branch=str(preflight["source_branch"]),
+            source_ref=str(preflight["source_ref"]),
+            source_head=initial_source,
+            child_head=initial_child,
+            commit_order=claim_order,
+            preparation_token=preparation_token,
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+    manifest = load_manifest(primary, name)
+    assert manifest is not None
+    record = _find_record(primary, primary, name=name, current_cwd=primary)
+    managed = _managed_from_record(primary, record)
+    claimed_preflight = integration_preflight(cwd=primary, name=name)
+    if (
+        claimed_preflight["status"] != "commit-required"
+        or not claimed_preflight["commit_order"]
+        or claimed_preflight["commit_order"][0] != target
+        or claimed_preflight["preparation_token"] != preparation["token"]
+    ):
+        raise WorktreeError("integration commit eligibility changed after claiming it")
+    checkout, expected_branch = _preparation_checkout(
+        primary, manifest, managed, target
+    )
+    if _operation_in_progress(checkout):
+        raise WorktreeError(f"{target} Git operation started before commit")
+    branch = _git(checkout, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
+    head = _git(checkout, "rev-parse", "HEAD")
+    if branch != expected_branch or head != expected_head:
+        raise WorktreeError(f"{target} branch or HEAD changed before commit")
+    if not status_paths(checkout):
+        raise WorktreeError(f"{target} checkout no longer has changes to commit")
+
+    _git(checkout, "add", "-A")
+    _git(checkout, "diff", "--cached", "--check")
+    staged_tree = _git(checkout, "write-tree")
+    if staged_tree != expected_tree:
+        raise WorktreeError(
+            f"{target} staged tree changed after review; inspect and retry"
+        )
+    _git(checkout, "commit", "-m", message)
+    after_head = _git(checkout, "rev-parse", "HEAD")
+    if not _direct_child_commit(checkout, head, after_head):
+        raise WorktreeError(f"{target} commit is not one direct child of preflight HEAD")
+    commit_tree = _git(checkout, "rev-parse", f"{after_head}^{{tree}}")
+    try:
+        preparation = record_integration_preparation_commit(
+            primary,
+            name=name,
+            preparation_token=str(preparation["token"]),
+            target=target,
+            before_head=head,
+            after_head=after_head,
+            reviewed_tree=staged_tree,
+            commit_tree=commit_tree,
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    clean = not status_paths(checkout) and _operation_in_progress(checkout) is None
+    same_branch = (
+        _git(checkout, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
+        == expected_branch
+    )
+    tree_verified = commit_tree == staged_tree
+    status = "committed" if clean and same_branch and tree_verified else "review-required"
+    return {
+        "action": "integration-commit",
+        "status": status,
+        "name": name,
+        "target": target,
+        "branch": expected_branch,
+        "before_head": head,
+        "commit_head": after_head,
+        "reviewed_tree": staged_tree,
+        "commit_tree": commit_tree,
+        "preparation_token": preparation["token"],
+        "clean": clean,
+        "same_branch": same_branch,
+        "tree_verified": tree_verified,
+        "next_action": (
+            "rerun integration preflight"
+            if status == "committed"
+            else "review the actual commit and checkout before continuing"
+        ),
+    }
+
+
+def integration_commit(
+    *,
+    cwd: Path,
+    name: str,
+    target: str,
+    expected_head: str,
+    expected_tree: str,
+    message: str,
+    preparation_token: str | None = None,
+) -> dict[str, Any]:
+    primary = _integration_primary(cwd)
+    try:
+        with integration_transition_lock(primary, name):
+            return _integration_commit_unlocked(
+                cwd=cwd,
+                name=name,
+                target=target,
+                expected_head=expected_head,
+                expected_tree=expected_tree,
+                message=message,
+                preparation_token=preparation_token,
+            )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _integration_commit_review_unlocked(
+    *,
+    cwd: Path,
+    name: str,
+    target: str,
+    preparation_token: str,
+    commit_head: str,
+    commit_tree: str,
+) -> dict[str, Any]:
+    """Acknowledge an exact actual commit only after external review."""
+
+    primary = _integration_primary(cwd)
+    preparation = load_preparation(primary, name)
+    if preparation is None:
+        raise WorktreeError("integration preparation is missing")
+    manifest = load_manifest(primary, name)
+    assert manifest is not None
+    record = _find_record(primary, primary, name=name, current_cwd=primary)
+    managed = _managed_from_record(primary, record)
+    checkout, expected_branch = _preparation_checkout(
+        primary, manifest, managed, target
+    )
+    if (
+        _operation_in_progress(checkout)
+        or status_paths(checkout)
+        or _git(checkout, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
+        != expected_branch
+        or _git(checkout, "rev-parse", "HEAD") != commit_head
+        or _git(checkout, "rev-parse", f"{commit_head}^{{tree}}") != commit_tree
+    ):
+        raise WorktreeError("actual preparatory commit changed before review approval")
+    try:
+        approved = approve_integration_preparation_commit(
+            primary,
+            name=name,
+            preparation_token=preparation_token,
+            target=target,
+            commit_head=commit_head,
+            commit_tree=commit_tree,
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    return {
+        "action": "integration-commit-review",
+        "status": "verified",
+        "name": name,
+        "target": target,
+        "commit_head": commit_head,
+        "commit_tree": commit_tree,
+        "preparation_token": approved["token"],
+    }
+
+
+def integration_commit_review(
+    *,
+    cwd: Path,
+    name: str,
+    target: str,
+    preparation_token: str,
+    commit_head: str,
+    commit_tree: str,
+) -> dict[str, Any]:
+    primary = _integration_primary(cwd)
+    try:
+        with integration_transition_lock(primary, name):
+            return _integration_commit_review_unlocked(
+                cwd=cwd,
+                name=name,
+                target=target,
+                preparation_token=preparation_token,
+                commit_head=commit_head,
+                commit_tree=commit_tree,
+            )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _integration_preparation_abort_unlocked(
+    *, cwd: Path, name: str, preparation_token: str
+) -> dict[str, Any]:
+    """Drop only the preparation claim while retaining every Git commit."""
+
+    primary = _integration_primary(cwd)
+    if _orphan_candidate_blockers(primary, name):
+        raise WorktreeError("candidate resources exist; preserve them for recovery")
+    try:
+        result = abort_integration_preparation(
+            primary, name=name, preparation_token=preparation_token
+        )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
+    return {
+        "action": "integration-preparation-abort",
+        **result,
+        "next_action": "rerun integration preflight; retained commits are unchanged",
+    }
+
+
+def integration_preparation_abort(
+    *, cwd: Path, name: str, preparation_token: str
+) -> dict[str, Any]:
+    primary = _integration_primary(cwd)
+    try:
+        with integration_transition_lock(primary, name):
+            return _integration_preparation_abort_unlocked(
+                cwd=cwd,
+                name=name,
+                preparation_token=preparation_token,
+            )
+    except InteropError as error:
+        raise WorktreeError(str(error)) from error
 
 
 def _candidate_record(
@@ -1741,8 +2393,11 @@ def _integrate_worktree_unlocked(
     name: str,
     validated_head: str | None,
     restart: bool,
+    expected_source_head: str | None,
+    expected_child_head: str | None,
+    preparation_token: str | None,
 ) -> dict[str, Any]:
-    primary, _ = discover_repository(cwd)
+    primary = _integration_primary(cwd)
     _validate_name(name)
     try:
         manifest = load_manifest(primary, name)
@@ -1774,6 +2429,11 @@ def _integrate_worktree_unlocked(
             f"managed worktree cannot integrate from status {manifest.status}"
         )
     reservation = load_reservation(primary, name)
+    preparation = load_preparation(primary, name)
+    if reservation is None:
+        candidate_blockers = _orphan_candidate_blockers(primary, name)
+        if candidate_blockers:
+            raise WorktreeError("; ".join(candidate_blockers))
     record = _find_record(primary, primary, name=name, current_cwd=cwd)
     managed = _managed_from_record(primary, record)
     _validate_outer_lease_receipt(
@@ -1782,7 +2442,7 @@ def _integrate_worktree_unlocked(
         manifest=manifest,
         observed_head=managed.head,
     )
-    if reservation is None:
+    if reservation is None and preparation is None:
         try:
             with interop_lock(primary):
                 assert_idle(primary, name)
@@ -1803,6 +2463,38 @@ def _integrate_worktree_unlocked(
     if child_head == manifest.base:
         raise WorktreeError("child branch has no committed work to integrate")
     source_head = _source_snapshot(primary, manifest)
+    if expected_source_head is None or expected_child_head is None:
+        raise WorktreeError(
+            "integration requires exact source and child heads returned by "
+            "integration-preflight"
+        )
+    if source_head != expected_source_head:
+        raise WorktreeError(
+            "source HEAD changed after integration preflight: "
+            f"{source_head} != {expected_source_head}"
+        )
+    if child_head != expected_child_head:
+        raise WorktreeError(
+            "child HEAD changed after integration preflight: "
+            f"{child_head} != {expected_child_head}"
+        )
+    if reservation is not None and preparation is not None:
+        try:
+            reservation = begin_integration(
+                primary,
+                name=name,
+                branch=managed.branch,
+                worktree=managed.path,
+                source_branch=manifest.source_branch,
+                source_ref=manifest.source_ref,
+                source_head=source_head,
+                child_head=child_head,
+                integration_branch=_integration_branch(name),
+                integration_worktree=_integration_path(primary, name),
+                preparation_token=preparation_token,
+            )
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
     if restart:
         if reservation is None:
             raise WorktreeError("there is no active integration attempt to restart")
@@ -1822,7 +2514,13 @@ def _integrate_worktree_unlocked(
         except InteropError as error:
             raise WorktreeError(str(error)) from error
         return _integrate_worktree_unlocked(
-            cwd=cwd, name=name, validated_head=None, restart=False
+            cwd=cwd,
+            name=name,
+            validated_head=None,
+            restart=False,
+            expected_source_head=source_head,
+            expected_child_head=child_head,
+            preparation_token=None,
         )
     if reservation is not None:
         source_already_promoted = reservation.get(
@@ -1835,6 +2533,17 @@ def _integrate_worktree_unlocked(
         if child_head != reservation["child_head"]:
             raise WorktreeError("child branch advanced during integration")
     else:
+        reobserved_source = _source_snapshot(primary, manifest)
+        reobserved_child = _git(managed.path, "rev-parse", "HEAD")
+        if (
+            reobserved_source != source_head
+            or reobserved_child != child_head
+            or status_paths(managed.path)
+            or _operation_in_progress(managed.path)
+        ):
+            raise WorktreeError(
+                "source or child changed after integration preflight; rerun preflight"
+            )
         integration_branch = _integration_branch(name)
         integration_path = _integration_path(primary, name)
         try:
@@ -1849,6 +2558,7 @@ def _integrate_worktree_unlocked(
                 child_head=child_head,
                 integration_branch=integration_branch,
                 integration_worktree=integration_path,
+                preparation_token=preparation_token,
             )
         except InteropError as error:
             raise WorktreeError(str(error)) from error
@@ -1947,8 +2657,11 @@ def integrate_worktree(
     name: str,
     validated_head: str | None,
     restart: bool,
+    expected_source_head: str | None = None,
+    expected_child_head: str | None = None,
+    preparation_token: str | None = None,
 ) -> dict[str, Any]:
-    primary, _ = discover_repository(cwd)
+    primary = _integration_primary(cwd)
     _validate_name(name)
     try:
         with integration_transition_lock(primary, name):
@@ -1957,6 +2670,9 @@ def integrate_worktree(
                 name=name,
                 validated_head=validated_head,
                 restart=restart,
+                expected_source_head=expected_source_head,
+                expected_child_head=expected_child_head,
+                preparation_token=preparation_token,
             )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
@@ -2276,10 +2992,72 @@ def _parser() -> argparse.ArgumentParser:
         help="fail unless the entire managed linked worktree is clean",
     )
 
+    integration_preflight_parser = subparsers.add_parser(
+        "integration-preflight",
+        help="read-only classification before one primary-anchored integration",
+    )
+    integration_preflight_parser.add_argument("--name", required=True)
+    integration_preflight_parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="classify an explicit restart without permitting automatic commits",
+    )
+
+    integration_commit_parser = subparsers.add_parser(
+        "integration-commit",
+        help="internal: create one exact reviewed commit behind a preparation claim",
+    )
+    integration_commit_parser.add_argument("--name", required=True)
+    integration_commit_parser.add_argument(
+        "--target", required=True, choices=("child", "source")
+    )
+    integration_commit_parser.add_argument("--expected-head", required=True)
+    integration_commit_parser.add_argument("--expected-tree", required=True)
+    integration_commit_parser.add_argument("--message", required=True)
+    integration_commit_parser.add_argument("--preparation-token")
+
+    integration_commit_review_parser = subparsers.add_parser(
+        "integration-commit-review",
+        help="internal: bind external review to an exact hook-modified commit",
+    )
+    integration_commit_review_parser.add_argument("--name", required=True)
+    integration_commit_review_parser.add_argument(
+        "--target", required=True, choices=("child", "source")
+    )
+    integration_commit_review_parser.add_argument(
+        "--preparation-token", required=True
+    )
+    integration_commit_review_parser.add_argument("--commit-head", required=True)
+    integration_commit_review_parser.add_argument("--commit-tree", required=True)
+
+    integration_preparation_abort_parser = subparsers.add_parser(
+        "integration-preparation-abort",
+        help="internal: drop one exact claim without reverting retained commits",
+    )
+    integration_preparation_abort_parser.add_argument("--name", required=True)
+    integration_preparation_abort_parser.add_argument(
+        "--preparation-token", required=True
+    )
+
     integrate = subparsers.add_parser(
-        "integrate", help="prepare, validate, or promote one local integration"
+        "integrate",
+        help="prepare, validate, or promote one primary-anchored local integration",
     )
     integrate.add_argument("--name", required=True)
+    integrate.add_argument(
+        "--expected-source-head",
+        required=True,
+        help="exact clean source SHA returned by integration-preflight",
+    )
+    integrate.add_argument(
+        "--expected-child-head",
+        required=True,
+        help="exact clean child SHA returned by integration-preflight",
+    )
+    integrate.add_argument(
+        "--preparation-token",
+        help="exact private token returned after preparatory commits",
+    )
     integrate.add_argument(
         "--validated-head",
         help="exact candidate SHA after non-mutating combined validation",
@@ -2385,12 +3163,46 @@ def main(argv: Sequence[str] | None = None) -> int:
                 name=arguments.name,
                 require_clean=arguments.require_clean,
             )
+        elif arguments.action == "integration-preflight":
+            result = integration_preflight(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                restart=arguments.restart,
+            )
+        elif arguments.action == "integration-commit":
+            result = integration_commit(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                target=arguments.target,
+                expected_head=arguments.expected_head,
+                expected_tree=arguments.expected_tree,
+                message=arguments.message,
+                preparation_token=arguments.preparation_token,
+            )
+        elif arguments.action == "integration-commit-review":
+            result = integration_commit_review(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                target=arguments.target,
+                preparation_token=arguments.preparation_token,
+                commit_head=arguments.commit_head,
+                commit_tree=arguments.commit_tree,
+            )
+        elif arguments.action == "integration-preparation-abort":
+            result = integration_preparation_abort(
+                cwd=Path.cwd(),
+                name=arguments.name,
+                preparation_token=arguments.preparation_token,
+            )
         elif arguments.action == "integrate":
             result = integrate_worktree(
                 cwd=Path.cwd(),
                 name=arguments.name,
                 validated_head=arguments.validated_head,
                 restart=arguments.restart,
+                expected_source_head=arguments.expected_source_head,
+                expected_child_head=arguments.expected_child_head,
+                preparation_token=arguments.preparation_token,
             )
         elif arguments.action == "remove":
             result = remove_worktree(cwd=Path.cwd(), name=arguments.name)
