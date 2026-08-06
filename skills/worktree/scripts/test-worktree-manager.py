@@ -27,6 +27,7 @@ sys.modules[SPEC.name] = wm
 SPEC.loader.exec_module(wm)
 interop_state = sys.modules["worktree_interop"]
 ownership_state = sys.modules["worktree_state"]
+lane_state = sys.modules["task_lane_state"]
 
 
 def git(*arguments: str, cwd: Path, check: bool = True) -> str:
@@ -454,6 +455,13 @@ class WorktreeManagerTest(unittest.TestCase):
             "task-lease-promote",
             "task-lease-release",
             "task-lease-inspect",
+            "task-lane-ensure",
+            "task-lane-generation-acquire",
+            "task-lane-generation-inspect",
+            "task-lane-generation-claims",
+            "task-lane-generation-release",
+            "task-lane-integrate",
+            "task-lane-remove",
         )
         for action in actions:
             with self.subTest(action=action):
@@ -489,6 +497,10 @@ class WorktreeManagerTest(unittest.TestCase):
             / "sdlc-prepare-execution"
             / "scripts"
             / "sdlc_execution_interop.py",
+            skills_root
+            / "task-implementer"
+            / "scripts"
+            / "prompt_workspace_lanes.py",
         }
         callers = {
             path
@@ -515,6 +527,13 @@ class WorktreeManagerTest(unittest.TestCase):
             "task-lease-promote",
             "task-lease-release",
             "task-lease-resource",
+            "task-lane-ensure",
+            "task-lane-generation-acquire",
+            "task-lane-generation-inspect",
+            "task-lane-generation-claims",
+            "task-lane-generation-release",
+            "task-lane-integrate",
+            "task-lane-remove",
         }
         for caller in sorted(callers):
             tree = ast.parse(caller.read_text(encoding="utf-8"), filename=str(caller))
@@ -1456,6 +1475,880 @@ class WorktreeManagerTest(unittest.TestCase):
         self.integrate(used, validated_head=str(ready["candidate_head"]))
         removed = wm.remove_worktree(cwd=self.repo, name=str(used["name"]))
         self.assertEqual(removed["status"], "removed")
+
+    def test_task_lane_is_idempotent_and_excludes_dirty_source_state(self) -> None:
+        dirty = self.repo / "uncommitted.txt"
+        dirty.write_text("source-only\n", encoding="utf-8")
+
+        created = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        reused = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        reused_from_lane = wm.task_lane_ensure(
+            cwd=Path(str(created["scope_cwd"])), project=None
+        )
+
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(reused["status"], "reused")
+        self.assertEqual(created["lane_id"], reused["lane_id"])
+        self.assertEqual(created["branch"], reused["branch"])
+        self.assertEqual(created["worktree"], reused["worktree"])
+        self.assertEqual(created["lane_id"], reused_from_lane["lane_id"])
+        self.assertEqual(created["lane_head"], self.source)
+        self.assertFalse(Path(str(created["worktree"]), "uncommitted.txt").exists())
+        self.assertTrue(dirty.is_file())
+
+    def test_task_lane_rejects_ordinary_task_lease_without_state_mutation(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        manifest_path = wm.manifest_path(self.repo, str(lane["name"]))
+        manifest_before = manifest_path.read_bytes()
+        lease_path = (
+            wm.state_directory(self.repo) / "leases" / f"{lane['name']}.json"
+        )
+
+        with self.assertRaisesRegex(
+            wm.WorktreeError, "cannot be acquired from a Task Implementer"
+        ):
+            wm.task_lease_acquire(
+                cwd=Path(str(lane["scope_cwd"])),
+                workspace=self.root / "agentic-run",
+                run_id="agentic-run",
+                task_scope="skills",
+                initial_head=str(lane["lane_head"]),
+                owner_kind="agentic-sdlc",
+            )
+
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertFalse(lease_path.exists())
+
+    def test_task_lane_missing_branch_identity_fails_closed_without_lease(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        manifest_path = wm.manifest_path(self.repo, str(lane["name"]))
+        manifest_before = manifest_path.read_bytes()
+        lease_path = (
+            wm.state_directory(self.repo) / "leases" / f"{lane['name']}.json"
+        )
+        git(
+            "config",
+            "--local",
+            "--unset-all",
+            wm._task_lane_config_key(str(lane["branch"]), "lane_id"),
+            cwd=self.repo,
+        )
+
+        with self.assertRaisesRegex(
+            wm.WorktreeError, "task lane branch metadata is incomplete"
+        ):
+            wm.task_lease_acquire(
+                cwd=Path(str(lane["scope_cwd"])),
+                workspace=self.root / "agentic-run",
+                run_id="agentic-run",
+                task_scope="skills",
+                initial_head=str(lane["lane_head"]),
+                owner_kind="agentic-sdlc",
+            )
+
+        for field in ("source_ref", "incarnation"):
+            git(
+                "config",
+                "--local",
+                "--unset-all",
+                wm._task_lane_config_key(str(lane["branch"]), field),
+                cwd=self.repo,
+            )
+        with self.assertRaisesRegex(
+            wm.WorktreeError, "metadata is missing from a live lane"
+        ):
+            wm.inspect_managed_anchor(cwd=Path(str(lane["scope_cwd"])))
+
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertFalse(lease_path.exists())
+
+    def test_task_lane_creation_recovery_cleans_and_reincarnates(self) -> None:
+        original_write = wm.write_lane
+        failed = False
+
+        def fail_first_idle(primary: Path, value: dict[str, object]) -> Path:
+            nonlocal failed
+            if value["state"] == "idle" and not failed:
+                failed = True
+                raise wm.TaskLaneStateError("simulated lane checkpoint interruption")
+            return original_write(primary, value)
+
+        with (
+            mock.patch.object(wm, "write_lane", side_effect=fail_first_idle),
+            self.assertRaisesRegex(
+                wm.WorktreeError, "simulated lane checkpoint interruption"
+            ),
+        ):
+            wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+
+        recovered = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        self.assertEqual(recovered["status"], "created")
+        self.assertEqual(recovered["incarnation"], 2)
+        self.assertEqual(recovered["lane_head"], self.source)
+
+    def test_task_lane_generation_stays_monotonic_after_reincarnation(self) -> None:
+        def complete_no_change_generation(
+            lane: dict[str, object], *, run_id: str, generation: int
+        ) -> None:
+            lane_root = Path(str(lane["worktree"]))
+            initial = str(lane["lane_head"])
+            acquired = wm.task_lane_generation_acquire(
+                cwd=Path(str(lane["scope_cwd"])),
+                workspace=self.root / f"{run_id}.json",
+                run_id=run_id,
+                task_scope="skills",
+                initial_head=initial,
+            )
+            self.assertEqual(acquired["generation"], generation)
+            wm.task_lease_promote(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                lease_id=str(acquired["token"]),
+                promoted_head=initial,
+                expected_head=initial,
+                owner_kind="task-implementer",
+            )
+            wm.task_lane_generation_release(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                generation=generation,
+                lease_id=str(acquired["token"]),
+                promoted_head=initial,
+            )
+            integrated = wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=None,
+                restart=False,
+            )
+            self.assertEqual(integrated["integrated_generations"], [generation])
+
+        first = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        complete_no_change_generation(first, run_id="run-first-life", generation=1)
+        wm.task_lane_remove(cwd=self.repo, lane_id=str(first["lane_id"]))
+
+        second = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        self.assertEqual(second["incarnation"], int(first["incarnation"]) + 1)
+        complete_no_change_generation(second, run_id="run-second-life", generation=2)
+
+    def test_task_lane_state_rejects_inconsistent_lifecycle_shape(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        path = lane_state.lane_path(self.repo, str(lane["lane_id"]))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["latest_generation"] = 1
+        payload["pending_generations"] = [1]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            wm.TaskLaneStateError, "idle task lane retains lifecycle work"
+        ):
+            wm.load_lane(self.repo, str(lane["lane_id"]))
+
+    def test_task_lane_rejects_default_source_and_dirty_lane_run(self) -> None:
+        git("switch", "main", cwd=self.repo)
+        with self.assertRaisesRegex(wm.WorktreeError, "non-default source"):
+            wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        git("switch", "abc-feature", cwd=self.repo)
+
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        (lane_root / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        with self.assertRaisesRegex(wm.WorktreeError, "completely clean"):
+            wm.task_lane_generation_acquire(
+                cwd=Path(str(lane["scope_cwd"])),
+                workspace=self.root / "workspace.json",
+                run_id="run-dirty",
+                task_scope="skills",
+                initial_head=str(lane["lane_head"]),
+            )
+
+    def test_task_lane_generation_acquire_recovers_external_first_checkpoint(
+        self,
+    ) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        original_write = wm.write_lane
+        failed = False
+
+        def fail_first_active(primary: Path, value: dict[str, object]) -> Path:
+            nonlocal failed
+            if value["state"] == "active" and not failed:
+                failed = True
+                raise wm.TaskLaneStateError("simulated generation checkpoint loss")
+            return original_write(primary, value)
+
+        arguments = {
+            "cwd": Path(str(lane["scope_cwd"])),
+            "workspace": self.root / "workspace.json",
+            "run_id": "run-recover-acquire",
+            "task_scope": "skills",
+            "initial_head": str(lane["lane_head"]),
+        }
+        with (
+            mock.patch.object(wm, "write_lane", side_effect=fail_first_active),
+            self.assertRaisesRegex(wm.WorktreeError, "generation checkpoint loss"),
+        ):
+            wm.task_lane_generation_acquire(**arguments)
+
+        recovered = wm.task_lane_generation_acquire(**arguments)
+        self.assertEqual(recovered["status"], "recovered")
+        self.assertEqual(recovered["generation"], 1)
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["active_generation"]["token"], recovered["token"])
+
+    def test_task_lane_idle_refresh_recovers_after_fast_forward(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        (self.repo / "source-refresh.txt").write_text("advance\n", encoding="utf-8")
+        git("add", "source-refresh.txt", cwd=self.repo)
+        git("commit", "-qm", "advance source for lane refresh", cwd=self.repo)
+        source_head = git("rev-parse", "HEAD", cwd=self.repo)
+        original_write_config = wm._write_config
+        failed = False
+
+        def fail_after_fast_forward(
+            repository: Path, branch: str, field: str, value: str
+        ) -> None:
+            nonlocal failed
+            if field == "base" and value == source_head and not failed:
+                failed = True
+                raise wm.WorktreeError("simulated refresh checkpoint loss")
+            original_write_config(repository, branch, field, value)
+
+        with (
+            mock.patch.object(wm, "_write_config", side_effect=fail_after_fast_forward),
+            self.assertRaisesRegex(wm.WorktreeError, "refresh checkpoint loss"),
+        ):
+            wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=lane_root), source_head)
+
+        recovered = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        self.assertEqual(recovered["lane_head"], source_head)
+        manifest = wm.load_manifest(self.repo, str(lane["name"]))
+        assert manifest is not None
+        self.assertEqual(manifest.base, source_head)
+        self.assertEqual(manifest.expected_head, source_head)
+        self.assertEqual(
+            wm._read_config(self.repo, str(lane["branch"]), "base"), source_head
+        )
+        removed = wm.task_lane_remove(
+            cwd=self.repo, lane_id=str(lane["lane_id"])
+        )
+        self.assertEqual(removed["status"], "removed")
+
+    def test_task_lane_idle_refresh_serializes_generation_acquire(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        old_head = str(lane["lane_head"])
+        (self.repo / "source-refresh-race.txt").write_text(
+            "advance\n", encoding="utf-8"
+        )
+        git("add", "source-refresh-race.txt", cwd=self.repo)
+        git("commit", "-qm", "advance source for refresh race", cwd=self.repo)
+        source_head = git("rev-parse", "HEAD", cwd=self.repo)
+        refresh_entered = threading.Event()
+        allow_refresh = threading.Event()
+        acquire_entered = threading.Event()
+        original_refresh = wm._task_lane_refresh_idle
+        original_lane_by_name = wm._task_lane_by_name
+
+        def paused_refresh(
+            primary: Path, value: dict[str, object]
+        ) -> dict[str, object]:
+            refresh_entered.set()
+            if not allow_refresh.wait(timeout=5):
+                raise AssertionError("refresh barrier timed out")
+            return original_refresh(primary, value)
+
+        def observed_lane_by_name(
+            primary: Path, name: str
+        ) -> tuple[dict[str, object], object, object]:
+            acquire_entered.set()
+            return original_lane_by_name(primary, name)
+
+        with (
+            mock.patch.object(
+                wm, "_task_lane_refresh_idle", side_effect=paused_refresh
+            ),
+            mock.patch.object(
+                wm, "_task_lane_by_name", side_effect=observed_lane_by_name
+            ),
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                refresh_future = executor.submit(
+                    wm.task_lane_ensure, cwd=self.repo / "skills", project=None
+                )
+                self.assertTrue(refresh_entered.wait(timeout=5))
+                acquire_future = executor.submit(
+                    wm.task_lane_generation_acquire,
+                    cwd=Path(str(lane["scope_cwd"])),
+                    workspace=self.root / "refresh-race.json",
+                    run_id="run-refresh-race",
+                    task_scope="skills",
+                    initial_head=old_head,
+                )
+                try:
+                    self.assertFalse(acquire_entered.wait(timeout=0.2))
+                finally:
+                    allow_refresh.set()
+                refreshed = refresh_future.result(timeout=5)
+                self.assertEqual(refreshed["lane_head"], source_head)
+                with self.assertRaisesRegex(wm.WorktreeError, "baseline does not match"):
+                    acquire_future.result(timeout=5)
+
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["state"], "idle")
+        self.assertIsNone(state["active_generation"])
+        self.assertEqual(state["lane_head"], source_head)
+
+    def test_task_lane_idle_refresh_serializes_removal(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        (self.repo / "source-refresh-remove.txt").write_text(
+            "advance\n", encoding="utf-8"
+        )
+        git("add", "source-refresh-remove.txt", cwd=self.repo)
+        git("commit", "-qm", "advance source for refresh removal", cwd=self.repo)
+        refresh_entered = threading.Event()
+        allow_refresh = threading.Event()
+        remove_entered = threading.Event()
+        original_refresh = wm._task_lane_refresh_idle
+        original_remove = wm._remove_worktree_unlocked
+
+        def paused_refresh(
+            primary: Path, value: dict[str, object]
+        ) -> dict[str, object]:
+            refresh_entered.set()
+            if not allow_refresh.wait(timeout=5):
+                raise AssertionError("refresh barrier timed out")
+            return original_refresh(primary, value)
+
+        def observed_remove(**kwargs: object) -> dict[str, object]:
+            remove_entered.set()
+            return original_remove(**kwargs)
+
+        with (
+            mock.patch.object(
+                wm, "_task_lane_refresh_idle", side_effect=paused_refresh
+            ),
+            mock.patch.object(
+                wm, "_remove_worktree_unlocked", side_effect=observed_remove
+            ),
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                refresh_future = executor.submit(
+                    wm.task_lane_ensure, cwd=self.repo / "skills", project=None
+                )
+                self.assertTrue(refresh_entered.wait(timeout=5))
+                remove_future = executor.submit(
+                    wm.task_lane_remove,
+                    cwd=self.repo,
+                    lane_id=str(lane["lane_id"]),
+                )
+                try:
+                    self.assertFalse(remove_entered.wait(timeout=0.2))
+                finally:
+                    allow_refresh.set()
+                self.assertEqual(refresh_future.result(timeout=5)["status"], "reused")
+                self.assertEqual(remove_future.result(timeout=5)["status"], "removed")
+
+    def test_task_lane_no_change_integration_recovers_after_fast_forward(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        initial = str(lane["lane_head"])
+        acquired = wm.task_lane_generation_acquire(
+            cwd=lane_root / "skills",
+            workspace=self.root / "workspace.json",
+            run_id="run-no-change",
+            task_scope="skills",
+            initial_head=initial,
+        )
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(acquired["token"]),
+            promoted_head=initial,
+            expected_head=initial,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=1,
+            lease_id=str(acquired["token"]),
+            promoted_head=initial,
+        )
+        (self.repo / "source-no-change.txt").write_text("advance\n", encoding="utf-8")
+        git("add", "source-no-change.txt", cwd=self.repo)
+        git("commit", "-qm", "advance source around no-change lane", cwd=self.repo)
+        source_head = git("rev-parse", "HEAD", cwd=self.repo)
+        original_write_config = wm._write_config
+        failed = False
+
+        def fail_after_fast_forward(
+            repository: Path, branch: str, field: str, value: str
+        ) -> None:
+            nonlocal failed
+            if field == "base" and value == source_head and not failed:
+                failed = True
+                raise wm.WorktreeError("simulated no-change checkpoint loss")
+            original_write_config(repository, branch, field, value)
+
+        with (
+            mock.patch.object(wm, "_write_config", side_effect=fail_after_fast_forward),
+            self.assertRaisesRegex(wm.WorktreeError, "no-change checkpoint loss"),
+        ):
+            wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=None,
+                restart=False,
+            )
+        interrupted = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert interrupted is not None
+        self.assertEqual(interrupted["state"], "integrating")
+        self.assertEqual(interrupted["integration"]["phase"], "no-change")
+        self.assertEqual(git("rev-parse", "HEAD", cwd=lane_root), source_head)
+
+        recovered = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        self.assertEqual(recovered["status"], "integrated-no-change")
+        self.assertEqual(recovered["integrated_generations"], [1])
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["state"], "idle")
+        self.assertEqual(state["lane_head"], source_head)
+
+    def test_task_lane_claim_and_release_are_serialized(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        initial = str(lane["lane_head"])
+        acquired = wm.task_lane_generation_acquire(
+            cwd=lane_root / "skills",
+            workspace=self.root / "workspace.json",
+            run_id="run-claim-release",
+            task_scope="skills",
+            initial_head=initial,
+        )
+        first_claim = {"kind": "exact", "path": "skills/skill.txt"}
+        wm.task_lane_generation_claims(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=1,
+            lease_id=str(acquired["token"]),
+            claims=[first_claim],
+        )
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(acquired["token"]),
+            promoted_head=initial,
+            expected_head=initial,
+            owner_kind="task-implementer",
+        )
+        release_entered = threading.Event()
+        allow_release = threading.Event()
+        claim_started = threading.Event()
+        original_release = wm.task_lease_release
+
+        def paused_release(**kwargs: object) -> dict[str, object]:
+            release_entered.set()
+            if not allow_release.wait(timeout=5):
+                raise AssertionError("release barrier timed out")
+            return original_release(**kwargs)
+
+        def late_claim() -> dict[str, object]:
+            claim_started.set()
+            return wm.task_lane_generation_claims(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                generation=1,
+                lease_id=str(acquired["token"]),
+                claims=[{"kind": "exact", "path": "README.md"}],
+            )
+
+        with mock.patch.object(wm, "task_lease_release", side_effect=paused_release):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                release_future = executor.submit(
+                    wm.task_lane_generation_release,
+                    cwd=lane_root,
+                    name=str(lane["name"]),
+                    generation=1,
+                    lease_id=str(acquired["token"]),
+                    promoted_head=initial,
+                )
+                self.assertTrue(release_entered.wait(timeout=5))
+                claim_future = executor.submit(late_claim)
+                self.assertTrue(claim_started.wait(timeout=5))
+                with self.assertRaises(TimeoutError):
+                    claim_future.result(timeout=0.1)
+                allow_release.set()
+                self.assertEqual(release_future.result(timeout=5)["status"], "released")
+                with self.assertRaisesRegex(wm.WorktreeError, "not active"):
+                    claim_future.result(timeout=5)
+
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        receipt = wm.load_generation(self.repo, str(lane["lane_id"]), 1)
+        assert state is not None and receipt is not None
+        expected_claim = {**first_claim, "generation": 1}
+        self.assertEqual(state["claims"], [expected_claim])
+        self.assertEqual(receipt["claims"], [expected_claim])
+
+    def test_task_lane_generations_integrate_and_rearm_same_lane(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        workspace = self.root / "workspace.json"
+        expected_heads: list[str] = []
+
+        for generation, content in ((1, "first\n"), (2, "second\n")):
+            initial = git("rev-parse", "HEAD", cwd=lane_root)
+            acquired = wm.task_lane_generation_acquire(
+                cwd=Path(str(lane["scope_cwd"])),
+                workspace=workspace,
+                run_id=f"run-{generation}",
+                task_scope="skills",
+                initial_head=initial,
+            )
+            self.assertEqual(acquired["generation"], generation)
+            wm.task_lane_generation_claims(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                generation=generation,
+                lease_id=str(acquired["token"]),
+                claims=[{"kind": "exact", "path": "skills/skill.txt"}],
+            )
+            (lane_root / "skills" / "skill.txt").write_text(
+                content, encoding="utf-8"
+            )
+            git("add", "skills/skill.txt", cwd=lane_root)
+            git("commit", "-qm", f"generation {generation}", cwd=lane_root)
+            promoted = git("rev-parse", "HEAD", cwd=lane_root)
+            expected_heads.append(promoted)
+            wm.task_lease_promote(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                lease_id=str(acquired["token"]),
+                promoted_head=promoted,
+                expected_head=initial,
+                owner_kind="task-implementer",
+            )
+            released = wm.task_lane_generation_release(
+                cwd=lane_root,
+                name=str(lane["name"]),
+                generation=generation,
+                lease_id=str(acquired["token"]),
+                promoted_head=promoted,
+            )
+            self.assertEqual(released["status"], "released")
+
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["pending_generations"], [1, 2])
+        self.assertEqual(state["lane_head"], expected_heads[-1])
+        with self.assertRaisesRegex(wm.WorktreeError, "fully integrated"):
+            wm.task_lane_remove(cwd=self.repo, lane_id=str(lane["lane_id"]))
+        with self.assertRaisesRegex(wm.WorktreeError, "workspace remove"):
+            wm.remove_worktree(cwd=self.repo, name=str(lane["name"]))
+        source_dirty = self.repo / "source-dirty-before-integrate.txt"
+        source_dirty.write_text("dirty\n", encoding="utf-8")
+        with self.assertRaisesRegex(wm.WorktreeError, "source checkout"):
+            wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=None,
+                restart=False,
+            )
+        source_dirty.unlink()
+
+        ready = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        self.assertEqual(ready["status"], "validation-required")
+        original_write = wm.write_lane
+        failed = False
+
+        def fail_first_rearm(primary: Path, value: dict[str, object]) -> Path:
+            nonlocal failed
+            if (
+                value["state"] == "idle"
+                and value["last_integrated_generation"] == 2
+                and not failed
+            ):
+                failed = True
+                raise wm.TaskLaneStateError("simulated rearm checkpoint loss")
+            return original_write(primary, value)
+
+        with (
+            mock.patch.object(wm, "write_lane", side_effect=fail_first_rearm),
+            self.assertRaisesRegex(wm.WorktreeError, "rearm checkpoint loss"),
+        ):
+            wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=str(ready["candidate_head"]),
+                restart=False,
+            )
+        integrated = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        self.assertEqual(integrated["status"], "integrated")
+        self.assertEqual(integrated["integrated_generations"], [1, 2])
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), integrated["source_head"])
+        self.assertEqual(git("rev-parse", "HEAD", cwd=lane_root), integrated["lane_head"])
+        self.assertEqual(integrated["worktree"] if "worktree" in integrated else str(lane_root), str(lane_root))
+
+        next_generation = wm.task_lane_generation_acquire(
+            cwd=lane_root / "skills",
+            workspace=workspace,
+            run_id="run-3",
+            task_scope="skills",
+            initial_head=str(integrated["lane_head"]),
+        )
+        self.assertEqual(next_generation["generation"], 3)
+
+    def test_task_lane_claims_conflict_across_project_scopes(self) -> None:
+        first = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        second = wm.task_lane_ensure(
+            cwd=self.repo / "services" / "example", project=None
+        )
+        first_lease = wm.task_lane_generation_acquire(
+            cwd=Path(str(first["scope_cwd"])),
+            workspace=self.root / "first.json",
+            run_id="run-first",
+            task_scope="skills",
+            initial_head=str(first["lane_head"]),
+        )
+        second_lease = wm.task_lane_generation_acquire(
+            cwd=Path(str(second["scope_cwd"])),
+            workspace=self.root / "second.json",
+            run_id="run-second",
+            task_scope="services/example",
+            initial_head=str(second["lane_head"]),
+        )
+        claim = [{"kind": "domain", "path": "repository-docs"}]
+        wm.task_lane_generation_claims(
+            cwd=Path(str(first["worktree"])),
+            name=str(first["name"]),
+            generation=1,
+            lease_id=str(first_lease["token"]),
+            claims=claim,
+        )
+        with self.assertRaisesRegex(wm.WorktreeError, "claim conflicts"):
+            wm.task_lane_generation_claims(
+                cwd=Path(str(second["worktree"])),
+                name=str(second["name"]),
+                generation=1,
+                lease_id=str(second_lease["token"]),
+                claims=claim,
+            )
+
+    def test_task_lane_claim_scan_failure_does_not_publish_unchecked_claim(
+        self,
+    ) -> None:
+        first = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        second = wm.task_lane_ensure(
+            cwd=self.repo / "services" / "example", project=None
+        )
+        first_lease = wm.task_lane_generation_acquire(
+            cwd=Path(str(first["scope_cwd"])),
+            workspace=self.root / "claim-first.json",
+            run_id="run-claim-first",
+            task_scope="skills",
+            initial_head=str(first["lane_head"]),
+        )
+        second_lease = wm.task_lane_generation_acquire(
+            cwd=Path(str(second["scope_cwd"])),
+            workspace=self.root / "claim-second.json",
+            run_id="run-claim-second",
+            task_scope="services/example",
+            initial_head=str(second["lane_head"]),
+        )
+        claim = [{"kind": "domain", "path": "repository-docs"}]
+        wm.task_lane_generation_claims(
+            cwd=Path(str(second["worktree"])),
+            name=str(second["name"]),
+            generation=1,
+            lease_id=str(second_lease["token"]),
+            claims=claim,
+        )
+
+        with (
+            mock.patch.object(
+                wm,
+                "all_lanes",
+                side_effect=wm.TaskLaneStateError("simulated peer scan failure"),
+            ),
+            self.assertRaisesRegex(wm.WorktreeError, "simulated peer scan failure"),
+        ):
+            wm.task_lane_generation_claims(
+                cwd=Path(str(first["worktree"])),
+                name=str(first["name"]),
+                generation=1,
+                lease_id=str(first_lease["token"]),
+                claims=claim,
+            )
+
+        with self.assertRaisesRegex(wm.WorktreeError, "claim conflicts"):
+            wm.task_lane_generation_claims(
+                cwd=Path(str(first["worktree"])),
+                name=str(first["name"]),
+                generation=1,
+                lease_id=str(first_lease["token"]),
+                claims=claim,
+            )
+
+    def test_task_lane_integration_requires_explicit_restart_after_source_move(
+        self,
+    ) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        acquired = wm.task_lane_generation_acquire(
+            cwd=lane_root / "skills",
+            workspace=self.root / "workspace.json",
+            run_id="run-restart",
+            task_scope="skills",
+            initial_head=str(lane["lane_head"]),
+        )
+        initial = str(lane["lane_head"])
+        (lane_root / "skills" / "skill.txt").write_text(
+            "lane change\n", encoding="utf-8"
+        )
+        git("add", "skills/skill.txt", cwd=lane_root)
+        git("commit", "-qm", "lane generation", cwd=lane_root)
+        promoted = git("rev-parse", "HEAD", cwd=lane_root)
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+            expected_head=initial,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=1,
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+        )
+        first = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        self.assertEqual(first["status"], "validation-required")
+
+        (self.repo / "source-moved.txt").write_text("moved\n", encoding="utf-8")
+        git("add", "source-moved.txt", cwd=self.repo)
+        git("commit", "-qm", "advance source during lane integration", cwd=self.repo)
+        moved_source = git("rev-parse", "HEAD", cwd=self.repo)
+        with self.assertRaisesRegex(wm.WorktreeError, "source moved"):
+            wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=None,
+                restart=False,
+            )
+
+        restarted = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=True,
+        )
+        self.assertEqual(restarted["status"], "validation-required")
+        self.assertEqual(restarted["source_head"], moved_source)
+        integrated = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=str(restarted["candidate_head"]),
+            restart=False,
+        )
+        self.assertEqual(integrated["integrated_generations"], [1])
+
+    def test_task_lane_remove_is_idempotent_after_full_integration(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        removed = wm.task_lane_remove(
+            cwd=self.repo, lane_id=str(lane["lane_id"])
+        )
+        repeated = wm.task_lane_remove(
+            cwd=self.repo, lane_id=str(lane["lane_id"])
+        )
+        self.assertEqual(removed["status"], "removed")
+        self.assertEqual(repeated["status"], "already-removed")
+        self.assertFalse(Path(str(lane["worktree"])).exists())
+
+    def test_task_lane_remove_resumes_after_post_cleanup_interruption(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        original_remove = wm._remove_worktree_unlocked
+
+        def remove_then_interrupt(**kwargs: object) -> dict[str, object]:
+            original_remove(**kwargs)
+            raise wm.WorktreeError("simulated removal checkpoint interruption")
+
+        with (
+            mock.patch.object(
+                wm, "_remove_worktree_unlocked", side_effect=remove_then_interrupt
+            ),
+            self.assertRaisesRegex(wm.WorktreeError, "simulated removal"),
+        ):
+            wm.task_lane_remove(cwd=self.repo, lane_id=str(lane["lane_id"]))
+
+        resumed = wm.task_lane_remove(
+            cwd=self.repo, lane_id=str(lane["lane_id"])
+        )
+        self.assertEqual(resumed["status"], "removed")
+        final = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert final is not None
+        self.assertEqual(final["state"], "removed")
+
+    def test_task_lane_remove_retains_branch_when_source_ref_moves(self) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_head = str(lane["lane_head"])
+        moved_source = git("rev-parse", "HEAD^", cwd=self.repo)
+        original_remove = wm._remove_worktree_unlocked
+        moved = False
+
+        def move_source_then_remove(**kwargs: object) -> dict[str, object]:
+            nonlocal moved
+            if not moved:
+                moved = True
+                git(
+                    "update-ref",
+                    str(lane["source_ref"]),
+                    moved_source,
+                    lane_head,
+                    cwd=self.repo,
+                )
+            return original_remove(**kwargs)
+
+        with (
+            mock.patch.object(
+                wm, "_remove_worktree_unlocked", side_effect=move_source_then_remove
+            ),
+            self.assertRaisesRegex(wm.WorktreeError, "source ref moved"),
+        ):
+            wm.task_lane_remove(cwd=self.repo, lane_id=str(lane["lane_id"]))
+
+        self.assertEqual(
+            git(
+                "rev-parse",
+                "--verify",
+                f"refs/heads/{lane['branch']}",
+                cwd=self.repo,
+            ),
+            lane_head,
+        )
 
     def test_remove_rejects_unintegrated_child_commits(self) -> None:
         result = self.add()

@@ -147,7 +147,7 @@ bodies.
   },
   "repair": null,
   "execution": {
-    "schema": "agentic-sdlc/execution-coordinator-v6",
+    "schema": "agentic-sdlc/execution-coordinator-v7",
     "feature_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -202,20 +202,29 @@ immutable classification plus a completed successful dispatch. `resolved` is
 valid only when the cursor is complete; the Stop hook rejects UAT, PR, or
 publication routing while any invalidated gate remains.
 
-Coordinator v6 binds the exact initialized folder through `git_root`,
+Coordinator v7 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
-Execution wave v2 enforces an active capacity-batch cursor. Mutable task v3
-records store append-only hashed worker-session history plus attempt count;
-assignment v2 binds an immutable `incoming-handoff-v1`, and
+Execution wave v2 enforces an active capacity-batch cursor. Mutable task v4
+records store append-only hashed worker-session history, attempt count,
+dispatch/start timestamps, heartbeat phase/sequence, and an optional
+digest-protected `task-finish-intent-v1`; assignment v3 binds the exact
+helper/run identity, liveness profile, and immutable `incoming-handoff-v1`.
+Private `task-arm`, `task-start`, direct `task-heartbeat`, and read-only
+`task-watch` transitions are Agentic-owned and never share Task Implementer
+state. Private `task-requeue` returns only a confirmed-stopped, never-started,
+clean exact dispatch to the queue. The coordinator-owned `task-finish` creates
+the task commit after recording its assignment/base/tree/message/evidence
+intent. Retry can adopt only that clean direct-child commit and an exact result
+from either persistence crash window. A
 `worker-result-v4` carries an explicit summary, decisions, open risks, and,
 for corrective tasks, digest-protected `regression-oracle-evidence-v1` bound
-to the exact diagnosis, oracle, and worker commit. Atomic private
+to the exact diagnosis, oracle, and coordinator-created task commit. Atomic private
 `execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
 one session identity across tasks. A private execution transition lock and
 expected-attempt recovery guard make each task ownership transfer exclusive.
 Optional `execution/interop.json` uses
 `agentic-sdlc/worktree-interop-v2` for a managed outer-worktree lease and
-source-integration handoff. Every coordinator v1 through v5 record fails with
+source-integration handoff. Every coordinator v1 through v6 record fails with
 `WORKFLOW_UPGRADE_REQUIRED` and is
 not mutated, including completed records.
 
@@ -289,12 +298,13 @@ without conversation history.
 }
 ```
 
-Execution coordinator v6 is the only supported execution schema. If an
+Execution coordinator v7 is the only supported execution schema. If an
 `agentic-sdlc/execution-coordinator-v1` or
 `agentic-sdlc/execution-coordinator-v2` or
 `agentic-sdlc/execution-coordinator-v3` or
 `agentic-sdlc/execution-coordinator-v4` or
-`agentic-sdlc/execution-coordinator-v5` record exists, stop with
+`agentic-sdlc/execution-coordinator-v5` or
+`agentic-sdlc/execution-coordinator-v6` record exists, stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate its
 resources. This applies to completed records; there is no legacy read path.
 

@@ -85,6 +85,8 @@ def contract(source: Path) -> tuple[str, str]:
     required_commands = (
         "$task-implementer workspace init [project-folder]",
         "$task-implementer run <prompt-path-or-unique-filename>",
+        "$task-implementer integrate [project-folder]",
+        "$task-implementer workspace remove [project-folder]",
     )
     frontmatter = re.match(r"\A---\n(?P<body>.*?)\n---\n", skill, re.DOTALL)
     if source.name != "task-implementer" or frontmatter is None:
@@ -94,7 +96,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "the source folder and frontmatter name do not match"
     observed_commands = tuple(re.findall(r"(?m)^\$task-implementer[^\n]*$", skill))
     if observed_commands != required_commands:
-        return "FAIL", "the public interface is not exactly the two canonical commands"
+        return "FAIL", "the public interface is not exactly the four canonical actions"
     policy_block = re.search(
         r"(?m)^policy:\s*(?:#.*)?\n(?P<body>(?:(?:[ \t]+[^\n]*|[ \t]*)\n?)*)",
         metadata,
@@ -116,7 +118,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "an unsupported public compatibility command is present"
     return (
         "PASS",
-        "explicit-only metadata and the exact two-command surface are present",
+        "explicit-only metadata and the exact four-action surface are present",
     )
 
 

@@ -43,7 +43,7 @@ editable body.
 
 ## Seeded brownfield fixture
 
-`prepare` copies `assets/multi-tier-fixture/` into a new remote-free Git
+`prepare` copies `assets/multi-tier-fixture/` into a new local-only Git
 repository and commits it on a named test branch. The seed is a minimal local
 single-process task board. The managed prompt asks Task Implementer to migrate
 it into a frontend, API, and PostgreSQL application with a dependent runtime
@@ -136,6 +136,6 @@ uses the same durable ledger and must remain equally specific.
 
 Plain create always finishes through exact cleanup, including after a failed
 test. Keep mode retains the current generation. Destroy validates the current
-owner, marker, generation, remote-free Git identity, Compose snapshot, and
+owner, marker, generation, owned local-origin Git identity, Compose snapshot, and
 runtime labels, then removes only that generation. Any ambiguity retains state
 and returns a cleanup blocker.

@@ -40,7 +40,7 @@ Source basis:
 | Stateful workflow profile | State-machine skills define required reads, writes, idempotency, failure handling, must-not rules, and completion criteria. |
 | Private state boundary | Workflow execution state, locked plans, evidence, screenshots, transcripts, and steering files are kept out of committed project files unless explicitly intended. |
 | Hook boundary | Hooks enforce invariants only and do not become the workflow orchestrator. |
-| Help interface | After the selected `SKILL.md` loads, `$skill-name --help` and `$skill-name -h` stop before additional tools or mutation and report concise purpose, invocation policy, public usage/actions, and documented options without exposing private helper flags. |
+| Help interface | After the selected `SKILL.md` loads, `$skill-name --help` and `$skill-name -h` stop before additional tools or mutation; state concise purpose and invocation policy; show exact usage for every public action; describe every public action, positional argument, and flag in one concise line; include `-h, --help`; say when no additional public flags exist; and exclude private helper actions or flags. |
 | Learning loop coverage | Each target `SKILL.md` has a `## Learning Loop` section containing the validator-required public-safe source-learning text. |
 | Learning capture | Durable, reusable knowledge discovered during execution is captured in the local skill source materials when evidence-backed and in scope. |
 | Maintainability | Instructions are concise, non-duplicative, and easy to update. |
@@ -69,8 +69,11 @@ Source basis:
 5. For state-machine or coordinator skills, decide whether the optional
    stateful-workflow profile applies. If it applies, check the profile sections
    manually or run `validate-skill-structure.py --profile stateful-workflow`.
-6. Confirm the target `SKILL.md` has standard `## Help` and `## Learning Loop`
-   sections. Repair help that can execute or expose private flags, and repair
+6. Inventory every documented public action, positional argument, and flag.
+   Confirm the target `SKILL.md` has standard `## Help` and `## Learning Loop`
+   sections. Add or repair Help so it concisely describes every inventoried
+   public item, includes `-h, --help`, says when no other public flags exist,
+   and cannot execute or expose private helper actions or flags. Repair
    learning-loop variants that omit validator-required snippets.
 7. Search the skill for vendor names, CLI commands, APIs, cloud services,
    package managers, auth flows, publishing steps, Kubernetes, Terraform, Helm,

@@ -72,8 +72,9 @@ The parent agent is the feature coordinator: it owns phase decisions, shared
 execution state, integration, combined validation, promotion, and the final
 report. During implementation, every safe `TASK-*` uses one fresh task agent
 with its own branch and private Git worktree. A task agent owns only its
-immutable assignment, declared write claims, focused evidence, review, and one
-direct-child commit. Task agents never select SDLC phases or mutate shared
+immutable assignment, declared write claims, focused evidence, review, and
+uncommitted implementation. Coordinator-owned `task-finish` creates the one
+direct-child task commit. Task agents never select SDLC phases or mutate shared
 coordinator state directly. MCP servers are tools an agent can call through the
 selected phase skill.
 
@@ -178,7 +179,7 @@ Important files include:
   compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `execution/FEAT-*/coordinator.json`: schema-v6 feature execution identity,
+- `execution/FEAT-*/coordinator.json`: schema-v7 feature execution identity,
   exact base/integration SHAs, wave pointers, and promotion state.
 - `execution/FEAT-*/waves/`, `tasks/`, `assignments/`, `incoming-handoffs/`,
   `sessions/`, `results/`, and `journals/`: separate private records for
@@ -239,10 +240,12 @@ the first wave has no predecessors; later assignments contain structured
 evidence from all earlier completed waves and batches. A process-safe transition
 lock, atomic hashed-session claims, and expected-attempt recovery guards prevent
 session or task ownership reuse. Workers return explicit summary, decisions,
-risks, validation, and review evidence and produce one direct-child commit. The
-coordinator verifies digests, paths, Git identity, and ancestry, opens the next
+risks, validation, and review evidence without committing. The coordinator
+arms and watches workers, then uses `task-finish` to verify liveness, digests,
+paths, Git identity, and ancestry and create one direct-child task commit. It opens the next
 batch only after the active batch commits, merges tasks in stable task order
-with retained worker commits and explicit `--no-ff` merge commits, runs combined
+with retained coordinator-created task commits and explicit `--no-ff` merge
+commits, runs combined
 evidence at the exact integration tip, and non-force-cleans only clean reachable
 worker resources.
 
@@ -538,7 +541,7 @@ The preflight must verify and record:
 - deterministic failure-event, diagnosis, repair-control, design-admission,
   corrective-plan, full task-definition digest, and Stop-hook route contracts
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs schema-v6 execution through promotion, proves the v3 outer
+  worktree, runs schema-v7 execution through promotion, proves the v4 outer
   lease blocks outer integration, releases after final evidence, integrates
   the child locally, and records exact source proof
 - duplicate SDLC skill-name detection
@@ -623,7 +626,7 @@ Required happy-path evidence:
   implementation, including planned
   slice contracts and cross-layer validation targets when present.
 - `sdlc-implement-plan` uses one fresh agent, branch, and worktree per safe task,
-  preserves worker commits, creates ordered merge commits, runs combined
+  preserves coordinator-created task commits, creates ordered merge commits, runs combined
   evidence, and non-force-cleans worker resources.
 - `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
   evidence or route failures for classification, including slice boundary
@@ -920,11 +923,17 @@ branch and `HEAD` without fetching or resolving a remote default. It validates
 the locked task graph and prepares or resumes the feature
 integration branch/worktree at the exact project base SHA. The exact folder
 selected by `workspace init` is enforced as the claim, worker-cwd, and
-changed-path boundary even in a monorepo. It records schema-v6 private
+changed-path boundary even in a monorepo. It records schema-v7 private
 execution state, supports confirmed interrupted-worker transfer and
+confirmed-stopped prestart requeue by exact dispatch compare-and-swap,
 resource-free future-wave replanning, and acquires an `agentic-sdlc` v4 lease
-when nested in a managed outer worktree. It never implements behavior,
-promotes, or force-cleans resources.
+when nested in an ordinary managed outer worktree. A Task Implementer
+persistent lane belongs to a separate peer workflow and is rejected before
+Agentic state or lease mutation. Both workflows continue to use Worktree as
+their shared authoritative Git-lifecycle substrate. Partial or missing Task lane
+branch identity for a matching live lane fails closed rather than becoming an
+ordinary managed anchor. It never implements behavior, promotes, or
+force-cleans resources.
 Managed promotion records the exact Git fast-forward in the lease before
 persisting coordinator `promoted` state. Resume reconciles the durable lease,
 local interop, clean outer Git head, and coordinator through promotion, cleanup,
@@ -951,9 +960,21 @@ creates immutable task assignments, and dispatches one fresh task agent per
 safe task with its own branch and private worktree. Native agents are preferred;
 when unavailable, one fresh sequential `codex exec` process runs with exact
 scope cwd, `workspace-write`, `--ephemeral`, stdin assignment, and structured
-output. Each task validates and reviews inside declared ownership. The
+output. The coordinator arms only a real worker slot and invokes read-only
+`task-watch` every 30 seconds. Each worker must call `task-start` before editing
+and emit direct bounded `task-heartbeat` transitions at least every 30 seconds;
+background heartbeat loops are forbidden. Prestart scope violations outrank
+allowed in-claim mutation; prestart timeout, read-only, stale-heartbeat, and
+maximum-runtime violations interrupt the worker while retaining its recovery
+resources. The sequential fallback owns a dedicated process group per worker
+and terminates that group on every post-spawn failure. After confirmed stop, a
+never-started untouched assignment may be requeued only with the exact dispatch
+timestamp. Each task validates and reviews inside declared ownership. The
 coordinator screens staged content and evidence for obvious secrets/private
-endpoints, then produces one direct-child commit with normal Git hooks. The
+endpoints, persists a digest-bound assignment/base/tree/message/evidence finish
+intent, then produces one direct-child commit with normal Git hooks. Retry
+adopts only the matching clean direct-child commit and exact result across
+either persistence crash window. The
 coordinator verifies results, merges in stable order with explicit merge
 commits, runs combined evidence, and performs non-force worker cleanup before
 advancing. A corrective assignment carries its exact diagnosis and original
@@ -1191,7 +1212,7 @@ Typical routes are:
 - ordered merge conflicts -> `sdlc-implement-plan` without history rewrite
 - unsafe worker/integration cleanup -> `CLEANUP_BLOCKED` without force removal
 - moved project/integration state -> `PROMOTION_BLOCKED`
-- any execution coordinator schema v1 through v5 record ->
+- any execution coordinator schema v1 through v6 record ->
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
@@ -1252,8 +1273,10 @@ alignment, or commit may continue.
 
 Git actions are intentionally split:
 
-- Task agents create one scoped worker commit through the private transition
-  helper; the coordinator creates ordered merge commits.
+- Task agents produce scoped uncommitted changes, validation, review, and
+  handoff evidence. Coordinator-owned `task-finish` checks liveness and claims,
+  creates one scoped direct-child task commit on the worker branch, and the coordinator then
+  creates ordered merge commits.
 - `sdlc-commit` seals final integration changes, performs exact ff-only local
   promotion, and never pushes.
 - In active Agentic SDLC mode, `create-pr` only publishes the clean exact
@@ -1313,7 +1336,7 @@ Stable IDs are part of the design:
   whether to resume, retain, or block.
 - Worker and merge commits are retained. No rebase, squash, amend, reset,
   cherry-pick, or force cleanup is used by the execution plane.
-- Every execution coordinator schema v1 through v5 record fails closed with
+- Every execution coordinator schema v1 through v6 record fails closed with
   `WORKFLOW_UPGRADE_REQUIRED` without mutation, including completed records.
 - An unfinished pre-prompt run also fails with `WORKFLOW_UPGRADE_REQUIRED`;
   completed unbound history remains readable without an adoption shim.

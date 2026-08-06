@@ -380,7 +380,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v6",
+                    "schema": "agentic-sdlc/execution-coordinator-v7",
                     "status": "done",
                     "base_branch": "main",
                     "project_root": str(self.project),
@@ -475,7 +475,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v6",
+                "schema": "agentic-sdlc/execution-coordinator-v7",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -527,7 +527,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "agentic-sdlc/worker-assignment-v2",
+                "schema": "agentic-sdlc/worker-assignment-v3",
                 "feature_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",

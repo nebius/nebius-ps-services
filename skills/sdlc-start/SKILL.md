@@ -8,14 +8,16 @@ description: "Use only as part of the Agentic SDLC workflow; use when the user e
 ## Help
 
 For `$sdlc-start --help` or `$sdlc-start -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never
-expose private helper actions or treat help as workflow authorization.
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -299,7 +301,7 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `WORKFLOW_UPGRADE_REQUIRED`. Completed unbound history remains readable; do
   not adopt or migrate it.
 - If plan lock conflicts exist, stop and report.
-- If any execution coordinator schema v1 through v5 record exists, stop with
+- If any execution coordinator schema v1 through v6 record exists, stop with
   `WORKFLOW_UPGRADE_REQUIRED`, including for completed records. If registered Git identity, plan digest, or
   exact HEAD drifts, stop with the execution-plane failure code rather than
   routing around the coordinator.

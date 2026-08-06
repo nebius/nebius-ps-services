@@ -59,7 +59,7 @@ local Codex home.
 - An active run also covers coordinator-registered integration and worker
   worktrees outside the original checkout. The hook verifies canonical Git
   root/common directory, branch, and recorded HEAD before sensitive Git actions.
-- Raw worker commits, integration merges, non-force resource cleanup, and
+- Coordinator-created task commits, integration merges, non-force resource cleanup, and
   ff-only feature promotion require short-lived action-scoped authorization
   matching the worktree, branch, common directory, expected HEAD, expiry, and
   exact command/target. Force cleanup and identity drift remain denied.

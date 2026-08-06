@@ -512,18 +512,7 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator status is invalid"
         )
-    managed_local = value.get("promotion_source") == "managed-local"
-    remote_identity_valid = (
-        value.get("default_remote") == "origin"
-        and isinstance(value.get("default_branch"), str)
-        and bool(value["default_branch"])
-        and value.get("default_ref") == f"origin/{value['default_branch']}"
-        and isinstance(value.get("default_head"), str)
-        and SHA_RE.fullmatch(str(value["default_head"])) is not None
-        and value.get("promotion_source") in {"existing", "auto-created"}
-        and value.get("base_branch") != value.get("default_branch")
-    )
-    local_identity_valid = managed_local and all(
+    lane_identity_valid = value.get("promotion_source") == "managed-local" and all(
         value.get(field) is None
         for field in (
             "default_remote",
@@ -532,7 +521,7 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
             "default_head",
         )
     )
-    if not (remote_identity_valid or local_identity_valid):
+    if not lane_identity_valid:
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator promotion identity is invalid"
         )

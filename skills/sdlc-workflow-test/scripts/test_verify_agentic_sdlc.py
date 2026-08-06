@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -559,6 +561,22 @@ class VerifierContractTests(unittest.TestCase):
             "test_failed_session_claim_publication_leaves_no_partial_claim",
             session_recovery,
         )
+
+    def test_capability_requirements_resolve_to_declared_tests(self) -> None:
+        source = inspect.getsource(verifier.check_capability_regressions)
+        required = set(re.findall(r'"(test_[A-Za-z0-9_]+)"', source))
+        declared: set[str] = set()
+        for path in MODULE_PATH.parents[2].rglob("*.py"):
+            if not path.name.startswith("test"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            declared.update(
+                node.name
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            )
+        self.assertEqual(sorted(required - declared), [])
 
     def test_project_agent_instructions_is_runtime_support_and_golden_phase(
         self,

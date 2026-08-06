@@ -32,7 +32,9 @@ class VerifyTests(unittest.TestCase):
             'description: "test"\n'
             "---\n\n"
             "$task-implementer workspace init [project-folder]\n"
-            "$task-implementer run <prompt-path-or-unique-filename>\n",
+            "$task-implementer run <prompt-path-or-unique-filename>\n"
+            "$task-implementer integrate [project-folder]\n"
+            "$task-implementer workspace remove [project-folder]\n",
             encoding="utf-8",
         )
         (skill / "agents" / "openai.yaml").write_text(

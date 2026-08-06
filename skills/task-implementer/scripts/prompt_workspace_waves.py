@@ -30,6 +30,7 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import (
     ASSIGNMENT_SCHEMA,
     COORDINATOR_SCHEMA,
+    EXCLUSIVE_CONFLICT_CLASSES,
     INCOMING_HANDOFF_SCHEMA,
     RESULT_SCHEMA,
     SHA_RE,
@@ -62,6 +63,7 @@ from prompt_workspace_interop import (
     record_resource,
     release_interop,
 )
+from prompt_workspace_lanes import claim_generation
 from prompt_workspace_runs import (
     read_handoff_text,
     scope_lock,
@@ -74,14 +76,13 @@ if str(WORKTREE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(WORKTREE_SCRIPTS))
 from git_promotion import (  # noqa: E402
     GitPromotionError,
-    ensure_promotion_branch,
     promote_ff_only,
-    verify_remote_default,
 )
 
 
 BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,180}")
 WAVE_ID_RE = re.compile(r"wave-(?:[0-9]{3}|r[0-9a-f]{8}-[0-9]{3})")
+EXCLUSIVE_DOMAIN_CLAIM_PREFIX = "task-implementer/exclusive-class:"
 
 
 def _utc(clock: Callable[[], datetime]) -> str:
@@ -551,29 +552,29 @@ def _coordinator_claims(workspace: dict[str, object]) -> list[dict[str, str]]:
         {"kind": "exact", "path": f"{prefix}README.md"},
         {"kind": "exact", "path": f"{prefix}CHANGELOG.md"},
     ]
-    if scope != ".":
-        claims.extend(
-            (
-                {"kind": "exact", "path": "README.md"},
-                {"kind": "exact", "path": "CHANGELOG.md"},
-            )
-        )
     return claims
 
 
-def _verify_coordinator_remote(repo: Path, coordinator: dict[str, object]) -> None:
-    if coordinator.get("promotion_source") == "managed-local":
-        return
-    try:
-        verify_remote_default(
-            repo,
-            expected_remote=str(coordinator["default_remote"]),
-            expected_branch=str(coordinator["default_branch"]),
-            expected_ref=str(coordinator["default_ref"]),
-            expected_head=str(coordinator["default_head"]),
-        )
-    except GitPromotionError as error:
-        raise PromptWorkspaceError("PROMOTION_BLOCKED", str(error)) from error
+def _repository_claims(
+    workspace: dict[str, object], tasks: list[TaskPlan]
+) -> list[dict[str, str]]:
+    claims = list(_coordinator_claims(workspace))
+    for task in tasks:
+        claims.extend(claim.__dict__ for claim in task.write_claims)
+        for domain in task.conflict_domains:
+            claims.append({"kind": "domain", "path": domain})
+            domain_class = domain.split(":", 1)[0]
+            if domain_class in EXCLUSIVE_CONFLICT_CLASSES:
+                claims.append(
+                    {
+                        "kind": "domain",
+                        "path": f"{EXCLUSIVE_DOMAIN_CLAIM_PREFIX}{domain_class}",
+                    }
+                )
+    unique: dict[tuple[str, str], dict[str, str]] = {}
+    for claim in claims:
+        unique[(claim["kind"], claim["path"])] = claim
+    return [unique[key] for key in sorted(unique)]
 
 
 def _existing_run_interop(
@@ -590,16 +591,9 @@ def _existing_run_interop(
             manifest_path,
             str(coordinator["initial_head"]),
         )
-    if inspect_anchor(workspace).get("status") != "unmanaged":
-        raise PromptWorkspaceError(
-            "WORKFLOW_UPGRADE_REQUIRED",
-            "unfinished managed-outer runs without interop state are unsupported",
-        )
-    return acquire_interop(
-        workspace,
-        run_dir,
-        manifest_path,
-        str(coordinator["initial_head"]),
+    raise PromptWorkspaceError(
+        "WORKFLOW_UPGRADE_REQUIRED",
+        "unfinished persistent-lane runs without interop state are unsupported",
     )
 
 
@@ -963,7 +957,7 @@ def plan_waves(
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         _common_dir(repo)
         anchor = inspect_anchor(workspace)
-        if anchor.get("status") == "managed":
+        if anchor.get("status") == "task-lane":
             promotion: dict[str, object] = {
                 "promotion_branch": str(anchor["branch"]),
                 "promotion_initial_head": str(anchor["head"]),
@@ -974,14 +968,10 @@ def plan_waves(
                 "default_head": None,
             }
         else:
-            try:
-                promotion = ensure_promotion_branch(
-                    repo,
-                    lifecycle_id=run_id,
-                    task_slug="task",
-                )
-            except GitPromotionError as error:
-                raise PromptWorkspaceError("WORKTREE_CONFLICT", str(error)) from error
+            raise PromptWorkspaceError(
+                "WORKFLOW_UPGRADE_REQUIRED",
+                "wave execution requires a workspace-v2 persistent lane",
+            )
         branch = str(promotion["promotion_branch"])
         base = str(promotion["promotion_initial_head"])
         tasks = parse_task_plans(text)
@@ -991,7 +981,14 @@ def plan_waves(
                 "EXECUTION_STATE_INVALID", "no pending tasks can be planned"
             )
         plan = [[_task_record(task) for task in wave] for wave in waves]
-        acquire_interop(workspace, run_dir, manifest_path, base)
+        interop = acquire_interop(workspace, run_dir, manifest_path, base)
+        claim_generation(
+            workspace,
+            name=str(interop["name"]),
+            generation=int(interop["generation"]),
+            lease_id=str(interop["lease_id"]),
+            claims=_repository_claims(workspace, tasks),
+        )
         created = _utc(clock)
         wave_ids = [f"wave-{index:03d}" for index in range(1, len(waves) + 1)]
         root = _worktree_root(manifest_path, workspace, run_id)
@@ -1113,7 +1110,9 @@ def replan_waves(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "run has no replannable wave boundary"
             )
-        _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
+        interop = _existing_run_interop(
+            manifest_path, workspace, run_dir, coordinator
+        )
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
         append_after_done = active["status"] == "done"
         if active["status"] not in {"planned", "done"}:
@@ -1136,7 +1135,7 @@ def replan_waves(
             or not _clean(repo)
         ):
             raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT", "primary checkout changed before wave replanning"
+                "WORKTREE_CONFLICT", "persistent lane changed before wave replanning"
             )
         integration = Path(str(active["integration_worktree"]))
         branch = active.get("integration_branch")
@@ -1166,6 +1165,13 @@ def replan_waves(
         plan_sha256 = sha256_json(plan)
         if plan_sha256 == coordinator["plan_sha256"]:
             return coordinator
+        claim_generation(
+            workspace,
+            name=str(interop["name"]),
+            generation=int(interop["generation"]),
+            lease_id=str(interop["lease_id"]),
+            claims=_repository_claims(workspace, tasks),
+        )
         prefix = f"wave-r{plan_sha256[:8]}"
         wave_ids = [f"{prefix}-{index:03d}" for index in range(1, len(waves) + 1)]
         created = _utc(clock)
@@ -1476,14 +1482,14 @@ def prepare_wave(
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         if _branch(repo) != coordinator["base_branch"] or not _clean(repo):
             raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT", "primary checkout branch or cleanliness changed"
+                "WORKTREE_CONFLICT", "persistent lane branch or cleanliness changed"
             )
         expected_base = _expected_primary_head(
             run_dir, coordinator, str(wave["wave_id"])
         )
         if _head(repo) != expected_base:
             raise PromptWorkspaceError(
-                "WORKTREE_CONFLICT", "primary checkout moved before wave preparation"
+                "WORKTREE_CONFLICT", "persistent lane moved before wave preparation"
             )
         wave["status"] = "preparing"
         wave["base_commit"] = expected_base
@@ -2998,9 +3004,8 @@ def promote_wave(
         ):
             raise PromptWorkspaceError(
                 "PROMOTION_BLOCKED",
-                "primary checkout moved or became dirty before promotion",
+                "persistent lane moved or became dirty before promotion",
             )
-        _verify_coordinator_remote(repo, coordinator)
         retained_workers: list[str] = []
         for task_id in wave["task_ids"]:
             assignment = _validated_assignment(
@@ -3039,7 +3044,6 @@ def promote_wave(
                 "CLEANUP_BLOCKED",
                 "worker worktrees or branches could not be removed after combined validation",
             )
-        _verify_coordinator_remote(repo, coordinator)
         try:
             promotion = promote_ff_only(
                 repo,
@@ -3163,7 +3167,7 @@ def finalize_run(
     *,
     clock: Callable[[], datetime] = now_utc,
 ) -> dict[str, object]:
-    """Seal terminal handoff evidence and release a managed outer lease."""
+    """Seal terminal handoff evidence and release the active lane generation."""
 
     if not alignment.strip():
         raise PromptWorkspaceError(

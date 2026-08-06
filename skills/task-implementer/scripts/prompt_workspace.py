@@ -29,7 +29,9 @@ from prompt_workspace_core import (  # noqa: E402
     prompt_slug,
     resolve_prompt_reference,
     verify_workspace,
+    verify_workspace_for_removal,
 )
+from prompt_workspace_lanes import integrate_lane, remove_lane  # noqa: E402
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
 from prompt_workspace_waves import (  # noqa: E402
     accept_task_result,
@@ -78,6 +80,7 @@ __all__ = [
     "init_workspace",
     "initialize_project_workspace",
     "inspect_spec_documents",
+    "integrate_lane",
     "main",
     "project_workspace_manifest",
     "dispatch_wave",
@@ -89,6 +92,7 @@ __all__ = [
     "promote_wave",
     "recover_task",
     "replan_waves",
+    "remove_lane",
     "prompt_rows",
     "prompt_slug",
     "resolve_prompt_reference",
@@ -98,6 +102,7 @@ __all__ = [
     "verify_command",
     "verify_run",
     "verify_workspace",
+    "verify_workspace_for_removal",
     "watch_task",
 ]
 
@@ -105,7 +110,7 @@ __all__ = [
 def open_in_editor(editor: str, target: Path, *, workspace: bool) -> None:
     arguments = [editor]
     if workspace:
-        arguments.extend(("--new-window", str(target)))
+        arguments.extend(("--reuse-window", str(target)))
     else:
         arguments.extend(("--reuse-window", "--goto", str(target)))
     try:
@@ -151,6 +156,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
     init_parser.add_argument("--json", action="store_true")
+
+    integrate_parser = subparsers.add_parser(
+        "integrate",
+        help="Internal: integrate all pending project-lane generations.",
+    )
+    integrate_parser.add_argument(
+        "project_path", nargs="?", type=Path, default=Path.cwd()
+    )
+    integrate_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    integrate_parser.add_argument("--validated-head", help=argparse.SUPPRESS)
+    integrate_parser.add_argument(
+        "--restart", action="store_true", help=argparse.SUPPRESS
+    )
+    integrate_parser.add_argument("--json", action="store_true")
+
+    remove_parser = subparsers.add_parser(
+        "remove", help="Internal: retire one idle project lane."
+    )
+    remove_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
+    remove_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    remove_parser.add_argument("--json", action="store_true")
 
     intake_parser = subparsers.add_parser(
         "intake", help="Internal: resolve one prompt to its next run transition."
@@ -311,7 +345,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     wave_cleanup.add_argument("--run-id", required=True)
 
     run_finalize = subparsers.add_parser(
-        "run-finalize", help="Internal: seal final alignment and release outer lease."
+        "run-finalize",
+        help="Internal: seal final alignment and release the lane generation.",
     )
     add_common_workspace(run_finalize)
     run_finalize.add_argument("--run-id", required=True)
@@ -404,6 +439,22 @@ def main(argv: list[str]) -> int:
                 open_in_editor(
                     args.editor, Path(str(result["vscode_workspace"])), workspace=True
                 )
+        elif args.command == "integrate":
+            workspace_path = project_workspace_manifest(
+                args.project_path, args.codex_home
+            )
+            workspace = verify_workspace(workspace_path)
+            result = integrate_lane(
+                workspace,
+                validated_head=args.validated_head,
+                restart=args.restart,
+            )
+        elif args.command == "remove":
+            workspace_path = project_workspace_manifest(
+                args.project_path, args.codex_home
+            )
+            workspace = verify_workspace_for_removal(workspace_path, args.project_path)
+            result = remove_lane(workspace)
         elif args.command == "intake":
             result = route_project_prompt(
                 args.project_path,

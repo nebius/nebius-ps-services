@@ -29,6 +29,7 @@ from prompt_workspace_core import (
     ensure_unique_prompt_id,
     init_workspace,
     iso_seconds,
+    legacy_project_workspace_manifest,
     load_json_object,
     now_local,
     now_utc,
@@ -42,6 +43,7 @@ from prompt_workspace_core import (
     write_atomic,
     write_exclusive,
 )
+from prompt_workspace_lanes import ensure_project_lane
 from prompt_workspace_specs import (
     load_steering_ledger,
     pending_steering_revisions,
@@ -345,10 +347,20 @@ def initialize_project_workspace(
     """Initialize one exact project folder and ensure one starter prompt."""
 
     requested = project_path.expanduser().resolve()
+    legacy = legacy_project_workspace_manifest(requested, codex_home)
+    if legacy.exists():
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "legacy workspace-v1 state is unsupported; back up its prompt history "
+            f"and remove the private workspace before initializing a lane: {legacy}",
+        )
+    lane = ensure_project_lane(requested)
+    lane_root = Path(str(lane["worktree"]))
     result = init_workspace(
-        requested,
-        str(requested),
+        lane_root,
+        str(lane["scope"]),
         codex_home,
+        lane=lane,
         clock=clock,
     )
     workspace_path = Path(str(result["workspace"]))

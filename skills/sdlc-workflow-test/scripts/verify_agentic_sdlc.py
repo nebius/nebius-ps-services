@@ -257,6 +257,7 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
     },
     "sdlc-implement-plan": {
         "execution.sequential-fallback",
+        "execution.worker-liveness",
         "interop.outer-lease-v4",
         "interop.task-implementer-compatibility",
         "interop.task-implementer-promotion",
@@ -882,7 +883,7 @@ def check_design(ctx: Context) -> None:
         "task-recover",
         "replan-future",
         "sequential fallback",
-        "v3 outer",
+        "v4 outer",
         "verification-live-results-v3",
         "predefined runtime operational criterion",
         "non-Grafana provenance",
@@ -1124,10 +1125,14 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "one fresh worker agent per task",
                 "sequential `codex exec` fallback",
                 "task-recover",
+                "task-arm",
+                "task-requeue",
+                "task-heartbeat",
+                "task-watch",
                 "replan-future",
                 "git merge --no-ff --no-edit",
                 "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v6",
+                "agentic-sdlc/execution-coordinator-v7",
             ],
         ),
         "locked plan task graph": (
@@ -1155,11 +1160,11 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "workspace-write",
             ],
         ),
-        "workflow state v2 with execution coordinator v6": (
+        "workflow state v2 with execution coordinator v7": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v6",
+                "agentic-sdlc/execution-coordinator-v7",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "sessions/<session-hash>.json",
@@ -1263,7 +1268,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             [
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
-                "coordinator schema v1 through v5",
+                "coordinator schema v1 through v6",
                 "sdlc-update-documents, then sdlc-align-specs",
             ],
         ),
@@ -2405,7 +2410,8 @@ def check_capability_regressions(ctx: Context) -> None:
     }
     results: dict[str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]] = {}
     for suite, (command, cwd) in suites.items():
-        result = run(command, cwd=cwd, env=env, timeout=120)
+        timeout = 180 if suite == "worktree" else 120
+        result = run(command, cwd=cwd, env=env, timeout=timeout)
         passed, skipped = parse_unittest_results(result.stderr + result.stdout)
         results[suite] = (result, passed, skipped)
 
@@ -2559,6 +2565,14 @@ def check_capability_regressions(ctx: Context) -> None:
                     "execution",
                     "test_claim_outside_nested_project_scope_fails_before_resources",
                 ),
+                (
+                    "execution",
+                    "test_claim_crossing_gitlink_fails_before_resources",
+                ),
+                (
+                    "execution",
+                    "test_prefix_claim_containing_tracked_symlink_fails_before_resources",
+                ),
             ),
         ),
         "execution.sessions-recovery": (
@@ -2571,7 +2585,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("execution", "test_interrupted_worker_recovery_accepts_clean_base"),
                 (
                     "execution",
-                    "test_interrupted_worker_recovery_accepts_one_clean_direct_child",
+                    "test_interrupted_worker_recovery_rejects_worker_created_commit",
                 ),
                 ("execution", "test_one_worker_session_cannot_own_two_tasks"),
                 ("execution", "test_parallel_session_claim_is_atomic"),
@@ -2582,6 +2596,14 @@ def check_capability_regressions(ctx: Context) -> None:
                 (
                     "execution",
                     "test_failed_session_claim_publication_leaves_no_partial_claim",
+                ),
+                (
+                    "execution",
+                    "test_task_finish_recovers_commit_before_result_write",
+                ),
+                (
+                    "execution",
+                    "test_task_finish_recovers_result_before_task_state_write",
                 ),
             ),
         ),
@@ -2612,6 +2634,27 @@ def check_capability_regressions(ctx: Context) -> None:
                     "test_first_failure_stops_later_dispatch_and_retains_concise_error",
                 ),
                 ("dispatch", "test_missing_codex_is_environment_blocker"),
+                ("dispatch", "test_terminal_watch_interrupts_worker"),
+                ("dispatch", "test_legacy_assignment_requires_upgrade"),
+                ("dispatch", "test_watch_failure_stops_worker_process_group"),
+            ),
+        ),
+        "execution.worker-liveness": (
+            "Armed and monitored Agentic worker lifecycle",
+            (
+                ("execution", "test_worker_must_be_armed_before_start"),
+                ("execution", "test_arm_start_heartbeat_and_watch_liveness"),
+                ("execution", "test_prestart_mutation_and_timeout_fail_closed"),
+                (
+                    "execution",
+                    "test_confirmed_prestart_requeue_allows_a_fresh_arm",
+                ),
+                (
+                    "execution",
+                    "test_prestart_scope_violations_use_scope_error",
+                ),
+                ("execution", "test_progress_does_not_bypass_maximum_runtime"),
+                ("dispatch", "test_terminal_watch_interrupts_worker"),
             ),
         ),
         "git.promotion-safety": (
@@ -2681,7 +2724,7 @@ def check_capability_regressions(ctx: Context) -> None:
             ),
         ),
         "interop.task-implementer-compatibility": (
-            "Task Implementer lease compatibility",
+            "Task Implementer persistent-lane coexistence",
             (
                 (
                     "task-implementer",
@@ -2703,6 +2746,34 @@ def check_capability_regressions(ctx: Context) -> None:
                     "task-implementer",
                     "test_successive_promotions_advance_the_outer_lease_history",
                 ),
+                (
+                    "task-implementer",
+                    "test_replan_claims_block_a_conflicting_live_lane_before_state_write",
+                ),
+                (
+                    "task-implementer",
+                    "test_exclusive_domain_classes_conflict_across_lanes_with_distinct_keys",
+                ),
+                (
+                    "task-waves",
+                    "test_repository_claims_add_every_exclusive_class_sentinel",
+                ),
+                (
+                    "worktree",
+                    "test_task_lane_rejects_ordinary_task_lease_without_state_mutation",
+                ),
+                (
+                    "worktree",
+                    "test_task_lane_missing_branch_identity_fails_closed_without_lease",
+                ),
+                (
+                    "execution",
+                    "test_private_interop_rejects_task_lane_before_state_write",
+                ),
+                (
+                    "execution",
+                    "test_task_lane_rejection_leaves_next_task_generation_available",
+                ),
             ),
         ),
         "interop.task-implementer-promotion": (
@@ -2714,7 +2785,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "task-waves",
-                    "test_remote_default_head_drift_blocks_promotion_before_worker_cleanup",
+                    "test_remote_default_head_drift_does_not_affect_lane_promotion",
                 ),
                 (
                     "task-waves",
@@ -2854,6 +2925,10 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 ("verifier", "test_report_path_rejects_symlinked_parent"),
                 ("verifier", "test_report_path_rejects_symlinked_file"),
+                (
+                    "verifier",
+                    "test_capability_requirements_resolve_to_declared_tests",
+                ),
             ),
         ),
     }

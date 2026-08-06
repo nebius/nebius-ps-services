@@ -20,6 +20,11 @@
 
 - Skills missing `## Help`:
 - Skills with non-canonical or unsafe Help behavior:
+- Public actions inventoried:
+- Public positional arguments inventoried:
+- Public flags inventoried, including `-h, --help`:
+- Public interface items missing concise descriptions:
+- Skills with ambiguous public interfaces:
 - Skills missing `## Learning Loop`:
 - Skills with equivalent wording:
 - Skills needing repair:

@@ -12,7 +12,8 @@ $task-implementer -h
 ```
 
 Return concise, report-only help with purpose, explicit invocation policy,
-exactly two workflow actions (`workspace init` and `run`), their arguments, and
+exactly four workflow actions (`workspace init`, `run`, `integrate`, and
+`workspace remove`), their arguments, and
 `-h, --help`, then stop. After the selected `SKILL.md` loads, do not initialize
 a workspace, inspect the project, call additional tools, change private state,
 or start either workflow action.
@@ -29,7 +30,24 @@ $task-implementer workspace init services/nebius-cxcli
 ```
 
 Resolve the monorepo scope while keeping every future worker worktree a full
-repository checkout.
+repository checkout. Create or reuse the persistent lane from committed source
+`HEAD`; source-checkout dirt is allowed and excluded.
+
+```text
+$task-implementer integrate services/nebius-cxcli
+```
+
+Require a clean source checkout and lane, no active generation, and a
+contiguous pending range. Validate one exact two-parent candidate, promote it
+with expected-old source-head proof, consume every pending generation, release
+their claims, and rearm the same lane.
+
+```text
+$task-implementer workspace remove services/nebius-cxcli
+```
+
+Remove only an idle, clean, fully integrated lane with exact reachability proof.
+Preserve private prompt/run history and make repeated removal idempotent.
 
 ```text
 $task-implementer run 2026-07-12_1430--add-retries.md
@@ -81,31 +99,27 @@ resources, do not dispatch new batch members after failure, and resume without
 duplicating branches, worktrees, assignments, commits, or merges.
 
 ```text
-$task-implementer run <managed-prompt-from-inside-a-$worktree-checkout>
+$task-implementer run <managed-prompt-while-the-source-checkout-is-dirty>
 ```
 
-Bind the run to the exact outer worktree branch and current `HEAD`; never create
-a replacement outer worktree merely because one already exists. Keep every
-worker/integration branch private and temporary, promote only back to the outer
-branch, and block outer integration and removal until final alignment and
-lease release. Then return the recorded primary path and exact
-`$worktree integrate` command and stop for a fresh explicit user invocation
-from the primary checkout; never invoke it internally, push it, or use it as a
-PR head. Never use the remote default as the nested worker base.
+Use the existing clean persistent lane and leave source dirt untouched. Acquire
+the next exact generation, enforce repository-wide claims, and promote internal
+waves only to the lane branch. Never fetch, use a remote default, or copy dirty
+source files. Dirty source state is not part of the run baseline.
 
 ```text
 $task-implementer run <same-completed-prompt-after-an-interrupted-final-release>
 ```
 
-Resume the private finalizer and release the existing outer lease only after
+Resume the private finalizer and release the existing generation only after
 re-observing the final promoted head and absent internal resources. Do not
-start a new run, expire the lease, or force-clear state.
+start a new generation, expire the lease, or force-clear state.
 
 ```text
 $task-implementer run <same-prompt-after-an-integration-conflict>
 ```
 
-Confirm the primary branch remains at the recorded base, retain integration
+Confirm the persistent lane remains at the recorded base, retain integration
 and worker resources, and return `INTEGRATION_CONFLICT`. Do not partially merge
 the wave into the project branch.
 
@@ -132,7 +146,7 @@ $task-implementer continue <run-id>
 $task-implementer steer <steering-file>
 ```
 
-Explain the two-command interface without exposing internal IDs.
+Explain the four-action interface without exposing internal IDs.
 
 ## Should Not Trigger
 

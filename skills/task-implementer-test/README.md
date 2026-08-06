@@ -14,7 +14,7 @@ the verifier helper, lifecycle, reporting, and semantic suites. They do not
 create a real application, start Docker, or dispatch implementation workers.
 
 `--create` first replaces any prior exactly owned fixture, then exercises the
-real two-command Task Implementer interface on a seeded local brownfield
+real four-action Task Implementer interface on a seeded local-only brownfield
 frontend/API/PostgreSQL project. It verifies dependency waves, worker and Git
 evidence, the running application, database correlation, restart persistence,
 and a canonical post-completion unchanged-prompt invocation. A lifecycle-owned

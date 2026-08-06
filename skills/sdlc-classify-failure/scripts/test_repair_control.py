@@ -661,7 +661,7 @@ class RepairControlTests(unittest.TestCase):
         coordinator_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v6",
+                    "schema": "agentic-sdlc/execution-coordinator-v7",
                     "integration_worktree": str(integration),
                 }
             ),
@@ -752,7 +752,7 @@ class RepairControlTests(unittest.TestCase):
                 coordinator_path.write_text(
                     json.dumps(
                         {
-                            "schema": "agentic-sdlc/execution-coordinator-v6",
+                            "schema": "agentic-sdlc/execution-coordinator-v7",
                             "status": "done",
                             "base_branch": "main",
                             "project_root": str(promoted_project),

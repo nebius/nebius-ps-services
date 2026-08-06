@@ -147,9 +147,9 @@ candidate for non-mutating alignment/tests. Only that validated SHA may
 fast-forward the clean checked-out source branch. Cleanup remains a separate
 proof-gated action.
 
-Task Implementer and Agentic SDLC may use private nested worktrees inside one
-child. Their lease blocks outer integration until internal promotion, cleanup,
-alignment, and evidence gates finish. Managed Agentic SDLC remains pending
+Agentic SDLC may use private nested worktrees inside one child. Its lease blocks
+outer integration until internal promotion, cleanup, alignment, and evidence
+gates finish. Managed Agentic SDLC remains pending
 until exact source-integration proof is recorded. At that boundary the caller
 returns the recorded primary path plus the exact
 `$worktree integrate <generated-name>` command and stops; only a fresh explicit
@@ -167,6 +167,21 @@ cannot cross the outer lifecycle boundary.
 Removal keeps an exact private removal-intent snapshot until receipt, manifest,
 and resource revalidation finish; interruption at either deletion boundary is
 therefore retryable without losing the receipt compare-and-set anchor.
+
+Task Implementer uses a different private consumer boundary: Worktree owns its
+persistent per-project lane creation, monotonic generation leases,
+repository-wide claims, two-parent source integration, rearm, and removal
+primitives. Lane state and immutable generation receipts are separate from the
+general schema-v4 manifest, so ordinary public Worktree children remain
+compatible. Ordinary Task/Agentic coordinator lease acquisition also rejects a
+Task lane before mutation; workflows must use their own matching consumer
+boundary rather than nest or share execution state. The branch's `lane_id`,
+`source_ref`, and `incarnation` fields are one indivisible identity. Partial
+metadata fails closed, and a live lane whose branch or worktree matches but
+whose branch metadata is absent cannot fall through to ordinary managed-child
+classification. Public `$worktree integrate` and `$worktree remove` reject Task
+lanes; only `$task-implementer integrate` and `$task-implementer workspace
+remove` may drive those private lifecycle transitions.
 
 Push and PR guards classify the primary and every linked checkout against Git
 metadata, ownership manifests, integration reservations, and nested lease

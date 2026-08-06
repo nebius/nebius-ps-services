@@ -40,7 +40,8 @@ Two tasks cannot share a wave when they:
 Unknown claims or domains force a singleton wave. Live database, Kubernetes,
 Terraform, migration execution, and publication actions are singleton even
 when their resource keys differ, and they retain their own explicit authority
-requirements.
+requirements. Their lane generation also holds a class-wide repository domain
+claim so the singleton rule remains true across separate project lanes.
 
 ## Deterministic Scheduling
 
@@ -60,8 +61,8 @@ tasks 8, 9, and 10 form singleton waves.
 
 ## Preparing A Wave
 
-Require a clean named project branch and exact `HEAD`. Preflight the private
-root and Git common directory. Reject claims crossing a submodule/gitlink with
+Require the clean persistent lane on its recorded branch and exact `HEAD`.
+Preflight the private root and Git common directory. Reject claims crossing a submodule/gitlink with
 `UNSUPPORTED_SUBMODULE_SCOPE`; do not initialize submodules. Reject claims
 crossing a tracked symlink with `UNSUPPORTED_SYMLINK_SCOPE` rather than treating
 lexical ownership as filesystem containment.
@@ -139,7 +140,7 @@ Each worker must:
    `WORKER_SCOPE_VIOLATION`.
 5. Stop with `REPLAN_REQUIRED` before editing if an undeclared path or domain
    is needed.
-6. Implement exactly one task without touching the primary checkout, shared
+6. Implement exactly one task without touching the source checkout, shared
    handoff/spec/docs, other refs/worktrees, Git maintenance, or external state.
 7. Run focused and end-to-end validation.
 8. Invoke `code-review`, fix safe scoped findings, and revalidate.
@@ -199,8 +200,8 @@ After combined evidence is bound to the integration tip, remove each verified
 clean worker worktree and delete its ref with an exact expected-old SHA. If a
 worker is dirty, advanced, or unverifiable, retain it and block promotion.
 
-Recheck that the primary checkout is clean, on the recorded named promotion
-branch, at the recorded base. Hold the common-Git-directory promotion lock
+Recheck that the persistent lane is clean, on its recorded named branch, at the
+recorded base. Hold the common-Git-directory promotion lock
 through precheck, merge, and postcheck:
 
 ```text
@@ -253,7 +254,10 @@ coordinator schedule. Completed waves remain indexed; superseded planned wave
 files are retained as blocked history but are not part of final completion or
 semantic validation. After the final wave is promoted and cleaned, integration
 review may append a newly discovered isolated correction tail before
-finalization.
+finalization. Before any replacement wave or coordinator record is written,
+replanning atomically extends the active generation's Worktree-owned repository
+claims. Earlier claims remain held as a conservative superset until generation
+integration.
 
 For an interrupted running task, require explicit confirmation that the old
 worker stopped, then have the fresh replacement worker invoke `task-recover`
@@ -269,7 +273,7 @@ Failure rules:
 - scope expansion: `REPLAN_REQUIRED` before edit/commit;
 - merge conflict: abort integration merge and retain the wave;
 - validation/review failure: retain integration state before promotion;
-- primary branch drift: `PROMOTION_BLOCKED` with no mutation;
+- lane branch drift: `PROMOTION_BLOCKED` with no mutation;
 - promotion uncertainty: classify observed `HEAD` before retry;
 - cleanup failure: report retained inventory after successful promotion;
 - missing safe local bootstrap: `ENVIRONMENT_BLOCKER` without copying primary
@@ -281,12 +285,27 @@ Failure rules:
 Start the next planned wave from the newly promoted project `HEAD`. After the
 last wave is promoted and safely cleaned, run changed-surface `$align`, verify
 managed specification state, record final evidence, and invoke the private run
-finalizer. The finalizer sets the handoff to `done` and releases a managed outer
-worktree lease only when the outer branch is clean at the final promoted head
-and all internal resources are absent. In managed mode, completion hands the
-exact child identity and recorded primary path back with a
-`$worktree integrate <generated-name>` command. It then stops for a
-fresh explicit user invocation from the primary checkout; it never invokes that
-public lifecycle or publishes the child. If release is interrupted, repeat the
-same finalizer; do not start a new run or clear state. Static validation and
-observed live/runtime proof must be reported separately.
+finalizer. The finalizer sets the handoff to `done` and releases the active lane
+generation only when the lane is clean at the final promoted head and all
+internal resources are absent. It seals an immutable generation receipt and
+leaves it pending for `$task-implementer integrate`; it never invokes source
+integration or publishes the lane. If release is interrupted, repeat the same
+finalizer; do not start a new run or clear state. A later explicit `run` may
+acquire the next generation immediately. Static validation and observed
+live/runtime proof must be reported separately.
+
+## Persistent Lane Integration
+
+`$task-implementer integrate [project-folder]` consumes every contiguous
+pending generation for the exact lane. Require no active generation, no Git
+operation in progress, and complete cleanliness in both the recorded source
+checkout and lane. Serialize by source ref, then construct one two-parent candidate
+whose first parent is the exact source head and second parent is the
+latest lane head. Conflicts remain retained recovery state.
+
+Run nonmutating combined validation, integration `code-review`, and changed-
+surface checks in the exact candidate worktree. Promote only that candidate
+through expected-old compare-and-set. After promotion, fast-forward the same
+lane to the merge head, consume the pending range, release its repository
+claims, and rearm the lane. Never cherry-pick, rebase, squash, force, or call a
+public `$worktree` lifecycle action for a Task Implementer lane.

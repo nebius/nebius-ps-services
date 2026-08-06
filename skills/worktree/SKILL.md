@@ -8,14 +8,16 @@ description: "Requires explicit invocation to create, locally integrate, exactly
 ## Help
 
 For `$worktree --help` or `$worktree -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never
-expose private helper actions or treat help as workflow authorization.
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -38,8 +40,10 @@ branch without publishing child branches.
   `integrate` may commit eligible primary dirt.
 - Do not use child worktrees for push or PR publication. Publish only the
   accumulated source branch through the standalone Git/PR skills.
-- Do not use as Task Implementer or Agentic SDLC's internal worker manager;
-  those workflows may nest privately inside one managed child.
+- Do not invoke these public actions as Task Implementer's internal worker
+  manager. Task Implementer is an approved private consumer of separate lane
+  primitives owned by this helper; those primitives are not public Worktree
+  actions or compatibility aliases.
 - A caller or coordinator reaching an outer-lifecycle handoff must return the
   exact `$worktree ...` command and stop. A recorded next skill, hook
   continuation, or internal phase transition is not the fresh explicit user
@@ -98,6 +102,16 @@ $worktree remove <generated-worktree-name>
   normal-hook commit, and records its direct-child/tree proof. Neither layer
   fetches for lifecycle decisions, pushes, creates PRs, deletes remote branches,
   or writes private workflow state into the repo.
+- Private Task Implementer lane primitives keep separate schema-v1 lane state
+  and immutable generation receipts under the same protected state root while
+  reusing schema-v4 ownership, exact integration candidates, locks, and
+  expected-head cleanup. Public `integrate` and `remove` reject those lanes,
+  and ordinary coordinator lease acquisition rejects them before lease or
+  manifest mutation. Branch `lane_id`, `source_ref`, and `incarnation` metadata
+  is an all-or-none identity; incomplete or missing metadata for a live lane
+  fails closed before the checkout can be classified as an ordinary managed
+  child. Task Implementer and Agentic SDLC remain separate peer workflows over
+  this shared Worktree substrate.
 
 ## Process
 
@@ -250,6 +264,12 @@ $worktree remove <generated-worktree-name>
   through expected-head compare-and-set. Outer removal retains an exact private
   removal-intent snapshot until receipt, manifest, and final resource cleanup
   complete.
+- Persistent Task Implementer lanes are idempotent by logical common-directory,
+  primary-checkout, named source-ref, and project-scope identity. Their
+  generations are monotonic, released receipts are immutable, integration
+  consumes a contiguous pending range and rearms the same lane, and explicit
+  lane removal records an incarnation boundary without deleting Task prompt
+  history.
 
 ## Failure Handling
 

@@ -17,8 +17,9 @@ validation, or validation evidence aligned.
 - Creates or repairs `agents/openai.yaml` metadata when the repository
   convention requires it, including the correct
   `policy.allow_implicit_invocation` value for the skill contract.
-- Adds or repairs the standard side-effect-free `## Help` contract and
-  `## Learning Loop` rule on target skills.
+- Adds or repairs the standard side-effect-free `## Help` contract so concise
+  help describes every public action, positional argument, and flag, plus the
+  standard `## Learning Loop` rule on target skills.
 - Verifies vendor-specific claims against official documentation when needed.
 - Adds guardrails for destructive actions, secrets, live systems, and external
   services.
@@ -52,7 +53,9 @@ align-skill checks structure, safety, docs, and validation
 1. Detect the target skill scope.
 2. Inspect current skill files and nearby repository conventions.
 3. Verify relevant product or API claims against official docs.
-4. Add or repair the target skill's `## Help` and `## Learning Loop` sections.
+4. Inventory the target's documented public actions, positional arguments, and
+   flags. Add or repair `## Help` so each public item has exact usage and a
+   concise description, then add or repair `## Learning Loop`.
 5. Apply focused updates to metadata, instructions, references, assets, or
    scripts.
 6. For stateful workflow skills, use
@@ -86,9 +89,11 @@ align-skill checks structure, safety, docs, and validation
   only when implicit work is read-only and explicit current-turn confirmation
   follows a displayed mutation plan.
 - Do not broaden a skill until its trigger becomes hard to reason about.
-- Treat `$skill-name --help` and `$skill-name -h` as report-only: show purpose,
-  invocation policy, public usage/actions, and documented options, then stop
-  after the selected `SKILL.md` loads, without additional tools or mutation.
+- Treat `$skill-name --help` and `$skill-name -h` as report-only: show purpose
+  and invocation policy, exact usage for every public action, and one concise
+  description for every public action, positional argument, and flag. Include
+  `-h, --help`, say when there are no additional public flags, then stop after
+  the selected `SKILL.md` loads without additional tools or mutation.
 - For internal or coordinator-only skills, report that boundary and no
   standalone public workflow action instead of exposing private phases.
 - Capture durable knowledge in reusable skill sources, not in ad hoc notes or

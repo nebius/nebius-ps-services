@@ -48,19 +48,21 @@ batches; batches do not change logical dependencies or wave IDs.
 
 ## State And Resources
 
-Private execution state uses `agentic-sdlc/execution-coordinator-v6`,
-`execution-wave-v2`, `execution-task-v3`, `worker-assignment-v2`, and
+Private execution state uses `agentic-sdlc/execution-coordinator-v7`,
+`execution-wave-v2`, `execution-task-v4`, `worker-assignment-v3`, and
 `worker-result-v4`. Wave, task, assignment, incoming-handoff, and result files are
 separate so parallel workers never write shared mutable JSON. Assignments and
 results carry SHA-256 digests. A corrective result must include
 `regression-oracle-evidence-v1` with the assignment's exact diagnosis and
-oracle, a `passed` outcome, evidence reference, worker commit, and content
+oracle, a `passed` outcome, evidence reference, coordinator-created task
+commit, and content
 digest; missing or mismatched proof fails before integration. Task records
 retain append-only hashes of every
 worker session that has owned the task. A process-safe execution transition
 lock serializes task ownership, atomic private session claims prevent one
 identity from owning multiple tasks, and recovery requires the exact current
-attempt. Every coordinator v1 through v5 record fails
+attempt. Task records also own dispatch, start, heartbeat, phase, and bounded
+liveness timing. Every coordinator v1 through v6 record fails
 with `WORKFLOW_UPGRADE_REQUIRED` and retains resources, including completed
 records.
 
@@ -74,15 +76,20 @@ Branch/path components are sanitized IDs; never include prompt text or secrets.
 1. Prepare and lock the integration worktree from the exact clean project base.
 2. Run TDD there and seal one internal TDD-base commit.
 3. Create one branch/worktree/assignment only for the active capacity batch
-   from the current integration tip and dispatch one fresh worker agent per
-   task. Each assignment binds an immutable incoming handoff with accepted
+   from the current integration tip. Dispatch one fresh worker agent per task.
+   Each assignment binds an immutable incoming handoff with accepted
    result evidence from all earlier completed waves and capacity batches; only
-   the first batch of the first wave has an empty predecessor list. Prefer native agents; when
-   unavailable use the sequential `codex exec` fallback with exact scope cwd,
+   the first batch of the first wave has an empty predecessor list. Prefer
+   native agents; when unavailable use the sequential `codex exec` fallback with exact scope cwd,
    `workspace-write`, `--ephemeral`, stdin assignment, and output schema.
-   This preserves one fresh worker agent per task across every batch and wave.
+   Arm a task only when a worker slot exists, require `task-start` before any
+   edit, accept direct bounded heartbeats, and have the coordinator invoke
+   read-only `task-watch` every 30 seconds. This preserves one fresh worker
+   agent per task across every batch and wave.
 4. Advance to the next capacity batch only after every task in the active batch
-   is committed. Verify each worker's one direct-child commit and changed paths, then merge in
+   is committed. Workers do not commit. The coordinator invokes locked
+   `task-finish` to check liveness, claims, special Git entries, and sensitive
+   content before creating one direct-child task commit, then merges it in
    stable task-ID order with `git merge --no-ff --no-edit`.
 5. Run combined evidence at the exact integration tip and non-force-clean
    reachable worker resources.
@@ -102,17 +109,34 @@ resources, assignments, commits, merges, or cleanup. Dirty, divergent,
 unreachable, malformed, or foreign resources stay recorded. Do not infer
 success from a command error; classify observed Git state first.
 
-`task-start` and `task-recover` derive identity from `CODEX_THREAD_ID`; callers
-cannot supply arbitrary runtime session tokens. `task-recover` requires
-explicit previous-worker-stopped confirmation, the exact current attempt, a
-fresh hashed session identity, and exact scope cwd. It preserves only a clean
-base, claimed dirty state, or one clean direct-child commit. `replan-future`
-holds the execution transition lock and replaces only planned waves without
-assignments, worktrees, branches, results, commits, or active journals.
+`task-start`, `task-heartbeat`, and `task-recover` derive identity from
+`CODEX_THREAD_ID`; callers cannot supply arbitrary runtime session tokens.
+`task-arm` starts a 60-second prestart deadline only when capacity exists.
+Workers emit direct heartbeats at least every 30 seconds; background heartbeat
+loops are forbidden. Read-only `task-watch` gives scope violations precedence
+over prestart mutation and enforces prestart timeout, scope, read-only, stall,
+and maximum-runtime budgets. After the coordinator stops the entire process
+group for a never-started worker, `task-requeue` compares the exact dispatch
+timestamp and accepts only attempt zero, no session ownership, exact branch and
+common-directory identity, clean base `HEAD`, and no changed paths.
+`task-recover` requires explicit previous-worker-stopped confirmation, the
+exact current attempt, a fresh hashed session identity, and exact scope cwd. It
+preserves only a clean base or claimed dirty state; worker-created commits are
+rejected. `replan-future` holds the execution transition lock and replaces only
+planned waves without assignments, worktrees, branches, results, commits, or
+active journals.
 Completed and current waves remain immutable, and every task in them must match
 both its full canonical definition and recorded definition digest.
 
-When execution starts inside a managed outer worktree, acquire the shared v4
+Coordinator `task-finish` writes a digest-protected
+`agentic-sdlc/task-finish-intent-v1` before invoking Git. The intent binds the
+assignment digest, base, staged tree, canonical message, and structured
+evidence. A retry may adopt only an exact clean direct-child commit matching
+that intent, and may reuse a result file only when every result field matches
+the same finish request. A moved `HEAD` without an exact intent, or any intent,
+commit, result, or evidence drift, fails closed.
+
+When execution starts inside an ordinary managed outer worktree, acquire the shared v4
 lease as owner `agentic-sdlc`, register integration/worker resources, and record
 each promoted feature head. Promotion ordering is Git fast-forward, exact lease
 compare-and-set, local interop write, then coordinator `promoted` persistence.
@@ -125,9 +149,11 @@ pending. The coordinator returns the recorded primary path plus the exact
 user invocation from that primary checkout; it never invokes that public
 lifecycle internally. After the separate local merge,
 `complete-outer-integration` must record exact source proof. Never publish the
-managed child.
+managed child. A Task Implementer persistent lane is a separate workflow domain
+and fails with `WORKTREE_CONFLICT` before Agentic state, lease, or resource
+mutation.
 
-Execution coordinator schema v1 through v5 is unsupported. Return
+Execution coordinator schema v1 through v6 is unsupported. Return
 `WORKFLOW_UPGRADE_REQUIRED` without changing its resources, including for
 completed records. There is no legacy read path or migration.
 

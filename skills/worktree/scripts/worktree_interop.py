@@ -254,6 +254,30 @@ def lifecycle_creation_lock(primary: Path) -> Iterator[None]:
 
 
 @contextmanager
+def task_lane_transition_lock(primary: Path) -> Iterator[None]:
+    """Serialize repository-wide Task lane claim and release transitions."""
+
+    root = _root(primary, create=True)
+    path = root / ".task-lanes.lock"
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as error:
+        raise InteropError(f"could not open Task lane transition lock: {path}") from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise InteropError(f"Task lane transition lock must be regular: {path}")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+@contextmanager
 def integration_transition_lock(primary: Path, name: str) -> Iterator[None]:
     """Serialize Git mutations for one child's durable integration attempt."""
 
@@ -1163,6 +1187,30 @@ def release_task_lease(
         validate_lease(lease, name)
         _atomic_json(lease_path(primary, name), lease)
         return {**lease, "status": "released"}
+
+
+def retire_released_task_lease(
+    primary: Path, *, name: str, token: str
+) -> dict[str, object]:
+    """Remove one archived lane lease after its immutable receipt is persisted."""
+
+    with interop_lock(primary):
+        lease = load_lease(primary, name)
+        if lease is None:
+            return {"status": "already-absent", "name": name}
+        if lease["token"] != _token(token):
+            raise InteropError("released task lease token does not match")
+        if lease["state"] != "released" or any(
+            resource["state"] != "absent" for resource in lease["resources"]
+        ):
+            raise InteropError("only a fully released task lane lease can be retired")
+        path = lease_path(primary, name)
+        try:
+            path.unlink()
+            fsync_directory(path.parent)
+        except OSError as error:
+            raise InteropError(f"could not retire task lane lease: {path}") from error
+        return {"status": "retired", "name": name}
 
 
 def validate_released_resources(

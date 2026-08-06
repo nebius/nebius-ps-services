@@ -64,8 +64,11 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-start run <prompt-path-or-unique-filename>`
 - `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
   `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
-- schema-v6 execution, exact initialized-folder scope, `task-recover`,
-  `replan-future`, sequential `codex exec` fallback, and v2 coordinator leases
+- schema-v7 execution, exact initialized-folder scope, `task-arm`, direct
+  `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
+  `task-recover`, task-finish crash adoption, `replan-future`, process-group
+  monitored sequential `codex exec` fallback, and `worktree-interop-v2`
+  coordinator state over v4 Worktree leases
 - `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
 - `sdlc-auto-steering`
@@ -268,6 +271,10 @@ primary path plus exact local `$worktree integrate` handoff. Verify the
 coordinator and Stop hook stop for a fresh explicit user invocation from that
 primary checkout, then record source-integration proof only after that separate
 action.
+For Task Implementer coexistence, verify replanning extends the active lane
+generation's claims before replacement state is written, and verify differently
+keyed external database, Kubernetes, Terraform, migration, and publication
+domains collide through class-wide sentinel claims across separate lanes.
 Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
 

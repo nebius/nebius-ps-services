@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Requires explicit invocation to initialize a private prompt workspace and run one durable brownfield implementation through dependency waves, internal full-repository Git worktrees, worker review/commit evidence, ordered integration, and fast-forward promotion, including safe nesting under a worktree-managed outer branch. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
+description: "Requires explicit invocation to create or reuse a persistent per-project Git worktree lane, run durable brownfield implementations through dependency waves, integrate pending generations to their named source branch, or safely remove an idle lane while preserving private prompt history. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
 ---
 
 # Task Implementer
@@ -8,14 +8,16 @@ description: "Requires explicit invocation to initialize a private prompt worksp
 ## Help
 
 For `$task-implementer --help` or `$task-implementer -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never
-expose private helper actions or treat help as workflow authorization.
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -31,15 +33,22 @@ in `agents/openai.yaml`.
 
 ## Public Interface
 
-Expose exactly these two actions:
+Expose exactly these four actions:
 
 ```text
 $task-implementer workspace init [project-folder]
 $task-implementer run <prompt-path-or-unique-filename>
+$task-implementer integrate [project-folder]
+$task-implementer workspace remove [project-folder]
 ```
 
 - `workspace init` defaults to the exact current directory.
 - `run` accepts one managed absolute path or one unique managed filename.
+- `integrate` defaults to the exact current project and consumes every pending
+  released generation for that lane.
+- `workspace remove` defaults to the exact current project and removes only an
+  idle, clean, fully integrated lane. It preserves private prompts and run
+  history.
 - Never require a prompt ID, run ID, wave ID, task ID, branch, worktree, or
   internal transition.
 - Steering means editing the same prompt and repeating `run`; do not expose a
@@ -49,7 +58,7 @@ $task-implementer run <prompt-path-or-unique-filename>
 
 ## When To Use
 
-- The user explicitly invokes one of the two actions.
+- The user explicitly invokes one of the four actions.
 - A brownfield request benefits from durable steering, dependency ordering,
   isolated worker commits, combined validation, and resumable integration.
 - Independent tasks have complete, disjoint ownership and can run in parallel.
@@ -66,15 +75,16 @@ $task-implementer run <prompt-path-or-unique-filename>
 ## Inputs
 
 - One explicit public action.
-- The canonical project checkout, repo instructions, and immutable prompt
-  snapshot. In an unmanaged checkout, `origin` must expose an unambiguous
-  symbolic default branch; a clean checkout on that default is switched to a
-  deterministic `feature/task-<run-hash>` promotion branch. A managed child
-  instead uses its exact local branch and current `HEAD` without fetching or
-  consulting the remote default.
-- When the checkout is owned by `worktree`, its exact managed outer identity,
-  recorded scope, and current `HEAD`; that outer branch is the sole promotion
-  target for the full task run.
+- The canonical Git common directory, primary checkout, exact named
+  non-default source ref, committed project scope, repo instructions, and
+  immutable prompt snapshot.
+- The Worktree-owned persistent lane for that exact logical identity. It is a
+  full-repository linked worktree and its branch is the sole promotion target
+  for internal dependency waves.
+- Source-checkout dirt is permitted during initialization and runs, is excluded
+  from the committed lane baseline, and is never copied or mutated. The lane
+  itself must be clean before a run. Integration requires both source checkout
+  and lane to be completely clean.
 - Complete task dependencies, exact or directory-prefix write claims, keyed
   conflict domains, validation, and done criteria.
 
@@ -142,11 +152,21 @@ and private result record.
 ### `workspace init [project-folder]`
 
 1. Resolve the installed skill and canonical Git root/exact project scope.
-2. Invoke private `init`. Create or verify the private workspace and exactly
-   one starter prompt only when the prompt directory is empty.
-3. Open the generated VS Code workspace when available; editor failure does not
-   invalidate initialization.
-4. Return workspace paths and prompt metadata. Stop without queuing work.
+2. Require configured `origin/HEAD`, an attached named source branch different
+   from that default, and a project directory present in its committed `HEAD`.
+   Invoke the private Worktree-owned lane
+   ensure primitive. Create one full-repository lane from that exact commit or
+   reuse the existing lane for the same common directory, primary checkout,
+   source ref, and scope. Do not copy source-checkout dirt.
+3. Invoke private `init`. Create, verify, or safely rebind workspace-v2 to a
+   newer lane incarnation. Create exactly one starter prompt only when the
+   prompt directory is empty; preserve all existing prompts and run history.
+4. Ask VS Code to reuse its last active window for the generated workspace when
+   available. Loading the workspace restarts that window's extension host and
+   may interrupt its terminal or Codex UI; editor failure does not invalidate
+   initialization.
+5. Return workspace and lane paths plus prompt metadata. Stop without queuing
+   work.
 
 ### `run <prompt-path-or-unique-filename>`
 
@@ -160,14 +180,16 @@ and private result record.
    records have both been rendered and validated.
 3. Combine overlapping work before IDs lock when it is one coherent result.
    Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
-   cycles or malformed ownership. If the project checkout is a `worktree`
-   managed linked worktree, acquire its private v4 lease with owner kind
-   `task-implementer` at the exact current outer `HEAD` before creating task
-   resources. On every resume, reconcile the exact lease token, owner, run,
-   promoted head, release state, clean outer checkout, and live Git identity;
-   never trust local interop flags alone. The active lease blocks outer
-   integration and removal. Reject any worker or coordinator write claim that
-   escapes the managed task scope; never clip it.
+   cycles or malformed ownership. Acquire the next monotonic lane generation
+   at the exact clean lane `HEAD` before creating task resources. Reconcile its
+   exact lane ID, incarnation, generation, lease token, run, promoted head,
+   release state, clean checkout, and live Git identity on every resume; never
+   trust local interop flags alone. Register repository-wide exact/prefix and
+   conflict-domain claims before worker creation. Claims overlapping any other
+   live lane block the run and remain held through integration. Replanning
+   extends the active generation's claims before replacement state is written;
+   earlier claims remain as a conservative superset. The active generation
+   blocks lane integration and removal.
 4. Coordinate every recorded wave through the lifecycle below. A logical wave
    may dispatch in capacity-sized batches, but batching never changes its wave.
 5. Reconcile queued steering only at a safe wave boundary. Contradictory
@@ -177,17 +199,42 @@ and private result record.
    isolated correction tail before finalization. The active coordinator index
    keeps only completed waves plus the replacement schedule;
    superseded planned wave files remain blocked history outside that index.
-6. Continue with the next wave from the newly promoted project `HEAD`. After
+6. Continue with the next wave from the newly promoted lane `HEAD`. After
    the last cleanup, run final changed-surface `$align`, then invoke private
    `run-finalize` with its concise evidence. Only that transition marks the
-   handoff done and releases a managed outer lease. For a managed child, report
-   the recorded primary path/source branch plus the exact
-   `$worktree integrate <generated-name>` handoff, and stop for a fresh explicit
-   user invocation from that primary checkout; never invoke it internally,
-   push the child, or open a PR from it. An unchanged completed prompt returns
-   `ALREADY_COMPLETE`; an interrupted lease release returns a private
-   finalization-pending outcome and repeats the same final transition. Edited
-   completed content starts a new internal run only after release.
+   handoff done, seals an immutable generation receipt, and releases the
+   generation for later lane integration. It does not integrate the source
+   branch, push, or open a PR. An unchanged completed prompt returns
+   `ALREADY_COMPLETE`; an interrupted generation release returns a private
+   finalization-pending outcome and repeats the same final transition. A fresh
+   explicit `run` may immediately acquire the next generation, so multiple
+   pending generations can accumulate before `integrate`.
+
+### `integrate [project-folder]`
+
+1. Resolve workspace-v2 and its exact lane identity. Reject an active
+   generation, missing or non-contiguous pending receipts, a Git operation in
+   progress, source-branch drift, or any dirt in the source checkout or lane.
+2. Serialize integration for the recorded source ref. Build one two-parent
+   candidate from the exact source head and latest lane head. Retain conflicts
+   and recovery state; never resolve, reset, rebase, or force automatically.
+3. Run nonmutating combined validation, integration `code-review`, and the
+   required changed-surface checks in the exact candidate worktree. Promote
+   only that validated candidate with expected-old source-head compare-and-set.
+4. Fast-forward the same persistent lane to the promoted merge head, mark the
+   entire pending generation range integrated, release its repository claims,
+   and rearm the lane for the next `run`.
+
+### `workspace remove [project-folder]`
+
+1. Resolve workspace-v2 and its exact lane identity. Require no active or
+   pending generations, no claims or integration recovery, a clean idle lane,
+   and proof that the source ref contains the lane head.
+2. Invoke the private non-forced lane removal primitive. Delete only the exact
+   linked worktree and branch behind expected-head proof. Never remove prompt,
+   run, or generation history.
+3. Repeated removal is idempotent. A later `workspace init` creates the next
+   lane incarnation and safely rebinds the same private workspace/history.
 
 ## Dependency-Wave Contract
 
@@ -198,7 +245,9 @@ Build deterministic earliest-fit waves in stable task order:
 - conflict-domain keys must be pairwise disjoint;
 - unknown or incomplete ownership forces a singleton wave;
 - external database, Kubernetes, Terraform, migration execution, and
-  publication actions are singleton domains and still need explicit authority;
+  publication actions are singleton domains and still need explicit authority.
+  Each also reserves one class-wide repository domain claim so distinct keys
+  cannot run concurrently in separate lanes;
 - cycles fail closed.
 
 Conflict domains cover core APIs, schemas, migration chains, dependency
@@ -216,13 +265,11 @@ Task states are
 
 For each wave:
 
-1. Require a clean named project branch. In an unmanaged checkout, resolve and
-   verify the actual remote default; when the current branch is that default,
-   create and switch to the deterministic run promotion branch from the
-   verified default SHA. In a managed child, retain the exact local child
-   branch and current `HEAD` without fetching or resolving a remote default.
-   Record the selected mode and exact identity in coordinator v6.
-2. Register resource intent in the managed outer lease when present, journal
+1. Require the clean persistent lane branch at its recorded exact `HEAD`.
+   Never create a promotion branch, fetch, consult a remote default, or touch
+   the source checkout. Record the lane mode and exact identity in coordinator
+   v6.
+2. Register resource intent in the active lane generation, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
 3. Preallocate and validate coordinator-owned requirement/design records.
@@ -318,10 +365,9 @@ For each wave:
     `git worktree remove <exact-worker-path>`, then delete each worker ref with
     `git update-ref -d <ref> <exact-worker-tip>`. Dirty,
     advanced, or unverifiable workers block promotion and remain intact.
-12. Invoke private `wave-promote` only after worker cleanup succeeds, the
-    primary checkout remains clean on the recorded promotion branch at its
-    recorded base, and the actual remote-default branch and HEAD still equal
-    their recorded identity. A common-Git-directory lock covers identity precheck,
+12. Invoke private `wave-promote` only after worker cleanup succeeds and the
+    persistent lane remains clean on its recorded branch at its recorded base.
+    A common-Git-directory lock covers identity precheck,
     `git merge --ff-only <verified-integration-SHA>`, and postcheck. Mark tasks
     done only after promotion. Then `wave-cleanup` removes the integration
     worktree first with `git worktree remove <exact-integration-path>` and its
@@ -341,13 +387,12 @@ For each wave:
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.
-- A managed outer lease spans every wave and final `$align`. While held it
-  blocks outer integration and removal. It releases only from a clean outer
-  branch at the final promoted head with every internal resource absent. The
-  released child then returns the primary path plus the exact
-  `$worktree integrate` handoff and stops for a fresh explicit user invocation
-  from the primary checkout; publication remains a source-branch action.
-  Missing or malformed coordination state fails closed.
+- A lane generation spans every wave and final `$align`. While active it blocks
+  lane integration and removal. It releases only from the clean lane at the
+  final promoted head with every internal resource absent. Released immutable
+  receipts and repository claims remain pending until `$task-implementer
+  integrate` consumes their contiguous range. Missing or malformed
+  coordination state fails closed.
 - Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.
@@ -355,7 +400,8 @@ For each wave:
 ## Failure Handling
 
 - Worker, merge, validation, review, steering, sandbox, or promotion failure
-  leaves the project branch unchanged and retains exact recovery resources.
+  leaves the persistent lane at its last proven head and retains exact recovery
+  resources. Lane integration failure leaves the source ref unchanged.
 - Use `REPLAN_REQUIRED` for undeclared paths/domains;
   `UNSUPPORTED_SUBMODULE_SCOPE` for claims crossing gitlinks;
   `UNSUPPORTED_SYMLINK_SCOPE` for claims crossing tracked symlinks;
@@ -369,13 +415,14 @@ For each wave:
   never widen permissions to make a worker pass.
 - Preflight private-root and shared Git-common-directory access. Linked
   worktrees share objects, refs, config, and hooks despite separate indexes.
-- An unfinished pre-interop run detected inside a managed outer worktree
-  returns `WORKFLOW_UPGRADE_REQUIRED`; do not infer, migrate, or adopt its
-  resources. There is no TTL, PID-based recovery, force-clear, or compatibility
-  path for task leases.
-- Treat the schema-v4 `released` lease record as the terminal receipt. Repair a
-  missed local interop write only when its owner, token, promoted SHA, clean
-  outer checkout, and absent resources match exactly; otherwise stop.
+- An unfinished pre-interop run in a persistent lane returns
+  `WORKFLOW_UPGRADE_REQUIRED`; do not infer, migrate, or adopt its resources.
+  There is no TTL, PID-based recovery, force-clear, or compatibility path for
+  generation leases.
+- Treat the immutable generation record as the terminal run receipt. Repair a
+  missed local interop write only when its lane, incarnation, generation,
+  token, promoted SHA, clean checkout, and absent resources match exactly;
+  otherwise stop.
 
 ## Must Not
 
@@ -386,25 +433,28 @@ For each wave:
   assumptions.
 - Do not let workers touch the primary checkout, other refs/worktrees, shared
   handoff/spec/docs, Git maintenance, external systems, or undeclared paths.
-- Do not push or publish internal task branches or managed child branches,
-  target the remote default from managed mode, or let outer `worktree`
-  integrate/remove run while the task lease is active.
+- Do not push or publish internal task branches or the lane branch, target a
+  remote default from lane mode, call public `$worktree` lifecycle actions for
+  a lane, or integrate/remove while a generation is active.
 - Do not force-remove worktrees, force-delete branches, copy local state,
   initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,
   or perform live external writes without separate authorization.
 
 ## Completion Criteria
 
-- The public interface remains exactly two explicit-only commands.
+- The public interface remains exactly four explicit-only actions.
 - Every task belongs to a deterministic wave and has locked ownership.
 - Every promoted task has one verified worker commit, ordered merge evidence,
   combined validation/review evidence, and handoff status updated after
   promotion.
-- The project branch advances only by verified fast-forward promotion.
+- Internal waves advance only the persistent lane by verified fast-forward
+  promotion. Source integration advances only the recorded source ref through
+  its exact validated two-parent candidate.
 - Successful cleanup leaves no managed temporary refs or worktrees; retained
   resources are reported exactly.
-- Final changed-surface `$align` passes and the private finalizer releases any
-  outer task lease, or the run stops with a precise blocker.
+- Final changed-surface `$align` passes and the private finalizer seals the lane
+  generation, or the run stops with a precise blocker. A successful
+  `integrate` consumes every pending generation and rearms the same lane.
 
 ## Output Contract
 

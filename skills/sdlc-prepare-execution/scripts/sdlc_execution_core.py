@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import sys
 
@@ -41,12 +41,28 @@ from git_promotion import (  # noqa: E402
 )
 
 
-COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v6"
+COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v7"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
-TASK_SCHEMA = "agentic-sdlc/execution-task-v3"
-ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v2"
+TASK_SCHEMA = "agentic-sdlc/execution-task-v4"
+ASSIGNMENT_SCHEMA = "agentic-sdlc/worker-assignment-v3"
 RESULT_SCHEMA = "agentic-sdlc/worker-result-v4"
 INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v1"
+TASK_FINISH_INTENT_SCHEMA = "agentic-sdlc/task-finish-intent-v1"
+WORKER_HEARTBEAT_SECONDS = 30
+WORKER_START_SECONDS = 60
+WORKER_STANDARD_WARNING_SECONDS = 240
+WORKER_STANDARD_READ_ONLY_SECONDS = 300
+WORKER_INTEGRATION_WARNING_SECONDS = 360
+WORKER_INTEGRATION_READ_ONLY_SECONDS = 420
+WORKER_STALL_SECONDS = 240
+WORKER_MAX_SECONDS = 1800
+WORKER_PHASES = (
+    "preflight",
+    "implementing",
+    "validating",
+    "reviewing",
+    "reporting",
+)
 FEATURE_ID_RE = re.compile(r"FEAT-[0-9]{3,}")
 REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}")
 WAVE_ID_RE = re.compile(r"WAVE-[0-9]{3,}")
@@ -127,6 +143,48 @@ def utc_now() -> str:
     )
 
 
+def _clock_utc(clock: Callable[[], datetime]) -> str:
+    value = clock()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return (
+        value.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _time_value(value: object, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise ExecutionError("EXECUTION_STATE_INVALID", f"{label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ExecutionError("EXECUTION_STATE_INVALID", f"{label} is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ExecutionError("EXECUTION_STATE_INVALID", f"{label} is invalid")
+    return parsed.astimezone(timezone.utc)
+
+
+def _system_clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def worker_liveness_profile(dependencies: Iterable[str]) -> dict[str, object]:
+    if tuple(dependencies):
+        return {
+            "worker_profile": "integration",
+            "read_only_warning_seconds": WORKER_INTEGRATION_WARNING_SECONDS,
+            "read_only_seconds": WORKER_INTEGRATION_READ_ONLY_SECONDS,
+        }
+    return {
+        "worker_profile": "standard",
+        "read_only_warning_seconds": WORKER_STANDARD_WARNING_SECONDS,
+        "read_only_seconds": WORKER_STANDARD_READ_ONLY_SECONDS,
+    }
+
+
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -146,6 +204,14 @@ def _session_hash(value: str) -> str:
 
 
 def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
+    if task_record.get("schema") in {
+        "agentic-sdlc/execution-task-v1",
+        "agentic-sdlc/execution-task-v2",
+        "agentic-sdlc/execution-task-v3",
+    }:
+        raise ExecutionError(
+            "WORKFLOW_UPGRADE_REQUIRED", "legacy execution task schema is unsupported"
+        )
     history = task_record.get("worker_session_hash_history")
     current = task_record.get("worker_session_hash")
     if (
@@ -506,6 +572,8 @@ def _path_in_project_scope(path: str, project_scope: str) -> bool:
 def _verify_claim_paths(
     project_root: Path, project_scope: str, tasks: Iterable[TaskPlan]
 ) -> None:
+    tasks = tuple(tasks)
+    _reject_special_claims(project_root, tasks)
     for task in tasks:
         for claim in task.write_claims:
             if not _path_in_project_scope(claim.path, project_scope):
@@ -519,6 +587,41 @@ def _verify_claim_paths(
                 )
             except ExecutionError as exc:
                 raise ExecutionError("PLAN_INVALID", str(exc)) from exc
+
+
+def _reject_special_claims(project_root: Path, tasks: Iterable[TaskPlan]) -> None:
+    output = git(
+        project_root,
+        ["ls-files", "--stage", "-z"],
+        "inspect special Git entries",
+    )
+    gitlinks: list[PurePosixPath] = []
+    symlinks: list[PurePosixPath] = []
+    for entry in output.split("\x00"):
+        if "\t" not in entry:
+            continue
+        mode = entry.split(" ", 1)[0]
+        path = PurePosixPath(entry.split("\t", 1)[1])
+        if mode == "160000":
+            gitlinks.append(path)
+        elif mode == "120000":
+            symlinks.append(path)
+    for task in tasks:
+        for claim in task.write_claims:
+            claim_path = PurePosixPath(claim.path)
+            for special, code, label in (
+                (gitlinks, "UNSUPPORTED_SUBMODULE_SCOPE", "gitlink"),
+                (symlinks, "UNSUPPORTED_SYMLINK_SCOPE", "tracked symlink"),
+            ):
+                for entry in special:
+                    crosses = claim_path == entry or entry in claim_path.parents
+                    if claim.kind == "prefix":
+                        crosses = crosses or claim_path in entry.parents
+                    if crosses:
+                        raise ExecutionError(
+                            code,
+                            f"{task.task_id} write scope crosses a {label}",
+                        )
 
 
 def local_branch_exists(cwd: Path, branch_name: str) -> bool:
@@ -852,6 +955,7 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "agentic-sdlc/execution-coordinator-v3",
         "agentic-sdlc/execution-coordinator-v4",
         "agentic-sdlc/execution-coordinator-v5",
+        "agentic-sdlc/execution-coordinator-v6",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -878,7 +982,7 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
             "default_head",
         )
     )
-    if value.get("state_version") != 6 or not (
+    if value.get("state_version") != 7 or not (
         remote_identity_valid or local_identity_valid
     ):
         raise ExecutionError(
@@ -969,7 +1073,7 @@ def prepare_execution(
             "default_ref": None,
             "default_head": None,
         }
-    else:
+    elif anchor.get("status") == "unmanaged":
         try:
             promotion = ensure_promotion_branch(
                 project_root,
@@ -981,6 +1085,12 @@ def prepare_execution(
                 "WORKTREE_CONFLICT" if "must be clean" in str(exc) else "POLICY_BLOCK"
             )
             raise ExecutionError(code, str(exc)) from exc
+    else:
+        raise ExecutionError(
+            "WORKTREE_CONFLICT",
+            "Agentic SDLC cannot start from a Task Implementer persistent lane; "
+            "start from the source checkout or an ordinary Worktree child",
+        )
     current_branch = str(promotion["promotion_branch"])
     base_head = str(promotion["promotion_initial_head"])
     state_path = coordinator_path(run_dir, feature_id)
@@ -1034,7 +1144,7 @@ def prepare_execution(
             )
         coordinator = {
             "schema": COORDINATOR_SCHEMA,
-            "state_version": 6,
+            "state_version": 7,
             "feature_id": feature_id,
             "run_id": run_dir.name,
             "project_root": str(project_root),
@@ -1216,13 +1326,19 @@ def prepare_execution(
                 "attempt": 0,
                 "worker_session_hash": None,
                 "worker_session_hash_history": [],
+                "dispatched_at": None,
+                "worker_started_at": None,
+                "last_heartbeat_at": None,
+                "heartbeat_sequence": 0,
+                "heartbeat_phase": None,
+                "finish_intent": None,
             }
             task_file = task_path(run_dir, feature_id, wave_id, task.task_id)
             if task_file.exists():
                 existing_task = read_json(task_file)
+                _validate_task_liveness(existing_task)
                 if (
-                    existing_task.get("schema") != TASK_SCHEMA
-                    or existing_task.get("wave_id") != wave_id
+                    existing_task.get("wave_id") != wave_id
                     or existing_task.get("task") != expected_task["task"]
                     or existing_task.get("task_definition_digest")
                     != expected_task["task_definition_digest"]
@@ -1434,6 +1550,12 @@ def _replan_future_locked(
                     "attempt": 0,
                     "worker_session_hash": None,
                     "worker_session_hash_history": [],
+                    "dispatched_at": None,
+                    "worker_started_at": None,
+                    "last_heartbeat_at": None,
+                    "heartbeat_sequence": 0,
+                    "heartbeat_phase": None,
+                    "finish_intent": None,
                 },
             )
     replaced: list[tuple[Path, Path]] = []
@@ -1559,6 +1681,7 @@ def seal_tdd_base(run_dir: Path, feature_id: str, message: str) -> dict[str, Any
 
 
 def _task_plan_from_state(value: dict[str, Any]) -> TaskPlan:
+    _validate_task_liveness(value)
     raw = value.get("task")
     if not isinstance(raw, dict):
         raise ExecutionError("EXECUTION_STATE_INVALID", "task record is invalid")
@@ -1621,6 +1744,14 @@ def _read_incoming_handoff(path: Path) -> dict[str, Any]:
 
 
 def _validate_assignment_record(assignment: dict[str, Any]) -> None:
+    if assignment.get("schema") in {
+        "agentic-sdlc/worker-assignment-v1",
+        "agentic-sdlc/worker-assignment-v2",
+    }:
+        raise ExecutionError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "legacy worker assignment schema is unsupported",
+        )
     unsigned = dict(assignment)
     recorded = unsigned.pop("assignment_digest", None)
     if (
@@ -1630,6 +1761,41 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
     ):
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker assignment digest is invalid"
+        )
+    helper = Path(str(assignment.get("execution_helper") or ""))
+    bound_run_dir = Path(str(assignment.get("run_dir") or ""))
+    dependencies = assignment.get("dependencies")
+    if not isinstance(dependencies, list) or any(
+        not isinstance(item, str) for item in dependencies
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker assignment dependencies are invalid"
+        )
+    expected_profile = worker_liveness_profile(dependencies)
+    expected_liveness = {
+        "worker_profile": expected_profile["worker_profile"],
+        "heartbeat_seconds": WORKER_HEARTBEAT_SECONDS,
+        "start_seconds": WORKER_START_SECONDS,
+        "read_only_warning_seconds": expected_profile[
+            "read_only_warning_seconds"
+        ],
+        "read_only_seconds": expected_profile["read_only_seconds"],
+        "stall_seconds": WORKER_STALL_SECONDS,
+        "max_seconds": WORKER_MAX_SECONDS,
+        "worker_phases": list(WORKER_PHASES),
+    }
+    expected_helper = Path(__file__).with_name("sdlc_execution.py").resolve()
+    if (
+        not helper.is_absolute()
+        or helper.is_symlink()
+        or helper.resolve() != expected_helper
+        or not helper.is_file()
+        or not bound_run_dir.is_absolute()
+        or bound_run_dir.is_symlink()
+        or any(assignment.get(key) != value for key, value in expected_liveness.items())
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker assignment liveness is invalid"
         )
 
 
@@ -1783,6 +1949,8 @@ def _build_incoming_handoff(
         dependency_result = read_json(
             result_path(run_dir, feature_id, dependency_wave, dependency)
         )
+        _validate_assignment_record(dependency_assignment)
+        _validate_result_record(dependency_result, dependency_assignment)
         unsigned_assignment = dict(dependency_assignment)
         assignment_digest = unsigned_assignment.pop("assignment_digest", None)
         unsigned_result = dict(dependency_result)
@@ -1881,11 +2049,14 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             if isinstance(active_index, int)
             else wave["task_ids"]
         )
-        return [
+        assignments = [
             read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
             for task_id in task_ids
             if assignment_path(run_dir, feature_id, wave_id, task_id).exists()
         ]
+        for assignment in assignments:
+            _validate_assignment_record(assignment)
+        return assignments
     if wave["status"] not in {"planned", "preparing", "blocked"}:
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave is not preparable")
     wave_position = coordinator["wave_ids"].index(wave_id)
@@ -1923,10 +2094,10 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         assignment_file = assignment_path(run_dir, feature_id, wave_id, task_id)
         if assignment_file.exists():
             existing = read_json(assignment_file)
+            _validate_assignment_record(existing)
             worker = Path(str(existing.get("worktree") or ""))
             if (
-                existing.get("schema") != ASSIGNMENT_SCHEMA
-                or existing.get("plan_digest") != coordinator["plan_digest"]
+                existing.get("plan_digest") != coordinator["plan_digest"]
                 or existing.get("base_head") != base_head
                 or not worker.is_absolute()
                 or not worker.exists()
@@ -1938,7 +2109,6 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                 raise ExecutionError(
                     "WORKTREE_CONFLICT", f"recorded worker drifted for {task_id}"
                 )
-            _validate_assignment_record(existing)
             _validate_assignment_handoff(
                 run_dir, feature_id, coordinator, existing, task
             )
@@ -2000,8 +2170,18 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "regression_oracle": task.regression_oracle,
             "incoming_handoff_path": str(handoff_file),
             "incoming_handoff_digest": incoming_handoff["handoff_digest"],
+            "execution_helper": str(
+                Path(__file__).with_name("sdlc_execution.py").resolve()
+            ),
+            "run_dir": str(run_dir.resolve()),
+            "heartbeat_seconds": WORKER_HEARTBEAT_SECONDS,
+            "start_seconds": WORKER_START_SECONDS,
+            "stall_seconds": WORKER_STALL_SECONDS,
+            "max_seconds": WORKER_MAX_SECONDS,
+            "worker_phases": list(WORKER_PHASES),
             "created_at": created_at,
         }
+        assignment.update(worker_liveness_profile(task.dependencies))
         assignment["assignment_digest"] = sha256_json(assignment)
         selected_project_root = Path(str(coordinator["selected_project_root"]))
         _interop(
@@ -2147,6 +2327,147 @@ def advance_batch(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str
     return prepare_wave(run_dir, feature_id, wave_id)
 
 
+def arm_task(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    assignment_digest: str,
+    *,
+    clock: Callable[[], datetime] = _system_clock,
+) -> dict[str, Any]:
+    with _execution_transition_lock(run_dir, feature_id):
+        coordinator = _load_coordinator(run_dir, feature_id)
+        assignment = read_json(
+            assignment_path(run_dir, feature_id, wave_id, task_id)
+        )
+        _validate_assignment_record(assignment)
+        if assignment.get("assignment_digest") != assignment_digest:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "assignment digest mismatch"
+            )
+        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record = read_json(task_record_path)
+        _validate_task_liveness(task_record)
+        _validate_assignment_handoff(
+            run_dir,
+            feature_id,
+            coordinator,
+            assignment,
+            _task_plan_from_state(task_record),
+        )
+        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+        active_index = wave.get("active_batch_index")
+        if (
+            not isinstance(active_index, int)
+            or task_id not in wave["batches"][active_index]
+            or wave["batch_states"][active_index] != "active"
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "task is outside the active capacity batch"
+            )
+        if task_record.get("status") != "assigned":
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "only an assigned task can be armed"
+            )
+        worker = Path(str(assignment["worktree"]))
+        if (
+            branch(worker) != assignment["branch"]
+            or head(worker) != assignment["base_head"]
+            or not clean(worker)
+            or git_common_dir(worker) != Path(assignment["git_common_dir"])
+        ):
+            raise ExecutionError(
+                "WORKTREE_CONFLICT", "worker arm identity mismatch"
+            )
+        if task_record.get("dispatched_at") is None:
+            task_record["dispatched_at"] = _clock_utc(clock)
+            write_json_atomic(task_record_path, task_record)
+            append_journal(
+                journal_path(run_dir, feature_id, wave_id),
+                {"event": "worker_armed", "task_id": task_id},
+            )
+        return task_record
+
+
+def requeue_task(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    assignment_digest: str,
+    expected_dispatched_at: str,
+    *,
+    confirmed_stopped: bool,
+) -> dict[str, Any]:
+    if not confirmed_stopped:
+        raise ExecutionError(
+            "WORKSPACE_BUSY", "previous prestart worker must be confirmed stopped"
+        )
+    with _execution_transition_lock(run_dir, feature_id):
+        coordinator = _load_coordinator(run_dir, feature_id)
+        assignment = read_json(
+            assignment_path(run_dir, feature_id, wave_id, task_id)
+        )
+        _validate_assignment_record(assignment)
+        if assignment.get("assignment_digest") != assignment_digest:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "assignment digest mismatch"
+            )
+        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record = read_json(task_record_path)
+        _validate_task_liveness(task_record)
+        _validate_assignment_handoff(
+            run_dir,
+            feature_id,
+            coordinator,
+            assignment,
+            _task_plan_from_state(task_record),
+        )
+        if task_record.get("status") != "assigned":
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "only an assigned task can be requeued"
+            )
+        if (
+            task_record.get("dispatched_at") != expected_dispatched_at
+            or not expected_dispatched_at
+        ):
+            raise ExecutionError(
+                "WORKSPACE_BUSY", "worker dispatch changed before requeue"
+            )
+        if (
+            task_record.get("worker_session_hash") is not None
+            or task_record.get("worker_session_hash_history")
+            or int(task_record.get("attempt") or 0) != 0
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "prestart task already has worker ownership"
+            )
+        worker = Path(str(assignment["worktree"]))
+        if branch(worker) != assignment["branch"] or git_common_dir(worker) != Path(
+            str(assignment["git_common_dir"])
+        ):
+            raise ExecutionError(
+                "WORKTREE_CONFLICT", "prestart worker identity changed before requeue"
+            )
+        observation = _worker_scope_observation(assignment)
+        if observation["scope_violation"]:
+            raise ExecutionError(
+                "WORKER_SCOPE_VIOLATION", "prestart worker exceeded its write scope"
+            )
+        if observation["progress_observed"]:
+            raise ExecutionError(
+                "WORKER_PRESTART_MUTATION", "prestart worker changed its worktree"
+            )
+        task_record["dispatched_at"] = None
+        write_json_atomic(task_record_path, task_record)
+        append_journal(
+            journal_path(run_dir, feature_id, wave_id),
+            {"event": "worker_requeued", "task_id": task_id},
+        )
+        return task_record
+
+
 def start_task(
     run_dir: Path,
     feature_id: str,
@@ -2155,6 +2476,8 @@ def start_task(
     assignment_digest: str,
     session_identity: str,
     scope_cwd: Path,
+    *,
+    clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
     with _execution_transition_lock(run_dir, feature_id):
         return _start_task_locked(
@@ -2165,6 +2488,7 @@ def start_task(
             assignment_digest,
             session_identity,
             scope_cwd,
+            clock=clock,
         )
 
 
@@ -2176,6 +2500,8 @@ def _start_task_locked(
     assignment_digest: str,
     session_identity: str,
     scope_cwd: Path,
+    *,
+    clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
@@ -2187,16 +2513,13 @@ def _start_task_locked(
     requested_scope = scope_cwd.expanduser().resolve()
     if requested_scope != expected_scope:
         raise ExecutionError("WORKTREE_CONFLICT", "worker scope cwd mismatch")
-    if (
-        branch(worktree_path) != assignment["branch"]
-        or head(worktree_path) != assignment["base_head"]
-        or not clean(worktree_path)
-        or git_common_dir(worktree_path) != Path(assignment["git_common_dir"])
-    ):
+    if branch(worktree_path) != assignment["branch"] or git_common_dir(
+        worktree_path
+    ) != Path(assignment["git_common_dir"]):
         raise ExecutionError("WORKTREE_CONFLICT", "worker start identity mismatch")
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
-    _validated_session_history(task_record)
+    _validate_task_liveness(task_record)
     task = _task_plan_from_state(task_record)
     _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
     wave = read_json(wave_path(run_dir, feature_id, wave_id))
@@ -2220,6 +2543,29 @@ def _start_task_locked(
             )
         _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
         return assignment
+    dispatched_at = task_record.get("dispatched_at")
+    if dispatched_at is None:
+        raise ExecutionError(
+            "TASK_NOT_ARMED", "coordinator must arm a worker slot before task-start"
+        )
+    now_text = _clock_utc(clock)
+    elapsed = (
+        _time_value(now_text, "worker start time")
+        - _time_value(dispatched_at, "worker dispatch time")
+    ).total_seconds()
+    observation = _worker_scope_observation(assignment)
+    if observation["scope_violation"]:
+        raise ExecutionError(
+            "WORKER_SCOPE_VIOLATION", "prestart worker exceeded its write scope"
+        )
+    if observation["progress_observed"]:
+        raise ExecutionError(
+            "WORKER_PRESTART_MUTATION", "worker changed its worktree before task-start"
+        )
+    if elapsed >= int(assignment["start_seconds"]):
+        raise ExecutionError(
+            "WORKER_PRESTART_TIMEOUT", "worker missed the task-start deadline"
+        )
     for other in execution_dir(run_dir, feature_id).glob("tasks/*/*.json"):
         if other == task_record_path:
             continue
@@ -2233,11 +2579,18 @@ def _start_task_locked(
             )
     _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
     task_record["status"] = "running"
-    task_record["worker_started_at"] = utc_now()
+    task_record["worker_started_at"] = now_text
+    task_record["last_heartbeat_at"] = now_text
+    task_record["heartbeat_sequence"] = 1
+    task_record["heartbeat_phase"] = "preflight"
     task_record["worker_session_hash"] = session_hash
     task_record["worker_session_hash_history"].append(session_hash)
     task_record["attempt"] = max(1, int(task_record.get("attempt") or 0) + 1)
     write_json_atomic(task_record_path, task_record)
+    append_journal(
+        journal_path(run_dir, feature_id, wave_id),
+        {"event": "worker_started", "task_id": task_id, "attempt": task_record["attempt"]},
+    )
     return assignment
 
 
@@ -2253,6 +2606,291 @@ def _working_paths(worktree_path: Path) -> list[str]:
     ):
         values.update(_split_nul(git(worktree_path, args, action)))
     return sorted(values)
+
+
+def _validate_task_liveness(task_record: dict[str, Any]) -> None:
+    _validated_session_history(task_record)
+    if "finish_intent" not in task_record:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "task finish intent state is missing"
+        )
+    finish_intent = task_record.get("finish_intent")
+    if finish_intent is not None:
+        _validate_finish_intent(finish_intent)
+    dispatched_at = task_record.get("dispatched_at")
+    started_at = task_record.get("worker_started_at")
+    heartbeat_at = task_record.get("last_heartbeat_at")
+    sequence = task_record.get("heartbeat_sequence")
+    phase = task_record.get("heartbeat_phase")
+    for value, label in (
+        (dispatched_at, "worker dispatch time"),
+        (started_at, "worker start time"),
+        (heartbeat_at, "worker heartbeat time"),
+    ):
+        if value is not None:
+            _time_value(value, label)
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker heartbeat sequence is invalid"
+        )
+    if phase is not None and phase not in WORKER_PHASES:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker heartbeat phase is invalid"
+        )
+    if task_record.get("status") in {"planned", "assigned"}:
+        if any(value is not None for value in (started_at, heartbeat_at, phase)) or sequence:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "inactive worker liveness state is invalid"
+            )
+    elif task_record.get("status") in {"running", "committed"}:
+        if (
+            dispatched_at is None
+            or started_at is None
+            or heartbeat_at is None
+            or sequence < 1
+            or phase is None
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "active worker liveness state is invalid"
+            )
+    if task_record.get("status") == "committed" and finish_intent is None:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "committed task finish intent is missing"
+        )
+
+
+def _validate_finish_intent(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "task finish intent is invalid"
+        )
+    required = {
+        "schema",
+        "assignment_digest",
+        "base_head",
+        "tree",
+        "message",
+        "evidence_digest",
+        "intent_digest",
+    }
+    unsigned = dict(value)
+    recorded = unsigned.pop("intent_digest", None)
+    if (
+        set(value) != required
+        or value.get("schema") != TASK_FINISH_INTENT_SCHEMA
+        or SHA_RE.fullmatch(str(value.get("base_head") or "")) is None
+        or SHA_RE.fullmatch(str(value.get("tree") or "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("assignment_digest") or ""))
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("evidence_digest") or ""))
+        is None
+        or not isinstance(value.get("message"), str)
+        or not value["message"]
+        or not isinstance(recorded, str)
+        or recorded != sha256_json(unsigned)
+    ):
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "task finish intent is invalid"
+        )
+    return value
+
+
+def _worker_scope_observation(assignment: dict[str, Any]) -> dict[str, object]:
+    worker = Path(str(assignment["worktree"]))
+    paths = _working_paths(worker)
+    claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
+    project_scope = str(assignment["project_scope"])
+    scope_violation = head(worker) != assignment["base_head"] or any(
+        not _path_in_project_scope(path, project_scope)
+        or not _path_allowed(path, claims)
+        for path in paths
+    )
+    if not scope_violation:
+        for path in paths:
+            mode = git(
+                worker,
+                ["ls-files", "--stage", "--", path],
+                "inspect worker path mode",
+            ).partition(" ")[0]
+            if mode in {"120000", "160000"}:
+                scope_violation = True
+                break
+    return {
+        "paths": paths,
+        "progress_observed": bool(paths) and not scope_violation,
+        "scope_violation": scope_violation,
+    }
+
+
+def _worker_guard_status(
+    assignment: dict[str, Any],
+    task_record: dict[str, Any],
+    *,
+    clock: Callable[[], datetime],
+) -> dict[str, object]:
+    now_text = _clock_utc(clock)
+    now = _time_value(now_text, "worker guard clock")
+    started = _time_value(task_record.get("worker_started_at"), "worker start time")
+    heartbeat = _time_value(
+        task_record.get("last_heartbeat_at"), "worker heartbeat time"
+    )
+    elapsed = max(0, int((now - started).total_seconds()))
+    heartbeat_age = max(0, int((now - heartbeat).total_seconds()))
+    observation = _worker_scope_observation(assignment)
+    progress_observed = bool(observation["progress_observed"])
+    scope_violation = bool(observation["scope_violation"])
+    if scope_violation:
+        status = "WORKER_SCOPE_VIOLATION"
+    elif elapsed >= int(assignment["max_seconds"]):
+        status = "WORKER_TIMEOUT"
+    elif not progress_observed and elapsed >= int(assignment["read_only_seconds"]):
+        status = "WORKER_READ_ONLY_TIMEOUT"
+    elif heartbeat_age >= int(assignment["stall_seconds"]):
+        status = "WORKER_STALLED"
+    else:
+        status = "ACTIVE"
+    warning = (
+        "READ_ONLY_DEADLINE_NEAR"
+        if status == "ACTIVE"
+        and not progress_observed
+        and elapsed >= int(assignment["read_only_warning_seconds"])
+        else None
+    )
+    return {
+        "status": status,
+        "warning": warning,
+        "elapsed_seconds": elapsed,
+        "heartbeat_age_seconds": heartbeat_age,
+        "progress_observed": progress_observed,
+        "scope_violation": scope_violation,
+        "heartbeat_sequence": task_record["heartbeat_sequence"],
+        "heartbeat_phase": task_record["heartbeat_phase"],
+        "observed_at": now_text,
+    }
+
+
+def heartbeat_task(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    assignment_digest: str,
+    phase: str,
+    session_identity: str,
+    scope_cwd: Path,
+    *,
+    clock: Callable[[], datetime] = _system_clock,
+) -> dict[str, object]:
+    if phase not in WORKER_PHASES:
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID", "worker heartbeat phase is invalid"
+        )
+    with _execution_transition_lock(run_dir, feature_id):
+        assignment = read_json(
+            assignment_path(run_dir, feature_id, wave_id, task_id)
+        )
+        _validate_assignment_record(assignment)
+        if assignment.get("assignment_digest") != assignment_digest:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "assignment digest mismatch"
+            )
+        expected_scope = Path(str(assignment["scope_cwd"])).resolve()
+        if scope_cwd.expanduser().resolve() != expected_scope:
+            raise ExecutionError(
+                "WORKTREE_CONFLICT", "worker heartbeat scope cwd mismatch"
+            )
+        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record = read_json(task_record_path)
+        _validate_task_liveness(task_record)
+        if (
+            task_record.get("status") != "running"
+            or task_record.get("worker_session_hash")
+            != _session_hash(session_identity)
+        ):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "worker heartbeat ownership is invalid"
+            )
+        status = _worker_guard_status(assignment, task_record, clock=clock)
+        if status["status"] != "ACTIVE":
+            raise ExecutionError(
+                str(status["status"]), "worker liveness budget was exceeded"
+            )
+        task_record["last_heartbeat_at"] = status["observed_at"]
+        task_record["heartbeat_sequence"] = int(
+            task_record["heartbeat_sequence"]
+        ) + 1
+        task_record["heartbeat_phase"] = phase
+        write_json_atomic(task_record_path, task_record)
+        status["heartbeat_sequence"] = task_record["heartbeat_sequence"]
+        status["heartbeat_phase"] = phase
+        return status
+
+
+def watch_task(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    assignment_digest: str,
+    *,
+    clock: Callable[[], datetime] = _system_clock,
+) -> dict[str, object]:
+    with _execution_transition_lock(run_dir, feature_id):
+        assignment = read_json(
+            assignment_path(run_dir, feature_id, wave_id, task_id)
+        )
+        _validate_assignment_record(assignment)
+        if assignment.get("assignment_digest") != assignment_digest:
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID", "assignment digest mismatch"
+            )
+        task_record = read_json(task_path(run_dir, feature_id, wave_id, task_id))
+        _validate_task_liveness(task_record)
+        if task_record.get("status") == "assigned":
+            now_text = _clock_utc(clock)
+            observation = _worker_scope_observation(assignment)
+            dispatched_at = task_record.get("dispatched_at")
+            if observation["scope_violation"]:
+                status = "WORKER_SCOPE_VIOLATION"
+                elapsed = 0
+            elif observation["progress_observed"]:
+                status = "WORKER_PRESTART_MUTATION"
+                elapsed = 0
+            elif dispatched_at is None:
+                status = "QUEUED"
+                elapsed = 0
+            else:
+                elapsed = max(
+                    0,
+                    int(
+                        (
+                            _time_value(now_text, "worker guard clock")
+                            - _time_value(dispatched_at, "worker dispatch time")
+                        ).total_seconds()
+                    ),
+                )
+                status = (
+                    "WORKER_PRESTART_TIMEOUT"
+                    if elapsed >= int(assignment["start_seconds"])
+                    else "PENDING_START"
+                )
+            return {
+                "status": status,
+                "warning": None,
+                "elapsed_seconds": elapsed,
+                "heartbeat_age_seconds": None,
+                "progress_observed": observation["progress_observed"],
+                "scope_violation": observation["scope_violation"],
+                "heartbeat_sequence": 0,
+                "heartbeat_phase": None,
+                "observed_at": now_text,
+            }
+        if task_record.get("status") != "running":
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID",
+                "only an assigned or running task can be watched",
+            )
+        return _worker_guard_status(assignment, task_record, clock=clock)
 
 
 def _verify_integration_paths(
@@ -2331,6 +2969,104 @@ def _verify_integration_commit(
         )
 
 
+def _finish_evidence_digest(
+    assignment: dict[str, Any],
+    *,
+    validation: str,
+    review: str,
+    message: str,
+    summary: str,
+    decisions: list[str],
+    open_risks: list[str],
+    regression_oracle_evidence: dict[str, Any] | None,
+) -> str:
+    return sha256_json(
+        {
+            "assignment_digest": assignment["assignment_digest"],
+            "validation": validation,
+            "review": review,
+            "message": message,
+            "summary": summary,
+            "decisions": decisions,
+            "open_risks": open_risks,
+            "regression_oracle_evidence": regression_oracle_evidence,
+        }
+    )
+
+
+def _finish_intent_record(
+    assignment: dict[str, Any],
+    *,
+    tree: str,
+    message: str,
+    evidence_digest: str,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "schema": TASK_FINISH_INTENT_SCHEMA,
+        "assignment_digest": assignment["assignment_digest"],
+        "base_head": assignment["base_head"],
+        "tree": tree,
+        "message": message,
+        "evidence_digest": evidence_digest,
+    }
+    value["intent_digest"] = sha256_json(value)
+    return value
+
+
+def _adopt_finish_commit(
+    worktree_path: Path,
+    assignment: dict[str, Any],
+    task_record: dict[str, Any],
+    *,
+    message: str,
+    evidence_digest: str,
+) -> str:
+    intent_value = task_record.get("finish_intent")
+    if intent_value is None:
+        raise ExecutionError(
+            "WORKER_SCOPE_VIOLATION",
+            "worker HEAD moved without a coordinator task-finish intent",
+        )
+    intent = _validate_finish_intent(intent_value)
+    current = head(worktree_path)
+    base = str(assignment["base_head"])
+    parents = git(
+        worktree_path,
+        ["rev-list", "--parents", "-n", "1", current],
+        "inspect recoverable task commit parent",
+    ).split()
+    tree = git(
+        worktree_path,
+        ["show", "-s", "--format=%T", current],
+        "inspect recoverable task commit tree",
+    )
+    commit_message = git(
+        worktree_path,
+        ["show", "-s", "--format=%B", current],
+        "inspect recoverable task commit message",
+    )
+    expected = _finish_intent_record(
+        assignment,
+        tree=tree,
+        message=message,
+        evidence_digest=evidence_digest,
+    )
+    if (
+        intent != expected
+        or len(parents) != 2
+        or parents[1] != base
+        or commit_message != message
+        or branch(worktree_path) != assignment["branch"]
+        or git_common_dir(worktree_path) != Path(assignment["git_common_dir"])
+        or not clean(worktree_path)
+    ):
+        raise ExecutionError(
+            "WORKER_SCOPE_VIOLATION",
+            "moved worker HEAD does not match the coordinator task-finish intent",
+        )
+    return current
+
+
 def recover_task(
     run_dir: Path,
     feature_id: str,
@@ -2341,6 +3077,7 @@ def recover_task(
     *,
     expected_attempt: int,
     confirmed_stopped: bool,
+    clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
     with _execution_transition_lock(run_dir, feature_id):
         return _recover_task_locked(
@@ -2352,6 +3089,7 @@ def recover_task(
             scope_cwd,
             expected_attempt=expected_attempt,
             confirmed_stopped=confirmed_stopped,
+            clock=clock,
         )
 
 
@@ -2365,6 +3103,7 @@ def _recover_task_locked(
     *,
     expected_attempt: int,
     confirmed_stopped: bool,
+    clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     if not confirmed_stopped:
         raise ExecutionError(
@@ -2372,8 +3111,10 @@ def _recover_task_locked(
         )
     coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    _validate_assignment_record(assignment)
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
+    _validate_task_liveness(task_record)
     history = _validated_session_history(task_record)
     task = _task_plan_from_state(task_record)
     _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
@@ -2409,51 +3150,34 @@ def _recover_task_locked(
         raise ExecutionError("WORKTREE_CONFLICT", "worker recovery identity drifted")
     base = str(assignment["base_head"])
     current = head(worker)
-    count = int(
-        git(
-            worker,
-            ["rev-list", "--count", f"{base}..{current}"],
-            "count recovery commits",
-        )
-    )
     claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
-    if count == 0:
-        if current != base:
-            raise ExecutionError("WORKTREE_CONFLICT", "worker base ancestry drifted")
-        _verify_worker_paths(
-            worker,
-            _working_paths(worker),
-            claims,
-            str(assignment["project_scope"]),
-        )
-    elif count == 1:
-        parents = git(
-            worker,
-            ["rev-list", "--parents", "-n", "1", current],
-            "read recovery parent",
-        ).split()
-        if len(parents) != 2 or parents[1] != base or not clean(worker):
-            raise ExecutionError(
-                "WORKTREE_CONFLICT", "worker recovery commit is invalid"
-            )
-        paths = _split_nul(
-            git(
-                worker,
-                ["diff", "--name-only", "-z", f"{base}..{current}"],
-                "read recovery paths",
-            )
-        )
-        _verify_worker_paths(worker, paths, claims, str(assignment["project_scope"]))
-    else:
+    if current != base:
         raise ExecutionError(
-            "WORKTREE_CONFLICT", "worker recovery has multiple commits"
+            "WORKER_SCOPE_VIOLATION",
+            "worker recovery cannot adopt a worker-created commit",
         )
+    _verify_worker_paths(
+        worker,
+        _working_paths(worker),
+        claims,
+        str(assignment["project_scope"]),
+    )
     _claim_worker_session(run_dir, feature_id, wave_id, task_id, new_hash)
+    recovered_at = _clock_utc(clock)
     task_record["worker_session_hash"] = new_hash
     task_record["worker_session_hash_history"].append(new_hash)
     task_record["attempt"] = int(task_record.get("attempt") or 1) + 1
-    task_record["recovered_at"] = utc_now()
+    task_record["dispatched_at"] = recovered_at
+    task_record["worker_started_at"] = recovered_at
+    task_record["last_heartbeat_at"] = recovered_at
+    task_record["heartbeat_sequence"] = 1
+    task_record["heartbeat_phase"] = "preflight"
+    task_record["recovered_at"] = recovered_at
     write_json_atomic(task_record_path, task_record)
+    append_journal(
+        journal_path(run_dir, feature_id, wave_id),
+        {"event": "worker_recovered", "task_id": task_id, "attempt": task_record["attempt"]},
+    )
     return assignment
 
 
@@ -2516,11 +3240,49 @@ def finish_task(
     decisions: Iterable[str] = (),
     open_risks: Iterable[str] = (),
     regression_oracle_evidence: dict[str, Any] | None = None,
+    clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
-    if not validation.strip() or not review.strip():
+    with _execution_transition_lock(run_dir, feature_id):
+        return _finish_task_locked(
+            run_dir,
+            feature_id,
+            wave_id,
+            task_id,
+            validation,
+            review,
+            message,
+            summary=summary,
+            decisions=decisions,
+            open_risks=open_risks,
+            regression_oracle_evidence=regression_oracle_evidence,
+            clock=clock,
+        )
+
+
+def _finish_task_locked(
+    run_dir: Path,
+    feature_id: str,
+    wave_id: str,
+    task_id: str,
+    validation: str,
+    review: str,
+    message: str,
+    *,
+    summary: str,
+    decisions: Iterable[str],
+    open_risks: Iterable[str],
+    regression_oracle_evidence: dict[str, Any] | None,
+    clock: Callable[[], datetime],
+) -> dict[str, Any]:
+    if (
+        not validation.strip()
+        or not review.strip()
+        or not message.strip()
+        or message != message.strip()
+    ):
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED",
-            "worker validation and review evidence are required",
+            "worker validation, review, and canonical commit message are required",
         )
     summary_value = summary
     decision_values = list(decisions)
@@ -2540,9 +3302,11 @@ def finish_task(
     )
     coordinator = _load_coordinator(run_dir, feature_id)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    _validate_assignment_record(assignment)
     worktree_path = Path(assignment["worktree"])
     task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
     task_record = read_json(task_record_path)
+    _validate_task_liveness(task_record)
     _validate_assignment_handoff(
         run_dir,
         feature_id,
@@ -2550,14 +3314,6 @@ def finish_task(
         assignment,
         _task_plan_from_state(task_record),
     )
-    if task_record["status"] == "committed":
-        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
-        _validate_result_record(result, assignment)
-        if head(worktree_path) != result["commit"] or not clean(worktree_path):
-            raise ExecutionError("WORKTREE_CONFLICT", "accepted worker result drifted")
-        return result
-    if task_record["status"] != "running":
-        raise ExecutionError("EXECUTION_STATE_INVALID", "task is not running")
     if assignment.get("regression_oracle") and regression_oracle_evidence is None:
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED",
@@ -2572,49 +3328,128 @@ def finish_task(
             "non-corrective task supplied regression-oracle evidence",
         )
     _validate_regression_oracle_claim(assignment, regression_oracle_evidence)
-    if branch(worktree_path) != assignment["branch"]:
-        raise ExecutionError("WORKTREE_CONFLICT", "worker branch changed")
-    if not clean(worktree_path):
-        git(worktree_path, ["add", "-A"], "stage worker task")
-        staged = _split_nul(
-            git(
-                worktree_path,
-                ["diff", "--cached", "--name-only", "-z"],
-                "read staged paths",
-            )
+    evidence_digest = _finish_evidence_digest(
+        assignment,
+        validation=validation,
+        review=review,
+        message=message,
+        summary=summary_value,
+        decisions=decision_values,
+        open_risks=risk_values,
+        regression_oracle_evidence=regression_oracle_evidence,
+    )
+    if task_record["status"] == "committed":
+        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        _validate_result_record(result, assignment)
+        adopted = _adopt_finish_commit(
+            worktree_path,
+            assignment,
+            task_record,
+            message=message,
+            evidence_digest=evidence_digest,
         )
-        claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
-        try:
-            _verify_worker_paths(
-                worktree_path, staged, claims, str(assignment["project_scope"])
-            )
-            if any(
-                pattern.search(path)
-                for path in staged
-                for pattern in SENSITIVE_FILENAMES
-            ):
-                raise ExecutionError(
-                    "SECURITY_BLOCKER", "worker staged a sensitive credential path"
-                )
-            staged_diff = git(
-                worktree_path,
-                ["diff", "--cached", "--no-ext-diff", "--unified=0"],
-                "inspect staged worker content",
-            )
-            if _contains_sensitive(staged_diff):
-                raise ExecutionError(
-                    "SECURITY_BLOCKER", "worker staged sensitive content"
-                )
-        except ExecutionError:
-            git(
-                worktree_path,
-                ["restore", "--staged", ":/"],
-                "unstage out-of-claim task changes",
-            )
-            raise
-        git(worktree_path, ["commit", "-m", message], "commit worker task")
-    task_head = head(worktree_path)
+        expected_oracle = _build_regression_oracle_evidence(
+            assignment, regression_oracle_evidence, adopted
+        )
+        if (
+            adopted != result["commit"]
+            or result.get("summary") != summary_value
+            or result.get("decisions") != decision_values
+            or result.get("open_risks") != risk_values
+            or result.get("validation") != validation
+            or result.get("review") != review
+            or result.get("regression_oracle_evidence") != expected_oracle
+        ):
+            raise ExecutionError("WORKTREE_CONFLICT", "accepted worker result drifted")
+        return result
+    if task_record["status"] != "running":
+        raise ExecutionError("EXECUTION_STATE_INVALID", "task is not running")
+    if (
+        branch(worktree_path) != assignment["branch"]
+        or git_common_dir(worktree_path) != Path(assignment["git_common_dir"])
+    ):
+        raise ExecutionError("WORKTREE_CONFLICT", "worker branch changed")
     base_head = assignment["base_head"]
+    task_head = head(worktree_path)
+    if task_head != base_head:
+        task_head = _adopt_finish_commit(
+            worktree_path,
+            assignment,
+            task_record,
+            message=message,
+            evidence_digest=evidence_digest,
+        )
+    else:
+        guard = _worker_guard_status(assignment, task_record, clock=clock)
+        if guard["status"] != "ACTIVE":
+            raise ExecutionError(
+                str(guard["status"]), "worker liveness budget was exceeded"
+            )
+        if not clean(worktree_path):
+            git(worktree_path, ["add", "-A"], "stage worker task")
+            staged = _split_nul(
+                git(
+                    worktree_path,
+                    ["diff", "--cached", "--name-only", "-z"],
+                    "read staged paths",
+                )
+            )
+            claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
+            try:
+                _verify_worker_paths(
+                    worktree_path, staged, claims, str(assignment["project_scope"])
+                )
+                if any(
+                    pattern.search(path)
+                    for path in staged
+                    for pattern in SENSITIVE_FILENAMES
+                ):
+                    raise ExecutionError(
+                        "SECURITY_BLOCKER",
+                        "worker staged a sensitive credential path",
+                    )
+                staged_diff = git(
+                    worktree_path,
+                    ["diff", "--cached", "--no-ext-diff", "--unified=0"],
+                    "inspect staged worker content",
+                )
+                if _contains_sensitive(staged_diff):
+                    raise ExecutionError(
+                        "SECURITY_BLOCKER", "worker staged sensitive content"
+                    )
+            except ExecutionError:
+                git(
+                    worktree_path,
+                    ["restore", "--staged", ":/"],
+                    "unstage out-of-claim task changes",
+                )
+                raise
+            tree = git(worktree_path, ["write-tree"], "record worker task tree")
+            intent = _finish_intent_record(
+                assignment,
+                tree=tree,
+                message=message,
+                evidence_digest=evidence_digest,
+            )
+            existing_intent = task_record.get("finish_intent")
+            if existing_intent is None:
+                task_record["finish_intent"] = intent
+                write_json_atomic(task_record_path, task_record)
+                append_journal(
+                    journal_path(run_dir, feature_id, wave_id),
+                    {
+                        "event": "task_finish_intent",
+                        "task_id": task_id,
+                        "tree": tree,
+                    },
+                )
+            elif _validate_finish_intent(existing_intent) != intent:
+                raise ExecutionError(
+                    "WORKER_SCOPE_VIOLATION",
+                    "worker tree changed after coordinator task-finish intent",
+                )
+            git(worktree_path, ["commit", "-m", message], "commit worker task")
+        task_head = head(worktree_path)
     count = git(
         worktree_path,
         ["rev-list", "--count", f"{base_head}..{task_head}"],
@@ -2625,10 +3460,23 @@ def finish_task(
         ["rev-list", "--parents", "-n", "1", task_head],
         "read worker commit parent",
     ).split()
+    commit_tree = git(
+        worktree_path,
+        ["show", "-s", "--format=%T", task_head],
+        "read worker commit tree",
+    )
+    commit_message = git(
+        worktree_path,
+        ["show", "-s", "--format=%B", task_head],
+        "read worker commit message",
+    )
+    finish_intent = _validate_finish_intent(task_record.get("finish_intent"))
     if (
         count != "1"
         or len(parents) != 2
         or parents[1] != base_head
+        or commit_tree != finish_intent["tree"]
+        or commit_message != finish_intent["message"]
         or not clean(worktree_path)
     ):
         raise ExecutionError(
@@ -2665,7 +3513,7 @@ def finish_task(
     oracle_evidence = _build_regression_oracle_evidence(
         assignment, regression_oracle_evidence, task_head
     )
-    result: dict[str, Any] = {
+    expected_result: dict[str, Any] = {
         "schema": RESULT_SCHEMA,
         "feature_id": feature_id,
         "wave_id": wave_id,
@@ -2680,10 +3528,20 @@ def finish_task(
         "review": review,
         "regression_oracle_evidence": oracle_evidence,
         "attempt": int(task_record.get("attempt") or 1),
-        "completed_at": utc_now(),
     }
-    result["result_digest"] = sha256_json(result)
-    write_json_atomic(result_path(run_dir, feature_id, wave_id, task_id), result)
+    result_file = result_path(run_dir, feature_id, wave_id, task_id)
+    if result_file.exists():
+        result = read_json(result_file)
+        _validate_result_record(result, assignment)
+        if any(result.get(key) != value for key, value in expected_result.items()):
+            raise ExecutionError(
+                "EXECUTION_STATE_INVALID",
+                "persisted task result does not match task-finish intent",
+            )
+    else:
+        result = {**expected_result, "completed_at": utc_now()}
+        result["result_digest"] = sha256_json(result)
+        write_json_atomic(result_file, result)
     task_record["status"] = "committed"
     task_record["commit"] = task_head
     task_record["result_digest"] = result["result_digest"]
@@ -3209,6 +4067,31 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
 
 def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, feature_id)
+    worker_liveness: list[dict[str, object]] = []
+    active_wave = coordinator.get("active_wave")
+    if isinstance(active_wave, str):
+        active_wave_path = wave_path(run_dir, feature_id, active_wave)
+        if active_wave_path.exists():
+            active_wave_record = read_json(active_wave_path)
+            for task_id in active_wave_record.get("task_ids", []):
+                record_path = task_path(run_dir, feature_id, active_wave, task_id)
+                if not record_path.exists():
+                    continue
+                task_record = read_json(record_path)
+                worker_liveness.append(
+                    {
+                        "task_id": task_id,
+                        "status": task_record.get("status"),
+                        "attempt": task_record.get("attempt"),
+                        "dispatched_at": task_record.get("dispatched_at"),
+                        "worker_started_at": task_record.get("worker_started_at"),
+                        "last_heartbeat_at": task_record.get("last_heartbeat_at"),
+                        "heartbeat_sequence": task_record.get(
+                            "heartbeat_sequence"
+                        ),
+                        "heartbeat_phase": task_record.get("heartbeat_phase"),
+                    }
+                )
     return {
         "feature_id": feature_id,
         "status": coordinator["status"],
@@ -3221,4 +4104,5 @@ def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "wave_ids": coordinator["wave_ids"],
         "promoted_head": coordinator["promoted_head"],
         "cleanup_retained": coordinator["cleanup_retained"],
+        "worker_liveness": worker_liveness,
     }

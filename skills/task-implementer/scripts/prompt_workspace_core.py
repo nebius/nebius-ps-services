@@ -19,7 +19,7 @@ import unicodedata
 import uuid
 
 
-WORKSPACE_SCHEMA = "task-implementer/workspace-v1"
+WORKSPACE_SCHEMA = "task-implementer/workspace-v2"
 PROMPT_SCHEMA = "task-implementer/prompt-v1"
 RUN_SCHEMA = "task-implementer/run-manifest-v1"
 MAX_PROMPT_BYTES = 256 * 1024
@@ -305,16 +305,154 @@ def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
     return root, source_root, scope
 
 
+def workspace_git_identity(
+    root: Path,
+) -> tuple[Path, Path, str, str, str, str | None]:
+    try:
+        common_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        worktrees_result = subprocess.run(
+            ["git", "-C", str(root), "worktree", "list", "--porcelain"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        branch_result = subprocess.run(
+            ["git", "-C", str(root), "symbolic-ref", "-q", "--short", "HEAD"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "Git identity discovery failed"
+        ) from exc
+    first_line = (
+        worktrees_result.stdout.splitlines()[0] if worktrees_result.stdout else ""
+    )
+    if (
+        common_result.returncode != 0
+        or not common_result.stdout.strip()
+        or worktrees_result.returncode != 0
+        or not first_line.startswith("worktree ")
+        or branch_result.returncode != 0
+        or not branch_result.stdout.strip()
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace Git identity is unavailable"
+        )
+    common_dir = Path(common_result.stdout.strip()).resolve()
+    primary = Path(first_line.removeprefix("worktree ")).resolve()
+    branch = branch_result.stdout.strip()
+    try:
+        source_config_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "config",
+                "--local",
+                "--get",
+                f"branch.{branch}.worktreeSkillTaskLaneSourceRef",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        lane_config_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "config",
+                "--local",
+                "--get",
+                f"branch.{branch}.worktreeSkillTaskLaneId",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "Git lane identity discovery failed"
+        ) from exc
+    source_ref = (
+        source_config_result.stdout.strip()
+        if source_config_result.returncode == 0 and source_config_result.stdout.strip()
+        else f"refs/heads/{branch}"
+    )
+    if not source_ref.startswith("refs/heads/") or source_ref == "refs/heads/":
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace source ref is invalid"
+        )
+    lane_id = (
+        lane_config_result.stdout.strip()
+        if lane_config_result.returncode == 0 and lane_config_result.stdout.strip()
+        else None
+    )
+    return (
+        common_dir,
+        primary,
+        source_ref,
+        source_ref.removeprefix("refs/heads/"),
+        branch,
+        lane_id,
+    )
+
+
 def workspace_identity(
-    root: Path, source_root: Path, scope: str
+    root: Path,
+    source_root: Path,
+    scope: str,
+    *,
+    common_dir: Path | None = None,
+    primary: Path | None = None,
+    source_ref: str | None = None,
 ) -> tuple[str, str, str]:
-    root_hash = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    project_id = f"{safe_segment(root.name, fallback='project')}-{root_hash}"
-    scope_value = root.name if scope == "." else scope
+    if common_dir is None or primary is None or source_ref is None:
+        common_dir, primary, source_ref, _, _, _ = workspace_git_identity(root)
+    root_hash = hashlib.sha256(f"{common_dir}\0{primary}".encode("utf-8")).hexdigest()[
+        :12
+    ]
+    project_id = f"{safe_segment(primary.name, fallback='project')}-{root_hash}"
+    scope_value = primary.name if scope == "." else scope
     scope_slug = safe_segment(scope_value, fallback="scope", limit=60)
-    scope_hash = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
+    scope_hash = hashlib.sha256(f"{source_ref}\0{scope}".encode("utf-8")).hexdigest()[
+        :8
+    ]
     scope_id = f"{scope_slug}-{scope_hash}"
     return project_id, scope_id, scope_slug
+
+
+def task_lane_identity(
+    *, common_dir: Path, primary: Path, source_ref: str, scope: str
+) -> str:
+    """Return the Worktree-owned deterministic identity for one project lane."""
+
+    payload = "\0".join((str(common_dir), str(primary), source_ref, scope))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 def project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
@@ -323,6 +461,30 @@ def project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
     requested = project_path.expanduser().resolve()
     root, source_root, scope = repo_and_scope(requested, str(requested))
     project_id, scope_id, _ = workspace_identity(root, source_root, scope)
+    return (
+        codex_home.expanduser().resolve()
+        / "task-implementer"
+        / "projects"
+        / project_id
+        / "scopes"
+        / scope_id
+        / "workspace.json"
+    )
+
+
+def legacy_project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
+    """Return the former primary-checkout workspace-v1 location."""
+
+    requested = project_path.expanduser().resolve()
+    root, _, scope = repo_and_scope(requested, str(requested))
+    _, primary, _, _, _, _ = workspace_git_identity(root)
+    root = primary
+    root_hash = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+    project_id = f"{safe_segment(root.name, fallback='project')}-{root_hash}"
+    scope_value = root.name if scope == "." else scope
+    scope_slug = safe_segment(scope_value, fallback="scope", limit=60)
+    scope_hash = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
+    scope_id = f"{scope_slug}-{scope_hash}"
     return (
         codex_home.expanduser().resolve()
         / "task-implementer"
@@ -406,9 +568,43 @@ def init_workspace(
     scope_value: str,
     codex_home: Path,
     *,
+    lane: dict[str, object] | None = None,
     clock: Callable[[], datetime] = now_local,
 ) -> dict[str, object]:
     root, source_root, scope = repo_and_scope(repo_path, scope_value)
+    if lane is None:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "workspace-v2 requires a Worktree-owned Task Implementer lane",
+        )
+    common_dir = Path(required_string(lane, "common_dir", "task lane"))
+    primary = Path(required_string(lane, "primary", "task lane"))
+    source_ref = required_string(lane, "source_ref", "task lane")
+    source_branch = required_string(lane, "source_branch", "task lane")
+    lane_id = required_string(lane, "lane_id", "task lane")
+    lane_branch = required_string(lane, "branch", "task lane")
+    (
+        actual_common_dir,
+        actual_primary,
+        actual_source_ref,
+        actual_source_branch,
+        actual_branch,
+        actual_lane_id,
+    ) = workspace_git_identity(root)
+    if (
+        str(root) != required_string(lane, "worktree", "task lane")
+        or scope != required_string(lane, "scope", "task lane")
+        or str(source_root) != required_string(lane, "scope_cwd", "task lane")
+        or common_dir != actual_common_dir
+        or primary != actual_primary
+        or source_ref != actual_source_ref
+        or source_branch != actual_source_branch
+        or lane_branch != actual_branch
+        or lane_id != actual_lane_id
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "Task Implementer lane scope is inconsistent"
+        )
     home = codex_home.expanduser().resolve()
     requested_state_root = home / "task-implementer"
     if requested_state_root.is_symlink():
@@ -426,7 +622,14 @@ def init_workspace(
             "task-implementer state must be outside Git worktrees and metadata",
         )
 
-    project_id, scope_id, scope_slug = workspace_identity(root, source_root, scope)
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
     scope_dir = state_root / "projects" / project_id / "scopes" / scope_id
     prompt_root = scope_dir / "prompts"
     runs_root = scope_dir / "runs"
@@ -461,8 +664,16 @@ def init_workspace(
         "project_id": project_id,
         "scope_id": scope_id,
         "repo_root": str(root),
+        "primary_root": str(primary),
+        "common_dir": str(common_dir),
+        "source_branch": source_branch,
+        "source_ref": source_ref,
         "scope": scope,
         "source_root": str(source_root),
+        "lane_id": lane_id,
+        "lane_name": required_string(lane, "name", "task lane"),
+        "lane_branch": lane_branch,
+        "lane_incarnation": lane.get("incarnation"),
         "prompt_root": str(prompt_root),
         "runs_root": str(runs_root),
         "vscode_workspace": str(vscode_path),
@@ -471,10 +682,38 @@ def init_workspace(
     if manifest_path.exists():
         existing = load_json_object(manifest_path, "workspace manifest")
         if existing != manifest:
-            raise PromptWorkspaceError(
-                "WORKSPACE_MISMATCH",
-                "existing workspace manifest does not match the canonical checkout",
+            immutable_keys = {
+                "schema",
+                "project_id",
+                "scope_id",
+                "primary_root",
+                "common_dir",
+                "source_branch",
+                "source_ref",
+                "scope",
+                "lane_id",
+                "prompt_root",
+                "runs_root",
+                "vscode_workspace",
+                "created_at",
+            }
+            old_incarnation = existing.get("lane_incarnation")
+            new_incarnation = manifest.get("lane_incarnation")
+            rebindable = (
+                set(existing) == set(manifest)
+                and all(
+                    existing.get(key) == manifest.get(key) for key in immutable_keys
+                )
+                and isinstance(old_incarnation, int)
+                and isinstance(new_incarnation, int)
+                and new_incarnation > old_incarnation
             )
+            if not rebindable:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_MISMATCH",
+                    "existing workspace manifest does not match the canonical checkout",
+                )
+            write_atomic(manifest_path, stable_json(manifest))
         private_chmod(manifest_path, 0o600)
     else:
         try:
@@ -511,6 +750,10 @@ def init_workspace(
         "prompt_root": str(prompt_root),
         "project_id": verified["project_id"],
         "scope_id": verified["scope_id"],
+        "lane_id": verified["lane_id"],
+        "lane_state": lane.get("lane_state"),
+        "lane_status": lane.get("status"),
+        "scope_cwd": str(source_root),
     }
 
 
@@ -550,6 +793,42 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace Git root no longer resolves canonically"
         )
+    (
+        common_dir,
+        primary,
+        source_ref,
+        source_branch,
+        current_branch,
+        current_lane_id,
+    ) = workspace_git_identity(root)
+    if (
+        required_string(manifest, "primary_root", "workspace manifest") != str(primary)
+        or required_string(manifest, "common_dir", "workspace manifest")
+        != str(common_dir)
+        or required_string(manifest, "source_ref", "workspace manifest") != source_ref
+        or required_string(manifest, "source_branch", "workspace manifest")
+        != source_branch
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH", "workspace logical repository identity changed"
+        )
+    lane_id = required_string(manifest, "lane_id", "workspace manifest")
+    lane_name = required_string(manifest, "lane_name", "workspace manifest")
+    lane_branch = required_string(manifest, "lane_branch", "workspace manifest")
+    lane_incarnation = manifest.get("lane_incarnation")
+    if (
+        re.fullmatch(r"[0-9a-f]{32}", lane_id) is None
+        or not lane_name.startswith("project-")
+        or lane_branch != f"feature/{lane_name.removeprefix('project-')}"
+        or lane_branch != current_branch
+        or lane_id != current_lane_id
+        or not isinstance(lane_incarnation, int)
+        or lane_incarnation < 1
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID",
+            "workspace Task Implementer lane identity is invalid",
+        )
     source_value = Path(required_string(manifest, "source_root", "workspace manifest"))
     if not source_value.is_absolute() or source_value.is_symlink():
         raise PromptWorkspaceError(
@@ -577,7 +856,14 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
             "workspace source scope no longer matches the Git root",
         )
 
-    project_id, scope_id, scope_slug = workspace_identity(root, source_root, scope)
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
     if manifest.get("project_id") != project_id or manifest.get("scope_id") != scope_id:
         raise PromptWorkspaceError(
             "WORKSPACE_MISMATCH", "workspace identity does not match canonical paths"
@@ -693,6 +979,93 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
             "VS Code workspace differs from the generated CODE/PROMPTS contract",
         )
 
+    return manifest
+
+
+def verify_workspace_for_removal(
+    manifest_path: Path, project_path: Path
+) -> dict[str, object]:
+    """Verify stable workspace identity even after its lane path is absent."""
+
+    requested_manifest = manifest_path.expanduser()
+    if requested_manifest.is_symlink():
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "workspace manifest must not be a symlink"
+        )
+    path = requested_manifest.resolve()
+    manifest = load_json_object(path, "workspace manifest")
+    if manifest.get("schema") != WORKSPACE_SCHEMA:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "workspace remove requires workspace-v2 lane state",
+        )
+    requested = project_path.expanduser().resolve()
+    root, source_root, scope = repo_and_scope(requested, str(requested))
+    common_dir, primary, source_ref, source_branch, _, _ = workspace_git_identity(root)
+    project_id, scope_id, scope_slug = workspace_identity(
+        root,
+        source_root,
+        scope,
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+    )
+    scope_dir = path.parent
+    scopes_dir = scope_dir.parent
+    project_dir = scopes_dir.parent
+    projects_dir = project_dir.parent
+    state_root = projects_dir.parent
+    lane_id = required_string(manifest, "lane_id", "workspace manifest")
+    lane_name = required_string(manifest, "lane_name", "workspace manifest")
+    lane_branch = required_string(manifest, "lane_branch", "workspace manifest")
+    lane_incarnation = manifest.get("lane_incarnation")
+    expected_lane_id = task_lane_identity(
+        common_dir=common_dir,
+        primary=primary,
+        source_ref=source_ref,
+        scope=scope,
+    )
+    repo_value = Path(required_string(manifest, "repo_root", "workspace manifest"))
+    source_value = Path(required_string(manifest, "source_root", "workspace manifest"))
+    expected_source = repo_value if scope == "." else repo_value / scope
+    expected_values = {
+        "project_id": project_id,
+        "scope_id": scope_id,
+        "primary_root": str(primary),
+        "common_dir": str(common_dir),
+        "source_branch": source_branch,
+        "source_ref": source_ref,
+        "scope": scope,
+        "prompt_root": str(path.parent / "prompts"),
+        "runs_root": str(path.parent / "runs"),
+        "vscode_workspace": str(path.parent / f"{scope_slug}-prompts.code-workspace"),
+    }
+    if (
+        path.name != "workspace.json"
+        or scope_dir.name != scope_id
+        or scopes_dir.name != "scopes"
+        or project_dir.name != project_id
+        or projects_dir.name != "projects"
+        or state_root.name != "task-implementer"
+        or any(manifest.get(key) != value for key, value in expected_values.items())
+        or lane_id != expected_lane_id
+        or not repo_value.is_absolute()
+        or repo_value.is_symlink()
+        or repo_value.resolve() != repo_value
+        or not source_value.is_absolute()
+        or source_value.is_symlink()
+        or source_value.resolve() != source_value
+        or source_value != expected_source
+        or not lane_name.startswith("project-ti-")
+        or not lane_name.endswith(f"-{lane_id[:8]}-{lane_incarnation}")
+        or lane_branch != f"feature/{lane_name.removeprefix('project-')}"
+        or not isinstance(lane_incarnation, int)
+        or lane_incarnation < 1
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_MISMATCH",
+            "workspace removal identity does not match the exact project lane",
+        )
     return manifest
 
 

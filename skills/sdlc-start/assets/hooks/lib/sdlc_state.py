@@ -263,7 +263,7 @@ def _execution_registration(
             coordinator = load_json(coordinator_path) or {}
         except json.JSONDecodeError:
             continue
-        if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v6":
+        if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
             continue
         integration_path = coordinator.get("integration_worktree")
         if integration_path and is_inside(cwd_path, str(integration_path)):
@@ -284,6 +284,8 @@ def _execution_registration(
             try:
                 assignment = load_json(assignment_path) or {}
             except json.JSONDecodeError:
+                continue
+            if assignment.get("schema") != "agentic-sdlc/worker-assignment-v3":
                 continue
             worker_path = assignment.get("worktree")
             if not worker_path or not is_inside(cwd_path, str(worker_path)):

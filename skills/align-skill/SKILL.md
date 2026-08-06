@@ -8,14 +8,16 @@ description: "Use for reviewing, hardening, validating, aligning, and improving 
 ## Help
 
 For `$align-skill --help` or `$align-skill -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never
-expose private helper actions or treat help as workflow authorization.
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -42,8 +44,8 @@ alignment.
 - Standardizing skill folders against a canonical skill structure.
 - Adding or repairing the standard `## Learning Loop` rule on target skills.
 - Adding or repairing the standard side-effect-free `## Help` contract so
-  `$skill-name --help` and `$skill-name -h` report only the public skill
-  surface.
+  `$skill-name --help` and `$skill-name -h` concisely explain the skill and
+  describe every public action, positional argument, and flag.
 - Reviewing trigger/evaluation prompts stored under `evals/`.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
@@ -145,29 +147,43 @@ newly scaffolded skill folder:
    - This repository's source-owned standard: keep `agents/openai.yaml` on
      every skill, keep the standard `## Help` and `## Learning Loop` sections,
      and add other resource folders only when useful.
-6. Create or repair `agents/openai.yaml` when the target repository convention
+6. Inventory the target's documented public actions, positional arguments, and
+   flags. Add or repair the standard `## Help` contract so every public item
+   has exact usage plus a concise description. Include `-h, --help`; when the
+   skill has no other public flags, require the help response to say so. Never
+   infer public options from private helper scripts or workflow transitions.
+7. Create or repair `agents/openai.yaml` when the target repository convention
    expects OpenAI metadata. Use `agents/openai.yaml`, not `agents.openai.yaml`.
    Add `interface.default_prompt` and a `policy.allow_implicit_invocation`
    value derived from the skill requirements and `SKILL.md`.
-7. Apply safe, secure, and fast skill guidance from
+8. Apply safe, secure, and fast skill guidance from
    `references/skill-authoring-best-practices.md`.
-8. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
+9. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-9. Run the mandatory review lanes for the target skill scope, then validate
+10. Run the mandatory review lanes for the target skill scope, then validate
    locally with the narrowest relevant checks. Broaden only when the contract or
    shared validator changed.
 
 ## Help Interface Enforcement
 
-Every repo-owned skill must treat `$skill-name --help` and `$skill-name -h` as
-report-only requests that, after the selected `SKILL.md` loads, stop before
-workflow reads, additional tools, or mutation. Help must summarize purpose and
-invocation policy, show only skill-level public usage/actions and options, state
-when no additional public flags exist, and never expose private helper commands
-or transitions. Internal or coordinator-only skills must state that boundary
-and that they have no standalone public workflow action.
+For every repo-owned skill that is created, refined, or aligned, add or repair
+a standard `## Help` section. Treat `$skill-name --help` and `$skill-name -h`
+as report-only requests that, after the selected `SKILL.md` loads, stop before
+workflow reads, additional tools, or mutation.
+
+Before writing the Help contract, inventory the documented public interface.
+Help must state the skill's purpose and invocation policy, show exact usage for
+every public action, and describe each public action, positional argument, and
+flag in one concise line. It must include `-h, --help`; when no other public
+flags exist, it must say "No additional public flags." Use only the documented
+public interface. Never expose private helper actions, script flags, or
+workflow transitions. If the public interface is ambiguous, resolve the skill
+contract or report the unresolved gap instead of inventing an option.
+
+Internal or coordinator-only skills must state that boundary and that they have
+no standalone public workflow action.
 
 ## Learning Loop Enforcement
 
@@ -287,8 +303,10 @@ not be forced onto simple instruction-only skills.
    GitHub source.
 2. Inspect nearby repository conventions before editing.
 3. Read the target `SKILL.md` files and supporting folders.
-4. Add or repair the standard `## Help` and `## Learning Loop` sections in
-   target `SKILL.md` files when missing or unsafe.
+4. Inventory each target's public actions, positional arguments, and flags.
+   Add or repair the standard `## Help` section so its report-only response
+   concisely describes every public interface item, and add or repair the
+   standard `## Learning Loop` section when missing or unsafe.
 5. Identify products, CLIs, APIs, clouds, frameworks, package managers, and
    external services the skill references.
 6. Verify vendor-specific behavior against current official documentation.
@@ -342,6 +360,8 @@ Return:
 - Review-lane findings fixed, deferred, skipped, incomplete, or blocking.
 - Live tests run or skipped.
 - Safety decisions.
+- Help-interface coverage for every public action, positional argument, and
+  flag, including unresolved interface ambiguity.
 - Learning-loop coverage for target skills.
 - Source materials updated with reusable learnings, or why updates were skipped.
 - Remaining uncertainty.

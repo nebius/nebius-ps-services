@@ -18,15 +18,27 @@ Native isolated agents are preferred. When unavailable, the private launcher
 uses one sequential ephemeral `codex exec` process per assignment with exact
 scope cwd, `workspace-write`, stdin instructions, and schema-bound output. The
 coordinator—not the worker—performs the sensitive-content gate and task commit.
+Workers must start through the bound private helper, emit direct bounded
+heartbeats at least every 30 seconds, and never run a background heartbeat
+process. The coordinator arms only available slots and watches each active
+worker for prestart, scope, read-only, stall, and maximum-runtime violations.
+The sequential launcher places each worker and its descendants in one dedicated
+process group and terminates that group on every post-spawn failure. A worker
+that never starts is requeued only after confirmed termination and an exact
+dispatch-timestamp compare-and-swap proves the assignment is untouched.
 
 For diagnosis-bound correction, immutable plan vN+1 preserves every prior task
 definition and digest, then appends corrective tasks and waves. Each corrective
 assignment carries the exact diagnosis and original regression oracle. The
 worker runs that oracle first after the bounded repair, followed by the
 affected-boundary check and normal validation. `task-finish` stores a passed,
-digest-protected oracle proof bound to the diagnosis and worker commit; missing
+digest-protected oracle proof bound to the diagnosis and the
+coordinator-created task commit; missing
 or mismatched proof cannot enter integration. Completed, sealed, promoted, or
 completed-run execution is never reopened.
+Before creating that commit, the coordinator journals the exact staged tree,
+message, assignment, and evidence intent. Retry accepts only the corresponding
+clean direct-child commit and exact persisted result.
 
 ## Main Boundaries
 

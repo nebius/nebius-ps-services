@@ -25,9 +25,11 @@ HELP_REQUIRED_SNIPPETS = (
     "before any workflow step",
     "purpose",
     "invocation policy",
-    "public usage/actions",
+    "exact usage for every public action",
+    "describe each public action, positional argument, and flag",
+    "in one concise line",
     "-h, --help",
-    "documented skill-level options",
+    "documented public interface",
     "no additional public flags",
     "internal or coordinator-only skills",
     "no standalone public workflow action exists",
@@ -39,10 +41,10 @@ HELP_REQUIRED_SNIPPETS = (
     "private state",
     "git",
     "external systems",
-    "private helper actions",
+    "private helper actions or flags",
     "workflow authorization",
 )
-HELP_MAX_WORDS = 100
+HELP_MAX_WORDS = 120
 LEARNING_LOOP_HEADING = "\n## Learning Loop\n"
 LEARNING_LOOP_REQUIRED_SNIPPETS = (
     "capture durable, reusable, public-safe learnings",
@@ -255,13 +257,15 @@ def extract_learning_loop_section(skill_text: str) -> str | None:
 
 def canonical_help_body(name: str) -> str:
     return f"""For `${name} --help` or `${name} -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never expose private helper actions or treat help as workflow
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
 authorization."""
 
 

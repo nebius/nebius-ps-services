@@ -14,6 +14,9 @@
 
 - Skills with compliant `## Help`:
 - Skills with Help updated, skipped, or uncertain:
+- Public actions, positional arguments, and flags covered by Help:
+- Public interface items missing concise descriptions:
+- Ambiguous public interfaces left unresolved:
 - Skills updated:
 - Skills already compliant:
 - Skills skipped or uncertain:

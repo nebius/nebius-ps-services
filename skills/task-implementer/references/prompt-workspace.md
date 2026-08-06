@@ -10,6 +10,8 @@ The only public commands are:
 ```text
 $task-implementer workspace init [project-folder]
 $task-implementer run <prompt-path-or-unique-filename>
+$task-implementer integrate [project-folder]
+$task-implementer workspace remove [project-folder]
 ```
 
 All helper commands are private mechanical transitions. Never ask the user for
@@ -17,7 +19,8 @@ prompt, run, wave, task, branch, worktree, assignment, or result IDs.
 
 ## Workspace Identity And Storage
 
-Canonical Git root plus exact repo-relative scope determine one workspace:
+Canonical Git common directory, primary checkout, exact named source ref, and
+repo-relative scope determine one logical workspace and persistent lane:
 
 ```text
 ${CODEX_HOME:-$HOME/.codex}/task-implementer/
@@ -58,13 +61,28 @@ creation metadata; accepted invocation ordering comes from private
 
 ## Initialization
 
-Private `init` canonicalizes the repository and exact source scope, creates or
-verifies workspace metadata, and creates exactly one starter prompt only when
-no Markdown prompt exists. Repeated initialization preserves every prompt,
-revision, run, result, branch, and worktree record. It never starts a run.
+Private lane ensure requires configured `origin/HEAD`, an attached named source
+branch different from that default, and an exact scope present at committed
+`HEAD`. It creates one full-repository linked
+worktree from that commit or reuses the existing lane for the logical identity.
+Dirty source-checkout state is permitted, excluded, and never copied.
+
+Private `init` canonicalizes the lane and exact source scope, creates or
+verifies workspace-v2 metadata, and creates exactly one starter prompt only
+when no Markdown prompt exists. Repeated initialization preserves every prompt,
+revision, run, result, branch, and worktree record. After explicit removal, it
+may rebind only the same logical workspace to a strictly newer lane
+incarnation. It never starts a run.
 
 The generated workspace exposes `CODE` and `PROMPTS`. The editor task creates a
 new prompt only; it does not invoke Codex.
+
+After successful initialization, the helper asks VS Code to reuse its last
+active window for the generated workspace. The CLI does not bind this request
+to an exact invoking window when several windows are open. Loading the workspace
+restarts that window's extension host and may interrupt its terminal or Codex
+UI. An unavailable, timed-out, or unsuccessful editor launch warns without
+invalidating initialization.
 
 ## Intake And Steering
 
@@ -84,14 +102,14 @@ returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
   `STEERING_QUEUED_AFTER_WAVE` or `HUMAN_INPUT_REQUIRED`.
 - An unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
   prompt starts a new run.
-- A terminal handoff whose managed outer lease was not released returns private
+- A terminal handoff whose lane generation was not released returns private
   `finalize`/`TASK_LEASE_RELEASE_REQUIRED` and resumes the same run.
 
 Every validated, lock-acquired invocation updates private activity and the
 handoff `Last invoked at`, including no-op and blocked outcomes. Rejected and
 lock-busy calls do not reorder prompts.
 
-## V3 Execution State Ownership
+## V4 Execution State Ownership
 
 `handoff.md` is coordinator-owned. It contains the stable task queue,
 requirements/design mappings, wave schedule, checkpoints, failure log, and
@@ -106,15 +124,14 @@ Each mutable task plane records `planned -> assigned -> running -> committed -> 
 the current worker session fingerprint, append-only session-fingerprint
 history, assignment digest, result digest, and commit.
 
-`interop.json` is strict private run state. For a `worktree`-managed outer
-checkout it binds the run to the exact outer name, branch, path, outer/task
-scope, v4 `task-implementer` owner lease identity, promoted head, release
-status, and local source-integration handoff. For an unmanaged
-checkout it records only the unmanaged mode. Any malformed or mismatched state
-fails closed. Existing managed state is never authoritative by itself: resume,
-promotion, and release inspect the exact durable lease and live clean outer Git
-head, repair only exact external-first crash windows, and reject stale local
-promoted/released values.
+`interop.json` is strict schema-v4 private run state. It binds the run to the
+exact lane ID, incarnation, monotonic generation, lane name/branch/path,
+outer/task scope, Worktree-owned lease token, promoted head, and release status.
+There is no unmanaged execution mode. Any malformed or mismatched state fails
+closed. Existing local state is never authoritative by itself: resume,
+promotion, and release inspect the exact durable generation/lease and live
+clean lane head, repair only exact external-first crash windows, and reject
+stale local promoted/released values.
 
 Assignments are immutable and bind:
 
@@ -159,6 +176,9 @@ acceptance.
 The skill may invoke:
 
 ```text
+prompt_workspace.py init [project-folder]
+prompt_workspace.py integrate [project-folder]
+prompt_workspace.py remove [project-folder]
 prompt_workspace.py wave-plan --workspace <manifest> --run-id <id> --capacity <n>
 prompt_workspace.py wave-replan --workspace <manifest> --run-id <id> --capacity <n>
 prompt_workspace.py wave-prepare --workspace <manifest> --run-id <id>
@@ -180,7 +200,9 @@ These names and arguments are not public workflow commands. Human output stays
 redacted; internal JSON may carry assignment paths to the coordinator.
 `wave-replan` replaces only a clean planned tail that owns no Git resources.
 The coordinator index keeps completed history plus the replacement schedule;
-superseded planned wave files remain blocked, non-indexed history.
+superseded planned wave files remain blocked, non-indexed history. It extends
+the active lane generation's repository claims before writing replacement
+state and retains earlier claims until generation integration.
 After the last promoted wave is cleaned, `wave-replan` may append a new
 isolated correction tail discovered by integration review before finalization.
 `task-recover` requires confirmation that the previous worker stopped and must
@@ -191,32 +213,35 @@ Recovery transfers only declared dirty state or one direct-child commit.
 Blocked resources remain retained for operator-directed recovery;
 they are never silently discarded.
 
-`wave-plan` acquires the managed outer task lease before task resources exist.
+`wave-plan` acquires the next lane-generation lease and its repository-wide
+claims before task resources exist. Exclusive external database, Kubernetes,
+Terraform, migration execution, and publication classes add class-wide domain
+claims so differently keyed tasks in separate lanes still conflict.
 Each integration/worker identity is recorded before creation and marked absent
 only after real Git and filesystem removal. `run-finalize` requires all waves
-done, no retained cleanup resources, a clean project branch at the final
-promoted head, and non-empty final `$align` evidence before lease release.
-An interrupted release is retried idempotently. Unfinished pre-interop runs in
-a managed outer checkout return `WORKFLOW_UPGRADE_REQUIRED`; there is no
+done, no retained cleanup resources, a clean lane branch at the final promoted
+head, and non-empty final `$align` evidence before generation release. An
+interrupted release is retried idempotently. Unfinished pre-interop runs return
+`WORKFLOW_UPGRADE_REQUIRED`; there is no
 migration, stale timeout, PID recovery, or force-clear path.
 
-Lease release persists a schema-v4 `released` terminal receipt rather than
-deleting ownership. Exact owner/token/promoted-head replay is accepted; missing
-or different state is a conflict. Successive wave promotions append to the
-lease's ordered head history through expected-head compare-and-set. The
-schema-v4 outer ownership manifest independently retains lease participation
-and identity, and the receipt remains until `$worktree remove` revalidates
-absent resources and deletes the outer lifecycle.
+Generation release persists an immutable receipt before retiring the terminal
+schema-v4 coordinator lease. Exact lane/incarnation/generation/token/promoted-
+head replay is accepted; missing or different state is a conflict. Successive
+wave promotions append to the lease's ordered head history through expected-
+head compare-and-set. Pending generation receipts and claims remain until
+`$task-implementer integrate` consumes their contiguous range.
 
-Completed private prompt/run history may be archived only after the outer
-worktree lifecycle has also been removed. Archive is history retention, not a
-workspace identity migration; never rebind it to a primary or different linked
-checkout.
+`workspace remove` deletes only an idle, clean, fully integrated lane through
+non-forced exact-head proof. It preserves completed private prompt/run and
+generation history. A later initialization may rebind that same logical
+workspace only to the next recorded lane incarnation.
 
 ## Legacy Boundary
 
-Workspace, prompt, and run-manifest schemas are unchanged. The execution state
-machine has no compatibility path: every
+Workspace-v1 is unsupported and must be backed up/removed before lane
+initialization. Prompt and run-manifest schemas are unchanged. The execution
+state machine has no compatibility path: every
 `task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4/v5 run returns
 `WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v6 resources,
 including completed records. Do not add a legacy read path, migration, or
@@ -230,7 +255,7 @@ worktree-confined. Verify absolute cwd, real worktree root, branch, base, and
 assignment digest at every worker transition.
 
 Do not copy ignored/untracked files, credentials, dotenv files, caches, local
-tool state, or hooks from the primary checkout. Linked worktrees already share
+tool state, or hooks from the source checkout. Linked worktrees already share
 repository objects, refs, config, and hooks. If a safe required bootstrap input
 is unavailable, stop with `ENVIRONMENT_BLOCKER`. If persistent private-root
 access is missing, report the narrow launch option:

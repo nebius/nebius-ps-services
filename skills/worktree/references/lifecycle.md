@@ -148,6 +148,42 @@ physically absent, then atomically changes the lease record and manifest marker
 to `released`. A released receipt cannot be reacquired or updated; exact release
 replay is safe, while missing, stale, or contradictory state fails closed. Outer
 integration may proceed through a released receipt.
+
+## Persistent Task Implementer Lane
+
+Task Implementer is a private Worktree-engine consumer, not a caller of public
+`$worktree` actions. Its lane key is the canonical common Git directory,
+primary checkout, exact named non-default source ref, and exact repo-relative
+project scope. Creation is permitted with source-checkout dirt because the lane
+starts from committed source `HEAD`; the source checkout is neither copied nor
+mutated. The lane itself must be clean before a generation starts.
+
+Separate schema-v1 lane state records incarnation, globally monotonic active/
+pending/integrated generations across reincarnations, repository-wide exact/
+prefix/domain claims, integration recovery, and removal intent. Immutable
+generation receipts are persisted before a terminal schema-v4 coordinator
+lease is retired. Claims are validated against every other lane before the
+candidate lane document is published. This keeps the general Worktree manifest
+and lease schemas unchanged.
+
+The lane branch's `lane_id`, `source_ref`, and `incarnation` configuration is an
+all-or-none identity. Inspection also cross-checks the live lane registry by
+exact branch and worktree. Partial configuration, or a matching live lane with
+missing branch configuration, is corruption and fails closed before ordinary
+managed-child classification or lease mutation.
+
+Lane integration requires the source checkout and lane both clean, no active
+generation, and one contiguous pending range. It serializes the recorded source
+ref, reuses the exact two-parent candidate and validation protocol above,
+promotes by expected-old source-head proof, then fast-forwards and rearms the
+same lane at the merge head. Explicit lane removal requires idle, fully
+integrated, clean, source-reachable state and never deletes Task prompt/run
+history. Idle reuse/refresh, generation transitions, integration, and removal
+share the per-lane transition lock; initialization takes the lifecycle lock
+before that per-lane lock. Removal binds the observed source ref and source
+head into its durable intent, then atomically verifies that source ref while
+deleting the exact lane ref. Public Worktree integration/removal reject
+lane-owned branches.
 Before creating or resuming an outer integration reservation, rebind that
 receipt to the manifest and live outer branch/path/scope/common-directory/head,
 then rescan every recorded private path, symlink, registered worktree, and

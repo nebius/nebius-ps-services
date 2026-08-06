@@ -266,6 +266,11 @@ def acquire(
             if anchor.get("status") != "unmanaged":
                 raise ExecutionInteropError("managed outer worktree mode changed")
             return existing
+        if anchor.get("status") != "managed":
+            raise ExecutionInteropError(
+                "Agentic SDLC cannot use a Task Implementer persistent lane; "
+                "start from the source checkout or an ordinary Worktree child"
+            )
         if (
             anchor.get("task_scope") != project_scope
             or anchor.get("name") != existing["name"]
@@ -294,7 +299,7 @@ def acquire(
             "outer_integration_status": "not-required",
             "source_integration_head": None,
         }
-    else:
+    elif anchor.get("status") == "managed":
         if (
             anchor.get("task_scope") != project_scope
             or anchor.get("head") != feature_base_head
@@ -349,6 +354,11 @@ def acquire(
             "outer_integration_status": "leased",
             "source_integration_head": None,
         }
+    else:
+        raise ExecutionInteropError(
+            "Agentic SDLC cannot use a Task Implementer persistent lane; "
+            "start from the source checkout or an ordinary Worktree child"
+        )
     _write(_path(run_dir), state)
     return state
 

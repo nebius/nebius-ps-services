@@ -5,67 +5,66 @@ It keeps prompts, revisions, steering, orchestration state, assignments,
 results, and Git worktrees outside the repository while product changes remain
 normal reviewed commits.
 
-## Two-Command Workflow
+## Four-Action Workflow
 
 ```text
 $task-implementer workspace init [project-folder]
 $task-implementer run <prompt-path-or-unique-filename>
+$task-implementer integrate [project-folder]
+$task-implementer workspace remove [project-folder]
 ```
 
 Use `$task-implementer --help` or `$task-implementer -h` to display the
-purpose, explicit invocation policy, these two workflow actions, their
+purpose, explicit invocation policy, these four workflow actions, their
 arguments, and the help option itself. After the selected `SKILL.md` loads, Help
 performs no workspace initialization, project inspection, additional tool
 calls, or private-state changes; it is not a third workflow action and does not
-authorize `workspace init` or `run`.
+authorize any lifecycle action.
 
-Initialization creates or verifies the private `CODE` + `PROMPTS` workspace
-and one starter prompt when needed. Edit that prompt, then invoke `run` once.
-The run continues every dependency wave until completion or a precise blocker;
-users never supply run, wave, task, branch, or worktree IDs.
+Initialization creates or verifies the private `CODE` + `PROMPTS` workspace and
+one starter prompt when needed, then asks VS Code to reuse its last active
+window. Loading the workspace restarts that window's extension host and may
+interrupt its terminal or Codex UI; editor failure remains non-fatal. Edit the
+starter prompt, then invoke `run` once. The run continues every dependency wave
+until completion or a precise blocker; users never supply run, wave, task,
+branch, or worktree IDs.
 
 Steer active work by editing the same prompt and repeating `run`. Steering
 received after a wave starts remains queued until the next safe boundary. An
 unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
 prompt starts a new run.
 
-## Recommended Monorepo Entry Point
+## Persistent Project Lanes
 
-For one coherent brownfield deliverable, run Task Implementer directly from a
-clean non-default base branch. Do not create one outer worktree for every
-project folder by default.
+Run initialization from the exact monorepo project folder while the primary
+checkout has configured `origin/HEAD` and is attached to a named non-default
+source branch. Task Implementer
+creates one persistent full-repository linked worktree, branch, and private VS
+Code workspace for the exact common Git directory, primary checkout, source
+ref, and repo-relative scope.
 
-Task Implementer already creates private full-repository worktrees for
-parallel-capable tasks and coordinates dependencies through ordered waves.
-Adding one managed outer worktree per project folder duplicates isolation and
-adds serial `$worktree integrate` steps. Use a managed outer worktree when a
-separate deliverable must advance independently or concurrently before serial
-integration into the base branch.
+Initialization and runs may start while the source checkout is dirty. Only its
+committed `HEAD` becomes the lane baseline; dirty and untracked source files are
+never copied or mutated. The lane must remain clean at run boundaries. Separate
+project scopes get separate lanes and may run concurrently when their
+repository-wide exact/prefix claims and conflict domains do not overlap.
 
 Before resources exist, replanning replaces the resource-free planned tail.
 The coordinator index keeps completed waves plus the replacement schedule;
 superseded planned wave files remain blocked history outside final completion.
+The active lane generation reserves every newly introduced repository claim
+before replacement state is written and retains earlier claims conservatively.
 After a final promoted wave is cleaned, replanning can append an isolated
 correction tail found by integration review before finalization.
 
-When initialized inside a linked worktree created by the `worktree` skill, the
-entire task run is nested under that outer branch. The exact current outer
-`HEAD` becomes the worker base, all wave promotions return to that branch, and
-a private v4 lease with owner kind `task-implementer` blocks outer integration
-and removal through final alignment. The task coordinator never fetches or
-bases workers on the remote default in this case. After release, the managed
-child returns its recorded primary path/source branch plus an exact
-`$worktree integrate <generated-name>` handoff, and the coordinator stops for a
-fresh explicit user invocation from that primary checkout; it is never pushed
-or used as a PR head.
-
-Resume, promotion, and release reconcile local `interop.json` against the exact
-durable lease token and live clean outer Git head. Release persists a terminal
-receipt; only an exact receipt can repair an interrupted local state write, and
-any missing, contradictory, or different-SHA state fails closed. Each wave
-promotion advances the lease's ordered history with an expected-head
-compare-and-set, so a later wave cannot overwrite or skip durable promotion
-proof.
+Every `run` acquires the next monotonic generation at the lane's exact clean
+`HEAD`. Finalization creates an immutable released-generation receipt and keeps
+its repository claims pending. Back-to-back runs therefore accumulate a
+contiguous pending range without touching the source checkout. `integrate`
+validates and promotes the whole range, then fast-forwards and rearms the same
+lane. `workspace remove` is explicit and proof-gated; it preserves private
+prompts and run history, and a later initialization creates the next lane
+incarnation and rebinds that history.
 
 ## Dependency Waves
 
@@ -88,7 +87,10 @@ Tasks may share a wave only when dependencies are already satisfied and their
 ownership is completely disjoint. Shared interfaces, schemas, migration
 chains, dependency files, abstractions, Kubernetes/Terraform identities,
 exclusive test resources, external mutations, and architecture decisions
-serialize. Unknown ownership forces a singleton wave.
+serialize. Unknown ownership forces a singleton wave. External database,
+Kubernetes, Terraform, migration execution, and publication domains also
+reserve class-wide repository claims, so separate lanes cannot run those
+live-action classes concurrently merely by using different keys.
 
 Logical waves may exceed runtime agent capacity. They dispatch in stable
 capacity-sized batches without changing the dependency wave.
@@ -151,7 +153,7 @@ managed prompt or coordinator-only state after validating their assignment.
 `WORKER_SCOPE_VIOLATION` instead of extending any liveness budget.
 
 Workers never edit the shared handoff, managed specs, common docs, other refs
-or worktrees, or the primary checkout. An undeclared path requirement stops
+or worktrees, or the source checkout. An undeclared path requirement stops
 with `REPLAN_REQUIRED` before edit or commit.
 
 ## Integration And Promotion
@@ -161,14 +163,13 @@ branches into a temporary integration branch in stable task-ID order with
 `git merge --no-ff --no-edit`. Shared managed specs, README/design docs, and
 changelog remain coordinator-owned.
 
-At planning, the coordinator resolves the actual `origin` default. If the
-clean project checkout is on that branch, it automatically creates and switches
-to a deterministic `feature/task-<run-hash>` promotion branch; otherwise it
-reuses the existing non-default branch.
+At planning, the coordinator verifies the exact Worktree-owned persistent lane
+and acquires a generation lease. It never creates another promotion branch,
+fetches, resolves a remote default, or mutates the source checkout.
 
 After combined validation, integration `code-review`, and steering
-and project-agent-instructions reconciliation, the unchanged clean primary
-branch advances under a shared promotion lock with
+and project-agent-instructions reconciliation, the unchanged clean lane branch
+advances under a shared promotion lock with
 `git merge --ff-only <verified-integration-SHA>` after the integration branch
 is verified at that SHA. Before that promotion, clean verified worker
 worktrees are removed and worker refs are deleted with exact expected-old
@@ -180,12 +181,18 @@ workflow never runs broad prune/gc, cherry-picks, rebases, squashes, pushes, or
 force-removes.
 
 After the last wave cleanup, final changed-surface `$align` evidence is sealed
-before a managed outer lease is released. The result is the recorded primary
-path plus an exact local `$worktree integrate <generated-name>` handoff,
-followed by a stop for a fresh explicit user invocation from that primary
-checkout instead of an internal call to that public lifecycle.
-An interruption after the handoff is marked done remains recoverable: repeating
-`run` finishes the same private release instead of starting a new task run.
+before the lane generation is released. An interruption after the handoff is
+marked done remains recoverable: repeating `run` finishes the same private
+release instead of starting a new generation.
+
+`integrate [project-folder]` requires both the recorded source checkout and
+lane to be clean and free of Git operations, with no active generation. It
+serializes by source ref, builds one exact two-parent candidate from the current
+source head and latest lane head, runs combined validation and review on that
+candidate, and promotes only the validated SHA through an expected-old
+compare-and-set. Conflicts and uncertain state are retained. Success consumes
+all pending generations, releases their claims, and rearms the same lane at the
+merge head.
 
 ## Private State And Recovery
 
@@ -195,10 +202,11 @@ under the private prompt workspace. Every Git mutation is journaled before
 execution and re-observed afterward. A repeated `run` resumes durable v5 truth
 without recreating branches, worktrees, assignments, commits, or merges.
 
-`orchestration/interop.json` uses schema v3 and binds a nested run to the exact
-managed outer identity and its worktree-owned lease. Completed prompt history is archive-only
-after the outer worktree has itself been removed; it is never migrated to a
-different workspace identity.
+`orchestration/interop.json` uses schema v4 and binds one run to its exact lane,
+incarnation, generation, and Worktree-owned lease. Worktree schema-v4 remains
+the general linked-worktree ownership format; separate lane schema-v1 state and
+immutable generation receipts add the persistent Task lifecycle without
+changing that public Worktree schema.
 
 Every execution-plane-v1 or coordinator-v1/v2/v3/v4/v5 run returns
 `WORKFLOW_UPGRADE_REQUIRED`, including completed records. There is no legacy
@@ -210,7 +218,7 @@ secrets, or internal IDs.
 
 ## Files
 
-- `SKILL.md`: explicit two-command coordinator contract.
+- `SKILL.md`: explicit four-action coordinator contract.
 - `agents/openai.yaml`: UI metadata and explicit-only policy.
 - `references/prompt-workspace.md`: private storage, routing, v2 state, errors,
   and sandbox behavior.
@@ -219,22 +227,24 @@ secrets, or internal IDs.
 - `assets/handoff-template.md`: coordinator-owned queue and wave evidence.
 - `scripts/prompt_workspace_execution.py`: parsing and deterministic scheduler.
 - `scripts/prompt_workspace_waves.py`: journaled worktree lifecycle.
-- `scripts/prompt_workspace_interop.py`: optional managed-outer lease bridge.
-- `scripts/prompt_workspace_intake.py`: two-command routing and steering.
+- `scripts/prompt_workspace_lanes.py`: private Worktree-owned lane adapter.
+- `scripts/prompt_workspace_interop.py`: generation lease bridge.
+- `scripts/prompt_workspace_intake.py`: prompt routing and steering.
 - `scripts/prompt_workspace_specs.py`: managed specification validation.
 - `project-agent-instructions`: shared conditional selected-project
   `AGENTS.md` owner and deterministic provenance helper.
 - `scripts/test-task-execution.py`: scheduler and v1-boundary tests.
 - `scripts/test-task-waves.py`: disposable real-Git lifecycle tests.
-- `scripts/test-worktree-interoperability.py`: composed outer-worktree lease,
-  promotion, cleanup, interruption, and remote-isolation tests.
+- `scripts/test-worktree-interoperability.py`: composed lane-generation,
+  promotion, cleanup, interruption, and source-isolation tests.
 - `scripts/test-prompt-workspace.py`, `test-task-specs.py`, and
   `test-task-implementer-contract.py`: storage, spec, and contract tests.
 
 ## Boundaries
 
 - Explicit invocation only; generic parallel requests do not trigger it.
-- Public surface remains exactly `workspace init` and `run`.
+- Public surface remains exactly `workspace init`, `run`, `integrate`, and
+  `workspace remove`.
 - External database, Kubernetes, Terraform, migration, and publication actions
   remain singleton and need separate explicit authority.
 - Use `$align` after the final promoted wave; use `$sdlc-start run <prompt>` for Agentic

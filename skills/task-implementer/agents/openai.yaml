@@ -1,23 +1,18 @@
 interface:
   display_name: "Task Implementer"
   short_description: "Coordinate internal workers through dependency waves"
-  default_prompt: "Use $task-implementer workspace init [project-folder] once,
-    then $task-implementer run <prompt-path-or-unique-filename>. Keep the
-    two-command public surface and IDs private; plan deterministic dependency
-    waves from complete write claims and conflict domains; use
-    isolated full-repository worktrees and one reviewed direct-child commit per
-    worker;
-    create a deterministic promotion branch when starting on the actual remote
-    default;
-    when nested in a worktree-managed checkout, base on and promote only to
-    that exact local child while its schema-v4 lease blocks outer integration
-    and every resume reconciles durable lease plus clean Git truth;
-    integrate in stable order; validate and review the combined result;
-    reconcile steering; promote only by ff-only merge; clean up internal
-    worker resources after combined evidence, clean integration resources only
-    after promotion, use exact-SHA ref deletion without force, and release the
-    outer lease only after final alignment, then return the recorded primary
-    path and exact $worktree integrate command. Stop for a
-    fresh explicit user invocation from that primary checkout."
+  default_prompt: "Use the explicit four-action Task Implementer workflow:
+    workspace init creates or reuses the persistent Worktree-owned project
+    lane, run acquires one monotonic generation and coordinates deterministic
+    dependency waves, integrate validates and promotes every pending generation
+    to the exact named source branch before rearming the same lane, and
+    workspace remove proof-gates explicit lane cleanup while preserving private
+    prompt history. Allow dirty source state for init and run but exclude it
+    from the committed baseline; require the lane clean for runs and both source
+    plus lane clean for integration. Keep internal IDs private, enforce
+    repository-wide claims across lanes, use full-repository worker worktrees,
+    ordered no-ff task integration, ff-only internal promotion, exact-head CAS,
+    durable receipts, and non-forced cleanup. Never call public $worktree
+    lifecycle actions for a Task Implementer lane."
 policy:
   allow_implicit_invocation: false

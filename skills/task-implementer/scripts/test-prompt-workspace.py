@@ -19,6 +19,7 @@ from unittest import mock
 
 import prompt_workspace_intake as intake
 import prompt_workspace_core as core
+import prompt_workspace_lanes as lanes
 
 
 SCRIPT = Path(__file__).resolve().with_name("prompt_workspace.py")
@@ -54,11 +55,16 @@ class PromptWorkspaceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.origin = self.root / "origin.git"
+        git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "repo with spaces"
         self.repo.mkdir()
-        git("init", "-q", cwd=self.repo)
+        git("init", "-q", "-b", "main", cwd=self.repo)
+        self.scope = self.repo / "services" / "example"
+        self.scope.mkdir(parents=True)
         (self.repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-        git("add", "tracked.txt", cwd=self.repo)
+        (self.scope / "scope.txt").write_text("scope\n", encoding="utf-8")
+        git("add", "-A", cwd=self.repo)
         git(
             "-c",
             "user.name=Prompt Test",
@@ -69,13 +75,26 @@ class PromptWorkspaceTest(unittest.TestCase):
             "initial",
             cwd=self.repo,
         )
-        self.scope = self.repo / "services" / "example"
-        self.scope.mkdir(parents=True)
+        git("remote", "add", "origin", str(self.origin), cwd=self.repo)
+        git("push", "-q", "origin", "main", cwd=self.repo)
+        git("symbolic-ref", "HEAD", "refs/heads/main", cwd=self.origin)
+        git("fetch", "-q", "origin", cwd=self.repo)
+        git(
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            cwd=self.repo,
+        )
+        git("switch", "-qc", "prompt-feature", cwd=self.repo)
         self.codex_home = self.root / "private codex"
+        self.lane = lanes.ensure_project_lane(self.scope)
+        self.lane_root = Path(str(self.lane["worktree"]))
+        self.lane_scope = Path(str(self.lane["scope_cwd"]))
         self.workspace_result = pw.init_workspace(
-            self.repo,
+            self.lane_root,
             "services/example",
             self.codex_home,
+            lane=self.lane,
             clock=lambda: FIXED_LOCAL,
         )
         self.workspace = Path(self.workspace_result["workspace"])
@@ -209,9 +228,10 @@ class PromptWorkspaceTest(unittest.TestCase):
         vscode_before = vscode.read_bytes()
 
         repeated = pw.init_workspace(
-            self.repo,
+            self.lane_root,
             "services/example",
             self.codex_home,
+            lane=self.lane,
             clock=lambda: datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
 
@@ -223,14 +243,32 @@ class PromptWorkspaceTest(unittest.TestCase):
 
         if os.name == "posix":
             alias = self.root / "repo-alias"
-            alias.symlink_to(self.repo, target_is_directory=True)
+            alias.symlink_to(self.lane_root, target_is_directory=True)
             aliased = pw.init_workspace(
                 alias,
                 "services/example",
                 self.codex_home,
+                lane=self.lane,
                 clock=lambda: FIXED_LOCAL,
             )
             self.assertEqual(aliased["workspace"], str(self.workspace))
+
+    def test_init_detects_primary_legacy_workspace_from_source_or_lane(self) -> None:
+        legacy_home = self.root / "legacy codex home"
+        from_source = core.legacy_project_workspace_manifest(self.scope, legacy_home)
+        from_lane = core.legacy_project_workspace_manifest(self.lane_scope, legacy_home)
+        self.assertEqual(from_source, from_lane)
+        from_source.parent.mkdir(parents=True)
+        from_source.write_text("{}\n", encoding="utf-8")
+
+        for invocation in (self.scope, self.lane_scope):
+            with self.subTest(invocation=invocation):
+                self.assert_error(
+                    "WORKFLOW_UPGRADE_REQUIRED",
+                    pw.initialize_project_workspace,
+                    invocation,
+                    legacy_home,
+                )
 
     def test_project_init_defaults_to_cwd_and_preserves_starter(self) -> None:
         project_home = self.root / "project init home"
@@ -280,7 +318,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         manifest = json.loads(
             Path(first_result["workspace"]).read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["source_root"], str(self.scope.resolve()))
+        self.assertEqual(manifest["source_root"], str(self.lane_scope))
         vscode = Path(manifest["vscode_workspace"])
         vscode_bytes = vscode.read_bytes()
         vscode.write_text("{}\n", encoding="utf-8")
@@ -326,6 +364,21 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertTrue(Path(json.loads(result.stdout)["workspace"]).is_file())
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
 
+    def test_open_in_editor_reuses_last_active_window(self) -> None:
+        target = self.root / "workspace with spaces.code-workspace"
+        cases = (
+            (True, ["code", "--reuse-window", str(target)]),
+            (False, ["code", "--reuse-window", "--goto", str(target)]),
+        )
+
+        for workspace, expected in cases:
+            with self.subTest(workspace=workspace):
+                with mock.patch.object(pw.subprocess, "run") as run:
+                    run.return_value = subprocess.CompletedProcess(expected, 0)
+                    pw.open_in_editor("code", target, workspace=workspace)
+
+                run.assert_called_once_with(expected, check=False, timeout=15)
+
     def test_project_init_preserves_prompts_and_run_history(self) -> None:
         prompt = self.new_prompt()
         self.complete_prompt(prompt)
@@ -361,6 +414,98 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(handoff.read_bytes(), handoff_bytes)
         self.assertEqual(result["prompts"][0]["path"], str(prompt))
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
+
+    def test_workspace_remove_then_init_rebinds_lane_and_preserves_prompts(
+        self,
+    ) -> None:
+        prompt = self.new_prompt()
+        prompt_bytes = prompt.read_bytes()
+        before = json.loads(self.workspace.read_text(encoding="utf-8"))
+
+        removed = lanes.remove_lane(before)
+        self.assertEqual(removed["status"], "removed")
+        self.assertFalse(Path(str(before["repo_root"])).exists())
+
+        initialized = pw.initialize_project_workspace(
+            self.scope,
+            self.codex_home,
+            clock=lambda: FIXED_LOCAL + timedelta(minutes=1),
+        )
+        after = json.loads(self.workspace.read_text(encoding="utf-8"))
+        self.assertEqual(initialized["workspace"], str(self.workspace))
+        self.assertFalse(initialized["starter_created"])
+        self.assertEqual(prompt.read_bytes(), prompt_bytes)
+        self.assertEqual(after["lane_id"], before["lane_id"])
+        self.assertGreater(after["lane_incarnation"], before["lane_incarnation"])
+        self.assertNotEqual(after["repo_root"], before["repo_root"])
+
+    def test_workspace_remove_is_idempotent_after_lane_path_is_absent(self) -> None:
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "remove",
+            str(self.scope),
+            "--codex-home",
+            str(self.codex_home),
+            "--json",
+        ]
+
+        first = subprocess.run(
+            command,
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(json.loads(first.stdout)["status"], "removed")
+        self.assertFalse(self.lane_root.exists())
+
+        repeated = subprocess.run(
+            command,
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+        self.assertEqual(json.loads(repeated.stdout)["status"], "already-removed")
+
+    def test_workspace_remove_rejects_tampered_destructive_identity(self) -> None:
+        original = self.workspace.read_bytes()
+        cases = {
+            "lane_id": "0" * 32,
+            "primary_root": str(self.root / "other-repository"),
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                manifest = json.loads(original)
+                manifest[field] = value
+                self.workspace.write_bytes(core.stable_json(manifest))
+                self.workspace.chmod(0o600)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        "remove",
+                        str(self.scope),
+                        "--codex-home",
+                        str(self.codex_home),
+                        "--json",
+                    ],
+                    cwd=self.repo,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("WORKSPACE_MISMATCH", result.stderr)
+                self.assertTrue(self.lane_root.is_dir())
+        self.workspace.write_bytes(original)
+        self.workspace.chmod(0o600)
 
     def test_concurrent_project_init_is_idempotent(self) -> None:
         project_home = self.root / "concurrent init home"
@@ -398,25 +543,36 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
 
     def test_init_isolates_clones_and_scopes(self) -> None:
+        root_lane = lanes.ensure_project_lane(self.repo)
         root_scope = pw.init_workspace(
-            self.repo, ".", self.codex_home, clock=lambda: FIXED_LOCAL
+            Path(str(root_lane["worktree"])),
+            ".",
+            self.codex_home,
+            lane=root_lane,
+            clock=lambda: FIXED_LOCAL,
         )
         self.assertNotEqual(root_scope["scope_id"], self.workspace_result["scope_id"])
 
         second_parent = self.root / "second"
         second_repo = second_parent / self.repo.name
-        second_repo.mkdir(parents=True)
-        git("init", "-q", cwd=second_repo)
+        second_parent.mkdir()
+        git("clone", "-q", str(self.origin), str(second_repo), cwd=self.root)
+        git("switch", "-qc", "clone-feature", cwd=second_repo)
+        clone_lane = lanes.ensure_project_lane(second_repo)
         clone = pw.init_workspace(
-            second_repo, ".", self.codex_home, clock=lambda: FIXED_LOCAL
+            Path(str(clone_lane["worktree"])),
+            ".",
+            self.codex_home,
+            lane=clone_lane,
+            clock=lambda: FIXED_LOCAL,
         )
         self.assertNotEqual(clone["project_id"], self.workspace_result["project_id"])
 
         manifest = json.loads(self.workspace.read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema"], pw.WORKSPACE_SCHEMA)
-        self.assertEqual(manifest["repo_root"], str(self.repo.resolve()))
+        self.assertEqual(manifest["repo_root"], str(self.lane_root))
         self.assertEqual(manifest["scope"], "services/example")
-        self.assertEqual(manifest["source_root"], str(self.scope.resolve()))
+        self.assertEqual(manifest["source_root"], str(self.lane_scope))
         self.assertEqual(manifest["prompt_root"], str(self.prompt_root.resolve()))
 
     def test_init_rejects_unsafe_locations(self) -> None:
@@ -437,16 +593,18 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assert_error(
             "WORKSPACE_PATH_INVALID",
             pw.init_workspace,
-            self.repo,
-            ".",
+            self.lane_root,
+            "services/example",
             self.repo / ".codex",
+            lane=self.lane,
         )
         self.assert_error(
             "WORKSPACE_PATH_INVALID",
             pw.init_workspace,
-            self.repo,
-            ".",
+            self.lane_root,
+            "services/example",
             self.repo / ".git" / "private-codex",
+            lane=self.lane,
         )
 
         if os.name == "posix":
@@ -471,9 +629,10 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assert_error(
             "WORKSPACE_PATH_INVALID",
             pw.init_workspace,
-            self.repo,
-            ".",
+            self.lane_root,
+            "services/example",
             foreign_home,
+            lane=self.lane,
         )
         self.assertFalse((foreign_home / "task-implementer").exists())
         self.assertEqual(git("status", "--porcelain=v1", cwd=foreign_repo), "")
@@ -490,9 +649,10 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assert_error(
             "WORKSPACE_PATH_INVALID",
             pw.init_workspace,
-            self.repo,
-            ".",
+            self.lane_root,
+            "services/example",
             other_home,
+            lane=self.lane,
         )
 
         shutil.rmtree(self.prompt_root)
@@ -520,7 +680,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(
             value["folders"],
             [
-                {"name": "CODE", "path": str(self.scope.resolve())},
+                {"name": "CODE", "path": str(self.lane_scope)},
                 {"name": "PROMPTS", "path": "prompts"},
             ],
         )

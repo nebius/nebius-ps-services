@@ -12,18 +12,22 @@ from typing import Any
 from sdlc_execution_core import (
     ExecutionError,
     advance_batch,
+    arm_task,
     complete_wave,
     describe_status,
     finish_task,
+    heartbeat_task,
     integrate_wave,
     prepare_execution,
     prepare_wave,
     promote_feature,
     replan_future,
+    requeue_task,
     recover_task,
     seal_feature,
     seal_tdd_base,
     start_task,
+    watch_task,
 )
 from sdlc_execution_interop import (
     complete_source_integration,
@@ -139,6 +143,37 @@ def parser() -> argparse.ArgumentParser:
     task_start.add_argument("--assignment-digest", required=True)
     task_start.add_argument("--scope-cwd", type=Path, required=True)
 
+    task_arm = sub.add_parser("task-arm")
+    task_arm.add_argument("--run-dir", type=Path, required=True)
+    task_arm.add_argument("--feature", required=True)
+    task_arm.add_argument("--wave", required=True)
+    task_arm.add_argument("--task", required=True)
+    task_arm.add_argument("--assignment-digest", required=True)
+
+    task_requeue = sub.add_parser("task-requeue")
+    task_requeue.add_argument("--run-dir", type=Path, required=True)
+    task_requeue.add_argument("--feature", required=True)
+    task_requeue.add_argument("--wave", required=True)
+    task_requeue.add_argument("--task", required=True)
+    task_requeue.add_argument("--assignment-digest", required=True)
+    task_requeue.add_argument("--expected-dispatched-at", required=True)
+    task_requeue.add_argument("--confirmed-stopped", action="store_true")
+
+    task_heartbeat = sub.add_parser("task-heartbeat")
+    task_heartbeat.add_argument("--run-dir", type=Path, required=True)
+    task_heartbeat.add_argument("--feature", required=True)
+    task_heartbeat.add_argument("--wave", required=True)
+    task_heartbeat.add_argument("--task", required=True)
+    task_heartbeat.add_argument("--assignment-digest", required=True)
+    task_heartbeat.add_argument("--phase", required=True)
+
+    task_watch = sub.add_parser("task-watch")
+    task_watch.add_argument("--run-dir", type=Path, required=True)
+    task_watch.add_argument("--feature", required=True)
+    task_watch.add_argument("--wave", required=True)
+    task_watch.add_argument("--task", required=True)
+    task_watch.add_argument("--assignment-digest", required=True)
+
     task_recover = sub.add_parser("task-recover")
     task_recover.add_argument("--run-dir", type=Path, required=True)
     task_recover.add_argument("--feature", required=True)
@@ -215,6 +250,10 @@ def execute(args: argparse.Namespace) -> Any:
     if args.command == "replan-future":
         return replan_future(args.run_dir, args.feature, args.plan, args.capacity)
     if args.command == "task-start":
+        if args.scope_cwd.expanduser().resolve() != Path.cwd().resolve():
+            raise ExecutionError(
+                "WORKTREE_CONFLICT", "task-start must run from the assigned scope cwd"
+            )
         return start_task(
             args.run_dir,
             args.feature,
@@ -224,7 +263,48 @@ def execute(args: argparse.Namespace) -> Any:
             runtime_session_identity(),
             args.scope_cwd,
         )
+    if args.command == "task-arm":
+        return arm_task(
+            args.run_dir,
+            args.feature,
+            args.wave,
+            args.task,
+            args.assignment_digest,
+        )
+    if args.command == "task-requeue":
+        return requeue_task(
+            args.run_dir,
+            args.feature,
+            args.wave,
+            args.task,
+            args.assignment_digest,
+            args.expected_dispatched_at,
+            confirmed_stopped=args.confirmed_stopped,
+        )
+    if args.command == "task-heartbeat":
+        return heartbeat_task(
+            args.run_dir,
+            args.feature,
+            args.wave,
+            args.task,
+            args.assignment_digest,
+            args.phase,
+            runtime_session_identity(),
+            Path.cwd(),
+        )
+    if args.command == "task-watch":
+        return watch_task(
+            args.run_dir,
+            args.feature,
+            args.wave,
+            args.task,
+            args.assignment_digest,
+        )
     if args.command == "task-recover":
+        if args.scope_cwd.expanduser().resolve() != Path.cwd().resolve():
+            raise ExecutionError(
+                "WORKTREE_CONFLICT", "task-recover must run from the assigned scope cwd"
+            )
         return recover_task(
             args.run_dir,
             args.feature,

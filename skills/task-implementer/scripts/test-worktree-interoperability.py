@@ -59,6 +59,9 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         scope = self.primary / "services" / "example"
         scope.mkdir(parents=True)
         (scope / "feature.txt").write_text("base\n", encoding="utf-8")
+        peer_scope = self.primary / "services" / "other"
+        peer_scope.mkdir(parents=True)
+        (peer_scope / "feature.txt").write_text("base\n", encoding="utf-8")
         git("add", "-A", cwd=self.primary)
         git("commit", "-qm", "initial", cwd=self.primary)
         git("remote", "add", "origin", str(self.origin), cwd=self.primary)
@@ -72,12 +75,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             cwd=self.primary,
         )
         git("switch", "-qc", "local-source", cwd=self.primary)
-        with mock.patch.object(wm.secrets, "token_hex", return_value="a7c2f9"):
-            outer = wm.add_worktree(
-                cwd=scope,
-                project=None,
-                task_slug="composed-run",
-            )
+        outer = wm.task_lane_ensure(cwd=scope, project=None)
+        self.lane_id = str(outer["lane_id"])
         self.outer_name = str(outer["name"])
         self.outer_branch = str(outer["branch"])
         self.outer = Path(str(outer["worktree"]))
@@ -90,6 +89,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             self.outer,
             "services/example",
             self.codex_home,
+            lane=outer,
             clock=lambda: FIXED,
         )
         self.workspace = Path(initialized["workspace"])
@@ -167,6 +167,93 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def _claim_peer_lane(
+        self, claims: list[dict[str, str]]
+    ) -> dict[str, object]:
+        peer = wm.task_lane_ensure(
+            cwd=self.primary / "services" / "other", project=None
+        )
+        acquired = wm.task_lane_generation_acquire(
+            cwd=Path(str(peer["scope_cwd"])),
+            workspace=self.root / "peer-workspace.json",
+            run_id="run-peer",
+            task_scope="services/other",
+            initial_head=str(peer["lane_head"]),
+        )
+        return wm.task_lane_generation_claims(
+            cwd=Path(str(peer["worktree"])),
+            name=str(peer["name"]),
+            generation=int(acquired["generation"]),
+            lease_id=str(acquired["token"]),
+            claims=claims,
+        )
+
+    def test_replan_claims_block_a_conflicting_live_lane_before_state_write(
+        self,
+    ) -> None:
+        self._claim_peer_lane(
+            [{"kind": "domain", "path": "shared-contract:peer"}]
+        )
+        original = pw.plan_waves(
+            self.workspace, self.run_id, 1, clock=lambda: FIXED
+        )
+        coordinator_path = self.run_dir / "orchestration" / "coordinator.json"
+        before = coordinator_path.read_bytes()
+        handoff_path = self.run_dir / "handoff.md"
+        handoff_path.write_text(
+            handoff_path.read_text(encoding="utf-8").replace(
+                "files:feature.txt", "shared-contract:peer"
+            ),
+            encoding="utf-8",
+        )
+        handoff_path.chmod(0o600)
+
+        with self.assertRaises(PromptWorkspaceError) as caught:
+            pw.replan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+
+        self.assertEqual(caught.exception.code, "WORKTREE_CONFLICT")
+        self.assertIn("repository claim conflicts", str(caught.exception))
+        self.assertEqual(coordinator_path.read_bytes(), before)
+        self.assertEqual(
+            json.loads(before)["plan_sha256"], original["plan_sha256"]
+        )
+        self.assertEqual(
+            list((self.run_dir / "orchestration" / "waves").glob("wave-r*.json")),
+            [],
+        )
+
+    def test_exclusive_domain_classes_conflict_across_lanes_with_distinct_keys(
+        self,
+    ) -> None:
+        handoff_path = self.run_dir / "handoff.md"
+        handoff_path.write_text(
+            handoff_path.read_text(encoding="utf-8").replace(
+                "files:feature.txt", "publication:first"
+            ),
+            encoding="utf-8",
+        )
+        handoff_path.chmod(0o600)
+        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        sentinel = {
+            "kind": "domain",
+            "path": f"{waves.EXCLUSIVE_DOMAIN_CLAIM_PREFIX}publication",
+        }
+        lane = wm.load_lane(self.primary, self.lane_id)
+        assert lane is not None
+        self.assertIn({**sentinel, "generation": 1}, lane["claims"])
+
+        peer_text = (
+            handoff_path.read_text(encoding="utf-8")
+            .replace("services/example/feature.txt", "services/other/feature.txt")
+            .replace("publication:first", "publication:second")
+        )
+        peer_claims = waves._repository_claims(
+            {"scope": "services/other"}, waves.parse_task_plans(peer_text)
+        )
+        self.assertIn(sentinel, peer_claims)
+        with self.assertRaisesRegex(wm.WorktreeError, "claim conflicts"):
+            self._claim_peer_lane(peer_claims)
+
     def test_private_interop_rejects_public_lifecycle_before_subprocess(self) -> None:
         workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
         for action in ("add", "integrate", "remove"):
@@ -188,7 +275,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(interop["mode"], "managed")
+        self.assertEqual(interop["mode"], "lane")
         self.assertEqual(interop["outer_scope"], "services/example")
         self.assertEqual(interop["task_scope"], "services/example")
         wave = json.loads(
@@ -197,10 +284,10 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertIn(
-            {"kind": "exact", "path": "README.md"},
+            {"kind": "exact", "path": "services/example/README.md"},
             wave["coordinator_write_claims"],
         )
-        with self.assertRaisesRegex(wm.WorktreeError, "still owns"):
+        with self.assertRaisesRegex(wm.WorktreeError, "Task Implementer lanes"):
             wm.integrate_worktree(
                 cwd=self.primary,
                 name=self.outer_name,
@@ -336,13 +423,11 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             cwd=self.outer_scope, name=None, require_clean=True
         )
         self.assertEqual(inspected["head"], promoted["promoted_head"])
-        ready = wm.integrate_worktree(
+        ready = wm.task_lane_integrate(
             cwd=self.primary,
-            name=self.outer_name,
+            lane_id=self.lane_id,
             validated_head=None,
             restart=False,
-            expected_source_head=git("rev-parse", "HEAD", cwd=self.primary),
-            expected_child_head=git("rev-parse", "HEAD", cwd=self.outer),
         )
         self.assertEqual(ready["status"], "validation-required")
         remote_branches = git("ls-remote", "--heads", "origin", cwd=self.outer)
@@ -387,11 +472,11 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
 
         local = task_interop.load_interop(self.run_dir)
         assert local is not None
-        inspected = wm.task_lease_inspect(
+        inspected = wm.task_lane_generation_inspect(
             cwd=self.outer,
             name=self.outer_name,
+            generation=int(local["generation"]),
             lease_id=str(local["lease_id"]),
-            owner_kind="task-implementer",
         )
         self.assertEqual(local["promoted_head"], second)
         self.assertEqual(inspected["promotion_heads"], [self.initial, first, second])
@@ -411,19 +496,19 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         with (
             mock.patch.object(
                 wm,
-                "_record_manifest_lease",
+                "retire_released_task_lease",
                 side_effect=wm.WorktreeError(
-                    "simulated crash before manifest release marker"
+                    "simulated crash before terminal lease retirement"
                 ),
             ),
             self.assertRaisesRegex(wm.WorktreeError, "simulated crash"),
         ):
-            wm.task_lease_release(
+            wm.task_lane_generation_release(
                 cwd=self.outer,
                 name=self.outer_name,
+                generation=int(local["generation"]),
                 lease_id=str(local["lease_id"]),
                 promoted_head=self.initial,
-                owner_kind="task-implementer",
             )
         workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
         reconciled = task_interop.acquire_interop(

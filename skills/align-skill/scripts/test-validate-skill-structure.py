@@ -24,13 +24,15 @@ def help_contract(name: str) -> str:
     return f"""## Help
 
 For `${name} --help` or `${name} -h`, return concise help and stop before any
-workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never expose private helper actions or treat help as workflow
+workflow step. State the purpose and invocation policy. Show exact usage for
+every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
 authorization.
 """
 
@@ -272,6 +274,32 @@ def test_help_requires_no_side_effect_guardrail() -> None:
         assert_contains(
             output,
             "## Help is missing required text: do not call any additional tools",
+        )
+
+
+def test_help_requires_descriptions_for_every_public_interface_item() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        help_text = help_contract("incomplete-help").replace(
+            "Describe each public action, positional\nargument, and flag",
+            "List public options",
+        )
+        write_skill(
+            root / "incomplete-help",
+            "incomplete-help",
+            help_text,
+            include_help=False,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "## Help is missing required text: describe each public action, "
+            "positional argument, and flag",
         )
 
 
@@ -846,6 +874,7 @@ def main() -> int:
         test_missing_help_fails,
         test_help_requires_exact_skill_invocations,
         test_help_requires_no_side_effect_guardrail,
+        test_help_requires_descriptions_for_every_public_interface_item,
         test_help_requires_internal_skill_boundary,
         test_help_requires_exact_canonical_body,
         test_help_rejects_near_miss_invocation_tokens,

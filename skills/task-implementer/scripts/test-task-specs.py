@@ -13,6 +13,8 @@ import sys
 import tempfile
 import unittest
 
+import prompt_workspace_lanes as lanes
+
 
 SCRIPT = Path(__file__).resolve().with_name("prompt_workspace.py")
 SPEC = importlib.util.spec_from_file_location("prompt_workspace_specs_test", SCRIPT)
@@ -100,11 +102,16 @@ class TaskSpecificationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.origin = self.root / "origin.git"
+        git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        git("init", "-q", cwd=self.repo)
+        git("init", "-q", "-b", "main", cwd=self.repo)
+        self.scope = self.repo / "services" / "example"
+        self.scope.mkdir(parents=True)
         (self.repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
-        git("add", "tracked.txt", cwd=self.repo)
+        (self.scope / "scope.txt").write_text("scope\n", encoding="utf-8")
+        git("add", "-A", cwd=self.repo)
         git(
             "-c",
             "user.name=Spec Test",
@@ -115,15 +122,28 @@ class TaskSpecificationTest(unittest.TestCase):
             "initial",
             cwd=self.repo,
         )
-        self.scope = self.repo / "services" / "example"
-        self.scope.mkdir(parents=True)
+        git("remote", "add", "origin", str(self.origin), cwd=self.repo)
+        git("push", "-q", "origin", "main", cwd=self.repo)
+        git("symbolic-ref", "HEAD", "refs/heads/main", cwd=self.origin)
+        git("fetch", "-q", "origin", cwd=self.repo)
+        git(
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            cwd=self.repo,
+        )
+        git("switch", "-qc", "spec-feature", cwd=self.repo)
         self.codex_home = self.root / "codex"
+        lane = lanes.ensure_project_lane(self.scope)
+        lane_root = Path(str(lane["worktree"]))
         result = pw.init_workspace(
-            self.repo,
+            lane_root,
             "services/example",
             self.codex_home,
+            lane=lane,
             clock=lambda: FIXED,
         )
+        self.scope = Path(str(lane["scope_cwd"]))
         self.workspace = Path(result["workspace"])
         self.workspace_value = pw.verify_workspace(self.workspace)
         self.docs = self.scope / "docs"

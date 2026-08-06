@@ -97,17 +97,23 @@ this reference:
 
 ## Help Interfaces
 
+- Add or repair the standard `## Help` contract for every repo-owned skill that
+  is created, refined, or aligned.
+- Inventory the documented public actions, positional arguments, and flags
+  before writing Help. Resolve ambiguity in the skill contract instead of
+  inventing an interface.
 - Treat `$skill-name --help` and `$skill-name -h` as report-only requests that
   stop after the selected `SKILL.md` loads and before required reads, project
   inspection, additional tools, delegation, workflow execution, or mutation.
-- Return concise purpose, invocation policy, public usage/actions, and only
-  documented skill-level options. Include `-h, --help` and say when no
-  additional public flags exist.
+- Return concise purpose and invocation policy, show exact usage for every
+  public action, and describe every public action, positional argument, and
+  flag in one concise line. Include `-h, --help` and say "No additional public
+  flags" when there are no others.
 - For an internal or coordinator-only skill, state that boundary and that no
   standalone public workflow action exists instead of synthesizing one from
   private inputs or phases.
-- Never expose flags or transitions belonging only to private scripts or
-  workflow helpers.
+- Never expose actions, flags, or transitions belonging only to private scripts
+  or workflow helpers.
 - Keep this contract in `SKILL.md`, which is the portable runtime authority;
   do not add unsupported custom help fields to `agents/openai.yaml`.
 

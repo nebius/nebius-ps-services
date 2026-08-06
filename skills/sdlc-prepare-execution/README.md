@@ -10,11 +10,13 @@ private SDLC run directory. Later implementation workers receive separate
 branches and worktrees from that integration line; the project branch does not
 advance again until the final evidence-gated fast-forward promotion.
 
-Preparation writes coordinator v6. In unmanaged mode it resolves the actual
+Preparation writes coordinator v7. In unmanaged mode it resolves the actual
 `origin` default and creates the deterministic run promotion branch when the
 clean checkout is still on that default. In a managed `worktree` child it uses
 the exact local child branch and `HEAD` without fetching or resolving a remote
 default.
+Task Implementer persistent lanes are a separate peer workflow domain and are
+rejected before Agentic coordinator, lease, promotion, or resource mutation.
 
 The exact folder initialized by `sdlc-start` is an enforced monorepo boundary:
 Git worktrees contain the full repository, but claims, worker cwd, and changes
@@ -36,12 +38,26 @@ force-cleans resources. Interrupted or unsafe resources remain recorded for
 exact recovery.
 
 The private helper exposes `prepare`, `seal-tdd`, `replan-future`,
-`wave-prepare`, `batch-advance`, `task-start`, `task-recover`, `task-finish`, `wave-integrate`,
+`wave-prepare`, `batch-advance`, `task-arm`, `task-start`, `task-heartbeat`,
+`task-watch`, `task-requeue`, `task-recover`, `task-finish`, `wave-integrate`,
 `wave-complete`, `seal-feature`, `promote`, `release-outer-lease`,
 `complete-outer-integration`, and `status`.
 It is an internal state-transition surface, not a public SDLC CLI.
 
+An armed task may return to the queue only after the coordinator has stopped
+the worker process group and supplies the exact recorded dispatch timestamp.
+The task must still be attempt zero with no session claim, at the clean assigned
+base and with no changed paths. Pre-start moved `HEAD`, out-of-claim paths,
+gitlinks, or tracked symlinks are scope violations; only allowed in-claim dirt
+is a pre-start mutation.
+
+Before it commits, `task-finish` persists an exact assignment/tree/message/
+evidence intent. A retry adopts only the matching clean direct-child commit and
+reuses only an exact matching result, which closes both commit-to-result and
+result-to-task-state crash windows without accepting worker-created history.
+
 For a corrective assignment, `task-finish --oracle-evidence-json` must name
 the assignment's exact regression oracle, a `passed` outcome, and an evidence
-reference. The helper binds that proof to the diagnosis and worker commit in
+reference. The helper binds that proof to the diagnosis and the
+coordinator-created task commit in
 `worker-result-v4`; missing or mismatched proof fails closed.

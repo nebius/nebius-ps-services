@@ -96,7 +96,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Coordinate durable dependency waves through internal worktrees, including safe nesting under a `worktree`-managed outer branch. |
+| `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves, integrate pending generations, and explicitly remove idle lanes. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 | `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures with a session-configurable bounded repair budget, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
@@ -150,13 +150,14 @@ Append `--help` or `-h` to any repo-owned skill for concise, report-only help:
 $task-implementer --help
 ```
 
-Help reports the skill's purpose, invocation policy, public usage/actions, and
-supported skill-level options. It says when no additional public flags exist,
-never exposes private helper options, and identifies internal or
-coordinator-only skills as having no standalone public workflow action. It
-stops after Codex loads the selected `SKILL.md`, before project inspection,
-additional tools, workflow execution, or mutation. A help request is not
-authorization to run the skill's workflow.
+Help reports the skill's purpose and invocation policy, shows exact usage for
+every public action, and describes every public action, positional argument,
+and flag in one concise line. It includes `-h, --help`, says when no additional
+public flags exist, never exposes private helper actions or flags, and
+identifies internal or coordinator-only skills as having no standalone public
+workflow action. It stops after Codex loads the selected `SKILL.md`, before
+project inspection, additional tools, workflow execution, or mutation. A help
+request is not authorization to run the skill's workflow.
 
 OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
 invocation policy, and dependencies. In this repository, every source skill
@@ -245,6 +246,10 @@ $task-implementer workspace init services/nebius-cxcli
 
 $task-implementer run <prompt-path-or-unique-filename>
 
+$task-implementer integrate services/nebius-cxcli
+
+$task-implementer workspace remove services/nebius-cxcli
+
 $task-implementer-test
 
 $task-implementer-test --create --keep
@@ -322,9 +327,11 @@ multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 `SKILL.md`, trigger metadata, references, assets, scripts, safety guardrails,
 official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
-learning capture in local skill source materials need to be aligned. Before it
-claims a target skill is aligned, it applies `code-review` in review-only mode
-and `apply-security` in advisory or scan mode to the target skill scope, and it
+learning capture in local skill source materials need to be aligned. It adds or
+repairs concise report-only Help for every created or aligned skill, covering
+each public action, positional argument, and flag. Before it claims a target
+skill is aligned, it applies `code-review` in review-only mode and
+`apply-security` in advisory or scan mode to the target skill scope, and it
 reports fixed, deferred, skipped, incomplete, or blocking findings.
 
 ### `brainstorm`
@@ -533,12 +540,19 @@ editable Markdown file per independent ask. A generated VS Code workspace puts
 together without making Codex depend on multi-root behavior.
 
 `workspace init [project-folder]` defaults to the exact current directory. It
-creates or verifies the private workspace, creates one starter prompt only when
-none exists, opens VS Code when available, and is safe to repeat without
-changing prompts or history. One `run <prompt-path-or-unique-filename>` validates
+creates or reuses a persistent full-repository lane from the exact committed
+`HEAD` of a named non-default source branch, creates or verifies the private
+workspace, creates one starter prompt only when none exists, asks VS Code to
+reuse its last active window, and is safe to repeat without changing prompts or
+history. Dirty source-checkout state is allowed and excluded from the lane
+baseline. Loading the workspace restarts that
+window's extension host and may interrupt its terminal or Codex UI; editor
+failure remains non-fatal. One `run <prompt-path-or-unique-filename>` validates
 and snapshots exact prompt bytes, creates or reconciles the internal task queue,
 locks dependencies, exact/prefix write claims, conflict domains, validation,
 and done criteria, then coordinates every wave until completion or a blocker.
+Each completed run releases one immutable lane generation; back-to-back runs
+may accumulate pending generations while leaving the source checkout untouched.
 
 Users steer the workflow by editing the same prompt—preferably appending to its
 optional `## Steering` section—and running the same command. There is no public
@@ -595,32 +609,32 @@ and incoming handoff instead of rereading the full prompt or coordinator state.
 Worker start is single-use, and only in-claim mutations count as liveness
 progress.
 
-The coordinator verifies worker commits and changed paths, merges task branches
+The coordinator verifies its task commits and changed paths, merges task branches
 into a temporary integration branch in stable task-ID order, runs combined
 validation and review, reconciles steering, then removes clean worker
 worktrees and deletes their refs at exact expected SHAs. It advances the
-unchanged primary promotion branch under the shared lock with
+unchanged persistent lane branch under the shared lock with
 `git merge --ff-only`; tasks become done after promotion. Integration cleanup
 then removes its worktree before exact-SHA ref deletion. Any failure retains
 exact recovery resources and leaves unverified work intact.
 
-At unmanaged wave planning, the actual symbolic `origin` default is resolved
-and verified. A clean checkout on it is switched to a deterministic
-`feature/task-<run-hash>` branch; an existing non-default branch is reused.
-Managed children retain their exact local branch and `HEAD` without fetching.
+At wave planning, the coordinator acquires the next exact lane generation and
+registers repository-wide exact/prefix and conflict-domain claims. Overlap with
+another project lane blocks before worker resources exist. Replanning extends
+those claims before replacement state is written and retains prior claims until
+generation integration. Globally exclusive live-action classes also register
+class-wide domain claims so separate lanes cannot bypass singleton behavior
+with different keys. It never fetches, resolves a remote default, or mutates
+the source checkout.
 
-When the project checkout is itself managed by `worktree`, the exact outer
-branch `HEAD` is the task base and sole promotion target. A private lease keeps
-all worker and integration branches internal, blocks outer integration and
-removal, and remains through per-wave cleanup plus final changed-surface
-`align`. Lease schema v4 reconciles every resume against the clean outer Git
-head and persists an exact terminal release receipt. Only a clean final
-promoted head with no internal resources can release it, after which the
-coordinator returns the recorded primary path plus the exact
-`$worktree integrate <generated-name>` command and stops for a fresh explicit
-user invocation from that primary checkout. That separate action merges the
-child locally. The managed child and its private nested branches are never
-pushed or used as PR heads.
+`integrate [project-folder]` requires the recorded source checkout and lane both
+clean with no active generation. It serializes the source ref, validates one
+exact two-parent candidate for every pending generation, promotes by expected-
+old source-head proof, then fast-forwards and rearms the same lane while
+releasing its claims. `workspace remove [project-folder]` explicitly removes
+only an idle, clean, fully integrated lane; prompts and run history remain, and
+later initialization creates a new lane incarnation. Public `$worktree`
+lifecycle actions reject Task Implementer lanes.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, journals Git mutations, and never prints
@@ -633,15 +647,15 @@ is explicit-only. Use `global-context-management` for general context hygiene,
 ### `task-implementer-test`
 
 `task-implementer-test` verifies Task Implementer without using a real user
-project. With no flags it runs the current explicit-only and exact two-command
+project. With no flags it runs the current explicit-only and exact four-action
 contract checks plus the local temporary-fixture workspace, specification,
-scheduler, Git-wave, outer-worktree, verifier-helper, lifecycle, reporting, and
+scheduler, Git-wave, persistent-lane, verifier-helper, lifecycle, reporting, and
 semantic suites. It never starts Docker, dispatches implementation workers, or
 creates a persistent application.
 
 The opt-in `--create` mode first replaces any prior exactly owned verifier
 generation, then exercises the real Task Implementer public interface on a
-seeded remote-free brownfield task board. The target is a browser frontend,
+seeded local-only brownfield task board with an owned bare origin. The target is a browser frontend,
 HTTP API, and PostgreSQL stack with disjoint first-wave tier ownership and a
 dependent integration/runtime task. The verifier checks worker isolation,
 reviewed commits, ordered integration, ff-only promotion, final alignment,
@@ -854,14 +868,25 @@ only when the evidence gate requires it, a provenance-owned project-root
 conditional decision after design and before auto-steering or planning.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
-Each active feature also has schema-v6 execution state and private worktrees
+Each active feature also has schema-v7 execution state and private worktrees
 there. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
-claim and worker-cwd boundary. `sdlc-implement-plan` runs safe tasks in enforced
+claim and worker-cwd boundary. Task Implementer and Agentic SDLC remain
+separate peer workflows: both use Worktree infrastructure, but Agentic SDLC
+rejects an active Task Implementer persistent lane rather than nesting or
+sharing execution state. `sdlc-implement-plan` runs safe tasks in enforced
 capacity batches inside dependency waves, using one fresh native agent or
 sequential ephemeral `codex exec` fallback per task and immutable direct-
-predecessor handoffs, retains worker and ordered
-merge commits, and cleans only proven reachable resources without force. The
+predecessor handoffs. It arms only available slots, requires direct bounded
+worker heartbeats, watches liveness every 30 seconds, and gives scope violations
+precedence over allowed in-claim prestart mutation. Its sequential fallback
+terminates the worker's whole process group on any post-spawn failure. An
+untouched worker that never started can be requeued only after confirmed stop
+and an exact dispatch compare-and-swap. The coordinator journals an exact
+tree/message/evidence finish intent before creating each task commit and retry
+adopts only the matching clean direct-child commit and exact result. It retains
+coordinator-created task commits and ordered merge commits and cleans only
+proven reachable resources without force. The
 project promotion branch stays unchanged until `sdlc-commit` seals the final
 integration tip and promotes it under the shared Git lock with
 `git merge --ff-only`. Unmanaged runs reverify the recorded remote-default
@@ -952,7 +977,8 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   implementation, including planned slice contracts and cross-layer validation
   targets when present.
 - `sdlc-implement-plan`: dispatches one fresh task agent per safe task, verifies
-  scoped worker commits, integrates in stable order, runs combined evidence,
+  direct heartbeats and scoped coordinator-created task commits, integrates in
+  stable order, runs combined evidence,
   and non-force-cleans worker resources. Corrective work runs the original
   oracle first, then the affected boundary and every invalidated downstream
   gate at the new integration commit.

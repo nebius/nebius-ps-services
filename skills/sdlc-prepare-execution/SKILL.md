@@ -8,14 +8,16 @@ description: "Use only as part of the Agentic SDLC workflow; use after one featu
 ## Help
 
 For `$sdlc-prepare-execution --help` or `$sdlc-prepare-execution -h`, return concise help and stop before
-any workflow step. Include the purpose, invocation policy, public usage/actions,
-and `-h, --help` plus only documented skill-level options; say "No additional
-public flags" when none exist. For internal or coordinator-only skills, state
-that boundary and that no standalone public workflow action exists. After the
-selected `SKILL.md` is loaded, help is report-only: do not call any additional
-tools, inspect project state, or modify files, private state, Git, or external
-systems. Never
-expose private helper actions or treat help as workflow authorization.
+any workflow step. State the purpose and invocation policy. Show exact usage
+for every public action. Describe each public action, positional
+argument, and flag in one concise line, including `-h, --help`; say "No
+additional public flags" when there are no others. Use only the documented
+public interface. For internal or coordinator-only skills, state that boundary
+and that no standalone public workflow action exists. After the selected
+`SKILL.md` is loaded, help is report-only: do not call any additional tools,
+inspect project state, or modify files, private state, Git, or external systems.
+Never expose private helper actions or flags or treat help as workflow
+authorization.
 
 ## Purpose
 
@@ -95,7 +97,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Repeated preparation returns the same verified integration identity.
 - Never recreate a recorded branch, worktree, wave, task, or contract commit.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
-  closed. Every execution coordinator schema v1 through v5 record returns
+  closed. Every execution coordinator schema v1 through v6 record returns
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,
@@ -106,11 +108,34 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 - Use `PLAN_INVALID` for malformed tasks, unknown dependencies, or cycles.
 - Use `WORKTREE_CONFLICT` for dirty, moved, foreign, or colliding Git resources.
+- Reject a Task Implementer persistent lane before Agentic coordinator, lease,
+  promotion, or resource mutation. Direct the user to the source checkout or
+  an ordinary Worktree child.
+- Use `UNSUPPORTED_SUBMODULE_SCOPE` and `UNSUPPORTED_SYMLINK_SCOPE` when plan
+  claims cross indexed gitlinks or tracked symlinks; inspect only and never
+  initialize submodules.
 - Use `REPLAN_REQUIRED` when the locked plan changes after preparation.
+- Use private `task-arm` only when a real worker slot is available. Require
+  `task-start` before editing, direct `task-heartbeat` calls at least every 30
+  seconds, and coordinator `task-watch` polling at the same interval. Never run
+  a background heartbeat loop. Classify moved `HEAD`, out-of-claim changes,
+  indexed gitlinks, and tracked symlinks as `WORKER_SCOPE_VIOLATION` even before
+  `task-start`; reserve `WORKER_PRESTART_MUTATION` for allowed in-claim dirt.
+- If an armed worker never starts, stop its whole process group first, then use
+  private `task-requeue --confirmed-stopped --expected-dispatched-at <time>`.
+  Requeue is permitted only before any session claim or attempt and only when
+  the exact assignment, dispatch timestamp, branch, common Git directory,
+  clean base `HEAD`, and empty write set still match.
 - Use private `task-recover --confirmed-stopped --expected-attempt <n>` only
-  with a fresh worker session and an exactly re-observed clean, claimed-dirty,
-  or one-direct-child worktree. The expected attempt makes ownership transfer
+  with a fresh worker session and an exactly re-observed clean or claimed-dirty
+  worktree. Reject worker-created commits; coordinator `task-finish` is the
+  sole task-commit owner. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
+- `task-finish` persists a digest-protected `task-finish-intent-v1` before the
+  Git commit. Retry may adopt only the exact clean direct-child commit whose
+  parent, tree, message, assignment, and structured evidence match that intent;
+  it also validates and reuses an exact result written before a task-state
+  crash. Any unjournaled or mismatched moved `HEAD` is a scope violation.
 - Reject corrective replan when any active/completed task definition or digest
   changes, any future wave owns a branch/worktree/assignment/result/journal, or
   execution is sealed, promoted, or done.
@@ -140,7 +165,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Every task record binds its full canonical definition digest; corrective
   replanning preserves those bindings for all active and completed waves.
 - Every corrective worker result binds a passed, digest-protected copy of the
-  assignment's exact regression oracle to its diagnosis and worker commit.
+  assignment's exact regression oracle to its diagnosis and the
+  coordinator-created task commit.
 - Current state and checkpoint point to the integration cwd and
   `sdlc-tdd` as the next skill.
 

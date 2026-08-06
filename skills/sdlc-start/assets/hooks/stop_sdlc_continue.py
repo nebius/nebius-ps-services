@@ -497,7 +497,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             except (json.JSONDecodeError, OSError):
                 return "Agentic SDLC execution coordinator is unreadable."
             integration_value = coordinator.get("integration_worktree")
-            if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v6":
+            if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
                 return "Agentic SDLC execution coordinator is inconsistent."
             fingerprint_ids = current_state.get("fingerprint_ids")
             current_fingerprints: dict[str, str] = {}

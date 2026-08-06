@@ -148,6 +148,14 @@ policy, troubleshooting, and templates into `references/` or `assets/`.
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
 
+For this repository's source-owned standard, `## Help` is mandatory for every
+new or aligned skill. Inventory the documented public interface before writing
+it. The Help contract must make `--help` and `-h` report-only, state purpose and
+invocation policy, show exact usage for every public action, and require one
+concise description for each public action, positional argument, and flag. It
+must include `-h, --help`, say "No additional public flags" when applicable,
+and exclude private helper actions, script flags, and workflow transitions.
+
 ## OpenAI Metadata
 
 Use this exact path:

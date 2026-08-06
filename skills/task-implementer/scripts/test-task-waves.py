@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 import prompt_workspace as pw
+import prompt_workspace_lanes as lanes
 import prompt_workspace_waves as waves
 from prompt_workspace_core import PromptWorkspaceError
 from prompt_workspace_execution import (
@@ -69,6 +70,7 @@ class WorktreeWaveTest(unittest.TestCase):
         git("commit", "-qm", "initial", cwd=self.repo)
         self.initial = git("rev-parse", "HEAD", cwd=self.repo)
         default_branch = git("branch", "--show-current", cwd=self.repo)
+        self.default_branch = default_branch
         git("remote", "add", "origin", str(self.origin), cwd=self.repo)
         git("push", "-qu", "origin", default_branch, cwd=self.repo)
         git(
@@ -77,10 +79,27 @@ class WorktreeWaveTest(unittest.TestCase):
             f"refs/heads/{default_branch}",
             cwd=self.origin,
         )
-        self.codex_home = self.root / "codex home"
-        initialized = pw.init_workspace(
-            self.repo, "services/example", self.codex_home, clock=lambda: FIXED
+        git("fetch", "-q", "origin", cwd=self.repo)
+        git(
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            f"refs/remotes/origin/{default_branch}",
+            cwd=self.repo,
         )
+        git("switch", "-qc", "wave-feature", cwd=self.repo)
+        self.codex_home = self.root / "codex home"
+        lane = lanes.ensure_project_lane(self.scope)
+        lane_root = Path(str(lane["worktree"]))
+        initialized = pw.init_workspace(
+            lane_root,
+            "services/example",
+            self.codex_home,
+            lane=lane,
+            clock=lambda: FIXED,
+        )
+        self.primary = self.repo
+        self.repo = lane_root
+        self.scope = Path(str(lane["scope_cwd"]))
         self.workspace = Path(initialized["workspace"])
         prompt = pw.create_prompt(
             self.workspace,
@@ -295,9 +314,8 @@ class WorktreeWaveTest(unittest.TestCase):
         self,
     ) -> None:
         plan = pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
-        self.assertTrue(str(plan["base_branch"]).startswith("feature/task-"))
         self.assertNotEqual(plan["base_branch"], plan["default_branch"])
-        self.assertEqual(plan["promotion_source"], "auto-created")
+        self.assertEqual(plan["promotion_source"], "managed-local")
         self.assertEqual(
             git("branch", "--show-current", cwd=self.repo), plan["base_branch"]
         )
@@ -455,7 +473,7 @@ class WorktreeWaveTest(unittest.TestCase):
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
         worktrees = git("worktree", "list", "--porcelain", cwd=self.repo)
-        self.assertEqual(worktrees.count("worktree "), 1)
+        self.assertEqual(worktrees.count("worktree "), 2)
         self.assertNotIn(
             "codex/ti-", git("branch", "--format=%(refname:short)", cwd=self.repo)
         )
@@ -556,21 +574,18 @@ class WorktreeWaveTest(unittest.TestCase):
         for line in journal.read_text(encoding="utf-8").splitlines():
             self.assertIsInstance(json.loads(line), dict)
 
-    def test_remote_default_head_drift_blocks_promotion_before_worker_cleanup(
+    def test_remote_default_head_drift_does_not_affect_lane_promotion(
         self,
     ) -> None:
-        _integrated, _integration, evidence = self._integrated_first_wave()
-        coordinator = json.loads(
-            (self.run_dir / "orchestration" / "coordinator.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        _integrated, integration, evidence = self._integrated_first_wave()
+        integration_tip = git("rev-parse", "HEAD", cwd=integration)
         tree = git("rev-parse", "HEAD^{tree}", cwd=self.repo)
+        default_head = git("rev-parse", "HEAD", cwd=self.origin)
         advanced = git(
             "commit-tree",
             tree,
             "-p",
-            coordinator["default_head"],
+            default_head,
             "-m",
             "advance remote default",
             cwd=self.repo,
@@ -579,31 +594,17 @@ class WorktreeWaveTest(unittest.TestCase):
             "push",
             "-q",
             "origin",
-            f"{advanced}:refs/heads/{coordinator['default_branch']}",
+            f"{advanced}:refs/heads/{self.default_branch}",
             cwd=self.repo,
         )
-        assignment = json.loads(
-            (
-                self.run_dir
-                / "orchestration"
-                / "assignments"
-                / "wave-001"
-                / "task-1.json"
-            ).read_text(encoding="utf-8")
+        promoted = pw.promote_wave(
+            self.workspace, self.run_id, evidence, clock=lambda: FIXED
         )
+        self.assertEqual(promoted["promoted_head"], integration_tip)
 
-        with self.assertRaises(PromptWorkspaceError) as raised:
-            pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
-        self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
-        self.assertTrue(Path(assignment["worktree"]).is_dir())
-
-    def test_remote_default_advance_during_cleanup_blocks_promotion(self) -> None:
-        _integrated, _integration, evidence = self._integrated_first_wave()
-        coordinator = json.loads(
-            (self.run_dir / "orchestration" / "coordinator.json").read_text(
-                encoding="utf-8"
-            )
-        )
+    def test_remote_default_advance_during_cleanup_does_not_affect_lane(self) -> None:
+        _integrated, integration, evidence = self._integrated_first_wave()
+        integration_tip = git("rev-parse", "HEAD", cwd=integration)
         original_cleanup = waves._cleanup_resource
         advanced = False
 
@@ -612,11 +613,12 @@ class WorktreeWaveTest(unittest.TestCase):
             cleaned = original_cleanup(**kwargs)
             if not advanced:
                 tree = git("rev-parse", "HEAD^{tree}", cwd=self.repo)
+                default_head = git("rev-parse", "HEAD", cwd=self.origin)
                 remote_tip = git(
                     "commit-tree",
                     tree,
                     "-p",
-                    coordinator["default_head"],
+                    default_head,
                     "-m",
                     "advance default during cleanup",
                     cwd=self.repo,
@@ -625,7 +627,7 @@ class WorktreeWaveTest(unittest.TestCase):
                     "push",
                     "-q",
                     "origin",
-                    f"{remote_tip}:refs/heads/{coordinator['default_branch']}",
+                    f"{remote_tip}:refs/heads/{self.default_branch}",
                     cwd=self.repo,
                 )
                 advanced = True
@@ -634,12 +636,11 @@ class WorktreeWaveTest(unittest.TestCase):
         with mock.patch.object(
             waves, "_cleanup_resource", side_effect=cleanup_then_advance
         ):
-            with self.assertRaises(PromptWorkspaceError) as raised:
-                pw.promote_wave(
-                    self.workspace, self.run_id, evidence, clock=lambda: FIXED
-                )
-        self.assertEqual(raised.exception.code, "PROMOTION_BLOCKED")
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.initial)
+            promoted = pw.promote_wave(
+                self.workspace, self.run_id, evidence, clock=lambda: FIXED
+            )
+        self.assertTrue(advanced)
+        self.assertEqual(promoted["promoted_head"], integration_tip)
 
     def test_branch_advance_race_retains_worker_ref_and_blocks_promotion(self) -> None:
         _integrated, _integration, evidence = self._integrated_first_wave()
@@ -1057,6 +1058,26 @@ class WorktreeWaveTest(unittest.TestCase):
         active = pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(active["base_commit"], self.initial)
 
+    def test_repository_claims_add_every_exclusive_class_sentinel(self) -> None:
+        handoff = (self.run_dir / "handoff.md").read_text(encoding="utf-8")
+        domains = "\n  - ".join(
+            f"{domain_class}:separate-key"
+            for domain_class in sorted(waves.EXCLUSIVE_CONFLICT_CLASSES)
+        )
+        tasks = waves.parse_task_plans(
+            handoff.replace("files:one.txt", domains, 1)
+        )
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        claims = waves._repository_claims(workspace, tasks)
+        actual_domains = {
+            claim["path"] for claim in claims if claim["kind"] == "domain"
+        }
+        expected_sentinels = {
+            f"{waves.EXCLUSIVE_DOMAIN_CLAIM_PREFIX}{domain_class}"
+            for domain_class in waves.EXCLUSIVE_CONFLICT_CLASSES
+        }
+        self.assertTrue(expected_sentinels <= actual_domains)
+
     def test_cleaned_final_wave_can_append_correction_tail(self) -> None:
         handoff = self.run_dir / "handoff.md"
         text = handoff.read_text(encoding="utf-8").replace(
@@ -1262,12 +1283,12 @@ class WorktreeWaveTest(unittest.TestCase):
             "--add",
             "--cacheinfo",
             f"160000,{self.initial},services/example/vendor",
-            cwd=self.repo,
+            cwd=self.primary,
         )
-        git("commit", "-qm", "add gitlink fixture", cwd=self.repo)
-        base = git("rev-parse", "HEAD", cwd=self.repo)
-        git("push", "-q", "origin", "HEAD", cwd=self.repo)
-        (self.repo / "services" / "example" / "vendor").mkdir()
+        git("commit", "-qm", "add gitlink fixture", cwd=self.primary)
+        base = git("rev-parse", "HEAD", cwd=self.primary)
+        lanes.ensure_project_lane(self.primary / "services" / "example")
+        (self.repo / "services" / "example" / "vendor").mkdir(exist_ok=True)
         handoff = self.run_dir / "handoff.md"
         text = handoff.read_text(encoding="utf-8").replace(
             "exact: services/example/one.txt",
@@ -1288,12 +1309,12 @@ class WorktreeWaveTest(unittest.TestCase):
     def test_tracked_symlink_claim_is_rejected(self) -> None:
         outside = self.root / "outside"
         outside.mkdir()
-        link = self.scope / "linked"
+        link = self.primary / "services" / "example" / "linked"
         link.symlink_to(outside, target_is_directory=True)
-        git("add", "services/example/linked", cwd=self.repo)
-        git("commit", "-qm", "add symlink fixture", cwd=self.repo)
-        base = git("rev-parse", "HEAD", cwd=self.repo)
-        git("push", "-q", "origin", "HEAD", cwd=self.repo)
+        git("add", "services/example/linked", cwd=self.primary)
+        git("commit", "-qm", "add symlink fixture", cwd=self.primary)
+        base = git("rev-parse", "HEAD", cwd=self.primary)
+        lanes.ensure_project_lane(self.primary / "services" / "example")
         handoff = self.run_dir / "handoff.md"
         text = handoff.read_text(encoding="utf-8").replace(
             "exact: services/example/one.txt",
@@ -1317,7 +1338,7 @@ class WorktreeWaveTest(unittest.TestCase):
         pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
         interop_path = self.run_dir / "orchestration" / "interop.json"
         interop = json.loads(interop_path.read_text(encoding="utf-8"))
-        interop["released"] = False
+        interop["generation"] = 0
         interop_path.write_text(
             json.dumps(interop, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -1326,7 +1347,7 @@ class WorktreeWaveTest(unittest.TestCase):
             pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(raised.exception.code, "EXECUTION_STATE_INVALID")
         worktrees = git("worktree", "list", "--porcelain", cwd=self.repo)
-        self.assertEqual(worktrees.count("worktree "), 1)
+        self.assertEqual(worktrees.count("worktree "), 2)
 
     def test_legacy_wave_and_interop_schemas_are_rejected(self) -> None:
         pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)

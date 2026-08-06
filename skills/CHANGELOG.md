@@ -79,12 +79,34 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Refactored Task Implementer around persistent Worktree-owned per-project
+  lanes. `workspace init` is idempotent by canonical repository, named source
+  ref, and scope; it permits dirty source state while basing the lane only on
+  committed `HEAD`. Runs now acquire monotonic generations with repository-wide
+  claims, may execute back-to-back, and leave immutable pending receipts.
+  Generation numbering remains monotonic across explicit lane removal and
+  reincarnation. Reuse/refresh now shares the lane transition lock with run
+  acquisition and removal, repository claims publish only after a complete
+  peer scan, and removal atomically guards lane-ref deletion with the exact
+  durable source ref/head proof.
+  Added public `integrate [project-folder]` for validated two-parent source
+  promotion plus same-lane rearm, and `workspace remove [project-folder]` for
+  proof-gated explicit cleanup that preserves prompt/run history. General
+  Worktree schema-v4 and public lifecycle behavior remain compatible, while
+  public Worktree integration/removal reject Task lanes.
+- Changed `task-implementer workspace init` to ask VS Code to reuse its last
+  active window for the generated `CODE` + `PROMPTS` workspace instead of
+  always opening a new window. Focused tests now lock the workspace and prompt
+  editor arguments, and the runtime contract documents the extension-host
+  restart boundary.
 - Standardized side-effect-free `$skill-name --help` and `$skill-name -h`
-  behavior across all repo-owned skills. Help now reports concise purpose,
-  invocation policy, public usage/actions, and documented skill-level options
-  while keeping private helper flags private. Internal and coordinator-only
-  skills report that they have no standalone public workflow action; the shared
-  skill validator enforces this contract for existing and future skills.
+  behavior across all repo-owned skills. Help now reports concise purpose and
+  invocation policy, shows exact usage for every public action, and describes
+  every public action, positional argument, and flag in one concise line while
+  keeping private helper actions and flags private. Internal and
+  coordinator-only skills report that they have no standalone public workflow
+  action; `align-skill`, its templates, and the shared validator enforce this
+  contract for created, existing, and future skills.
 - Added primary-anchored `worktree integrate` preflight and exact-head guards.
   Fresh explicit integration may now delegate safe whole-repository commits for
   an ordinary dirty child and then its dirty source before candidate creation;
@@ -101,6 +123,25 @@ All notable changes to the reusable Codex skills are tracked here.
   skills keep managed children local; and runtime allowlists plus a canonical
   static test reject public `add`, `integrate`, or `remove` calls from private
   coordinator interop.
+- Kept Task Implementer and Agentic SDLC as separate peer development domains
+  over the shared Worktree lifecycle. Ordinary task leases and Agentic
+  preparation now reject Task Implementer persistent lanes before state or
+  resource mutation. Agentic execution hard-cuts to coordinator v7, task v4,
+  and assignment v3; adds coordinator arm/watch, worker start/direct heartbeat,
+  bounded prestart/read-only/stall/runtime enforcement, and coordinator-owned
+  task commits; rejects indexed gitlink and tracked-symlink claims before
+  resources; gives prestart scope violations fail-closed precedence; supports
+  exact confirmed-stopped prestart requeue; journals task-finish intent for both
+  commit/result crash windows; terminates each sequential worker process group
+  on every post-spawn failure; rejects incomplete live Task lane branch
+  identity; and makes verifier capability names resolve to declared regression
+  tests.
+- Closed two Task Implementer cross-lane claim gaps. Replanning now extends the
+  active generation's Worktree-owned claims before replacement state is
+  persisted while retaining earlier claims conservatively. External database,
+  Kubernetes, Terraform, migration execution, and publication domains now add
+  class-wide sentinel claims so distinct keys cannot bypass singleton behavior
+  in separate lanes.
 - Made successful `$worktree add` and exact `--reuse` hand off directly into
   the returned project directory for subsequent development commands, with a
   read-only child identity check. The skill now distinguishes command workdir
