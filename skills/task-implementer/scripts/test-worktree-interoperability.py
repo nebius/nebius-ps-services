@@ -22,6 +22,7 @@ from prompt_workspace_execution import RESULT_SCHEMA, sha256_json
 
 
 FIXED = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+FIXED_TEXT = FIXED.isoformat(timespec="seconds")
 WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
 sys.path.insert(0, str(WORKTREE_SCRIPTS))
 SPEC = importlib.util.spec_from_file_location(
@@ -93,6 +94,20 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             clock=lambda: FIXED,
         )
         self.workspace = Path(initialized["workspace"])
+        self.project_agent_gate = mock.patch.object(
+            waves,
+            "verify_project_agent_contract",
+            return_value={"status": "ok", "outcome": "not-needed"},
+        )
+        self.project_agent_gate.start()
+        self.addCleanup(self.project_agent_gate.stop)
+        self.refinement_gate = mock.patch.object(
+            waves,
+            "verify_requirements_refinement_contract",
+            return_value={"status": "ready"},
+        )
+        self.refinement_gate.start()
+        self.addCleanup(self.refinement_gate.stop)
         prompt = pw.create_prompt(
             self.workspace,
             "Implement one composed task",
@@ -167,9 +182,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def _claim_peer_lane(
-        self, claims: list[dict[str, str]]
-    ) -> dict[str, object]:
+    def _claim_peer_lane(self, claims: list[dict[str, str]]) -> dict[str, object]:
         peer = wm.task_lane_ensure(
             cwd=self.primary / "services" / "other", project=None
         )
@@ -191,12 +204,8 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
     def test_replan_claims_block_a_conflicting_live_lane_before_state_write(
         self,
     ) -> None:
-        self._claim_peer_lane(
-            [{"kind": "domain", "path": "shared-contract:peer"}]
-        )
-        original = pw.plan_waves(
-            self.workspace, self.run_id, 1, clock=lambda: FIXED
-        )
+        self._claim_peer_lane([{"kind": "domain", "path": "shared-contract:peer"}])
+        original = pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
         coordinator_path = self.run_dir / "orchestration" / "coordinator.json"
         before = coordinator_path.read_bytes()
         handoff_path = self.run_dir / "handoff.md"
@@ -214,9 +223,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, "WORKTREE_CONFLICT")
         self.assertIn("repository claim conflicts", str(caught.exception))
         self.assertEqual(coordinator_path.read_bytes(), before)
-        self.assertEqual(
-            json.loads(before)["plan_sha256"], original["plan_sha256"]
-        )
+        self.assertEqual(json.loads(before)["plan_sha256"], original["plan_sha256"])
         self.assertEqual(
             list((self.run_dir / "orchestration" / "waves").glob("wave-r*.json")),
             [],
@@ -313,6 +320,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 self.run_id,
                 "task-1",
                 str(assignment["assignment_sha256"]),
+                FIXED_TEXT,
                 session_id="composed-worker",
                 clock=lambda: FIXED,
             )

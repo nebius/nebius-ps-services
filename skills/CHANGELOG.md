@@ -6,6 +6,32 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the implicit `ai-stack` skill for effective, efficient AI technology
+  selection with explicit evidence classification across model providers,
+  PyTorch training, inference, agent frameworks and durability, MCP/A2A
+  interoperability, retrieval, evaluation, safety, and operations. The dated
+  baseline uses explicit switch conditions, exact protocol and compatibility
+  records, official-source verification, and logical-only implementation
+  handoffs; adjacent `app-stack`, `design`, and `research` skills now route
+  AI-specific decisions to it.
+- Added Prompt Durability v2 to Task Implementer and Agentic SDLC. Managed
+  prompts now require only generated metadata plus a meaningful Ask; optional
+  and custom sections feed a coordinator-owned requirements compiler with
+  selective stable clarifications. Generated `00-START-HERE.md` hubs and
+  default New Prompt tasks replace manual cloning. Exact raw and normalized
+  intent digests distinguish formatting from work, completed edits create
+  linked fresh-objective runs, and explicit cross-prompt run requests persist
+  in exact-byte and intent-drift-checked FIFO queues that activate after
+  authoritative resource release and recover interrupted dequeue. Fenced-code
+  indentation remains semantic, lineage and immutable snapshots are
+  integrity-checked, and ready refinement state must match the exact compiled
+  requirements contract before planning. Prompt-v1 execution is a hard cut
+  with read-only history and no migration. The disposable Task Implementer
+  live-test prompt renderer now accepts only the same v2 managed frontmatter.
+  Fence-aware parsing keeps Markdown examples inside Ask, revision and
+  refinement writes recover at an explicit manifest/binding commit point, and
+  execution coordinator v7 binds every plan to the exact accepted prompt
+  revision and intent before resources can be prepared.
 - Added the explicit-only `scaffold-project` composition skill for approved
   greenfield and additive brownfield repositories. It models logical
   capabilities, materialization units, runtime units, external services, and
@@ -49,27 +75,11 @@ All notable changes to the reusable Codex skills are tracked here.
   remain with `publish-image`, workflow YAML with `github-workflows`, and
   Kubernetes resources with `helmchart`.
 - Added the explicit-only shared `project-agent-instructions` skill. After
-  workflow-validated requirements and design, it uses deterministic
+  owner-validated requirements and design, it uses deterministic
   inspect/apply/verify state to decide whether the exact selected project needs
-  a concise root `AGENTS.md`. It preserves human-owned and override files,
-  exclusively creates missing files, refreshes only unchanged
-  provenance-owned content, records private evidence, and fails closed on
-  ownership, scope, conflict, safety, or concurrent-change ambiguity. Its
-  helper uses Python 3.9-compatible annotation syntax and reports a structured
-  prerequisite when an older runtime cannot parse Codex TOML configuration.
-  Final transition postconditions now prevent race-modified targets from being
-  attested, mixed workflow markers fail closed in either specification,
-  generated files cannot claim a human-owned disposition, refresh failures
-  restore verified prior content when safe, and private evidence shape and
-  mode are revalidated. The helper now computes the exact remaining generated
-  body capacity under Codex's cumulative project-document limit, caps generation
-  at 7 KiB, and rejects oversized bodies without truncation. It rejects
-  Git-ignored decision evidence while accepting tracked files that merely match
-  ignore patterns, and splits contracts, discovery, private state, target I/O,
-  and workflow transitions into focused modules behind the unchanged canonical
-  CLI. Generated-body safety validation now also rejects bracketed private IPv6
-  endpoints, including loopback, unique-local, link-local, and unspecified
-  addresses.
+  a concise `AGENTS.md`. It preserves human-owned and override files, records
+  private evidence, uses guarded filesystem transitions, and fails closed on
+  ownership, scope, recovery, safety, or concurrent-change ambiguity.
 - Added the explicit-only `nosleep4mac` skill with one no-argument,
   idempotent workflow that atomically converges a public-safe per-user macOS
   LaunchAgent running `/usr/bin/caffeinate -s`. It preserves display and
@@ -93,12 +103,56 @@ All notable changes to the reusable Codex skills are tracked here.
   promotion plus same-lane rearm, and `workspace remove [project-folder]` for
   proof-gated explicit cleanup that preserves prompt/run history. General
   Worktree schema-v4 and public lifecycle behavior remain compatible, while
-  public Worktree integration/removal reject Task lanes.
+  public Worktree integration/removal reject Task lanes. The Task Implementer
+  README now provides a generic post-run operator workflow covering source
+  integration, primary-checkout manual acceptance, defect follow-up,
+  independent publication, and optional lane retirement. It also defines the
+  primary checkout, persistent lane, temporary wave and worker worktrees,
+  source integration candidate, and private prompt state; distinguishes
+  internal wave integration from public source integration; and explains that
+  lane cleanliness is a managed precondition, not a request for a manual
+  `$commit` or destructive cleanup. The Task Implementer contract smoke test
+  now preserves those core README distinctions.
 - Changed `task-implementer workspace init` to ask VS Code to reuse its last
   active window for the generated `CODE` + `PROMPTS` workspace instead of
   always opening a new window. Focused tests now lock the workspace and prompt
   editor arguments, and the runtime contract documents the extension-host
   restart boundary.
+- Clarified in the Task Implementer README that `workspace init` creates no
+  project documentation, while `run` creates or updates Task
+  Implementer-managed `docs/requirements.md` and `docs/design.md` regions and
+  rejects Agentic SDLC-owned specification schemas.
+- Hardened Task Implementer prestart recovery with a coordinator-owned,
+  compare-and-swap lease rearm at the exact clean assigned base. A fresh lease
+  preserves the immutable assignment and existing wave/generation resources,
+  stale workers cannot start with the old lease, interrupted responses recover
+  by re-observing the current lease, and active, conflicting, or mutated
+  prestart state fails closed.
+- Hardened `project-agent-instructions` to schema v2 with owner-issued full-spec
+  and traceability receipts, layered effective Codex config fingerprints,
+  selected-project root markers, tracked evidence locators, structured
+  deterministic rules, a 2 KiB preferred and 4 KiB hard body budget, public
+  portable output independent of personal global instructions, separate exact
+  ownership receipts, explicit exact-digest adoption and retirement, and
+  recovery artifacts that block every transition. Legacy v1 output now fails
+  closed without a compatibility shim. Owner validators are replayed rather
+  than trusted by name, current file-based Codex profiles are fingerprinted,
+  rendered paths and common credential forms fail closed, and retirement
+  preserves concurrent replacements. Target writes are descriptor-anchored,
+  and refresh/retirement backups remain durable until private transition state
+  is persisted. Creation now rechecks recovery artifacts at the final anchored
+  mutation boundary, dot-segment root markers are rejected, and spec, renderer,
+  or evidence projection drift refreshes stale marker provenance even when the
+  rendered body is unchanged. Empty root-marker lists follow Codex's
+  no-parent-traversal semantics; ignored targets, untracked human instruction
+  sources, control-character rule injection, incomplete requirement coverage,
+  and Agentic marker/body mapping drift now fail closed. Task Implementer and
+  Agentic SDLC issue receipts only for tracked specs, and Task dispatch proves
+  specs plus active/ancestor project instructions belong to the exact clean
+  integration contract commit. Project-file changes require a fresh Codex
+  session. Added a concise skill README covering the coordinator-only flow,
+  decision and ownership model, safety boundaries, source layout, and focused
+  validation without promoting private helper actions into a public interface.
 - Standardized side-effect-free `$skill-name --help` and `$skill-name -h`
   behavior across all repo-owned skills. Help now reports concise purpose and
   invocation policy, shows exact usage for every public action, and describes

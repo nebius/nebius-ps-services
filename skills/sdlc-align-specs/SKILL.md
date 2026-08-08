@@ -124,12 +124,12 @@ evidence tell one consistent story.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
-  provenance-owned generated project-root `AGENTS.md` as committed project
+  ownership-receipted v2 selected-project `AGENTS.md` as committed project
   truth.
 - Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`; only `project-agent-instructions` creates or
-  refreshes its generated project-root `AGENTS.md`. Other skills route changes
-  to those owners.
+  writes `docs/design.md`; only `project-agent-instructions` creates, refreshes,
+  adopts, or retires its v2-managed selected-project `AGENTS.md`. Other skills
+  route changes to those owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

@@ -20,6 +20,7 @@ from unittest import mock
 import prompt_workspace_intake as intake
 import prompt_workspace_core as core
 import prompt_workspace_lanes as lanes
+import prompt_workspace_runs as runs
 
 
 SCRIPT = Path(__file__).resolve().with_name("prompt_workspace.py")
@@ -119,22 +120,16 @@ class PromptWorkspaceTest(unittest.TestCase):
     def complete_prompt(self, path: Path, *, sentinel: str = "") -> None:
         text = path.read_text(encoding="utf-8")
         text = text.replace(
-            "<!-- Required: describe what must be true when the work is complete. -->",
-            "The private prompt workflow is usable.",
+            "<!-- Required: replace this comment with your Ask. -->",
+            "Implement the requested prompt workflow behavior.",
         )
-        text = text.replace(
-            "- [ ] <!-- Required: add an observable, testable completion criterion. -->",
-            "- [ ] The focused tests pass.",
-        )
-        text = text.replace(
-            "<!-- Required: name expected checks or ask Codex to derive them from the repo. -->",
-            "Run the focused prompt workspace tests.",
+        text = text.rstrip() + (
+            "\n\n## Outcome\n\nThe private prompt workflow is usable.\n"
+            "\n## Acceptance criteria\n\n- [ ] The focused tests pass.\n"
+            "\n## Verification\n\nRun the focused prompt workspace tests.\n"
         )
         if sentinel:
-            text = text.replace(
-                "<!-- Optional: add relevant repository facts, paths, or background. -->",
-                sentinel,
-            )
+            text += f"\n## Context\n\n{sentinel}\n"
         path.write_text(text, encoding="utf-8")
         path.chmod(0o600)
 
@@ -313,7 +308,8 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertFalse(repeated_result["starter_created"])
         self.assertEqual(starter.read_bytes(), starter_bytes)
         self.assertEqual(starter.stat().st_mtime_ns, starter_mtime)
-        self.assertEqual(len(list(starter.parent.glob("*.md"))), 1)
+        self.assertEqual(len(list(starter.parent.glob("*.md"))), 2)
+        self.assertTrue((starter.parent / core.HUB_FILENAME).is_file())
 
         manifest = json.loads(
             Path(first_result["workspace"]).read_text(encoding="utf-8")
@@ -539,7 +535,8 @@ class PromptWorkspaceTest(unittest.TestCase):
             1,
         )
         prompt_root = Path(parsed[0]["prompt_root"])
-        self.assertEqual(len(list(prompt_root.glob("*.md"))), 1)
+        self.assertEqual(len(list(prompt_root.glob("*.md"))), 2)
+        self.assertTrue((prompt_root / core.HUB_FILENAME).is_file())
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
 
     def test_init_isolates_clones_and_scopes(self) -> None:
@@ -686,12 +683,21 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         tasks = value["tasks"]
         self.assertEqual(tasks["version"], "2.0.0")
-        self.assertEqual(len(tasks["tasks"]), 1)
+        self.assertEqual(len(tasks["tasks"]), 3)
+        self.assertEqual(
+            [item["label"] for item in tasks["tasks"]],
+            [
+                "Task Implementer: New Prompt",
+                "Task Implementer: Prompt Queue",
+                "Task Implementer: Cancel Queued Prompt",
+            ],
+        )
         task = tasks["tasks"][0]
         self.assertEqual(task["label"], "Task Implementer: New Prompt")
         self.assertEqual(task["type"], "process")
         self.assertEqual(Path(task["args"][0]).name, "prompt_workspace.py")
         self.assertIsInstance(task["args"], list)
+        self.assertEqual(task["group"], {"kind": "build", "isDefault": True})
         self.assertNotIn("runOptions", task)
         self.assertNotIn("extensions", value)
         self.assertNotIn("security.workspace.trust", json.dumps(value))
@@ -731,7 +737,8 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertIn(f"prompt_id: prompt-{'a' * 32}", text)
         self.assertIn('title: "Add prompt workspace support"', text)
         self.assertIn("created_at: 2026-07-12T14:30:00+00:00", text)
-        self.assertIn("## Acceptance criteria", text)
+        self.assertNotIn("## Acceptance criteria", text)
+        self.assertIn("Only Ask is required", text)
 
         manifest = json.loads(self.workspace.read_text(encoding="utf-8"))
         for directory in (
@@ -764,13 +771,8 @@ class PromptWorkspaceTest(unittest.TestCase):
 
     def test_prompt_validation_matrix(self) -> None:
         prompt = self.new_prompt()
-        self.assert_error(
-            "PROMPT_INPUT_INVALID",
-            pw.verify_command,
-            self.workspace,
-            prompt,
-            None,
-        )
+        ask_only = pw.verify_command(self.workspace, prompt, None)
+        self.assertEqual(ask_only["prompt_id"], f"prompt-{'a' * 32}")
         self.complete_prompt(prompt)
         verified = pw.verify_command(self.workspace, prompt, None)
         self.assertEqual(verified["prompt_id"], f"prompt-{'a' * 32}")
@@ -801,13 +803,14 @@ class PromptWorkspaceTest(unittest.TestCase):
         malformed = self.prompt_root / "malformed.md"
         malformed.write_text("not a prompt\n", encoding="utf-8")
         malformed.chmod(0o600)
-        self.assert_error(
-            "PROMPT_INPUT_INVALID",
-            pw.verify_command,
-            self.workspace,
-            prompt,
-            None,
+        isolated = pw.verify_command(self.workspace, prompt, None)
+        self.assertEqual(isolated["prompt_id"], f"prompt-{'a' * 32}")
+        malformed_row = next(
+            row
+            for row in pw.prompt_rows(self.workspace, None, None)
+            if row["path"] == str(malformed)
         )
+        self.assertEqual(malformed_row["status"], "invalid")
         malformed.unlink()
 
         original = prompt.read_bytes()
@@ -879,6 +882,509 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC.replace(second=2),
         )
         self.assertNotEqual(first["run_id"], second["run_id"])
+
+    def test_run_intake_queues_other_prompt_and_requires_explicit_drift_update(
+        self,
+    ) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement a queued objective", prompt_hex="b" * 32
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        queued = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(queued["action"], "queued")
+        self.assertEqual(queued["queue_position"], 1)
+        self.assertEqual(
+            pw.queue_rows(self.workspace)[0]["source_path"], second_prompt.name
+        )
+
+        second_prompt.write_text(
+            second_prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The edited queued objective is usable.",
+            ),
+            encoding="utf-8",
+        )
+        second_prompt.chmod(0o600)
+        self.mark_run_done(str(first["_internal"]["run_id"]))
+        self.assert_error(
+            "QUEUED_PROMPT_DRIFT", pw.activate_next_queued_prompt, self.workspace
+        )
+        updated = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(updated["action"], "new")
+        self.assertEqual(updated["_internal"]["status"], "activated")
+        self.assertEqual(updated["_internal"]["prompt_id"], "prompt-" + "b" * 32)
+        self.assertEqual(pw.queue_rows(self.workspace), [])
+
+    def test_queued_prompt_raw_drift_requires_explicit_rerun(self) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement a queued objective", prompt_hex="b" * 32
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+
+        second_prompt.write_text(
+            second_prompt.read_text(encoding="utf-8").replace(
+                "## Ask", "<!-- formatting after acceptance -->\n\n## Ask"
+            ),
+            encoding="utf-8",
+        )
+        second_prompt.chmod(0o600)
+        self.mark_run_done(str(first["_internal"]["run_id"]))
+        self.assert_error(
+            "QUEUED_PROMPT_DRIFT", pw.activate_next_queued_prompt, self.workspace
+        )
+
+        activated = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(activated["action"], "new")
+        self.assertEqual(activated["_internal"]["status"], "activated")
+        self.assertEqual(pw.queue_rows(self.workspace), [])
+
+    def test_completed_follow_up_queues_until_resources_release(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        first_run = str(first["_internal"]["run_id"])
+        self.mark_run_done(first_run)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The follow-up waits for resource release.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+
+        with mock.patch.object(intake, "_run_resources_active", return_value=True):
+            queued = pw.route_project_prompt(
+                self.scope,
+                self.codex_home,
+                prompt.name,
+                clock=lambda: FIXED_UTC.replace(second=1),
+            )
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["queue_position"], 1)
+
+        activated = pw.activate_next_queued_prompt(
+            self.workspace, clock=lambda: FIXED_UTC.replace(second=2)
+        )
+        self.assertEqual(activated["status"], "activated")
+        manifest = json.loads(
+            Path(str(activated["manifest"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["predecessor"]["run_id"], first_run)
+        self.assertEqual(manifest["revisions"][0]["kind"], "completed_follow_up")
+
+    def test_queue_activation_recovers_after_interrupted_dequeue(self) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement a queued objective", prompt_hex="b" * 32
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.mark_run_done(str(first["_internal"]["run_id"]))
+
+        with mock.patch.object(
+            runs,
+            "_resolve_queue_entry_unlocked",
+            side_effect=RuntimeError("injected dequeue interruption"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected dequeue"):
+                pw.activate_next_queued_prompt(
+                    self.workspace, clock=lambda: FIXED_UTC.replace(second=2)
+                )
+
+        recovered = pw.activate_next_queued_prompt(
+            self.workspace, clock=lambda: FIXED_UTC.replace(second=3)
+        )
+        self.assertEqual(recovered["status"], "activated")
+        self.assertTrue(recovered["recovered"])
+        self.assertEqual(recovered["prompt_id"], "prompt-" + "b" * 32)
+        self.assertEqual(pw.queue_rows(self.workspace), [])
+
+    def test_queue_cancel_reports_already_committed_activation(self) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement a queued objective", prompt_hex="b" * 32
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.mark_run_done(str(first["_internal"]["run_id"]))
+        with mock.patch.object(
+            runs,
+            "_resolve_queue_entry_unlocked",
+            side_effect=RuntimeError("injected dequeue interruption"),
+        ):
+            with self.assertRaises(RuntimeError):
+                pw.activate_next_queued_prompt(
+                    self.workspace, clock=lambda: FIXED_UTC.replace(second=2)
+                )
+
+        canceled = pw.cancel_queued_prompt(
+            self.workspace,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=3),
+        )
+        self.assertEqual(canceled["status"], "already_activated")
+        self.assertEqual(canceled["prompt_id"], "prompt-" + "b" * 32)
+        self.assertEqual(pw.queue_rows(self.workspace), [])
+
+    def test_semantic_no_effect_and_completed_follow_up_lineage(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        first_run = str(first["_internal"]["run_id"])
+        text = prompt.read_text(encoding="utf-8")
+        prompt.write_text(
+            text.replace("## Outcome", "<!-- formatting -->\n\n## Outcome"),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        unchanged = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(unchanged["_internal"]["revision"], "r0001")
+        unchanged_snapshot = Path(str(unchanged["_internal"]["snapshot"]))
+        self.assertEqual(
+            unchanged["_internal"]["sha256"],
+            hashlib.sha256(unchanged_snapshot.read_bytes()).hexdigest(),
+        )
+        self.mark_run_done(first_run)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The linked follow-up objective is usable.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        follow_up = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        manifest_path = Path(str(follow_up["_internal"]["manifest"]))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["revisions"][0]["kind"], "completed_follow_up")
+        self.assertEqual(manifest["predecessor"]["run_id"], first_run)
+        self.assertEqual(manifest["lineage_root"], first_run)
+        self.assertFalse((manifest_path.parent / "steering.json").exists())
+
+    def test_fenced_code_indentation_is_semantic(self) -> None:
+        prompt = self.new_prompt()
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "## Ask\n\nAdd prompt workspace support",
+                "## Ask\n\nImplement this YAML exactly:\n\n```yaml\nroot:\n  child: value\n```",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "  child: value", "    child: value"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        changed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(changed["_internal"]["run_id"], first["_internal"]["run_id"])
+        self.assertEqual(changed["_internal"]["revision"], "r0002")
+
+    def test_fenced_markdown_headings_remain_inside_ask(self) -> None:
+        prompt = self.new_prompt()
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "## Ask\n\nAdd prompt workspace support",
+                "## Ask\n\nDocument these examples:\n\n"
+                "```markdown\n## Ask\nNested backtick example\n```\n\n"
+                "~~~markdown\n## Context\nNested tilde example\n~~~",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        document = core.read_prompt(prompt, self.prompt_root, require_content=True)
+        self.assertIn("## Ask", document.sections["Ask"])
+        self.assertIn("## Context", document.sections["Ask"])
+        self.assertNotIn("Context", document.sections)
+
+    def test_interrupted_refinement_reset_retries_from_manifest_commit_point(
+        self,
+    ) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope, self.codex_home, prompt.name, clock=lambda: FIXED_UTC
+        )
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").rstrip()
+            + "\n\n## Steering\n\nApply the accepted revision atomically.\n",
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        with mock.patch.object(
+            runs,
+            "begin_requirements_refinement",
+            side_effect=OSError("injected refinement write failure"),
+        ):
+            with self.assertRaises(OSError):
+                pw.route_project_prompt(
+                    self.scope,
+                    self.codex_home,
+                    prompt.name,
+                    clock=lambda: FIXED_UTC.replace(second=1),
+                )
+        manifest_path = Path(str(first["_internal"]["manifest"]))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["revisions"]), 1)
+
+        retried = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(retried["_internal"]["revision"], "r0002")
+        refinement = json.loads(
+            (manifest_path.parent / "requirements-refinement.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(refinement["revision"], "r0002")
+
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").rstrip()
+            + "\nAdd one more accepted change.\n",
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        original_write = runs.write_atomic
+
+        def fail_manifest_commit(path: Path, content: bytes) -> None:
+            if path.name == "manifest.json":
+                raise OSError("injected manifest commit failure")
+            original_write(path, content)
+
+        with mock.patch.object(runs, "write_atomic", side_effect=fail_manifest_commit):
+            with self.assertRaises(OSError):
+                pw.route_project_prompt(
+                    self.scope,
+                    self.codex_home,
+                    prompt.name,
+                    clock=lambda: FIXED_UTC.replace(second=3),
+                )
+        self.assertEqual(
+            len(json.loads(manifest_path.read_text(encoding="utf-8"))["revisions"]),
+            2,
+        )
+        committed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=4),
+        )
+        self.assertEqual(committed["_internal"]["revision"], "r0003")
+
+    def test_verification_allows_repeated_bytes_in_linked_abandoned_run(self) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope, self.codex_home, prompt.name, clock=lambda: FIXED_UTC
+        )
+        self.write_handoff(str(first["_internal"]["run_id"]), status="abandoned")
+        second = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertNotEqual(second["_internal"]["run_id"], first["_internal"]["run_id"])
+        verified = runs.verify_command(
+            self.workspace, None, str(second["_internal"]["run_id"])
+        )
+        self.assertEqual(verified["run"]["sha256"], second["_internal"]["sha256"])
+
+    def test_run_validation_binds_intent_metadata_to_snapshot(self) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        manifest_path = Path(str(first["_internal"]["manifest"]))
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tampered = json.loads(json.dumps(original))
+        tampered["revisions"][0]["intent_sha256"] = "0" * 64
+        core.write_atomic(manifest_path, core.stable_json(tampered))
+        self.assert_error(
+            "RUN_STATE_INVALID",
+            pw.verify_command,
+            self.workspace,
+            None,
+            str(first["_internal"]["run_id"]),
+        )
+
+    def test_run_validation_rejects_mixed_v1_v2_revision_metadata(self) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "Add prompt workspace support", "Add revised prompt workspace support"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        changed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        manifest_path = Path(str(changed["_internal"]["manifest"]))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["revisions"][0].pop("intent_sha256")
+        manifest["revisions"][0].pop("kind")
+        core.write_atomic(manifest_path, core.stable_json(manifest))
+        self.assert_error(
+            "RUN_STATE_INVALID",
+            pw.verify_command,
+            self.workspace,
+            None,
+            str(first["_internal"]["run_id"]),
+        )
+
+    def test_run_validation_rejects_lineage_cycle(self) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        first_run = str(first["_internal"]["run_id"])
+        self.mark_run_done(first_run)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "Add prompt workspace support", "Add a linked objective"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        second = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        second_run = str(second["_internal"]["run_id"])
+        self.mark_run_done(second_run)
+        first_manifest_path = Path(str(first["_internal"]["manifest"]))
+        second_manifest_path = Path(str(second["_internal"]["manifest"]))
+        first_manifest = json.loads(first_manifest_path.read_text(encoding="utf-8"))
+        second_manifest = json.loads(second_manifest_path.read_text(encoding="utf-8"))
+        first_manifest["lineage_root"] = first_run
+        first_manifest["predecessor"] = {
+            "run_id": second_run,
+            "revision": "r0001",
+            "sha256": second_manifest["revisions"][0]["sha256"],
+        }
+        first_manifest["revisions"][0]["kind"] = "completed_follow_up"
+        core.write_atomic(first_manifest_path, core.stable_json(first_manifest))
+        self.assert_error(
+            "RUN_STATE_INVALID",
+            pw.verify_command,
+            self.workspace,
+            None,
+            second_run,
+        )
 
     def test_run_intake_routes_without_user_run_ids_or_prompt_mutation(self) -> None:
         prompt = self.new_prompt()
@@ -1250,21 +1756,15 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         activity = self.workspace.parent / "activity.json"
+        queued = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            rejected_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=5),
+        )
+        self.assertEqual(queued["status"], "queued")
         activity_before = activity.read_bytes()
         rows_before = pw.prompt_rows(self.workspace, None, None)
-
-        with self.assertRaises(pw.PromptWorkspaceError) as context:
-            pw.route_project_prompt(
-                self.scope,
-                self.codex_home,
-                rejected_prompt.name,
-                clock=lambda: FIXED_UTC.replace(second=5),
-            )
-        self.assertEqual(context.exception.code, "ACTIVE_RUN_EXISTS")
-        self.assertIn(str(active_prompt), context.exception.message)
-        self.assertNotIn("run-", context.exception.message)
-        self.assertEqual(activity.read_bytes(), activity_before)
-        self.assertEqual(pw.prompt_rows(self.workspace, None, None), rows_before)
 
         self.assert_error(
             "PROMPT_PATH_INVALID",

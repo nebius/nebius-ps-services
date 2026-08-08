@@ -45,16 +45,20 @@ from prompt_workspace_waves import (  # noqa: E402
     plan_waves,
     prepare_wave,
     promote_wave,
+    rearm_task,
     recover_task,
     replan_waves,
     start_task,
     watch_task,
 )
 from prompt_workspace_runs import (  # noqa: E402
+    activate_next_queued_prompt,
+    cancel_queued_prompt,
     initialize_project_workspace,
     load_run_manifests,
     manifest_revisions,
     prompt_rows,
+    queue_rows,
     scope_lock,
     snapshot_prompt,
     verify_command,
@@ -73,9 +77,11 @@ __all__ = [
     "WORKSPACE_SCHEMA",
     "PromptWorkspaceError",
     "accept_task_result",
+    "activate_next_queued_prompt",
     "advance_batch",
     "arm_task",
     "cleanup_wave",
+    "cancel_queued_prompt",
     "create_prompt",
     "init_workspace",
     "initialize_project_workspace",
@@ -90,10 +96,12 @@ __all__ = [
     "plan_waves",
     "prepare_wave",
     "promote_wave",
+    "rearm_task",
     "recover_task",
     "replan_waves",
     "remove_lane",
     "prompt_rows",
+    "queue_rows",
     "prompt_slug",
     "resolve_prompt_reference",
     "resolve_steering_revision",
@@ -220,6 +228,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     list_parser.add_argument("--query")
     list_parser.add_argument("--date")
 
+    queue_list_parser = subparsers.add_parser(
+        "queue-list", help="Internal: list accepted queued prompts without bodies."
+    )
+    add_common_workspace(queue_list_parser)
+
+    queue_cancel_parser = subparsers.add_parser(
+        "queue-cancel", help="Internal: cancel one accepted queued prompt."
+    )
+    add_common_workspace(queue_cancel_parser)
+    queue_cancel_parser.add_argument("--prompt", required=True)
+
+    queue_next_parser = subparsers.add_parser(
+        "queue-next", help="Internal: activate the FIFO queue head when idle."
+    )
+    add_common_workspace(queue_next_parser)
+
     snapshot_parser = subparsers.add_parser(
         "snapshot", help="Internal: create an immutable prompt revision."
     )
@@ -275,6 +299,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_start.add_argument("--run-id", required=True)
     task_start.add_argument("--task-id", required=True)
     task_start.add_argument("--assignment-sha256", required=True)
+    task_start.add_argument("--start-lease", required=True)
 
     task_arm = subparsers.add_parser(
         "task-arm", help="Internal: arm one available worker slot."
@@ -310,8 +335,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_watch.add_argument("--run-id", required=True)
     task_watch.add_argument("--task-id", required=True)
 
+    task_rearm = subparsers.add_parser(
+        "task-rearm", help="Internal: replace one expired clean prestart lease."
+    )
+    add_common_workspace(task_rearm)
+    task_rearm.add_argument("--run-id", required=True)
+    task_rearm.add_argument("--task-id", required=True)
+    task_rearm.add_argument("--expected-start-lease", required=True)
+    task_rearm.add_argument("--confirmed-stopped", action="store_true")
+
     task_recover = subparsers.add_parser(
-        "task-recover", help="Internal: transfer one interrupted worker task."
+        "task-recover", help="Internal: transfer one interrupted running task."
     )
     add_common_workspace(task_recover)
     task_recover.add_argument("--run-id", required=True)
@@ -413,6 +447,7 @@ def emit(value: object, json_output: bool) -> None:
                 "last_invoked_at",
                 "status",
                 "outcome",
+                "queue_position",
             ):
                 if key in value:
                     print(f"{key}: {value[key]}")
@@ -467,6 +502,12 @@ def main(argv: list[str]) -> int:
                 open_in_editor(args.editor, Path(str(result["path"])), workspace=False)
         elif args.command == "list":
             result = prompt_rows(args.workspace, args.query, args.date)
+        elif args.command == "queue-list":
+            result = queue_rows(args.workspace)
+        elif args.command == "queue-cancel":
+            result = cancel_queued_prompt(args.workspace, args.prompt)
+        elif args.command == "queue-next":
+            result = activate_next_queued_prompt(args.workspace)
         elif args.command == "snapshot":
             result = snapshot_prompt(
                 args.workspace,
@@ -493,7 +534,11 @@ def main(argv: list[str]) -> int:
             result = arm_task(args.workspace, args.run_id, args.task_id)
         elif args.command == "task-start":
             result = start_task(
-                args.workspace, args.run_id, args.task_id, args.assignment_sha256
+                args.workspace,
+                args.run_id,
+                args.task_id,
+                args.assignment_sha256,
+                args.start_lease,
             )
         elif args.command == "task-heartbeat":
             result = heartbeat_task(
@@ -505,6 +550,14 @@ def main(argv: list[str]) -> int:
             )
         elif args.command == "task-watch":
             result = watch_task(args.workspace, args.run_id, args.task_id)
+        elif args.command == "task-rearm":
+            result = rearm_task(
+                args.workspace,
+                args.run_id,
+                args.task_id,
+                args.expected_start_lease,
+                confirmed_stopped=args.confirmed_stopped,
+            )
         elif args.command == "task-recover":
             result = recover_task(
                 args.workspace,

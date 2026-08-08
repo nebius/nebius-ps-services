@@ -6,10 +6,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 import hashlib
+import json
 from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 
 from prompt_workspace_core import (
     REVISION_RE,
@@ -26,6 +28,23 @@ from prompt_workspace_core import (
 
 STEERING_SCHEMA = "task-implementer/steering-ledger-v1"
 STEERING_DISPOSITIONS = {"pending", "applied", "blocked", "no_effect"}
+REFINEMENT_SCHEMA = "task-implementer/requirements-refinement-v1"
+REFINEMENT_STATUSES = {"extracting", "needs_clarification", "ready"}
+REFINEMENT_CATEGORIES = (
+    "outcomes",
+    "actors",
+    "context",
+    "functional_requirements",
+    "constraints",
+    "acceptance_criteria",
+    "verification",
+    "non_goals",
+    "assumptions",
+    "dependencies",
+    "references",
+    "live_experiment_environment",
+)
+QUESTION_ID_RE = re.compile(r"Q-((?!0+\Z)[0-9]{3,})\Z")
 REQUIREMENTS_SCHEMA = "task-implementer/requirements-v1"
 DESIGN_SCHEMA = "task-implementer/design-v1"
 MAX_SPEC_BYTES = 1024 * 1024
@@ -41,6 +60,178 @@ INTERNAL_STATE_PATTERNS = (
     re.compile(r"\bcheckpoint-[0-9]+\b"),
     re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])"),
 )
+
+
+def refinement_path(run_dir: Path) -> Path:
+    return run_dir / "requirements-refinement.json"
+
+
+def load_requirements_refinement(
+    run_dir: Path,
+    *,
+    required: bool = False,
+    _candidate: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    path = refinement_path(run_dir)
+    if _candidate is None and not path.exists():
+        if required:
+            raise PromptWorkspaceError(
+                "REQUIREMENTS_REFINEMENT_REQUIRED",
+                "requirements refinement state is missing",
+            )
+        return None
+    if _candidate is None:
+        if path.is_symlink() or not path.is_file():
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement state is unsafe"
+            )
+        require_mode(path, 0o600, "requirements refinement state")
+        value = load_json_object(path, "requirements refinement state")
+    else:
+        value = dict(_candidate)
+    required_keys = {
+        "schema",
+        "prompt_id",
+        "revision",
+        "intent_sha256",
+        "status",
+        "extracted",
+        "questions",
+        "compiled_requirements_sha256",
+        "updated_at",
+    }
+    if (
+        set(value) != required_keys
+        or value.get("schema") != REFINEMENT_SCHEMA
+        or REVISION_RE.fullmatch(str(value.get("revision") or "")) is None
+        or re.fullmatch(r"prompt-[0-9a-f]{32}", str(value.get("prompt_id") or ""))
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("intent_sha256") or "")) is None
+        or value.get("status") not in REFINEMENT_STATUSES
+    ):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement identity is invalid"
+        )
+    extracted = value.get("extracted")
+    if not isinstance(extracted, dict) or set(extracted) != set(REFINEMENT_CATEGORIES):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement categories are invalid"
+        )
+    for category, statements in extracted.items():
+        if not isinstance(statements, list) or any(
+            not isinstance(item, str) or not item.strip() for item in statements
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID",
+                f"requirements refinement category is invalid: {category}",
+            )
+    questions = value.get("questions")
+    if not isinstance(questions, list):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement questions are invalid"
+        )
+    seen: set[str] = set()
+    open_material = False
+    for question in questions:
+        if not isinstance(question, dict) or set(question) != {
+            "id",
+            "question",
+            "material",
+            "status",
+            "answer",
+            "source",
+            "source_revision",
+            "conflict",
+        }:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement question is invalid"
+            )
+        question_id = str(question.get("id") or "")
+        if QUESTION_ID_RE.fullmatch(question_id) is None or question_id in seen:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement question ID is invalid"
+            )
+        seen.add(question_id)
+        if (
+            not isinstance(question.get("question"), str)
+            or not str(question["question"]).strip()
+            or not isinstance(question.get("material"), bool)
+            or question.get("status") not in {"open", "answered", "reopened"}
+            or question.get("source") not in {None, "chat", "prompt"}
+            or (
+                question.get("source_revision") is not None
+                and REVISION_RE.fullmatch(str(question["source_revision"])) is None
+            )
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID",
+                "requirements refinement question fields are invalid",
+            )
+        if question["status"] == "answered":
+            if (
+                not isinstance(question.get("answer"), str)
+                or not str(question["answer"]).strip()
+                or question.get("source") is None
+                or question.get("source_revision") is None
+            ):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "answered refinement question lacks provenance"
+                )
+        elif question.get("answer") is not None and not isinstance(
+            question.get("answer"), str
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement answer is invalid"
+            )
+        if question["material"] and question["status"] in {"open", "reopened"}:
+            open_material = True
+    compiled = value.get("compiled_requirements_sha256")
+    if compiled is not None and re.fullmatch(r"[0-9a-f]{64}", str(compiled)) is None:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "compiled requirements digest is invalid"
+        )
+    _timestamp(value.get("updated_at"), "requirements refinement update")
+    if value["status"] == "ready" and (open_material or compiled is None):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID",
+            "ready requirements refinement has an open material question or no compiled digest",
+        )
+    return value
+
+
+def begin_requirements_refinement(
+    run_dir: Path,
+    prompt_id: str,
+    revision: str,
+    intent_sha256: str,
+    *,
+    predecessor_dir: Path | None = None,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    prior = load_requirements_refinement(predecessor_dir or run_dir, required=False)
+    questions = [] if prior is None else list(prior["questions"])
+    value: dict[str, object] = {
+        "schema": REFINEMENT_SCHEMA,
+        "prompt_id": prompt_id,
+        "revision": revision,
+        "intent_sha256": intent_sha256,
+        "status": "extracting",
+        "extracted": {category: [] for category in REFINEMENT_CATEGORIES},
+        "questions": questions,
+        "compiled_requirements_sha256": None,
+        "updated_at": iso_seconds(clock()),
+    }
+    write_atomic(refinement_path(run_dir), stable_json(value))
+    return value
+
+
+def save_requirements_refinement(
+    run_dir: Path, value: dict[str, object]
+) -> dict[str, object]:
+    validated = load_requirements_refinement(run_dir, required=True, _candidate=value)
+    assert validated is not None
+    write_atomic(refinement_path(run_dir), stable_json(value))
+    return validated
 
 
 def steering_path(run_dir: Path) -> Path:
@@ -418,6 +609,7 @@ def inspect_spec_document(
             "exists": False,
             "managed": False,
             "managed_sha256": None,
+            "file_sha256": None,
             "surrounding_sha256": "absent",
             "rendered_surrounding_sha256": _surrounding_digest(*_new_envelope(kind)),
             "ids": [],
@@ -453,6 +645,7 @@ def inspect_spec_document(
             "exists": True,
             "managed": False,
             "managed_sha256": None,
+            "file_sha256": _digest(raw),
             "surrounding_sha256": _digest(raw),
             "rendered_surrounding_sha256": _surrounding_digest(*_append_envelope(raw)),
             "ids": [],
@@ -593,6 +786,7 @@ def inspect_spec_document(
         "schema": schema,
         "title": title,
         "managed_sha256": _digest(_canonical_managed_text(body)),
+        "file_sha256": _digest(raw),
         "surrounding_sha256": surrounding_sha256,
         "rendered_surrounding_sha256": surrounding_sha256,
         "ids": ids,
@@ -600,6 +794,35 @@ def inspect_spec_document(
         "statuses": statuses,
         "record_sha256": record_sha256,
     }
+
+
+def _spec_documents_are_tracked(workspace: dict[str, object]) -> bool:
+    repo_root = Path(required_string(workspace, "repo_root", "workspace manifest"))
+    for kind in ("requirements", "design"):
+        _path, relative = spec_repo_path(workspace, kind)
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo_root),
+                    "ls-files",
+                    "--error-unmatch",
+                    "--",
+                    relative,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PromptWorkspaceError(
+                "ENVIRONMENT_BLOCKER", "Git could not verify specification tracking"
+            ) from exc
+        if result.returncode != 0:
+            return False
+    return True
 
 
 def inspect_spec_documents(
@@ -615,6 +838,36 @@ def inspect_spec_documents(
                 "SPEC_CONFLICT",
                 f"{design_id} maps unknown requirements: {', '.join(sorted(unknown))}",
             )
+    complete_managed_specs = all(
+        bool(record["exists"]) and bool(record["managed"])
+        for record in (requirements, design)
+    )
+    if complete_managed_specs:
+        applicable_requirements = {
+            identifier
+            for identifier, status in dict(requirements["statuses"]).items()
+            if status != "superseded"
+        }
+        current_designs = {
+            identifier
+            for identifier, status in dict(design["statuses"]).items()
+            if status != "superseded"
+        }
+        covered_requirements = {
+            str(requirement)
+            for design_id, mappings in dict(design["requirements"]).items()
+            if design_id in current_designs
+            for requirement in mappings
+        }
+        if covered_requirements != applicable_requirements:
+            missing = sorted(applicable_requirements - covered_requirements)
+            extra = sorted(covered_requirements - applicable_requirements)
+            details = []
+            if missing:
+                details.append(f"unmapped requirements: {', '.join(missing)}")
+            if extra:
+                details.append(f"non-applicable mappings: {', '.join(extra)}")
+            raise PromptWorkspaceError("SPEC_CONFLICT", "; ".join(details))
     next_requirement = (
         max(
             (
@@ -633,12 +886,337 @@ def inspect_spec_documents(
         )
         + 1
     )
+    receipt = None
+    if complete_managed_specs and (
+        commit is not None or _spec_documents_are_tracked(workspace)
+    ):
+        repo_root = Path(required_string(workspace, "repo_root", "workspace manifest"))
+        source_root = Path(
+            required_string(workspace, "source_root", "workspace manifest")
+        )
+        scope_path = source_root.relative_to(repo_root)
+        project_scope = "." if scope_path == Path(".") else scope_path.as_posix()
+        traceability = {
+            "requirement_ids": requirements["ids"],
+            "requirement_statuses": requirements["statuses"],
+            "requirement_records": requirements["record_sha256"],
+            "design_ids": design["ids"],
+            "design_statuses": design["statuses"],
+            "design_records": design["record_sha256"],
+            "design_requirements": design["requirements"],
+        }
+        receipt = {
+            "schema": "project-agent-instructions.spec-validation.v2",
+            "owner": "task-implementer",
+            "project_root": str(source_root),
+            "git_root": str(repo_root),
+            "project_scope": project_scope,
+            "validator": "task-implementer/spec-inspect",
+            "validator_version": 3,
+            "requirements": {
+                "path": "docs/requirements.md",
+                "sha256": requirements["file_sha256"],
+            },
+            "design": {
+                "path": "docs/design.md",
+                "sha256": design["file_sha256"],
+            },
+            "traceability_sha256": _digest(
+                json.dumps(
+                    traceability,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ),
+        }
     return {
         "requirements": requirements,
         "design": design,
         "next_requirement_id": f"TI-REQ-{next_requirement:03d}",
         "next_design_id": f"TI-DES-{next_design:03d}",
+        "project_agent_spec_receipt": receipt,
     }
+
+
+def verify_requirements_refinement_contract(
+    workspace: dict[str, object],
+    run_dir: Path,
+    run_state: dict[str, object],
+) -> dict[str, object]:
+    """Bind a ready refinement ledger to the latest prompt and managed specs."""
+
+    refinement = load_requirements_refinement(run_dir, required=True)
+    assert refinement is not None
+    if (
+        refinement.get("prompt_id") != run_state.get("prompt_id")
+        or refinement.get("revision") != run_state.get("latest_revision")
+        or refinement.get("intent_sha256") != run_state.get("latest_intent_sha256")
+        or refinement.get("status") != "ready"
+    ):
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "latest prompt intent has no ready requirements refinement contract",
+        )
+    inspected = inspect_spec_documents(workspace)
+    requirements = inspected["requirements"]
+    if not requirements.get("managed") or requirements.get(
+        "managed_sha256"
+    ) != refinement.get("compiled_requirements_sha256"):
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "compiled requirements digest does not match managed product truth",
+        )
+    return {"refinement": refinement, "specs": inspected}
+
+
+def _contract_git(
+    git_root: Path, arguments: list[str], label: str, *, text: bool = False
+) -> bytes | str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(git_root), *arguments],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=text,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", f"could not {label}"
+        ) from error
+    if completed.returncode != 0:
+        raise PromptWorkspaceError("EXECUTION_STATE_INVALID", f"could not {label}")
+    return completed.stdout
+
+
+def _require_exact_contract_checkout(git_root: Path, contract_commit: str) -> None:
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", contract_commit) is None:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent contract commit is invalid"
+        )
+    head = str(
+        _contract_git(git_root, ["rev-parse", "HEAD"], "inspect contract HEAD", text=True)
+    ).strip()
+    status = _contract_git(
+        git_root,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        "inspect contract worktree",
+    )
+    if head != contract_commit or status != b"":
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID",
+            "project-agent contract checkout is not clean and exact",
+        )
+
+
+def _contract_blob(
+    git_root: Path, contract_commit: str, path: Path, label: str
+) -> bytes:
+    try:
+        relative = path.resolve().relative_to(git_root).as_posix()
+    except ValueError as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", f"{label} escaped the contract checkout"
+        ) from error
+    result = _contract_git(
+        git_root,
+        ["show", f"{contract_commit}:{relative}"],
+        f"read committed {label}",
+    )
+    assert isinstance(result, bytes)
+    return result
+
+
+def verify_project_agent_contract(
+    workspace: dict[str, object],
+    run_dir: Path,
+    project_root: Path,
+    contract_commit: str,
+) -> dict[str, object]:
+    """Verify current project-agent state before a managed-spec dispatch."""
+
+    selected = project_root.resolve()
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(selected), "rev-parse", "--show-toplevel"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent contract root is invalid"
+        ) from error
+    contract_workspace = dict(workspace)
+    git_root = Path(completed.stdout.strip()).resolve()
+    _require_exact_contract_checkout(git_root, contract_commit)
+    contract_workspace["repo_root"] = str(git_root)
+    contract_workspace["source_root"] = str(selected)
+    inspected = inspect_spec_documents(contract_workspace)
+    receipt = inspected["project_agent_spec_receipt"]
+    if receipt is None:
+        raise PromptWorkspaceError(
+            "SPEC_CONFLICT",
+            "current managed specs have no project-agent validation receipt",
+        )
+    committed_receipt = inspect_spec_documents(
+        contract_workspace, commit=contract_commit
+    )["project_agent_spec_receipt"]
+    if committed_receipt != receipt:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID",
+            "project-agent spec receipt is not bound to the contract commit",
+        )
+    private_root = run_dir / "orchestration" / "project-agent-instructions"
+    receipt_path = run_dir / "orchestration" / "project-agent-spec-receipt.json"
+    state_path = private_root / "state.json"
+    if (
+        private_root.is_symlink()
+        or not private_root.is_dir()
+        or stat.S_IMODE(private_root.stat().st_mode) != 0o700
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent private root is missing or unsafe"
+        )
+    for path, label in ((receipt_path, "spec receipt"), (state_path, "state")):
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or stat.S_IMODE(path.stat().st_mode) != 0o600
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", f"project-agent {label} is missing or unsafe"
+            )
+    try:
+        recorded_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent private state is invalid"
+        ) from error
+    if recorded_receipt != receipt or not isinstance(state, dict):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent spec receipt is stale"
+        )
+    receipt_record = state.get("spec_receipt")
+    if (
+        state.get("schema") != "project-agent-instructions.state.v2"
+        or state.get("spec_owner") != "task-implementer"
+        or state.get("project_root") != str(selected)
+        or state.get("outcome")
+        not in {
+            "created",
+            "refreshed",
+            "adopted",
+            "retired",
+            "existing-sufficient",
+            "not-needed",
+        }
+        or state.get("reload_required") is not False
+        or not isinstance(receipt_record, dict)
+        or receipt_record.get("path") != str(receipt_path.resolve())
+        or receipt_record.get("sha256") != _digest(receipt_path.read_bytes())
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent state is stale or reload-pending"
+        )
+    helper = (
+        Path(__file__).resolve().parents[2]
+        / "project-agent-instructions"
+        / "scripts"
+        / "project_agent_instructions.py"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "verify",
+                "--private-root",
+                str(private_root),
+                "--state",
+                str(state_path),
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        verified = json.loads(completed.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent verification could not run"
+        ) from error
+    if (
+        completed.returncode != 0
+        or not isinstance(verified, dict)
+        or verified.get("status") != "ok"
+        or verified.get("outcome") != state.get("outcome")
+        or verified.get("reload_required") is not False
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent verification failed"
+        )
+    manifest_path = (private_root / str(state.get("manifest_path", ""))).resolve()
+    if manifest_path.parent != private_root.resolve():
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent manifest path is unsafe"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent manifest is invalid"
+        ) from error
+    ancestors = manifest.get("ancestor_project_instructions")
+    if not isinstance(ancestors, list):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "project-agent instruction chain is invalid"
+        )
+    for entry in ancestors:
+        if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "project-agent instruction chain is invalid"
+            )
+        blob = _contract_blob(
+            git_root,
+            contract_commit,
+            Path(str(entry.get("path", ""))),
+            "ancestor project instruction",
+        )
+        if _digest(blob) != entry["sha256"]:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "ancestor project instruction is not bound to the contract commit",
+            )
+    active_path = verified.get("active_instruction_path")
+    if active_path is not None:
+        if not isinstance(active_path, str):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "active project instruction is invalid"
+            )
+        active = Path(active_path)
+        try:
+            active_digest = _digest(active.read_bytes())
+        except OSError as error:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "active project instruction is unreadable"
+            ) from error
+        if _digest(
+            _contract_blob(
+                git_root, contract_commit, active, "active project instruction"
+            )
+        ) != active_digest:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "active project instruction is not bound to the contract commit",
+            )
+    _require_exact_contract_checkout(git_root, contract_commit)
+    return verified
 
 
 def new_spec_document(kind: str, managed_body: str) -> bytes:

@@ -50,14 +50,17 @@
 
 ## Project Agent Instructions
 
-- Decision schema: project-agent-instructions.decision.v1
-- Outcome: pending | created | refreshed | existing-sufficient | not-needed | blocked
+- Spec receipt schema: project-agent-instructions.spec-validation.v2
+- Decision schema: project-agent-instructions.decision.v2
+- State schema: project-agent-instructions.state.v2
+- Outcome: pending | created | refreshed | adopted | retired | existing-sufficient | not-needed | blocked
 - Active instruction path: none
 - Decision SHA-256: none
 - Project instruction SHA-256: none
-- Requirements SHA-256: none
-- Design SHA-256: none
-- Inherited instruction fingerprint: none
+- Spec receipt SHA-256: none
+- Ownership receipt SHA-256: none
+- Effective config SHA-256: none
+- Reload required: no
 - Contract commit: none
 - Blocker: none
 

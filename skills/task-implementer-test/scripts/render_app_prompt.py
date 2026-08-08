@@ -39,7 +39,12 @@ def preserve_managed_frontmatter(managed_prompt: str, rendered_body: str) -> str
     if end < 0:
         raise ValueError("managed prompt frontmatter is not closed")
     frontmatter = managed_prompt[: end + 5]
-    for required in ("schema: task-implementer/prompt-v1", "prompt_id:", "created_at:"):
+    for required in (
+        "schema: task-implementer/prompt-v2",
+        "prompt_id:",
+        "title:",
+        "created_at:",
+    ):
         if required not in frontmatter:
             raise ValueError(f"managed prompt frontmatter is missing {required}")
     return frontmatter.rstrip() + "\n\n" + rendered_body.lstrip()

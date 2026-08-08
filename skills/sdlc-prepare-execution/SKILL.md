@@ -62,7 +62,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `~/.codex/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when committed
-  requirements, design, and a provenance-owned generated project-root
+  requirements, design, and an ownership-receipted v2 selected-project
   `AGENTS.md` are the complete repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 
@@ -78,7 +78,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
    `project-agent-instructions`-owned project-root `AGENTS.md` are the only
    tracked changes, stage from the repository root with `git add -A`, create
    one authorized contract commit, then require a clean checkout. Reject an
-   unverified or human-owned `AGENTS.md`; never make a partial mixed commit.
+   unverified, reload-pending, edited, or human-owned `AGENTS.md`; never make a
+   partial mixed commit.
 3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
    records, validates dependencies/claims/domains, builds deterministic logical
    waves, records intent, and creates the integration branch/worktree from the

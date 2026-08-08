@@ -62,8 +62,11 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `$sdlc-start`
 - `$sdlc-start workspace init [project-folder]`
 - `$sdlc-start run <prompt-path-or-unique-filename>`
-- `agentic-sdlc/prompt-v1`, immutable prompt revisions, same-prompt steering,
-  `ALREADY_COMPLETE`, and fail-closed `WORKFLOW_UPGRADE_REQUIRED`
+- `agentic-sdlc/prompt-v2`, Ask-only required input, immutable raw and intent
+  revisions, requirements refinement, same-prompt steering, durable FIFO
+  queueing, linked completed follow-ups, `ALREADY_COMPLETE`, and fail-closed
+  `WORKFLOW_UPGRADE_REQUIRED`; the private refinement verifier must bind the
+  latest accepted intent to the exact compiled requirements file before design
 - schema-v7 execution, exact initialized-folder scope, `task-arm`, direct
   `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
   `task-recover`, task-finish crash adoption, `replan-future`, process-group

@@ -47,12 +47,16 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Required Reads
 
+- `references/prompt-refinement.md` for prompt-v2 extraction, source
+  precedence, selective clarification, and stable question handling.
 - Existing requirements file.
 - Existing design file if present.
 - Project README or docs if available.
 - Active SDLC run state if the change happens during a run.
 - The bound run's `prompt.json` and accepted snapshot when prompt intake
   initiated the change.
+- The bound run's private `requirements-refinement.json` when prompt-v2 intake
+  initiated or revised the objective.
 
 ## Writes
 
@@ -62,7 +66,16 @@ Convert user intent into durable, testable product requirements in `docs/require
 ## Process
 
 - Use `assets/templates/requirements.md.template` when creating the file.
-- Extract product goal, users, constraints, non-goals, assumptions, and external systems.
+- Extract the entire Ask and all optional/custom headings into product goal,
+  users, actors, inputs/outputs, context, functional behavior, constraints,
+  acceptance and negative criteria, verification/test/evaluation, non-goals,
+  assumptions, dependencies, references, and external systems. The user does
+  not need to pre-sort their Ask into those sections.
+- Inspect safely discoverable repository facts before asking questions. Ask
+  only for ambiguity that materially changes product behavior, interfaces,
+  safety/authority, architecture, cost/availability, acceptance evidence, or
+  deletion of accepted truth. Persist stable `Q-*` IDs and answer provenance
+  privately; a conflicting later revision reopens the same ID.
 - Ask for or record the optional Live Experiment Environment when the user can
   provide one: status, environment type, non-production confirmation, safe
   access reference, connection steps, allowed and prohibited agent actions, test
@@ -75,6 +88,16 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Preserve existing requirement IDs and append new IDs instead of renumbering.
 - Update the requirements decision log and change log.
 - Mark unclear items as open questions instead of guessing.
+- Preserve accepted product truth on omission. Remove or supersede it only from
+  explicit user intent. Treat an edited completed prompt as a fresh full
+  objective evaluated against current truth, not as a textual patch.
+- After writing and validating `docs/requirements.md`, bind its digest in the
+  private refinement ledger and set `ready` only when no material question is
+  open or reopened.
+- Invoke the private `refinement-verify` action owned by `sdlc-start` with the
+  exact workspace and run after saving `ready`. Route to design only when it
+  proves that the latest accepted prompt identity and intent digest match the
+  exact current `docs/requirements.md` bytes.
 
 ## Idempotency
 
@@ -112,6 +135,8 @@ Convert user intent into durable, testable product requirements in `docs/require
   records safe access references, allowed operations, reset instructions, and
   evidence limits.
 - Open questions and change log are explicit.
+- The private refinement verifier passes for the latest accepted revision and
+  exact current `docs/requirements.md`.
 
 ## SDLC Invariants
 

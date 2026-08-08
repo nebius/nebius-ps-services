@@ -20,7 +20,8 @@ import uuid
 
 
 WORKSPACE_SCHEMA = "task-implementer/workspace-v2"
-PROMPT_SCHEMA = "task-implementer/prompt-v1"
+PROMPT_SCHEMA = "task-implementer/prompt-v2"
+LEGACY_PROMPT_SCHEMA = "task-implementer/prompt-v1"
 RUN_SCHEMA = "task-implementer/run-manifest-v1"
 MAX_PROMPT_BYTES = 256 * 1024
 TERMINAL_RUN_STATUSES = {"done", "superseded", "abandoned"}
@@ -28,9 +29,8 @@ PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
 RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 REVISION_RE = re.compile(r"r([0-9]{4})\Z")
 FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
-REQUIRED_SECTIONS = ("Ask", "Outcome", "Acceptance criteria", "Verification")
-ALL_SECTIONS = (
-    "Ask",
+REQUIRED_SECTIONS = ("Ask",)
+OPTIONAL_SECTIONS = (
     "Outcome",
     "Context",
     "Constraints",
@@ -38,8 +38,29 @@ ALL_SECTIONS = (
     "Verification",
     "Non-goals",
     "References",
+    "Clarifications",
+    "Live Experiment Environment",
+    "Steering",
 )
-OPTIONAL_SECTIONS = ("Steering",)
+RESERVED_SECTIONS = (*REQUIRED_SECTIONS, *OPTIONAL_SECTIONS)
+HUB_FILENAME = "00-START-HERE.md"
+SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\bAWS_ACCESS_KEY_ID\b\s*[:=]\s*[A-Z0-9]{16,}"),
+    re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
+    re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
+    re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(
+        r"\bNEBIUS_(?!(?:PROFILE|PROJECT_ID|AUTH_CREDENTIALS_FILE)\b)"
+        r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"
+    ),
+    re.compile(r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"),
+    re.compile(r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)"),
+    re.compile(
+        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?"
+        r"[A-Za-z0-9_./+=:-]{12,}"
+    ),
+)
 
 
 class PromptWorkspaceError(Exception):
@@ -64,6 +85,10 @@ class PromptDocument:
     @property
     def sha256(self) -> str:
         return hashlib.sha256(self.raw).hexdigest()
+
+    @property
+    def intent_sha256(self) -> str:
+        return prompt_intent_sha256(self.sections)
 
 
 def now_local() -> datetime:
@@ -287,7 +312,20 @@ def validate_short_ask(ask: str) -> str:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "short ask contains a control character"
         )
+    if contains_secret(value):
+        raise PromptWorkspaceError(
+            "PROMPT_SENSITIVE_INPUT",
+            "short ask appears to contain secret material",
+        )
     return value
+
+
+def contains_secret(text: str) -> bool:
+    return any(
+        pattern.search(line)
+        for line in (text.splitlines() or [text])
+        for pattern in SECRET_PATTERNS
+    )
 
 
 def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
@@ -500,14 +538,46 @@ def template_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "prompt-template.md"
 
 
-def render_prompt(ask: str, prompt_id: str, created_at: datetime) -> bytes:
+def hub_template_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "assets" / "prompt-workspace-hub.md"
+
+
+def ensure_prompt_hub(prompt_root: Path) -> Path:
+    hub_path = prompt_root / HUB_FILENAME
+    expected = hub_template_path().read_bytes()
+    if hub_path.exists() or hub_path.is_symlink():
+        if hub_path.is_symlink() or not hub_path.is_file():
+            raise PromptWorkspaceError(
+                "WORKSPACE_PATH_INVALID", "prompt workspace hub is unsafe"
+            )
+        require_mode(hub_path, 0o600, "prompt workspace hub")
+        if hub_path.read_bytes() != expected:
+            write_atomic(hub_path, expected)
+    else:
+        write_exclusive(hub_path, expected)
+    return hub_path
+
+
+def render_prompt(
+    ask: str,
+    prompt_id: str,
+    created_at: datetime,
+    *,
+    title: str | None = None,
+    draft: bool = False,
+) -> bytes:
+    rendered_ask = ask
+    rendered_title = title or ask
+    if draft:
+        rendered_ask = "<!-- Required: replace this comment with your Ask. -->"
+        rendered_title = title or "Untitled prompt"
     template = template_path().read_text(encoding="utf-8")
     replacements = {
         "{{PROMPT_ID}}": prompt_id,
-        "{{TITLE_JSON}}": json.dumps(ask, ensure_ascii=False),
+        "{{TITLE_JSON}}": json.dumps(rendered_title, ensure_ascii=False),
         "{{CREATED_AT}}": iso_seconds(created_at),
-        "{{TITLE}}": ask,
-        "{{ASK}}": ask,
+        "{{TITLE}}": rendered_title,
+        "{{ASK}}": rendered_ask,
     }
     rendered = template
     for marker, value in replacements.items():
@@ -548,7 +618,34 @@ def workspace_document(
                         "--open",
                     ],
                     "problemMatcher": [],
-                }
+                    "group": {"kind": "build", "isDefault": True},
+                },
+                {
+                    "label": "Task Implementer: Prompt Queue",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "queue-list",
+                        "--workspace",
+                        str(manifest_path),
+                    ],
+                    "problemMatcher": [],
+                },
+                {
+                    "label": "Task Implementer: Cancel Queued Prompt",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "queue-cancel",
+                        "--workspace",
+                        str(manifest_path),
+                        "--prompt",
+                        "${input:queuedPromptFilename}",
+                    ],
+                    "problemMatcher": [],
+                },
             ],
             "inputs": [
                 {
@@ -557,7 +654,12 @@ def workspace_document(
                     "description": (
                         "Short non-sensitive ask used for title and filename"
                     ),
-                }
+                },
+                {
+                    "id": "queuedPromptFilename",
+                    "type": "promptString",
+                    "description": "Exact queued prompt filename to cancel",
+                },
             ],
         },
     }
@@ -1126,36 +1228,61 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
     return values, closing + 1
 
 
-def parse_sections(lines: list[str], start: int) -> dict[str, str]:
+def parse_sections(
+    lines: list[str],
+    start: int,
+    *,
+    required_sections: tuple[str, ...] = REQUIRED_SECTIONS,
+) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
+    fence_character: str | None = None
+    fence_length = 0
     for line in lines[start:]:
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is not None:
+            if current is not None:
+                sections[current].append(line)
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_character
+                and len(fence.group(1)) >= fence_length
+                and not fence.group(2).strip()
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        if fence is not None:
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            if current is not None:
+                sections[current].append(line)
+            continue
         if line.startswith("## "):
             heading = line[3:].strip()
+            if not heading:
+                raise PromptWorkspaceError(
+                    "PROMPT_INPUT_INVALID", "prompt contains an empty section heading"
+                )
             if heading in sections:
                 raise PromptWorkspaceError(
                     "PROMPT_INPUT_INVALID", f"prompt repeats section: {heading}"
                 )
-            if heading not in {*ALL_SECTIONS, *OPTIONAL_SECTIONS}:
-                current = None
-                continue
             sections[heading] = []
             current = heading
             continue
         if current is not None:
             sections[current].append(line)
-    missing = [heading for heading in ALL_SECTIONS if heading not in sections]
+    missing = [heading for heading in required_sections if heading not in sections]
     if missing:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID",
             f"prompt is missing sections: {', '.join(missing)}",
         )
-    result = {
+    return {
         heading: "\n".join(content).strip() for heading, content in sections.items()
     }
-    for heading in OPTIONAL_SECTIONS:
-        result.setdefault(heading, "")
-    return result
 
 
 def meaningful_section(value: str) -> str:
@@ -1164,8 +1291,72 @@ def meaningful_section(value: str) -> str:
     return without_markers.strip()
 
 
+def normalize_intent_content(value: str) -> str:
+    """Normalize prose formatting while preserving fenced-code semantics."""
+
+    parts: list[str] = []
+    prose: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+
+    def flush_prose() -> None:
+        if not prose:
+            return
+        without_comments = re.sub(r"<!--.*?-->", "", "\n".join(prose), flags=re.DOTALL)
+        normalized = re.sub(r"\s+", " ", without_comments).strip()
+        if normalized:
+            parts.append(f"prose:{normalized}")
+        prose.clear()
+
+    for line in value.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is None:
+            if fence is None:
+                prose.append(line)
+                continue
+            flush_prose()
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            info = re.sub(r"\s+", " ", fence.group(2)).strip()
+            parts.append(f"fence:{fence_character}:{info}")
+            continue
+        if (
+            fence is not None
+            and fence.group(1)[0] == fence_character
+            and len(fence.group(1)) >= fence_length
+            and not fence.group(2).strip()
+        ):
+            parts.append("end-fence")
+            fence_character = None
+            fence_length = 0
+            continue
+        parts.append(f"code:{line}")
+    flush_prose()
+    return "\n".join(parts)
+
+
+def prompt_intent_sha256(sections: dict[str, str]) -> str:
+    normalized: list[tuple[str, str]] = []
+    for heading, value in sections.items():
+        content = normalize_intent_content(value)
+        if content:
+            normalized.append((heading, content))
+    normalized.sort(key=lambda item: item[0].casefold())
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def read_prompt(
-    path: Path, prompt_root: Path, *, require_content: bool
+    path: Path,
+    prompt_root: Path,
+    *,
+    require_content: bool,
+    allow_legacy: bool = False,
 ) -> PromptDocument:
     requested = path.expanduser()
     if requested.is_symlink():
@@ -1201,9 +1392,20 @@ def read_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt contains unresolved template markers"
         )
+    if contains_secret(text):
+        raise PromptWorkspaceError(
+            "PROMPT_SENSITIVE_INPUT",
+            "prompt appears to contain secret material; remove it before intake",
+        )
     lines = text.splitlines()
     frontmatter, body_start = parse_frontmatter(lines)
-    if frontmatter["schema"] != PROMPT_SCHEMA:
+    legacy = frontmatter["schema"] == LEGACY_PROMPT_SCHEMA
+    if legacy and not allow_legacy:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v1 is read-only history; create a new prompt-v2 file",
+        )
+    if frontmatter["schema"] != PROMPT_SCHEMA and not (allow_legacy and legacy):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt schema is unsupported"
         )
@@ -1231,10 +1433,14 @@ def read_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "created_at must include a UTC offset"
         )
-    sections = parse_sections(lines, body_start)
-    if require_content:
+    sections = parse_sections(
+        lines,
+        body_start,
+        required_sections=() if legacy else REQUIRED_SECTIONS,
+    )
+    if require_content and not legacy:
         for heading in REQUIRED_SECTIONS:
-            if not meaningful_section(sections[heading]):
+            if not meaningful_section(sections.get(heading, "")):
                 raise PromptWorkspaceError(
                     "PROMPT_INPUT_INVALID",
                     f"required prompt section is empty: {heading}",
@@ -1278,13 +1484,22 @@ def resolve_prompt_reference(
 def ensure_unique_prompt_id(document: PromptDocument, prompt_root: Path) -> None:
     matches: list[Path] = []
     for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME:
+            continue
         if candidate.is_symlink():
-            raise PromptWorkspaceError(
-                "PROMPT_PATH_INVALID", "prompt directory contains a symlink"
-            )
-        other = read_prompt(candidate, prompt_root, require_content=False)
-        if other.prompt_id == document.prompt_id:
-            matches.append(other.path)
+            continue
+        try:
+            raw = candidate.read_bytes()
+            if len(raw) > MAX_PROMPT_BYTES or b"\x00" in raw:
+                continue
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (OSError, UnicodeDecodeError, PromptWorkspaceError):
+            continue
+        if (
+            metadata.get("schema") == PROMPT_SCHEMA
+            and metadata.get("prompt_id") == document.prompt_id
+        ):
+            matches.append(candidate.resolve())
     if len(matches) != 1 or matches[0] != document.path:
         raise PromptWorkspaceError(
             "PROMPT_CONFLICT", "prompt_id is duplicated within this prompt workspace"
@@ -1297,10 +1512,11 @@ def create_prompt(
     *,
     clock: Callable[[], datetime] = now_local,
     id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+    draft: bool = False,
 ) -> dict[str, object]:
     manifest = verify_workspace(manifest_path)
     prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
-    ask = validate_short_ask(ask_value)
+    ask = validate_short_ask(ask_value) if not draft else "Untitled prompt"
     created_at = clock()
     if created_at.tzinfo is None or created_at.utcoffset() is None:
         raise PromptWorkspaceError(
@@ -1313,7 +1529,13 @@ def create_prompt(
         )
     prefix = created_at.strftime("%Y-%m-%d_%H%M")
     stem = f"{prefix}--{prompt_slug(ask)}"
-    content = render_prompt(ask, prompt_id, created_at)
+    content = render_prompt(
+        ask,
+        prompt_id,
+        created_at,
+        title="Untitled prompt" if draft else None,
+        draft=draft,
+    )
     for number in range(1, 1000):
         suffix = "" if number == 1 else f"--{number:02d}"
         prompt_path = prompt_root / f"{stem}{suffix}.md"

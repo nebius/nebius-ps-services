@@ -125,14 +125,18 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "prompt.json",
             {
-                "schema": "agentic-sdlc/prompt-binding-v1",
+                "schema": "agentic-sdlc/prompt-binding-v2",
                 "run_id": "run-1",
                 "prompt_id": "prompt-" + "1" * 32,
                 "prompt_filename": prompt_filename,
+                "lineage_root": "run-1",
+                "predecessor": None,
                 "revisions": [
                     {
                         "revision": "r0001",
                         "sha256": "a" * 64,
+                        "intent_sha256": "b" * 64,
+                        "kind": "initial",
                         "snapshot": "inputs/r0001/prompt.md",
                         "steering_status": "initial",
                     }

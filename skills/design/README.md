@@ -4,7 +4,9 @@
 implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
 `research` when available, routes undecided application-stack and layer
-technology choices through `app-stack`, applies `system-design-rules` to
+technology choices through `app-stack`, routes undecided AI-specific model,
+training, inference, agent, interoperability, retrieval, and evaluation choices
+through `ai-stack`, applies `system-design-rules` to
 non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
@@ -19,8 +21,8 @@ that scaffold and the scaffold workflow does not call back into design.
 - `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
-- `references/design-workflow.md`: detailed phase checklist, `research`
-  and `app-stack` handoff guidance, `system-design-rules` decision-review
+- `references/design-workflow.md`: detailed phase checklist, `research`,
+  `app-stack`, and `ai-stack` handoff guidance, `system-design-rules` decision-review
   guidance, depth guidance, vertical-slice strategy, and `/plan` handoff
   template.
 - `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
@@ -46,6 +48,8 @@ that scaffold and the scaffold workflow does not call back into design.
   layer is undecided or being reconsidered. Skip it when the stack is fixed.
 - Use `app-stack` directly when the user wants only a stack decision rather
   than a complete design and `/plan` handoff.
+- Use `ai-stack` for an undecided AI-specific stack or layer. Use it directly
+  when that decision does not need a complete design and `/plan` handoff.
 - Use `system-design-rules` inside `design` for standard, deep,
   architecture-heavy, ADR-like, or hard-to-reverse solution decisions before
   finalizing the `/plan`.

@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, route missing due diligence through `research`, undecided application-layer technology through `app-stack`, apply `system-design-rules` to standard or deep decisions, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture or design docs, ADR-like decisions, new applications, and proven remediations that change architecture topology, component or service boundaries, public interfaces, data ownership or lifecycle, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one existing private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, route missing due diligence through `research`, undecided application layers through `app-stack`, undecided AI layers through `ai-stack`, apply `system-design-rules`, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture docs, ADR-like decisions, new applications, and proven remediations that change topology, boundaries, public interfaces, data ownership, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned artifacts, or immediate implementation."
 ---
 
 # Design
@@ -33,7 +33,8 @@ codebase yet.
   integration before code exists.
 - Choosing components, boundaries, data flow, control flow, validation
   strategy, rollout, and operational concerns, with application-stack choices
-  delegated to `app-stack` when they are not already fixed.
+  delegated to `app-stack` and AI-specific stack choices delegated to
+  `ai-stack` when they are not already fixed.
 - Designing applications whose frontend, API, service, data, or infrastructure
   layers are connected in a serial end-to-end flow.
 - Designing a durable remediation after `troubleshoot` has already proven the
@@ -59,7 +60,8 @@ codebase yet.
 - Do not use as a checklist-only review of an existing architecture proposal;
   use `system-design-rules` when the design exists and needs evaluation.
 - Do not use for a stack-selection-only request that does not need a complete
-  solution design and `/plan`; use `app-stack` directly.
+  solution design and `/plan`; use `app-stack` or `ai-stack` directly according
+  to the undecided layer.
 - Do not create repository or component scaffolding directly. A completed
   design may emit an optional handoff for explicit `scaffold-project` use.
 - Do not use inside an active Agentic SDLC workflow unless the coordinator
@@ -103,6 +105,10 @@ or any design that will become a committed document.
 When the application stack or a technology choice for any application layer is
 undecided or under review, use `app-stack` and follow its required reads. Do not
 copy its selection framework into this skill.
+
+When model access, training, inference, agents, interoperability, retrieval, or
+AI evaluation is undecided or under review, use `ai-stack` and follow its
+required reads. Do not copy its workload or compatibility framework here.
 
 ## Workflow
 
@@ -153,7 +159,7 @@ Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,
 and unknowns. Mark anything unverified instead of treating it as fact.
 
-### Phase 4: Use `app-stack` For Stack Decisions
+### Phase 4: Use `app-stack` And `ai-stack` For Stack Decisions
 
 Use `app-stack` when the design must select, review, simplify, or modernize the
 application stack, including choices for frontend or client, web server, API
@@ -172,6 +178,18 @@ re-enter `design` recursively.
 Skip `app-stack` when the applicable technologies are already approved and no
 stack choice is being reconsidered. Record that fixed-stack boundary instead
 of reopening the decision.
+
+Use `ai-stack` for undecided or reconsidered model access, training and tuning,
+inference and serving, agent frameworks and durability, MCP/A2A and agent UI,
+retrieval and RAG, or AI evaluation, safety, and operations. Give it workload,
+data, model, environment, quality, safety, performance, cost, and ownership
+constraints. Bring its scoped decision back into `design` for cross-layer
+interfaces and `/plan`.
+
+When both product and AI layers are undecided, keep the two adviser handoffs
+scoped: `app-stack` owns the surrounding application and `ai-stack` owns the AI
+layers. `design` owns their integration. Skip either skill when its technologies
+are fixed.
 
 ### Phase 5: Design Solution
 
@@ -225,6 +243,7 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - selected option and rejected alternatives
 - assumptions and unresolved questions
 - `app-stack` decision or fixed-stack/skipped rationale
+- `ai-stack` decision or fixed-AI-stack/skipped rationale
 - `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
 - vertical slice order and any prerequisite foundation steps
@@ -291,6 +310,8 @@ short answer is explicitly requested:
 - Research findings with official source links or clear unverified markers.
 - `app-stack` decision for undecided or reconsidered stack choices, or the
   fixed-stack/skipped rationale.
+- `ai-stack` decision for undecided or reconsidered AI-specific choices, or the
+  fixed-AI-stack/skipped rationale.
 - `system-design-rules` findings for non-trivial designs, or why that review
   was not needed.
 - Recommended design with components, technologies, boundaries, data/control
@@ -302,6 +323,7 @@ short answer is explicitly requested:
 ## References
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
-  brownfield and greenfield paths, `research` and `app-stack` handoff guidance,
-  `system-design-rules` decision review guidance, and `/plan` handoff template.
+  brownfield and greenfield paths, `research`, `app-stack`, and `ai-stack`
+  handoff guidance, `system-design-rules` decision review guidance, and `/plan`
+  handoff template.
 - Use `evals/trigger-prompts.md` when reviewing or tuning trigger readiness.

@@ -1,29 +1,35 @@
 ---
 name: project-agent-instructions
-description: "Use only when explicitly routed by Task Implementer or Agentic SDLC after that workflow has validated project requirements and design; decide whether the exact selected project needs a concise root AGENTS.md, preserve human-owned instructions, and safely create or refresh only provenance-verified generated guidance."
+description: "Use only when explicitly routed by Task Implementer or Agentic SDLC after that workflow has issued a validation receipt for current requirements and design; conditionally create, refresh, adopt, or retire a concise selected-project AGENTS.md with deterministic rules, explicit ownership, and fail-closed recovery."
 ---
 
 # Project Agent Instructions
 
 ## Help
 
-For `$project-agent-instructions --help` or `$project-agent-instructions -h`, return concise help and stop before
-any workflow step. State the purpose and invocation policy. Show exact usage
-for every public action. Describe each public action, positional
-argument, and flag in one concise line, including `-h, --help`; say "No
-additional public flags" when there are no others. Use only the documented
-public interface. For internal or coordinator-only skills, state that boundary
-and that no standalone public workflow action exists. After the selected
-`SKILL.md` is loaded, help is report-only: do not call any additional tools,
-inspect project state, or modify files, private state, Git, or external systems.
-Never expose private helper actions or flags or treat help as workflow
-authorization.
+For `$project-agent-instructions --help` or `$project-agent-instructions -h`,
+return concise help and stop before any workflow step. State the purpose and
+invocation policy. Show exact usage for every public action. Describe each
+public action, positional argument, and flag in one concise line, including
+`-h, --help`; say "No additional public flags" when there are no others. Use
+only the documented public interface. For internal or coordinator-only skills,
+state that boundary and that no standalone public workflow action exists.
+After the selected `SKILL.md` is loaded, help is report-only: do not call any
+additional tools, inspect project state, or modify files, private state, Git,
+or external systems. Never expose private helper actions or flags or treat
+help as workflow authorization.
 
 ## Purpose
 
-Create durable, project-specific operating instructions for agents only when
-current requirements, design, and repository evidence justify guidance beyond
-the inherited instruction chain.
+Maintain the smallest durable, project-specific agent contract that should
+apply to every future session in one exact selected project. A valid decision
+may be `not-needed`; requirements and design do not automatically justify a
+file.
+
+Generated repository content is portable. Personal global instructions are
+checked for conflicts but never copied into, or used to suppress otherwise
+necessary rules from, the project file. Ancestor project instructions do count
+when determining whether a project-specific rule is redundant.
 
 ## Invocation Policy
 
@@ -33,160 +39,166 @@ a standalone public workflow command.
 
 ## When To Use
 
-- Task Implementer has validated its managed requirements and design and routes
-  the selected project here before the contract commit or worker dispatch.
-- Agentic SDLC has validated requirements and design and routes the selected
-  project here before auto-steering or planning.
-- A prior decision must be recomputed because specifications, inherited
-  instructions, repository evidence, renderer behavior, or the selected
-  project changed.
+- Task Implementer has issued a current managed-spec receipt and routes the
+  selected project here before locking its coordinator contract.
+- Agentic SDLC has issued a current spec-validation receipt and routes here
+  before auto-steering, planning, or execution.
+- Specs, selected-project identity, relevant evidence, effective Codex config,
+  ancestor instructions, renderer, target, or prior decision changed.
 
 ## When Not To Use
 
-- Do not invoke this skill directly outside Task Implementer or Agentic SDLC.
-- Do not run it before both workflow-owned specifications validate.
-- Do not use it to create generic instructions, task state, handoffs,
-  architecture documentation, reusable procedures, or override files.
-- Do not use it for recursive instruction generation across multiple project
-  folders; each workflow invocation evaluates only its exact selected project.
+- Do not invoke directly outside either coordinator.
+- Do not run from marker checks or unvalidated specification files.
+- Do not create generic guidance, task state, architecture prose, reusable
+  procedures, or recursive instruction files.
+- Do not create `AGENTS.override.md`.
 
 ## Inputs
 
-- The caller's exact selected project root and Git root.
-- Validated `docs/requirements.md` and `docs/design.md`.
-- Spec owner: `task-implementer` or `agentic-sdlc`.
-- A caller-owned private directory outside every Git worktree.
-- Python 3.11+ or an older Python environment with the `tomli` package when a
-  Codex `config.toml` must be read.
-- Applicable global, ancestor, and existing project instruction files.
-- Relevant project README, architecture, interface, build, test, CI,
-  deployment, and operations evidence.
+- Exact selected project root, enclosing Git root, and spec owner.
+- Current `docs/requirements.md` and `docs/design.md`.
+- Owner-issued mode-`0600` spec-validation receipt in a caller-owned private
+  mode-`0700` directory outside Git.
+- Active Codex profile and discovery-relevant CLI overrides, encoded in the
+  required private runtime-config declaration. Use explicit `null` and `{}`
+  values when neither applies.
+- Applicable global, ancestor, and selected-project instruction files.
+- Only the tracked project evidence needed to support candidate rules.
 
 ## Required Reads
 
-- Read `references/decision-contract.md` before making a decision or rendering
-  content.
-- Read the requirements and design completely.
-- Run the helper's `inspect` command and read its manifest.
-- Read only repository evidence needed to verify candidate rules. Do not read
-  every project document by default.
-- If a project instruction file already exists, read it completely before
-  classifying it.
+- Read `references/decision-contract.md` completely.
+- Read both specs completely, then run `inspect` with their owner receipt.
+- Read the resulting manifest and any active selected-project instruction file.
+- Read only repository sources needed to validate proposed rule locators and
+  commands.
 
 ## Writes
 
-- A private manifest, decision, and final state under the caller's private run
-  root.
-- `<selected-project-root>/AGENTS.md` only for a validated `needed` decision
-  when the target is missing or is an unchanged file generated by this skill.
+- Private manifest, decision, ownership receipt, and final state under the
+  caller-owned workflow directory.
+- `<selected-project-root>/AGENTS.md` only through the helper and only for an
+  authorized v2 transition.
 
-The project file is committed product truth. Decision manifests and state are
-private workflow evidence and must never be committed.
+The selected-project file is committed product truth. Private receipts and
+state must never be committed.
 
 ## Process
 
-1. Require both workflow-validated specification files. Reject mixed or
-   unrecognized ownership before considering project instructions.
-2. Use a dedicated mode-`0700` `project-agent-instructions` directory under
-   the caller's private run root. Run
-   `scripts/project_agent_instructions.py inspect` with that private root, the
-   exact project root, spec owner, spec paths, and a contained manifest path.
-3. Compare current project needs with the inherited instruction chain. Treat
-   requirements and design as necessary inputs, not automatic justification
-   for creating a file.
-4. Keep a candidate rule only when it is durable, project-specific,
-   actionable, verifiable, supported by cited current evidence, and not already
-   supplied by inherited guidance.
-5. Record one private decision using
-   `project-agent-instructions.decision.v1`:
-   - `needed` with a concise complete Markdown body no larger than the
-     manifest's `generated_body_max_bytes` and exact evidence digests;
-   - `not-needed` when no meaningful project-specific delta remains; or
-   - `existing-sufficient` when the active human-owned project file already
-     supplies the necessary contract.
-   Never generate an oversized body for later truncation. If the advertised
-   capacity is too small for the required guidance, return a blocker. The
-   advertised capacity never exceeds 7 KiB.
-6. Run the helper's `apply` command. Do not write `AGENTS.md` directly.
-7. Read a newly created or refreshed `AGENTS.md` explicitly in the current
-   session. Codex discovers instruction files only when a session starts.
-8. Return the structured outcome and decision fingerprint to the caller.
+1. Require the owner-issued receipt to bind tracked spec files, complete
+   status-aware requirements-to-design coverage, exact full-file digests,
+   selected project, Git root, scope, owner, validator, and traceability result.
+   `inspect` reruns that owner's fixed validator and requires exact receipt
+   equality.
+2. Always declare the active profile and discovery-sensitive runtime overrides;
+   use `null` and `{}` for the base case. Resolve the current
+   `$CODEX_HOME/PROFILE.config.toml` profile format before trusted project
+   config and runtime overrides. Treat the resulting selected project, layered
+   config, instruction chain, target classification, and recovery check as
+   authoritative.
+3. Keep a rule only when it is durable, project-specific, actionable,
+   public-safe, and supported by a tracked evidence record with an exact
+   locator. Requirements and design are inputs, not sufficient justification.
+4. Store a `project-agent-instructions.decision.v2` decision. For `needed`,
+   provide structured rules; the helper renders all Markdown deterministically.
+   For the other dispositions, provide no rules.
+5. Use exact-digest `adopt` approval before taking ownership of an unreceipted
+   intact v2 file. Use exact-digest `retire` approval before deleting an intact
+   managed file that is no longer needed. Never migrate v1 automatically.
+6. Run `apply`, then `verify`. Never write or delete `AGENTS.md` directly.
+7. If state reports `reload_required: true`, stop the current execution
+   boundary. Start a fresh Codex session, rerun inspection and verification,
+   and explicitly read the active selected-project instructions before any
+   planning, contract lock, auto-steering, or worker dispatch.
+8. Return the outcome, decision fingerprint, target digest, evidence paths,
+   reload status, and any blocker to the caller.
 
 ## Decision Rules
 
-- Use the exact selected project folder, not automatically the Git root and not
-  every descendant.
-- The generated file must include `Scope` and `Read before changing`; include
-  only other sections justified by evidence.
-- Verify commands against current configuration, task runners, or CI. Never
-  invent commands.
-- Cite only durable project evidence. The helper rejects untracked evidence
-  classified as Git-ignored; a tracked file that merely matches an ignore
-  pattern remains eligible because Git does not classify it as ignored.
-- A missing file plus no distinct rules is `not-needed`, not an empty or
-  generic file.
-- An unmarked pre-existing file is human-owned. Preserve it byte-for-byte.
-- Refresh a generated file only when its provenance marker and body digest
-  prove it is unchanged.
-- Treat a same-directory `AGENTS.override.md` or configured fallback file as
-  the active human-owned project instruction file.
-- If a human-owned file materially conflicts with or omits required guidance,
-  stop with `EXISTING_INSTRUCTIONS_GAP` or `INSTRUCTION_CONFLICT`; report a
-  proposed resolution without editing it.
-- Never automatically delete a stale generated file.
+- Evaluate the exact selected project, not automatically the Git root.
+- A selected subproject must satisfy the effective root-marker config. An empty
+  marker list disables parent traversal and treats the selected directory as
+  the project root.
+- `not-needed` is correct when no meaningful durable project rule remains.
+- Rules use only the six renderer-owned sections and stay within 8 preferred,
+  12 hard; each rule is at most 256 UTF-8 bytes.
+- Prefer at most 2 KiB of generated body. A larger body requires a compact
+  justification and may never exceed 4 KiB or effective Codex capacity.
+- Verify commands from current scripts, config, task runners, or CI.
+- An unmarked or edited file is human-owned and preserved byte-for-byte.
+- A same-directory override or configured fallback is the active human-owned
+  instruction source and blocks generation when necessary rules are missing.
+- Reject ignored targets and untracked or ignored ancestor/human-owned project
+  instruction sources. Stage generated project truth before contract commit.
+- Global instructions may reveal a conflict but do not affect portable output
+  bytes. Never weaken a higher-level security, privacy, authorization,
+  publication, or destructive-operation safeguard.
+- Treat closer nested instruction files as directory-scoped refinements, not
+  authorization to weaken higher-level safeguards.
+
+## Ownership and Recovery
+
+- The v2 marker binds the input manifest, decision, and rendered body digests.
+  A separate private ownership receipt binds the exact target bytes.
+- Human edits transfer ownership immediately.
+- Any lock or backup artifact blocks inspect, create, refresh, adoption,
+  retirement, and no-write state recording with `RECOVERY_REQUIRED`.
+- Create is exclusive. Refresh and retirement compare exact bytes under a lock
+  and preserve a recoverable backup on an interrupted final boundary.
+- Retirement is explicit, guarded, and receipt-recorded; it is never inferred
+  from `not-needed` alone.
+- A v1 marker returns `LEGACY_GENERATED_FILE`; resolve it manually rather than
+  adding a compatibility path.
 
 ## Idempotency
 
-- Identical inputs and decisions preserve project bytes, mode, and mtime.
-- Specification, inherited-instruction, evidence, renderer, target, or selected
-  project changes invalidate the previous decision.
-- Exclusive create and compare-before-replace prevent concurrent truncation.
-- Repeated `not-needed` and `existing-sufficient` decisions converge to the
-  same private state.
+- Identical rules with valid ownership and current portable provenance preserve
+  bytes, mode, and mtime; spec, renderer, or evidence projection drift refreshes
+  the marker even when the body is unchanged.
 
 ## Failure Handling
 
-- `PREREQUISITE_MISSING`: requirements or design is absent or invalid.
-- `SPEC_OWNER_CONFLICT`: the caller's spec owner does not match both documents.
-- `INSTRUCTION_CONFLICT`: applicable instructions cannot be reconciled without
-  weakening a higher-level safeguard.
-- `EXISTING_INSTRUCTIONS_GAP`: a human-owned active file needs a material rule.
-- `UNSAFE_TARGET`: target, evidence, or instruction paths are unsafe.
-- `CONCURRENT_MODIFICATION`: the target changed during a guarded write.
-- `STALE_GENERATED_FILE`: provenance exists but no safe refresh or deletion is
-  authorized.
+- `SPEC_VALIDATION_REQUIRED`: owner receipt is absent, malformed, or stale.
+- `DISCOVERY_CONTEXT_UNVERIFIED`: effective config, profile, overrides, trust,
+  or selected-project marker context is ambiguous.
+- `RECOVERY_REQUIRED`: a lock or backup requires explicit recovery.
+- `ADOPTION_APPROVAL_REQUIRED` or `RETIREMENT_APPROVAL_REQUIRED`: exact target
+  authorization is missing.
+- `OWNERSHIP_CONFLICT`: private ownership evidence is missing or stale.
+- `LEGACY_GENERATED_FILE`: v1 state needs manual resolution.
+- `EXISTING_INSTRUCTIONS_GAP` or `INSTRUCTION_CONFLICT`: human-owned active
+  instructions require a proposed human resolution.
+- `UNSAFE_TARGET`, `CONCURRENT_MODIFICATION`, or `STALE_GENERATED_FILE`: stop
+  without bypassing the helper.
 
-Return the blocker to the caller. Do not create a fallback file or silently
-weaken the decision. If a final-boundary race preserves
-`.AGENTS.md.project-agent-instructions.backup`, require explicit human recovery
-before retrying.
+Return blockers to the coordinator. Do not create a fallback, loosen a rule,
+or remove recovery evidence automatically.
 
 ## Must Not
 
-- Do not run before both validated specs exist.
-- Do not create `AGENTS.override.md`, recursively create nested files, or
-  overwrite a human-owned file.
-- Do not copy task state, prompts, acceptance criteria, architecture essays,
-  troubleshooting history, generic advice, secrets, private endpoints,
-  environment values, or temporary assumptions into project instructions.
-- Do not place reusable procedures in `AGENTS.md`; keep them in skills.
-- Do not commit private manifest, decision, or state files.
+- Do not copy prompts, task state, acceptance-criteria inventories,
+  architecture essays, troubleshooting history, generic advice, secrets,
+  endpoints, environment values, absolute home paths, or temporary decisions.
+- Do not place repeatable procedures in `AGENTS.md`; keep them in skills or
+  project docs.
+- Do not commit private manifest, decision, ownership, runtime-config, receipt,
+  or state files.
 
 ## Completion Criteria
 
-- The decision is based on current validated specs and cited repository
-  evidence.
-- The result is `created`, `refreshed`, `existing-sufficient`, `not-needed`, or
-  a structured blocker.
-- Any created/refreshed file is concise, public-safe, provenance-valid, and
-  located at the exact selected project root.
-- The caller receives the decision fingerprint and explicitly reads the active
-  project instructions before continuing.
+- The exact specs and effective discovery context are receipt-bound.
+- The result is `created`, `refreshed`, `adopted`, `retired`,
+  `existing-sufficient`, `not-needed`, or a structured blocker.
+- Any generated file is deterministic, concise, public-safe, evidence-backed,
+  provenance-valid, and at the selected project root.
+- Verification passes and any required session reload finishes before the
+  coordinator continues.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings
-in the narrowest appropriate surface only when the task contract allows source edits.
+When using this skill, capture durable, reusable, public-safe learnings in the
+narrowest appropriate surface only when the task contract allows source edits.
 For read-only/report-only work, or when a learning is not public-safe,
 evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
@@ -194,7 +206,6 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return the selected project, active instruction source, outcome, decision
-fingerprint, project-file digest when present, evidence paths, and any blocker.
-Do not print raw prompts, private decision rationale, secrets, or environment
-values.
+Return selected project, active instruction source, outcome, decision and
+target digests, evidence paths, `reload_required`, and any blocker. Do not print
+raw private rationale, prompts, credentials, or environment values.

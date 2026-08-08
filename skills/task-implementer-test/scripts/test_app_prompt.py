@@ -37,10 +37,31 @@ class RenderPromptTests(unittest.TestCase):
                 write_private(link, "new")
 
     def test_preserves_managed_identity_frontmatter(self) -> None:
-        managed = "---\nschema: task-implementer/prompt-v1\nprompt_id: prompt-1\ncreated_at: now\n---\n\nold\n"
+        managed = (
+            "---\n"
+            "schema: task-implementer/prompt-v2\n"
+            "prompt_id: prompt-1\n"
+            "title: Test prompt\n"
+            "created_at: now\n"
+            "---\n\n"
+            "old\n"
+        )
         result = preserve_managed_frontmatter(managed, "# New body\n")
-        self.assertTrue(result.startswith("---\nschema: task-implementer/prompt-v1"))
+        self.assertTrue(result.startswith("---\nschema: task-implementer/prompt-v2"))
         self.assertTrue(result.endswith("# New body\n"))
+
+    def test_rejects_legacy_managed_prompt(self) -> None:
+        managed = (
+            "---\n"
+            "schema: task-implementer/prompt-v1\n"
+            "prompt_id: prompt-1\n"
+            "title: Test prompt\n"
+            "created_at: now\n"
+            "---\n\n"
+            "old\n"
+        )
+        with self.assertRaisesRegex(ValueError, "task-implementer/prompt-v2"):
+            preserve_managed_frontmatter(managed, "# New body\n")
 
 
 if __name__ == "__main__":

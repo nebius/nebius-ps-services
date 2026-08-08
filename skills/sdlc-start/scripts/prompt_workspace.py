@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -38,17 +39,22 @@ from git_promotion import (  # noqa: E402
 
 
 WORKSPACE_SCHEMA = "agentic-sdlc/prompt-workspace-v1"
-PROMPT_SCHEMA = "agentic-sdlc/prompt-v1"
-BINDING_SCHEMA = "agentic-sdlc/prompt-binding-v1"
+PROMPT_SCHEMA = "agentic-sdlc/prompt-v2"
+LEGACY_PROMPT_SCHEMA = "agentic-sdlc/prompt-v1"
+BINDING_SCHEMA = "agentic-sdlc/prompt-binding-v2"
+LEGACY_BINDING_SCHEMA = "agentic-sdlc/prompt-binding-v1"
 ACTIVITY_SCHEMA = "agentic-sdlc/prompt-activity-v1"
+QUEUE_SCHEMA = "agentic-sdlc/prompt-queue-v1"
+REFINEMENT_SCHEMA = "agentic-sdlc/requirements-refinement-v1"
 PROMOTION_SCHEMA = "agentic-sdlc/git-promotion-v1"
 MAX_PROMPT_BYTES = 256 * 1024
+MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024
 PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
 RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 REVISION_RE = re.compile(r"r([0-9]{4})\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
-REQUIRED_SECTIONS = ("Ask", "Outcome", "Acceptance criteria", "Verification")
+REQUIRED_SECTIONS = ("Ask",)
 ALL_SECTIONS = (
     "Ask",
     "Outcome",
@@ -59,8 +65,26 @@ ALL_SECTIONS = (
     "Live Experiment Environment",
     "Non-goals",
     "References",
+    "Clarifications",
     "Steering",
 )
+HUB_FILENAME = "00-START-HERE.md"
+QUEUE_HISTORY_LIMIT = 200
+REFINEMENT_CATEGORIES = (
+    "outcomes",
+    "actors",
+    "context",
+    "functional_requirements",
+    "constraints",
+    "acceptance_criteria",
+    "verification",
+    "non_goals",
+    "assumptions",
+    "dependencies",
+    "references",
+    "live_experiment_environment",
+)
+QUESTION_ID_RE = re.compile(r"Q-((?!0+\Z)[0-9]{3,})\Z")
 TERMINAL_STATUSES = {
     "complete",
     "completed",
@@ -395,6 +419,26 @@ def template_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "prompt-template.md"
 
 
+def hub_template_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "assets" / "prompt-workspace-hub.md"
+
+
+def ensure_prompt_hub(prompt_root: Path) -> Path:
+    path = prompt_root / HUB_FILENAME
+    expected = hub_template_path().read_bytes()
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise PromptWorkspaceError(
+                "WORKSPACE_PATH_INVALID", "prompt workspace hub is unsafe"
+            )
+        require_mode(path, 0o600, "prompt workspace hub")
+        if path.read_bytes() != expected:
+            write_atomic(path, expected)
+    else:
+        write_exclusive(path, expected)
+    return path
+
+
 def validate_short_ask(value: str) -> str:
     ask = " ".join(value.split())
     if not ask or len(ask) > 160 or contains_secret(ask):
@@ -405,15 +449,25 @@ def validate_short_ask(value: str) -> str:
     return ask
 
 
-def render_prompt(prompt_id: str, created_at: datetime, ask_value: str) -> bytes:
+def render_prompt(
+    prompt_id: str,
+    created_at: datetime,
+    ask_value: str,
+    *,
+    draft: bool = False,
+) -> bytes:
     ask = validate_short_ask(ask_value)
+    rendered_ask = (
+        "<!-- Required: replace this comment with your Ask. -->" if draft else ask
+    )
+    title = "Untitled prompt" if draft else ask
     template = template_path().read_text(encoding="utf-8")
     replacements = {
         "{{PROMPT_ID}}": prompt_id,
-        "{{TITLE_JSON}}": json.dumps(ask),
+        "{{TITLE_JSON}}": json.dumps(title),
         "{{CREATED_AT}}": iso_seconds(created_at),
-        "{{TITLE}}": ask,
-        "{{ASK}}": ask,
+        "{{TITLE}}": title,
+        "{{ASK}}": rendered_ask,
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)
@@ -430,6 +484,7 @@ def allocate_prompt(
     created_at: datetime,
     *,
     id_factory=lambda: uuid.uuid4().hex,
+    draft: bool = False,
 ) -> Path:
     ask = validate_short_ask(ask_value)
     prompt_id = f"prompt-{uuid.uuid4().hex}"
@@ -440,7 +495,7 @@ def allocate_prompt(
             "PROMPT_INPUT_INVALID", "generated prompt ID is invalid"
         )
     stem = f"{created_at.strftime('%Y%m%dT%H%M%SZ')}--{safe_segment(ask, 'prompt')}"
-    content = render_prompt(prompt_id, created_at, ask)
+    content = render_prompt(prompt_id, created_at, ask, draft=draft)
     for number in range(1, 1000):
         suffix = "" if number == 1 else f"--{number:02d}"
         path = prompt_root / f"{stem}{suffix}.md"
@@ -455,9 +510,7 @@ def allocate_prompt(
 
 
 def create_starter(prompt_root: Path, created_at: datetime) -> Path:
-    return allocate_prompt(
-        prompt_root, "Describe the product or feature to build", created_at
-    )
+    return allocate_prompt(prompt_root, "Untitled prompt", created_at, draft=True)
 
 
 def code_workspace(
@@ -488,6 +541,7 @@ def code_workspace(
                         "--open",
                     ],
                     "problemMatcher": [],
+                    "group": {"kind": "build", "isDefault": True},
                 },
                 {
                     "label": "Agentic SDLC: Prompt History",
@@ -501,13 +555,44 @@ def code_workspace(
                     ],
                     "problemMatcher": [],
                 },
+                {
+                    "label": "Agentic SDLC: Prompt Queue",
+                    "type": "process",
+                    "command": str(Path(sys.executable).resolve()),
+                    "args": [
+                        str(Path(__file__).resolve()),
+                        "queue-list",
+                        "--workspace",
+                        str(manifest_path),
+                    ],
+                    "problemMatcher": [],
+                },
+                {
+                    "label": "Agentic SDLC: Cancel Queued Prompt",
+                    "type": "process",
+                    "command": str(Path(sys.executable).resolve()),
+                    "args": [
+                        str(Path(__file__).resolve()),
+                        "queue-cancel",
+                        "--workspace",
+                        str(manifest_path),
+                        "--prompt",
+                        "${input:queuedPromptFilename}",
+                    ],
+                    "problemMatcher": [],
+                },
             ],
             "inputs": [
                 {
                     "id": "promptTitle",
                     "type": "promptString",
                     "description": "Short non-sensitive product or feature ask",
-                }
+                },
+                {
+                    "id": "queuedPromptFilename",
+                    "type": "promptString",
+                    "description": "Exact queued prompt filename to cancel",
+                },
             ],
         },
     }
@@ -551,7 +636,10 @@ def initialize(
                 "created_at": iso_seconds(created_at),
             }
         write_atomic(manifest_path, stable_json(manifest))
-        prompts = sorted(prompt_root.glob("*.md"))
+        ensure_prompt_hub(prompt_root)
+        prompts = sorted(
+            path for path in prompt_root.glob("*.md") if path.name != HUB_FILENAME
+        )
         starter_created = False
         if not prompts:
             prompts = [create_starter(prompt_root, created_at)]
@@ -625,7 +713,64 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return metadata, "\n".join(lines[end + 1 :])
 
 
-def prompt_metadata(path: Path) -> dict[str, object]:
+def prompt_intent_sha256(sections: dict[str, str]) -> str:
+    normalized = [
+        (heading, normalize_intent_content(value))
+        for heading, value in sections.items()
+    ]
+    normalized = [item for item in normalized if item[1]]
+    normalized.sort(key=lambda item: item[0].casefold())
+    return hashlib.sha256(
+        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def normalize_intent_content(value: str) -> str:
+    """Normalize prose formatting while preserving fenced-code semantics."""
+
+    parts: list[str] = []
+    prose: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+
+    def flush_prose() -> None:
+        if not prose:
+            return
+        without_comments = re.sub(r"<!--.*?-->", "", "\n".join(prose), flags=re.DOTALL)
+        normalized_prose = re.sub(r"\s+", " ", without_comments).strip()
+        if normalized_prose:
+            parts.append(f"prose:{normalized_prose}")
+        prose.clear()
+
+    for line in value.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is None:
+            if fence is None:
+                prose.append(line)
+                continue
+            flush_prose()
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            info = re.sub(r"\s+", " ", fence.group(2)).strip()
+            parts.append(f"fence:{fence_character}:{info}")
+            continue
+        if (
+            fence is not None
+            and fence.group(1)[0] == fence_character
+            and len(fence.group(1)) >= fence_length
+            and not fence.group(2).strip()
+        ):
+            parts.append("end-fence")
+            fence_character = None
+            fence_length = 0
+            continue
+        parts.append(f"code:{line}")
+    flush_prose()
+    return "\n".join(parts)
+
+
+def prompt_metadata(path: Path, *, allow_legacy: bool = False) -> dict[str, object]:
     resolved = path.resolve()
     if path.is_symlink() or not resolved.is_file():
         raise PromptWorkspaceError(
@@ -649,9 +794,15 @@ def prompt_metadata(path: Path) -> dict[str, object]:
             "PROMPT_SENSITIVE_INPUT",
             "prompt appears to contain secret material; remove it before intake",
         )
-    if metadata["schema"] != PROMPT_SCHEMA or not PROMPT_ID_RE.fullmatch(
-        metadata["prompt_id"]
-    ):
+    legacy = metadata["schema"] == LEGACY_PROMPT_SCHEMA
+    if legacy and not allow_legacy:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v1 is read-only history; create a new prompt-v2 file",
+        )
+    if (
+        metadata["schema"] != PROMPT_SCHEMA and not (allow_legacy and legacy)
+    ) or not PROMPT_ID_RE.fullmatch(metadata["prompt_id"]):
         raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt identity is invalid")
     try:
         created_at = datetime.fromisoformat(
@@ -673,6 +824,7 @@ def prompt_metadata(path: Path) -> dict[str, object]:
         "title": metadata["title"],
         "created_at": created_at,
         "sha256": hashlib.sha256(raw).hexdigest(),
+        "schema": metadata["schema"],
     }
 
 
@@ -684,25 +836,67 @@ def parse_prompt(path: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt contains unresolved template markers"
         )
-    headings = list(re.finditer(r"(?m)^## ([^\n]+)\s*$", body))
-    names = [match.group(1) for match in headings]
-    if names != list(ALL_SECTIONS):
+    sections = parse_prompt_sections(body)
+    missing = [name for name in REQUIRED_SECTIONS if name not in sections]
+    if missing:
         raise PromptWorkspaceError(
-            "PROMPT_INPUT_INVALID", "prompt sections are missing or reordered"
+            "PROMPT_INPUT_INVALID",
+            f"prompt is missing sections: {', '.join(missing)}",
         )
-    sections: dict[str, str] = {}
-    for index, match in enumerate(headings):
-        start = match.end()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        sections[match.group(1)] = body[start:end].strip()
     for name in REQUIRED_SECTIONS:
         if not meaningful_section(sections[name]):
             raise PromptWorkspaceError(
                 "PROMPT_INPUT_INVALID", f"prompt section is empty: {name}"
             )
     document.pop("body", None)
-    document.pop("created_at", None)
+    document["sections"] = sections
+    document["intent_sha256"] = prompt_intent_sha256(sections)
     return document
+
+
+def parse_prompt_sections(body: str) -> dict[str, str]:
+    """Parse prompt headings without treating fenced examples as structure."""
+
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    fence_character: str | None = None
+    fence_length = 0
+    for line in body.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if fence_character is not None:
+            if current is not None:
+                sections[current].append(line)
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_character
+                and len(fence.group(1)) >= fence_length
+                and not fence.group(2).strip()
+            ):
+                fence_character = None
+                fence_length = 0
+            continue
+        if fence is not None:
+            marker = fence.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            if current is not None:
+                sections[current].append(line)
+            continue
+        if line.startswith("## "):
+            heading = line[3:].strip()
+            if not heading or heading in sections:
+                raise PromptWorkspaceError(
+                    "PROMPT_INPUT_INVALID",
+                    "prompt section headings are empty or repeated",
+                )
+            sections[heading] = []
+            current = heading
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {
+        heading: "\n".join(content).strip() for heading, content in sections.items()
+    }
 
 
 def discover_workspace(
@@ -785,12 +979,27 @@ def run_status(run_dir: Path) -> str:
     return "initializing"
 
 
-def validate_binding(run_dir: Path) -> dict[str, object]:
+def validate_binding(
+    run_dir: Path, _seen: set[Path] | None = None
+) -> dict[str, object]:
+    seen = set() if _seen is None else set(_seen)
+    canonical_run = run_dir.resolve()
+    if canonical_run in seen:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "prompt predecessor lineage contains a cycle"
+        )
+    seen.add(canonical_run)
     if run_dir.is_symlink() or not run_dir.is_dir():
         raise PromptWorkspaceError("RUN_STATE_INVALID", "run directory is unsafe")
     binding = load_json(run_dir / "prompt.json", "prompt binding")
+    legacy = binding.get("schema") == LEGACY_BINDING_SCHEMA
+    if legacy and run_status(run_dir) not in TERMINAL_STATUSES:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "unfinished prompt-v1 binding is read-only; finish or retire it before prompt-v2 intake",
+        )
     if (
-        binding.get("schema") != BINDING_SCHEMA
+        binding.get("schema") not in {BINDING_SCHEMA, LEGACY_BINDING_SCHEMA}
         or binding.get("run_id") != run_dir.name
         or not PROMPT_ID_RE.fullmatch(str(binding.get("prompt_id") or ""))
         or not valid_prompt_filename(binding.get("prompt_filename"))
@@ -798,20 +1007,58 @@ def validate_binding(run_dir: Path) -> dict[str, object]:
         raise PromptWorkspaceError(
             "RUN_STATE_INVALID", "prompt binding identity is invalid"
         )
+    try:
+        binding_created_at = datetime.fromisoformat(
+            str(binding.get("created_at") or "")
+        )
+    except ValueError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "prompt binding creation timestamp is invalid"
+        ) from exc
+    if binding_created_at.tzinfo is None or binding_created_at.utcoffset() is None:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "prompt binding creation timestamp needs an offset"
+        )
     revisions = binding.get("revisions")
     if not isinstance(revisions, list) or not revisions:
         raise PromptWorkspaceError(
             "RUN_STATE_INVALID", "prompt binding has no revisions"
         )
+    prior_accepted_at: datetime | None = None
     for index, revision in enumerate(revisions, 1):
         if (
             not isinstance(revision, dict)
             or revision.get("revision") != f"r{index:04d}"
             or not SHA256_RE.fullmatch(str(revision.get("sha256") or ""))
+            or (
+                not legacy
+                and not SHA256_RE.fullmatch(str(revision.get("intent_sha256") or ""))
+            )
+            or (
+                not legacy
+                and revision.get("kind")
+                not in {"initial", "active_steering", "completed_follow_up"}
+            )
         ):
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "prompt revisions are invalid"
             )
+        try:
+            accepted_at = datetime.fromisoformat(str(revision.get("accepted_at") or ""))
+        except ValueError as exc:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "prompt revision timestamp is invalid"
+            ) from exc
+        if (
+            accepted_at.tzinfo is None
+            or accepted_at.utcoffset() is None
+            or accepted_at < binding_created_at
+            or (prior_accepted_at is not None and accepted_at < prior_accepted_at)
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "prompt revision timestamps are invalid"
+            )
+        prior_accepted_at = accepted_at
         relative = Path(str(revision.get("snapshot") or ""))
         snapshot = run_dir / relative
         if relative != Path("inputs") / f"r{index:04d}" / "prompt.md":
@@ -830,6 +1077,69 @@ def validate_binding(run_dir: Path) -> dict[str, object]:
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "prompt snapshot digest changed"
             )
+        if not legacy and parse_prompt(snapshot)["intent_sha256"] != revision.get(
+            "intent_sha256"
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "prompt snapshot intent digest changed"
+            )
+    if not legacy:
+        predecessor = binding.get("predecessor")
+        lineage_root = binding.get("lineage_root")
+        if predecessor is None:
+            if lineage_root != run_dir.name:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "initial run lineage root is invalid"
+                )
+        else:
+            if (
+                not isinstance(predecessor, dict)
+                or set(predecessor) != {"run_id", "revision", "sha256"}
+                or not RUN_ID_RE.fullmatch(str(predecessor.get("run_id") or ""))
+                or not REVISION_RE.fullmatch(str(predecessor.get("revision") or ""))
+                or not SHA256_RE.fullmatch(str(predecessor.get("sha256") or ""))
+                or predecessor.get("run_id") == run_dir.name
+            ):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "prompt predecessor is invalid"
+                )
+            parent_dir = run_dir.parent / str(predecessor["run_id"])
+            if parent_dir.is_symlink() or not parent_dir.is_dir():
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "prompt predecessor directory is unsafe"
+                )
+            parent = validate_binding(parent_dir, seen)
+            if (
+                run_status(parent_dir) not in TERMINAL_STATUSES
+                or parent.get("prompt_id") != binding.get("prompt_id")
+                or lineage_root != str(parent.get("lineage_root") or parent_dir.name)
+            ):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "prompt predecessor lineage is invalid"
+                )
+            matches = [
+                item
+                for item in parent["revisions"]
+                if item.get("revision") == predecessor["revision"]
+                and item.get("sha256") == predecessor["sha256"]
+            ]
+            if len(matches) != 1:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "prompt predecessor revision is invalid"
+                )
+        if not RUN_ID_RE.fullmatch(str(lineage_root or "")):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "prompt lineage root is invalid"
+            )
+        expected_first_kind = (
+            "completed_follow_up" if predecessor is not None else "initial"
+        )
+        if revisions[0].get("kind") != expected_first_kind or any(
+            revision.get("kind") != "active_steering" for revision in revisions[1:]
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "prompt revision kinds do not match lineage"
+            )
     return binding
 
 
@@ -844,7 +1154,9 @@ def active_run(project_dir: Path) -> tuple[Path | None, dict[str, object] | None
                 )
             binding_path = run_dir / "prompt.json"
             binding = validate_binding(run_dir) if binding_path.exists() else None
-            if run_status(run_dir) not in TERMINAL_STATUSES:
+            if run_status(
+                run_dir
+            ) not in TERMINAL_STATUSES or binding_has_pending_steering(binding):
                 unfinished.append((run_dir, binding))
         if len(unfinished) > 1:
             raise PromptWorkspaceError(
@@ -876,7 +1188,12 @@ def active_run(project_dir: Path) -> tuple[Path | None, dict[str, object] | None
             continue
         if other.is_symlink() or not other.is_dir():
             raise PromptWorkspaceError("RUN_STATE_INVALID", "run directory is unsafe")
-        if run_status(other) not in TERMINAL_STATUSES:
+        other_binding = (
+            validate_binding(other) if (other / "prompt.json").exists() else None
+        )
+        if run_status(other) not in TERMINAL_STATUSES or binding_has_pending_steering(
+            other_binding
+        ):
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID",
                 "multiple unfinished runs conflict with the active pointer",
@@ -890,6 +1207,104 @@ def active_run(project_dir: Path) -> tuple[Path | None, dict[str, object] | None
             "unfinished active run has no managed prompt binding",
         )
     return run_dir, validate_binding(run_dir)
+
+
+def binding_has_pending_steering(binding: dict[str, object] | None) -> bool:
+    return bool(
+        binding is not None
+        and binding.get("revisions")
+        and binding["revisions"][-1].get("steering_status") == "pending"
+    )
+
+
+def run_resources_released(run_dir: Path) -> bool:
+    execution_root = run_dir / "execution"
+    if execution_root.exists():
+        if execution_root.is_symlink() or not execution_root.is_dir():
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "execution state directory is unsafe"
+            )
+        interop_path = execution_root / "interop.json"
+        if interop_path.exists():
+            interop = load_json(interop_path, "execution interop")
+            if (
+                interop.get("schema") != "agentic-sdlc/worktree-interop-v2"
+                or interop.get("run_id") != run_dir.name
+                or not isinstance(interop.get("released"), bool)
+            ):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "execution interop release state is invalid"
+                )
+            if interop["released"] is False:
+                return False
+        coordinator_paths = sorted(execution_root.glob("*/coordinator.json"))
+        feature_dirs = [
+            path
+            for path in execution_root.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
+        ]
+        if any(
+            (path / "coordinator.json") not in coordinator_paths
+            for path in feature_dirs
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "execution feature has no coordinator state"
+            )
+        for coordinator_path in coordinator_paths:
+            coordinator = load_json(coordinator_path, "execution coordinator")
+            schema = coordinator.get("schema")
+            if schema in {
+                f"agentic-sdlc/execution-coordinator-v{version}"
+                for version in range(1, 7)
+            }:
+                raise PromptWorkspaceError(
+                    "WORKFLOW_UPGRADE_REQUIRED",
+                    "older execution coordinator state cannot release a prompt queue",
+                )
+            if (
+                schema != "agentic-sdlc/execution-coordinator-v7"
+                or coordinator.get("run_id") != run_dir.name
+                or not isinstance(coordinator.get("cleanup_retained"), list)
+            ):
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID",
+                    "execution coordinator release state is invalid",
+                )
+            worktree_value = coordinator.get("integration_worktree")
+            if (
+                coordinator.get("status") != "done"
+                or coordinator.get("active_wave") is not None
+                or coordinator["cleanup_retained"]
+                or not isinstance(worktree_value, str)
+                or not Path(worktree_value).is_absolute()
+                or Path(worktree_value).exists()
+                or Path(worktree_value).is_symlink()
+            ):
+                return False
+
+    state_path = run_dir / "current-state.json"
+    if not state_path.exists():
+        return True
+    state = load_json(state_path, "current-state.json")
+    execution = state.get("execution")
+    if execution is None:
+        return True
+    if not isinstance(execution, dict):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "execution state is not an object"
+        )
+    if execution.get("status") not in {
+        "not_prepared",
+        "done",
+        "complete",
+        "completed",
+        "released",
+    }:
+        return False
+    return (
+        execution.get("integration_worktree") is None
+        and execution.get("active_wave") is None
+    )
 
 
 def new_run(
@@ -906,23 +1321,66 @@ def new_run(
     ensure_private_dir(revision_dir)
     snapshot = revision_dir / "prompt.md"
     write_exclusive(snapshot, document["raw"])
+    prior_runs: list[tuple[Path, dict[str, object]]] = []
+    for candidate in sorted(project_dir.glob("run-*")):
+        if candidate.is_symlink() or not candidate.is_dir():
+            raise PromptWorkspaceError("RUN_STATE_INVALID", "run directory is unsafe")
+        if not (candidate / "prompt.json").exists():
+            continue
+        candidate_binding = validate_binding(candidate)
+        if candidate_binding.get("prompt_id") == document["prompt_id"]:
+            if run_status(candidate) not in TERMINAL_STATUSES:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "prompt predecessor is not terminal"
+                )
+            prior_runs.append((candidate, candidate_binding))
+    predecessor = None
+    lineage_root = run_id
+    revision_kind = "initial"
+    if prior_runs:
+        parent_dir, parent = prior_runs[-1]
+        if parent.get("schema") == LEGACY_BINDING_SCHEMA:
+            raise PromptWorkspaceError(
+                "WORKFLOW_UPGRADE_REQUIRED",
+                "prompt-v1 history cannot be continued; create a fresh prompt-v2 ID",
+            )
+        parent_revision = parent["revisions"][-1]
+        predecessor = {
+            "run_id": parent_dir.name,
+            "revision": parent_revision["revision"],
+            "sha256": parent_revision["sha256"],
+        }
+        lineage_root = str(parent.get("lineage_root") or parent_dir.name)
+        revision_kind = "completed_follow_up"
     binding = {
         "schema": BINDING_SCHEMA,
         "run_id": run_id,
         "prompt_id": document["prompt_id"],
         "prompt_filename": Path(str(document["path"])).name,
         "created_at": iso_seconds(accepted_at),
+        "lineage_root": lineage_root,
+        "predecessor": predecessor,
         "revisions": [
             {
                 "revision": "r0001",
                 "accepted_at": iso_seconds(accepted_at),
                 "sha256": document["sha256"],
+                "intent_sha256": document["intent_sha256"],
+                "kind": revision_kind,
                 "snapshot": "inputs/r0001/prompt.md",
                 "steering_status": "initial",
             }
         ],
     }
     write_atomic(temporary / "prompt.json", stable_json(binding))
+    begin_requirements_refinement(
+        temporary,
+        str(document["prompt_id"]),
+        "r0001",
+        str(document["intent_sha256"]),
+        accepted_at,
+        predecessor_dir=parent_dir if prior_runs else None,
+    )
     temporary.rename(run_dir)
     write_atomic(project_dir / "active-run.json", stable_json({"run_id": run_id}))
     return run_dir, binding
@@ -961,13 +1419,87 @@ def append_revision(
             "revision": revision_id,
             "accepted_at": iso_seconds(accepted_at),
             "sha256": document["sha256"],
+            "intent_sha256": document["intent_sha256"],
+            "kind": "active_steering",
             "snapshot": f"inputs/{revision_id}/prompt.md",
             "steering_status": "pending",
         }
     )
     binding["revisions"] = revisions
+    begin_requirements_refinement(
+        run_dir,
+        str(document["prompt_id"]),
+        revision_id,
+        str(document["intent_sha256"]),
+        accepted_at,
+    )
     write_atomic(run_dir / "prompt.json", stable_json(binding))
     return binding
+
+
+def recover_incomplete_revision(
+    run_dir: Path,
+    binding: dict[str, object],
+    accepted_at: datetime,
+) -> bool:
+    """Roll back a revision staged before the binding commit point."""
+
+    revisions = list(binding["revisions"])
+    referenced = {
+        Path(str(revision.get("snapshot", ""))).parent.name for revision in revisions
+    }
+    inputs_dir = run_dir / "inputs"
+    if inputs_dir.is_symlink() or not inputs_dir.is_dir():
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "run inputs directory is missing or unsafe"
+        )
+    require_mode(inputs_dir, 0o700, "run inputs directory")
+    orphaned = [
+        child
+        for child in inputs_dir.iterdir()
+        if REVISION_RE.fullmatch(child.name) is not None
+        and child.name not in referenced
+    ]
+    if not orphaned:
+        return False
+    expected = f"r{len(revisions) + 1:04d}"
+    if len(orphaned) != 1 or orphaned[0].name != expected:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "run has unexpected uncommitted revisions"
+        )
+    orphan = orphaned[0]
+    if orphan.is_symlink() or not orphan.is_dir():
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "uncommitted revision path is unsafe"
+        )
+    require_mode(orphan, 0o700, "uncommitted revision directory")
+    if any(child.name != "prompt.md" for child in orphan.iterdir()):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "uncommitted revision contains unexpected files"
+        )
+    snapshot = orphan / "prompt.md"
+    if snapshot.exists() or snapshot.is_symlink():
+        if snapshot.is_symlink() or not snapshot.is_file():
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "uncommitted revision snapshot is unsafe"
+            )
+        require_mode(snapshot, 0o600, "uncommitted prompt snapshot")
+    shutil.rmtree(orphan)
+    latest = revisions[-1]
+    refinement = load_requirements_refinement(run_dir, required=False)
+    latest_intent = str(latest.get("intent_sha256") or latest.get("sha256"))
+    if refinement is not None and (
+        refinement.get("revision") != latest.get("revision")
+        or refinement.get("intent_sha256") != latest_intent
+    ):
+        begin_requirements_refinement(
+            run_dir,
+            str(binding["prompt_id"]),
+            str(latest["revision"]),
+            latest_intent,
+            accepted_at,
+        )
+    return True
 
 
 def update_activity(project_dir: Path, prompt_id: str, accepted_at: datetime) -> None:
@@ -1028,6 +1560,645 @@ def load_activity(project_dir: Path) -> dict[str, str]:
     return result
 
 
+def load_requirements_refinement(
+    run_dir: Path,
+    *,
+    required: bool = False,
+    _candidate: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    path = run_dir / "requirements-refinement.json"
+    if _candidate is None and not path.exists():
+        if required:
+            raise PromptWorkspaceError(
+                "REQUIREMENTS_REFINEMENT_REQUIRED",
+                "requirements refinement state is missing",
+            )
+        return None
+    value = (
+        load_json(path, "requirements refinement state")
+        if _candidate is None
+        else dict(_candidate)
+    )
+    if (
+        set(value)
+        != {
+            "schema",
+            "prompt_id",
+            "revision",
+            "intent_sha256",
+            "status",
+            "extracted",
+            "questions",
+            "compiled_requirements_sha256",
+            "updated_at",
+        }
+        or value.get("schema") != REFINEMENT_SCHEMA
+        or not PROMPT_ID_RE.fullmatch(str(value.get("prompt_id") or ""))
+        or not REVISION_RE.fullmatch(str(value.get("revision") or ""))
+        or not SHA256_RE.fullmatch(str(value.get("intent_sha256") or ""))
+        or value.get("status") not in {"extracting", "needs_clarification", "ready"}
+    ):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement identity is invalid"
+        )
+    extracted = value.get("extracted")
+    if not isinstance(extracted, dict) or set(extracted) != set(REFINEMENT_CATEGORIES):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement categories are invalid"
+        )
+    if any(
+        not isinstance(items, list)
+        or any(not isinstance(item, str) or not item.strip() for item in items)
+        for items in extracted.values()
+    ):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement statements are invalid"
+        )
+    questions = value.get("questions")
+    if not isinstance(questions, list):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement questions are invalid"
+        )
+    seen: set[str] = set()
+    open_material = False
+    for question in questions:
+        if not isinstance(question, dict) or set(question) != {
+            "id",
+            "question",
+            "material",
+            "status",
+            "answer",
+            "source",
+            "source_revision",
+            "conflict",
+        }:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement question is invalid"
+            )
+        question_id = str(question.get("id") or "")
+        if QUESTION_ID_RE.fullmatch(question_id) is None or question_id in seen:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "requirements refinement question ID is invalid"
+            )
+        seen.add(question_id)
+        if (
+            not isinstance(question.get("question"), str)
+            or not str(question["question"]).strip()
+            or not isinstance(question.get("material"), bool)
+            or question.get("status") not in {"open", "answered", "reopened"}
+            or question.get("source") not in {None, "chat", "prompt"}
+            or (
+                question.get("source_revision") is not None
+                and not REVISION_RE.fullmatch(str(question["source_revision"]))
+            )
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID",
+                "requirements refinement question fields are invalid",
+            )
+        if question["status"] == "answered" and (
+            not isinstance(question.get("answer"), str)
+            or not str(question["answer"]).strip()
+            or question.get("source") is None
+            or question.get("source_revision") is None
+        ):
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "answered refinement question lacks provenance"
+            )
+        if question["material"] and question["status"] in {"open", "reopened"}:
+            open_material = True
+    compiled = value.get("compiled_requirements_sha256")
+    if compiled is not None and not SHA256_RE.fullmatch(str(compiled)):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "compiled requirements digest is invalid"
+        )
+    try:
+        updated_at = datetime.fromisoformat(str(value.get("updated_at") or ""))
+    except ValueError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement timestamp is invalid"
+        ) from exc
+    if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "requirements refinement timestamp needs an offset"
+        )
+    if value["status"] == "ready" and (open_material or compiled is None):
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID",
+            "ready requirements refinement has unresolved material ambiguity",
+        )
+    return value
+
+
+def begin_requirements_refinement(
+    run_dir: Path,
+    prompt_id: str,
+    revision: str,
+    intent_sha256: str,
+    accepted_at: datetime,
+    *,
+    predecessor_dir: Path | None = None,
+) -> dict[str, object]:
+    prior = load_requirements_refinement(predecessor_dir or run_dir, required=False)
+    value: dict[str, object] = {
+        "schema": REFINEMENT_SCHEMA,
+        "prompt_id": prompt_id,
+        "revision": revision,
+        "intent_sha256": intent_sha256,
+        "status": "extracting",
+        "extracted": {category: [] for category in REFINEMENT_CATEGORIES},
+        "questions": [] if prior is None else list(prior["questions"]),
+        "compiled_requirements_sha256": None,
+        "updated_at": iso_seconds(accepted_at),
+    }
+    write_atomic(run_dir / "requirements-refinement.json", stable_json(value))
+    return value
+
+
+def save_requirements_refinement(
+    run_dir: Path, value: dict[str, object]
+) -> dict[str, object]:
+    validated = load_requirements_refinement(run_dir, required=True, _candidate=value)
+    assert validated is not None
+    write_atomic(run_dir / "requirements-refinement.json", stable_json(value))
+    return validated
+
+
+def verify_requirements_refinement_contract(
+    workspace_path: Path, run_id: str
+) -> dict[str, object]:
+    """Bind the latest accepted intent to the exact compiled requirements file."""
+
+    manifest_path = workspace_path.expanduser().resolve()
+    workspace = validate_workspace(manifest_path)
+    if RUN_ID_RE.fullmatch(run_id) is None:
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED", "run ID is invalid"
+        )
+    run_dir = manifest_path.parent / run_id
+    binding = validate_binding(run_dir)
+    if binding.get("schema") != BINDING_SCHEMA:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v1 refinement cannot unlock prompt-v2 requirements",
+        )
+    latest = binding["revisions"][-1]
+    refinement = load_requirements_refinement(run_dir, required=True)
+    assert refinement is not None
+    if (
+        refinement["prompt_id"] != binding["prompt_id"]
+        or refinement["revision"] != latest["revision"]
+        or refinement["intent_sha256"] != latest["intent_sha256"]
+        or refinement["status"] != "ready"
+    ):
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "requirements refinement is not ready for the latest accepted intent",
+        )
+    project_root = Path(str(workspace["project_root"])).resolve()
+    requirements_path = project_root / "docs" / "requirements.md"
+    if (
+        requirements_path.is_symlink()
+        or not requirements_path.is_file()
+        or requirements_path.resolve() != requirements_path
+    ):
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "docs/requirements.md is missing or unsafe",
+        )
+    raw = requirements_path.read_bytes()
+    if len(raw) > MAX_REQUIREMENTS_BYTES:
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "docs/requirements.md exceeds the supported size",
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != refinement["compiled_requirements_sha256"]:
+        raise PromptWorkspaceError(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            "docs/requirements.md changed after the latest refinement was compiled",
+        )
+    return {
+        "action": "requirements_refinement_verified",
+        "run_id": run_id,
+        "revision": latest["revision"],
+        "intent_sha256": latest["intent_sha256"],
+        "compiled_requirements_sha256": digest,
+    }
+
+
+def empty_prompt_queue() -> dict[str, object]:
+    return {"schema": QUEUE_SCHEMA, "entries": [], "history": []}
+
+
+def validate_queue_entry(entry: object, *, history: bool = False) -> dict[str, object]:
+    keys = {
+        "queue_id",
+        "prompt_id",
+        "title",
+        "source_path",
+        "queued_at",
+        "updated_at",
+        "sha256",
+        "intent_sha256",
+        "snapshot",
+    }
+    if history:
+        keys |= {"disposition", "resolved_at"}
+    if not isinstance(entry, dict) or set(entry) != keys:
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue entry shape is invalid"
+        )
+    if any(not isinstance(entry.get(key), str) or not entry[key] for key in keys):
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue entry contains invalid values"
+        )
+    if (
+        not PROMPT_ID_RE.fullmatch(str(entry["prompt_id"]))
+        or re.fullmatch(r"queued-[0-9a-f]{32}", str(entry["queue_id"])) is None
+        or not valid_prompt_filename(entry["source_path"])
+        or not SHA256_RE.fullmatch(str(entry["sha256"]))
+        or not SHA256_RE.fullmatch(str(entry["intent_sha256"]))
+    ):
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue identity is invalid"
+        )
+    if history and entry.get("disposition") not in {
+        "activated",
+        "canceled",
+        "no_effect",
+    }:
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue disposition is invalid"
+        )
+    for key in ("queued_at", "updated_at", *(("resolved_at",) if history else ())):
+        try:
+            parsed = datetime.fromisoformat(str(entry[key]))
+        except ValueError as exc:
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", f"prompt queue {key} is invalid"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", f"prompt queue {key} needs an offset"
+            )
+    return dict(entry)
+
+
+def load_prompt_queue(project_dir: Path) -> dict[str, object]:
+    path = project_dir / "prompt-queue.json"
+    if not path.exists():
+        return empty_prompt_queue()
+    value = load_json(path, "prompt queue")
+    if (
+        set(value) != {"schema", "entries", "history"}
+        or value.get("schema") != QUEUE_SCHEMA
+    ):
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue schema is invalid"
+        )
+    if not isinstance(value.get("entries"), list) or not isinstance(
+        value.get("history"), list
+    ):
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue collections are invalid"
+        )
+    entries = [validate_queue_entry(item) for item in value["entries"]]
+    history = [validate_queue_entry(item, history=True) for item in value["history"]]
+    prompt_ids = [str(item["prompt_id"]) for item in entries]
+    if len(prompt_ids) != len(set(prompt_ids)):
+        raise PromptWorkspaceError(
+            "QUEUE_STATE_INVALID", "prompt queue contains duplicate prompts"
+        )
+    return {"schema": QUEUE_SCHEMA, "entries": entries, "history": history}
+
+
+def save_prompt_queue(project_dir: Path, queue: dict[str, object]) -> None:
+    write_atomic(project_dir / "prompt-queue.json", stable_json(queue))
+
+
+def enqueue_prompt(
+    project_dir: Path, document: dict[str, object], accepted_at: datetime
+) -> dict[str, object]:
+    queue = load_prompt_queue(project_dir)
+    entries = list(queue["entries"])
+    prompt_id = str(document["prompt_id"])
+    snapshot_dir = project_dir / "queued-prompts" / prompt_id
+    ensure_private_dir(snapshot_dir)
+    snapshot_path = snapshot_dir / f"{document['sha256']}.md"
+    if snapshot_path.exists():
+        if snapshot_path.is_symlink() or not snapshot_path.is_file():
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", "queued prompt snapshot is unsafe"
+            )
+        require_mode(snapshot_path, 0o600, "queued prompt snapshot")
+        if snapshot_path.read_bytes() != document["raw"]:
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", "queued prompt snapshot digest collides"
+            )
+    else:
+        write_exclusive(snapshot_path, document["raw"])
+    timestamp = iso_seconds(accepted_at)
+    position = next(
+        (index for index, item in enumerate(entries) if item["prompt_id"] == prompt_id),
+        None,
+    )
+    if position is None:
+        entry = {
+            "queue_id": f"queued-{uuid.uuid4().hex}",
+            "prompt_id": prompt_id,
+            "title": str(document["title"]),
+            "source_path": Path(str(document["path"])).name,
+            "queued_at": timestamp,
+            "updated_at": timestamp,
+            "sha256": str(document["sha256"]),
+            "intent_sha256": str(document["intent_sha256"]),
+            "snapshot": str(snapshot_path.relative_to(project_dir)),
+        }
+        entries.append(entry)
+        position = len(entries) - 1
+        action = "queued"
+    else:
+        entry = dict(entries[position])
+        unchanged = entry["intent_sha256"] == document["intent_sha256"]
+        entry.update(
+            {
+                "title": str(document["title"]),
+                "source_path": Path(str(document["path"])).name,
+                "updated_at": timestamp,
+                "sha256": str(document["sha256"]),
+                "intent_sha256": str(document["intent_sha256"]),
+                "snapshot": str(snapshot_path.relative_to(project_dir)),
+            }
+        )
+        entries[position] = entry
+        action = "already_queued" if unchanged else "queue_updated"
+    queue["entries"] = entries
+    save_prompt_queue(project_dir, queue)
+    return {"action": action, "position": position + 1, "entry": entry}
+
+
+def resolve_queue_entry(
+    project_dir: Path,
+    reference: str,
+    disposition: str,
+    resolved_at: datetime,
+) -> dict[str, object]:
+    queue = load_prompt_queue(project_dir)
+    entries = list(queue["entries"])
+    matches = [
+        (index, item)
+        for index, item in enumerate(entries)
+        if reference in {item["source_path"], item["prompt_id"], item["queue_id"]}
+    ]
+    if len(matches) != 1:
+        raise PromptWorkspaceError(
+            "QUEUE_ENTRY_NOT_FOUND",
+            "queued prompt reference must match one filename, prompt ID, or queue ID",
+        )
+    index, entry = matches[0]
+    entries.pop(index)
+    history = list(queue["history"])
+    history.append(
+        {
+            **entry,
+            "disposition": disposition,
+            "resolved_at": iso_seconds(resolved_at),
+        }
+    )
+    queue["entries"] = entries
+    queue["history"] = history[-QUEUE_HISTORY_LIMIT:]
+    save_prompt_queue(project_dir, queue)
+    return entry
+
+
+def queue_rows(workspace_path: Path) -> list[dict[str, object]]:
+    manifest_path = workspace_path.expanduser().resolve()
+    validate_workspace(manifest_path)
+    queue = load_prompt_queue(manifest_path.parent)
+    return [
+        {
+            "position": index,
+            "queue_id": item["queue_id"],
+            "prompt_id": item["prompt_id"],
+            "title": item["title"],
+            "source_path": item["source_path"],
+            "queued_at": item["queued_at"],
+            "updated_at": item["updated_at"],
+        }
+        for index, item in enumerate(queue["entries"], start=1)
+    ]
+
+
+def cancel_queued_prompt(
+    workspace_path: Path, reference: str, *, clock=now_utc
+) -> dict[str, object]:
+    manifest_path = workspace_path.expanduser().resolve()
+    workspace = validate_workspace(manifest_path)
+    project_dir = manifest_path.parent
+    with prompt_lock(project_dir):
+        queue = load_prompt_queue(project_dir)
+        matches = [
+            (index, item)
+            for index, item in enumerate(queue["entries"])
+            if reference in {item["source_path"], item["prompt_id"], item["queue_id"]}
+        ]
+        if len(matches) != 1:
+            raise PromptWorkspaceError(
+                "QUEUE_ENTRY_NOT_FOUND",
+                "queued prompt reference must match one filename, prompt ID, or queue ID",
+            )
+        index, queued = matches[0]
+        run_dir, binding = active_run(project_dir)
+        if index == 0 and run_dir is not None:
+            recovered = recover_queued_activation_unlocked(
+                workspace,
+                project_dir,
+                queued,
+                run_dir,
+                binding,
+                clock=clock,
+            )
+            if recovered is not None:
+                return {
+                    "action": "queue_already_activated",
+                    "prompt_id": recovered["prompt_id"],
+                    "run_id": recovered["run_id"],
+                }
+        entry = resolve_queue_entry(project_dir, reference, "canceled", clock())
+    return {"action": "queue_canceled", "prompt_id": entry["prompt_id"]}
+
+
+def recover_queued_activation_unlocked(
+    workspace: dict[str, object],
+    project_dir: Path,
+    head: dict[str, object] | None,
+    run_dir: Path,
+    binding: dict[str, object] | None,
+    *,
+    clock=now_utc,
+) -> dict[str, object] | None:
+    """Finish dequeue when run creation committed before queue resolution."""
+
+    if (
+        head is None
+        or binding is None
+        or binding.get("schema") != BINDING_SCHEMA
+        or binding.get("prompt_id") != head.get("prompt_id")
+    ):
+        return None
+    latest = binding["revisions"][-1]
+    if latest.get("sha256") != head.get("sha256") or latest.get(
+        "intent_sha256"
+    ) != head.get("intent_sha256"):
+        return None
+    created_at = datetime.fromisoformat(str(binding["created_at"]))
+    queued_at = datetime.fromisoformat(str(head["queued_at"]))
+    if created_at < queued_at:
+        return None
+    promotion = ensure_run_promotion(workspace, run_dir)
+    resolve_queue_entry(
+        project_dir,
+        str(head["queue_id"]),
+        "activated",
+        clock(),
+    )
+    result: dict[str, object] = {
+        "status": "activated",
+        "action": "new",
+        "recovered": True,
+        "run_id": run_dir.name,
+        "prompt_id": binding["prompt_id"],
+        "prompt": str(project_dir / "prompts" / str(binding["prompt_filename"])),
+        "revision": latest["revision"],
+        "sha256": latest["sha256"],
+        "intent_sha256": latest["intent_sha256"],
+        "snapshot": str(run_dir / str(latest["snapshot"])),
+    }
+    if promotion is not None:
+        result["promotion_branch"] = promotion["promotion_branch"]
+        result["default_branch"] = promotion["default_branch"]
+    return result
+
+
+def activate_queue_head_unlocked(
+    manifest_path: Path, *, clock=now_utc
+) -> dict[str, object] | None:
+    workspace = validate_workspace(manifest_path)
+    project_dir = manifest_path.parent
+    prompt_root = project_dir / "prompts"
+    queue = load_prompt_queue(project_dir)
+    head = queue["entries"][0] if queue["entries"] else None
+    run_dir, binding = active_run(project_dir)
+    if run_dir is not None and (
+        run_status(run_dir) not in TERMINAL_STATUSES
+        or binding_has_pending_steering(binding)
+    ):
+        recovered = recover_queued_activation_unlocked(
+            workspace,
+            project_dir,
+            head,
+            run_dir,
+            binding,
+            clock=clock,
+        )
+        if recovered is not None:
+            return recovered
+        return {"status": "waiting_for_active_run", "run_id": run_dir.name}
+    unreleased = [
+        candidate
+        for candidate in sorted(project_dir.glob("run-*"))
+        if run_status(candidate) in TERMINAL_STATUSES
+        and not run_resources_released(candidate)
+    ]
+    if unreleased:
+        return {
+            "status": "waiting_for_resource_release",
+            "run_id": unreleased[-1].name,
+        }
+    while True:
+        queue = load_prompt_queue(project_dir)
+        if not queue["entries"]:
+            return None
+        head = queue["entries"][0]
+        document = parse_prompt(prompt_root / str(head["source_path"]))
+        if (
+            document["prompt_id"] != head["prompt_id"]
+            or document["sha256"] != head["sha256"]
+            or document["intent_sha256"] != head["intent_sha256"]
+        ):
+            raise PromptWorkspaceError(
+                "QUEUED_PROMPT_DRIFT",
+                "queue head changed after acceptance; explicitly run it again to update the queue",
+            )
+        snapshot = (project_dir / str(head["snapshot"])).resolve()
+        queued_root = (project_dir / "queued-prompts").resolve()
+        if (
+            snapshot == queued_root
+            or queued_root not in snapshot.parents
+            or snapshot.is_symlink()
+            or not snapshot.is_file()
+        ):
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", "queued prompt snapshot path is unsafe"
+            )
+        require_mode(snapshot, 0o600, "queued prompt snapshot")
+        if hashlib.sha256(snapshot.read_bytes()).hexdigest() != head["sha256"]:
+            raise PromptWorkspaceError(
+                "QUEUE_STATE_INVALID", "queued prompt snapshot digest is invalid"
+            )
+        prior = []
+        for candidate in sorted(project_dir.glob("run-*")):
+            if not (candidate / "prompt.json").exists():
+                continue
+            candidate_binding = validate_binding(candidate)
+            if candidate_binding.get("prompt_id") == document["prompt_id"]:
+                prior.append((candidate, candidate_binding))
+        if prior:
+            prior_dir, prior_binding = prior[-1]
+            prior_revision = prior_binding["revisions"][-1]
+            prior_intent = str(
+                prior_revision.get("intent_sha256") or prior_revision.get("sha256")
+            )
+            if (
+                run_status(prior_dir) in TERMINAL_STATUSES
+                and prior_intent == document["intent_sha256"]
+            ):
+                resolve_queue_entry(
+                    project_dir, str(head["queue_id"]), "no_effect", clock()
+                )
+                continue
+        accepted_at = clock()
+        new_dir, new_binding = new_run(project_dir, document, accepted_at)
+        resolve_queue_entry(project_dir, str(head["queue_id"]), "activated", clock())
+        latest = new_binding["revisions"][-1]
+        promotion = ensure_run_promotion(workspace, new_dir)
+        result: dict[str, object] = {
+            "status": "activated",
+            "action": "new",
+            "run_id": new_dir.name,
+            "prompt_id": document["prompt_id"],
+            "prompt": str(document["path"]),
+            "revision": latest["revision"],
+            "sha256": latest["sha256"],
+            "intent_sha256": latest["intent_sha256"],
+            "snapshot": str(new_dir / str(latest["snapshot"])),
+        }
+        if promotion is not None:
+            result["promotion_branch"] = promotion["promotion_branch"]
+            result["default_branch"] = promotion["default_branch"]
+        return result
+
+
+def activate_queue_head(
+    workspace_path: Path, *, clock=now_utc
+) -> dict[str, object] | None:
+    manifest_path = workspace_path.expanduser().resolve()
+    validate_workspace(manifest_path)
+    with prompt_lock(manifest_path.parent):
+        return activate_queue_head_unlocked(manifest_path, clock=clock)
+
+
 def create_prompt(
     workspace_path: Path,
     ask_value: str,
@@ -1072,6 +2243,10 @@ def prompt_rows(
                 "PROMPT_INPUT_INVALID", "--date must use YYYY-MM-DD"
             ) from exc
     activity = load_activity(project_dir)
+    queued = {
+        str(item["prompt_id"]): index
+        for index, item in enumerate(load_prompt_queue(project_dir)["entries"], start=1)
+    }
     needle = query.casefold() if query else None
     runs: list[tuple[Path, dict[str, object]]] = []
     for run_dir in sorted(project_dir.glob("run-*")):
@@ -1087,10 +2262,36 @@ def prompt_rows(
             )
     rows: list[dict[str, object]] = []
     for path in sorted(prompt_root.glob("*.md")):
-        document = prompt_metadata(path)
+        if path.name == HUB_FILENAME:
+            continue
+        try:
+            document = parse_prompt(path)
+        except PromptWorkspaceError as exc:
+            created = datetime.fromtimestamp(path.lstat().st_mtime, tz=timezone.utc)
+            searchable = path.name.casefold()
+            if needle and needle not in searchable:
+                continue
+            if date_value and created.date().isoformat() != date_value:
+                continue
+            rows.append(
+                {
+                    "title": path.stem,
+                    "last_invoked_at": iso_seconds(created),
+                    "status": "upgrade_required"
+                    if exc.code == "WORKFLOW_UPGRADE_REQUIRED"
+                    else "invalid",
+                    "revision_count": 0,
+                    "completed_run_count": 0,
+                    "path": str(path.absolute()),
+                }
+            )
+            continue
         created = document["created_at"]
-        assert isinstance(created, datetime)
-        searchable = f"{document['title']} {path.name}".casefold()
+        if not isinstance(created, datetime):
+            created = datetime.fromisoformat(str(created))
+        searchable = (
+            f"{document['title']} {path.name} {document['sections'].get('Ask', '')}"
+        ).casefold()
         if needle and needle not in searchable:
             continue
         if date_value and created.date().isoformat() != date_value:
@@ -1101,6 +2302,7 @@ def prompt_rows(
             if binding.get("prompt_id") == document["prompt_id"]
         ]
         status = "draft"
+        queue_position = queued.get(str(document["prompt_id"]))
         revisions = 0
         completed = 0
         if prompt_runs:
@@ -1114,18 +2316,21 @@ def prompt_rows(
                 status = "steering_pending"
             else:
                 status = run_status(latest_dir)
-        rows.append(
-            {
-                "title": document["title"],
-                "last_invoked_at": activity.get(
-                    str(document["prompt_id"]), iso_seconds(created)
-                ),
-                "status": status,
-                "revision_count": revisions,
-                "completed_run_count": completed,
-                "path": str(path.resolve()),
-            }
-        )
+        if queue_position is not None:
+            status = "queued"
+        row: dict[str, object] = {
+            "title": document["title"],
+            "last_invoked_at": activity.get(
+                str(document["prompt_id"]), iso_seconds(created)
+            ),
+            "status": status,
+            "revision_count": revisions,
+            "completed_run_count": completed,
+            "path": str(path.resolve()),
+        }
+        if queue_position is not None:
+            row["queue_position"] = queue_position
+        rows.append(row)
     rows.sort(
         key=lambda row: (str(row["last_invoked_at"]), str(row["path"])),
         reverse=True,
@@ -1141,13 +2346,20 @@ def verify_command(
     project_dir = manifest_path.parent
     prompt_root = project_dir / "prompts"
     rows = prompt_rows(manifest_path, None, None)
-    documents = [prompt_metadata(path) for path in sorted(prompt_root.glob("*.md"))]
+    documents: list[dict[str, object]] = []
+    for path in sorted(prompt_root.glob("*.md")):
+        if path.name == HUB_FILENAME:
+            continue
+        try:
+            documents.append(prompt_metadata(path, allow_legacy=True))
+        except PromptWorkspaceError:
+            continue
     ids = [str(document["prompt_id"]) for document in documents]
     if len(ids) != len(set(ids)):
         raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
     selected: dict[str, object] | None = None
     if prompt_path is not None:
-        selected = prompt_metadata(prompt_path)
+        selected = parse_prompt(prompt_path)
         try:
             Path(str(selected["path"])).relative_to(prompt_root)
         except ValueError as exc:
@@ -1172,7 +2384,15 @@ def verify_command(
         latest = binding["revisions"][-1]
         if run_status(run_dir) not in TERMINAL_STATUSES and (
             Path(str(document["path"])).name != binding["prompt_filename"]
-            or document["sha256"] != latest["sha256"]
+            or (
+                latest.get("intent_sha256") is not None
+                and parse_prompt(Path(str(document["path"])))["intent_sha256"]
+                != latest["intent_sha256"]
+            )
+            or (
+                latest.get("intent_sha256") is None
+                and document["sha256"] != latest["sha256"]
+            )
         ):
             raise PromptWorkspaceError(
                 "PROMPT_DRIFT", "editable prompt differs from the active binding"
@@ -1199,6 +2419,8 @@ def repair_prompt_mirror(run_dir: Path, binding: dict[str, object]) -> None:
             "filename": binding["prompt_filename"],
             "revision": latest["revision"],
             "sha256": latest["sha256"],
+            "intent_sha256": latest.get("intent_sha256") or latest["sha256"],
+            "kind": latest.get("kind") or "legacy",
             "snapshot": latest["snapshot"],
         }
     )
@@ -1229,24 +2451,91 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
                 "prompt changed while intake was starting",
             )
         document = current
-        duplicate_ids = [
-            path
-            for path in prompt_root.glob("*.md")
-            if path.resolve() != prompt_path
-            and prompt_metadata(path)["prompt_id"] == document["prompt_id"]
-        ]
+        duplicate_ids: list[Path] = []
+        for path in prompt_root.glob("*.md"):
+            if path.name == HUB_FILENAME or path.resolve() == prompt_path:
+                continue
+            try:
+                candidate = prompt_metadata(path, allow_legacy=True)
+            except PromptWorkspaceError:
+                continue
+            if candidate["prompt_id"] == document["prompt_id"]:
+                duplicate_ids.append(path)
         if duplicate_ids:
             raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
         run_dir, binding = active_run(project_dir)
+        if run_dir is not None and binding is not None:
+            recover_incomplete_revision(run_dir, binding, accepted_at)
         action = "new"
         outcome = None
         renamed = False
+        queue = load_prompt_queue(project_dir)
+        current_is_active = bool(
+            run_dir is not None
+            and (
+                run_status(run_dir) not in TERMINAL_STATUSES
+                or binding_has_pending_steering(binding)
+                or not run_resources_released(run_dir)
+            )
+        )
+        if not current_is_active and queue["entries"]:
+            queued = enqueue_prompt(project_dir, document, accepted_at)
+            head = load_prompt_queue(project_dir)["entries"][0]
+            activated = activate_queue_head_unlocked(manifest_path)
+            update_activity(project_dir, str(document["prompt_id"]), accepted_at)
+            if head["prompt_id"] != document["prompt_id"]:
+                return {
+                    "action": str(queued["action"]),
+                    "project_id": workspace["project_id"],
+                    "project_root": workspace["project_root"],
+                    "prompt": str(prompt_path),
+                    "prompt_filename": prompt_path.name,
+                    "status": "queued",
+                    "queue_position": queued["position"],
+                    "outcome": "PROMPT_QUEUED",
+                    "activated_queue_head": activated,
+                    "next_recommended_skill": "sdlc-start",
+                }
+            if (
+                activated is not None
+                and activated.get("prompt_id") == document["prompt_id"]
+            ):
+                return {
+                    **activated,
+                    "project_id": workspace["project_id"],
+                    "project_root": workspace["project_root"],
+                    "prompt_filename": prompt_path.name,
+                    "next_recommended_skill": "sdlc-start",
+                }
+            return {
+                "action": "done",
+                "project_id": workspace["project_id"],
+                "project_root": workspace["project_root"],
+                "prompt": str(prompt_path),
+                "prompt_filename": prompt_path.name,
+                "status": "done",
+                "outcome": "ALREADY_COMPLETE",
+                "activated_queue_head": activated,
+                "next_recommended_skill": "sdlc-start",
+            }
         if run_dir is not None and binding is not None:
             if binding.get("prompt_id") != document["prompt_id"]:
-                if run_status(run_dir) not in TERMINAL_STATUSES:
-                    raise PromptWorkspaceError(
-                        "ACTIVE_RUN_CONFLICT", "another prompt owns the unfinished run"
+                if current_is_active:
+                    queued = enqueue_prompt(project_dir, document, accepted_at)
+                    update_activity(
+                        project_dir, str(document["prompt_id"]), accepted_at
                     )
+                    return {
+                        "action": str(queued["action"]),
+                        "project_id": workspace["project_id"],
+                        "project_root": workspace["project_root"],
+                        "prompt": str(prompt_path),
+                        "prompt_filename": prompt_path.name,
+                        "status": "queued",
+                        "queue_position": queued["position"],
+                        "outcome": "PROMPT_QUEUED",
+                        "next_recommended_skill": "sdlc-start",
+                    }
                 run_dir, binding = new_run(project_dir, document, accepted_at)
             else:
                 latest = binding["revisions"][-1]
@@ -1258,7 +2547,10 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
                             "PROMPT_CONFLICT",
                             "recorded and renamed prompt sources both exist",
                         )
-                    if latest.get("sha256") != document["sha256"]:
+                    if (
+                        str(latest.get("intent_sha256") or latest.get("sha256"))
+                        != document["intent_sha256"]
+                    ):
                         raise PromptWorkspaceError(
                             "PROMPT_DRIFT",
                             "rename and content editing must be accepted separately",
@@ -1267,9 +2559,33 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
                     write_atomic(run_dir / "prompt.json", stable_json(binding))
                     repair_prompt_mirror(run_dir, binding)
                     renamed = True
-                same = latest.get("sha256") == document["sha256"]
+                same = (
+                    str(latest.get("intent_sha256") or latest.get("sha256"))
+                    == document["intent_sha256"]
+                )
                 status = run_status(run_dir)
-                if status in TERMINAL_STATUSES:
+                if status in TERMINAL_STATUSES and not run_resources_released(run_dir):
+                    if not same:
+                        queued = enqueue_prompt(project_dir, document, accepted_at)
+                        update_activity(
+                            project_dir, str(document["prompt_id"]), accepted_at
+                        )
+                        return {
+                            "action": str(queued["action"]),
+                            "project_id": workspace["project_id"],
+                            "project_root": workspace["project_root"],
+                            "prompt": str(prompt_path),
+                            "prompt_filename": prompt_path.name,
+                            "status": "queued",
+                            "queue_position": queued["position"],
+                            "outcome": "PROMPT_QUEUED",
+                            "next_recommended_skill": "sdlc-start",
+                        }
+                    action = "finalize"
+                    outcome = "RUN_RESOURCE_RELEASE_REQUIRED"
+                elif status in TERMINAL_STATUSES and not binding_has_pending_steering(
+                    binding
+                ):
                     if same:
                         action = "done"
                         outcome = "ALREADY_COMPLETE"
@@ -1292,7 +2608,7 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
         latest = binding["revisions"][-1]
     promotion = (
         None
-        if outcome == "ALREADY_COMPLETE"
+        if outcome in {"ALREADY_COMPLETE", "RUN_RESOURCE_RELEASE_REQUIRED"}
         else ensure_run_promotion(workspace, run_dir)
     )
     result = {
@@ -1304,6 +2620,9 @@ def intake(prompt: str, project_path: Path, codex_home: Path) -> dict[str, objec
         "run_id": run_dir.name,
         "revision": latest["revision"],
         "sha256": latest["sha256"],
+        "intent_sha256": latest.get("intent_sha256") or latest["sha256"],
+        "revision_kind": latest.get("kind") or "legacy",
+        "predecessor": binding.get("predecessor"),
         "snapshot": str(run_dir / str(latest["snapshot"])),
         "next_recommended_skill": "sdlc-auto-steering"
         if action == "steering"
@@ -1411,6 +2730,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     list_parser.add_argument("--query")
     list_parser.add_argument("--date")
     list_parser.add_argument("--json", action="store_true")
+    queue_list_parser = subparsers.add_parser(
+        "queue-list", help="Internal: list accepted queued prompts without bodies."
+    )
+    queue_list_parser.add_argument("--workspace", required=True, type=Path)
+    queue_list_parser.add_argument("--json", action="store_true")
+    queue_cancel_parser = subparsers.add_parser(
+        "queue-cancel", help="Internal: cancel one accepted queued prompt."
+    )
+    queue_cancel_parser.add_argument("--workspace", required=True, type=Path)
+    queue_cancel_parser.add_argument("--prompt", required=True)
+    queue_cancel_parser.add_argument("--json", action="store_true")
+    queue_next_parser = subparsers.add_parser(
+        "queue-next", help="Internal: activate the FIFO queue head when idle."
+    )
+    queue_next_parser.add_argument("--workspace", required=True, type=Path)
+    queue_next_parser.add_argument("--json", action="store_true")
     verify_parser = subparsers.add_parser(
         "verify", help="Internal: validate prompt workspace and binding state."
     )
@@ -1418,6 +2753,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser.add_argument("--prompt", type=Path)
     verify_parser.add_argument("--run-id")
     verify_parser.add_argument("--json", action="store_true")
+    refinement_verify_parser = subparsers.add_parser(
+        "refinement-verify",
+        help="Internal: verify the latest prompt-to-requirements lock.",
+    )
+    refinement_verify_parser.add_argument("--workspace", required=True, type=Path)
+    refinement_verify_parser.add_argument("--run-id", required=True)
+    refinement_verify_parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -1445,6 +2787,8 @@ def public_result(command: str, result: dict[str, object]) -> dict[str, object]:
             "prompt",
             "prompt_filename",
             "revision",
+            "status",
+            "queue_position",
             "next_recommended_skill",
             "outcome",
         )
@@ -1486,6 +2830,16 @@ def main(argv: list[str] | None = None) -> int:
                     )
         elif args.command == "list":
             result = prompt_rows(args.workspace, args.query, args.date)
+        elif args.command == "queue-list":
+            result = queue_rows(args.workspace)
+        elif args.command == "queue-cancel":
+            result = cancel_queued_prompt(args.workspace, args.prompt)
+        elif args.command == "queue-next":
+            result = activate_queue_head(args.workspace)
+        elif args.command == "refinement-verify":
+            result = verify_requirements_refinement_contract(
+                args.workspace, args.run_id
+            )
         else:
             result = verify_command(args.workspace, args.prompt, args.run_id)
         emit(public_result(args.command, result), args.json)

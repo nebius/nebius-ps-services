@@ -65,9 +65,14 @@ from prompt_workspace_interop import (
 )
 from prompt_workspace_lanes import claim_generation
 from prompt_workspace_runs import (
+    _activate_next_queued_prompt_unlocked,
     read_handoff_text,
     scope_lock,
     verify_run,
+)
+from prompt_workspace_specs import (
+    verify_project_agent_contract,
+    verify_requirements_refinement_contract,
 )
 
 
@@ -943,10 +948,22 @@ def plan_waves(
     run_dir = _run_dir(workspace, run_id)
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
-        verify_run(workspace, run_id, None)
+        run_state = verify_run(workspace, run_id, None)
         assert_no_unfinished_v1(run_dir)
         existing = load_coordinator_state(run_dir)
         if existing is not None:
+            if (
+                run_state["steering_pending"]
+                or run_state["reconciliation_pending"]
+                or existing.get("prompt_revision") != run_state["latest_revision"]
+                or existing.get("prompt_intent_sha256")
+                != run_state["latest_intent_sha256"]
+            ):
+                raise PromptWorkspaceError(
+                    "REPLAN_REQUIRED",
+                    "the existing plan is not bound to the latest accepted prompt intent",
+                )
+            verify_requirements_refinement_contract(workspace, run_dir, run_state)
             _existing_run_interop(manifest_path, workspace, run_dir, existing)
             return existing
         text = read_handoff_text(run_dir)
@@ -954,6 +971,7 @@ def plan_waves(
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "handoff is required before wave planning"
             )
+        verify_requirements_refinement_contract(workspace, run_dir, run_state)
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
         _common_dir(repo)
         anchor = inspect_anchor(workspace)
@@ -1056,6 +1074,8 @@ def plan_waves(
             "default_ref": promotion["default_ref"],
             "default_head": promotion["default_head"],
             "promotion_source": promotion["promotion_source"],
+            "prompt_revision": run_state["latest_revision"],
+            "prompt_intent_sha256": run_state["latest_intent_sha256"],
             "plan_sha256": sha256_json(plan),
             "waves": [
                 {
@@ -1092,10 +1112,17 @@ def replan_waves(
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
         run_dir = _run_dir(workspace, run_id)
+        run_state = verify_run(workspace, run_id, None)
+        if run_state["steering_pending"] or run_state["reconciliation_pending"]:
+            raise PromptWorkspaceError(
+                "REPLAN_REQUIRED",
+                "resolve pending steering and bind the latest revision before replanning",
+            )
+        verify_requirements_refinement_contract(workspace, run_dir, run_state)
         coordinator = load_coordinator_state(run_dir)
         if coordinator is None:
             raise PromptWorkspaceError(
-                "EXECUTION_STATE_INVALID", "run has no v6 coordinator"
+                "EXECUTION_STATE_INVALID", "run has no v7 coordinator"
             )
         active_wave = coordinator.get("active_wave")
         if coordinator["status"] == "running" and isinstance(active_wave, str):
@@ -1110,9 +1137,7 @@ def replan_waves(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "run has no replannable wave boundary"
             )
-        interop = _existing_run_interop(
-            manifest_path, workspace, run_dir, coordinator
-        )
+        interop = _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
         append_after_done = active["status"] == "done"
         if active["status"] not in {"planned", "done"}:
@@ -1164,6 +1189,10 @@ def replan_waves(
         plan = [[_task_record(task) for task in wave] for wave in waves]
         plan_sha256 = sha256_json(plan)
         if plan_sha256 == coordinator["plan_sha256"]:
+            coordinator["prompt_revision"] = run_state["latest_revision"]
+            coordinator["prompt_intent_sha256"] = run_state["latest_intent_sha256"]
+            coordinator["updated_at"] = _utc(clock)
+            _save_coordinator(run_dir, coordinator)
             return coordinator
         claim_generation(
             workspace,
@@ -1289,6 +1318,8 @@ def replan_waves(
         ]
         coordinator["waves"] = [*completed_prefix, *replacement_records]
         coordinator["active_wave"] = wave_ids[0]
+        coordinator["prompt_revision"] = run_state["latest_revision"]
+        coordinator["prompt_intent_sha256"] = run_state["latest_intent_sha256"]
         coordinator["plan_sha256"] = plan_sha256
         coordinator["status"] = "running"
         coordinator["updated_at"] = created
@@ -1476,6 +1507,22 @@ def prepare_wave(
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
         run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        run_state = verify_run(workspace, run_id, None)
+        if run_state["steering_pending"] or run_state["reconciliation_pending"]:
+            raise PromptWorkspaceError(
+                "REPLAN_REQUIRED",
+                "pending steering or reconciliation must be replanned before preparation",
+            )
+        verify_requirements_refinement_contract(workspace, run_dir, run_state)
+        if (
+            coordinator.get("prompt_revision") != run_state["latest_revision"]
+            or coordinator.get("prompt_intent_sha256")
+            != run_state["latest_intent_sha256"]
+        ):
+            raise PromptWorkspaceError(
+                "REPLAN_REQUIRED",
+                "the planned waves are not bound to the latest accepted prompt intent",
+            )
         _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
         if wave["status"] not in {"planned", "preparing"}:
             return wave
@@ -1587,6 +1634,11 @@ def dispatch_wave(
                 "WORKTREE_CONFLICT",
                 "integration contract commit is not clean and exact",
             )
+        scope = required_string(workspace, "scope", "workspace manifest")
+        contract_project = integration if scope == "." else integration / scope
+        verify_project_agent_contract(
+            workspace, run_dir, contract_project, contract_commit
+        )
         if wave["status"] == "running":
             if wave["contract_commit"] != contract_commit:
                 raise PromptWorkspaceError(
@@ -1670,7 +1722,6 @@ def dispatch_wave(
             if task["task_id"] in active_task_ids
         ]
         repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
-        scope = required_string(workspace, "scope", "workspace manifest")
         wave_root = Path(str(wave["integration_worktree"])).parent
         for task in tasks:
             _reject_special_claims(repo, task)
@@ -1947,11 +1998,107 @@ def arm_task(
         }
 
 
+def rearm_task(
+    manifest_path: Path,
+    run_id: str,
+    task_id: str,
+    expected_dispatched_at: str,
+    *,
+    confirmed_stopped: bool,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    """Replace one expired clean prestart lease after the old worker stopped."""
+
+    if not confirmed_stopped:
+        raise PromptWorkspaceError(
+            "RECOVERY_CONFIRMATION_REQUIRED",
+            "task rearm requires confirmation that the previous worker stopped",
+        )
+    _time_value(expected_dispatched_at, "expected worker dispatch time")
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
+        assignment = _validated_assignment(
+            _assignment_path(run_dir, str(wave["wave_id"]), task_id)
+        )
+        _validate_assignment_context(
+            assignment, workspace, coordinator, run_dir, wave, task_id
+        )
+        if (
+            wave["status"] != "running"
+            or wave["task_states"].get(task_id) != "assigned"
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task rearm requires one assigned task"
+            )
+        plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
+        if plane["state"] != "assigned":
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "task plane is not assigned"
+            )
+        if plane["dispatched_at"] is None:
+            raise PromptWorkspaceError(
+                "TASK_NOT_ARMED", "task rearm requires an armed worker deadline"
+            )
+        if (
+            plane["worker_session_sha256"] is not None
+            or plane["worker_session_sha256_history"]
+            or plane["started_at"] is not None
+            or plane["last_heartbeat_at"] is not None
+            or plane["heartbeat_sequence"] != 0
+            or plane["heartbeat_phase"] is not None
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "assigned prestart task already contains worker-owned state",
+            )
+        worktree = Path(required_string(assignment, "worktree", "worker assignment"))
+        repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
+        _verify_linked_worktree(repo, worktree, str(assignment["branch"]))
+        base = required_string(assignment, "base_commit", "worker assignment")
+        observed = _head(worktree)
+        changed = sorted(set(_dirty_paths(worktree)))
+        if observed != base:
+            changed = sorted(
+                set(changed) | set(_changed_paths(worktree, base, observed))
+            )
+        if observed != base or changed:
+            raise PromptWorkspaceError(
+                "WORKER_PRESTART_MUTATION",
+                "task rearm requires the exact clean assigned base",
+            )
+        rearmed_at = _utc(clock)
+        now = _time_value(rearmed_at, "worker rearm time")
+        current_dispatch = _time_value(plane["dispatched_at"], "worker dispatch time")
+        if plane["dispatched_at"] != expected_dispatched_at:
+            raise PromptWorkspaceError(
+                "WORKER_START_LEASE_CONFLICT",
+                "task rearm expected a different prestart lease",
+            )
+        if (now - current_dispatch).total_seconds() < WORKER_START_SECONDS:
+            raise PromptWorkspaceError(
+                "WORKER_PRESTART_ACTIVE",
+                "task rearm requires the task-start deadline to expire",
+            )
+        plane["dispatched_at"] = rearmed_at
+        plane["updated_at"] = rearmed_at
+        _save_task_plane(run_dir, plane)
+        return {
+            "status": "REARMED",
+            "task_id": task_id,
+            "assignment_sha256": assignment["assignment_sha256"],
+            "dispatched_at": rearmed_at,
+        }
+
+
 def start_task(
     manifest_path: Path,
     run_id: str,
     task_id: str,
     assignment_sha256: str,
+    dispatched_at: str,
     *,
     session_id: str | None = None,
     clock: Callable[[], datetime] = now_utc,
@@ -2042,6 +2189,11 @@ def start_task(
         if plane["dispatched_at"] is None:
             raise PromptWorkspaceError(
                 "TASK_NOT_ARMED", "coordinator must arm a worker slot before task-start"
+            )
+        if plane["dispatched_at"] != dispatched_at:
+            raise PromptWorkspaceError(
+                "WORKER_START_LEASE_INVALID",
+                "worker task-start lease is stale or belongs to another launch",
             )
         started_at = _utc(clock)
         prestart_elapsed = (
@@ -2231,7 +2383,7 @@ def watch_task(
             observed_paths = set(_dirty_paths(worktree))
             if observed_head != base:
                 observed_paths.update(_changed_paths(worktree, base, observed_head))
-            progress_observed = bool(observed_paths)
+            progress_observed = observed_head != base or bool(observed_paths)
             scope_violation = any(
                 not _path_allowed(path, assignment["write_claims"])
                 for path in observed_paths
@@ -2255,6 +2407,7 @@ def watch_task(
                 )
             return {
                 "status": status,
+                "dispatched_at": plane["dispatched_at"],
                 "warning": None,
                 "elapsed_seconds": elapsed,
                 "heartbeat_age_seconds": None,
@@ -3240,9 +3393,13 @@ def finalize_run(
             handoff = handoff.rstrip() + "\n\n" + final_section
         write_atomic(run_dir / "handoff.md", handoff.encode("utf-8"))
         result = release_interop(workspace, run_dir, promoted_head)
-        return {
+        next_prompt = _activate_next_queued_prompt_unlocked(manifest_path, clock=clock)
+        response: dict[str, object] = {
             "status": "done",
             "run_id": run_id,
             "promoted_head": promoted_head,
             "interop": result,
         }
+        if next_prompt is not None:
+            response["next_prompt"] = next_prompt
+        return response

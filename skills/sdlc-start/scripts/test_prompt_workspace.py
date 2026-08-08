@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import importlib.util
 import json
 import os
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("prompt_workspace.py")
@@ -48,16 +50,8 @@ class PromptWorkspaceTests(unittest.TestCase):
         path = Path(str(self.initialize()["starter_prompt"]))
         text = path.read_text(encoding="utf-8")
         text = text.replace(
-            "<!-- Required: describe what must be true when the SDLC run is complete. -->",
-            "The requested behavior is implemented and verified.",
-        )
-        text = text.replace(
-            "- [ ] <!-- Required: add an observable, testable completion criterion. -->",
-            "- [ ] The requested behavior meets its observable acceptance criteria.",
-        )
-        text = text.replace(
-            "<!-- Required: name expected checks or ask Codex to derive them. -->",
-            "Run focused tests and the Agentic SDLC verification checks.",
+            "<!-- Required: replace this comment with your Ask. -->",
+            "Implement the requested behavior and verify its observable acceptance criteria.",
         )
         path.write_text(text, encoding="utf-8")
         path.chmod(0o600)
@@ -72,10 +66,11 @@ class PromptWorkspaceTests(unittest.TestCase):
 
     def edit_prompt(self, path: Path, marker: str) -> None:
         text = path.read_text(encoding="utf-8")
-        path.write_text(
-            text.replace("## Steering\n", f"## Steering\n\n{marker}\n", 1),
-            encoding="utf-8",
-        )
+        if "## Steering\n" in text:
+            text = text.replace("## Steering\n", f"## Steering\n\n{marker}\n", 1)
+        else:
+            text = text.rstrip() + f"\n\n## Steering\n\n{marker}\n"
+        path.write_text(text, encoding="utf-8")
         path.chmod(0o600)
 
     def test_init_is_idempotent_and_survives_git_init(self) -> None:
@@ -161,7 +156,8 @@ class PromptWorkspaceTests(unittest.TestCase):
         )
         self.assertEqual(len({str(result["starter_prompt"]) for result in results}), 1)
         prompt_root = Path(str(results[0]["starter_prompt"])).parent
-        self.assertEqual(len(list(prompt_root.glob("*.md"))), 1)
+        self.assertEqual(len(list(prompt_root.glob("*.md"))), 2)
+        self.assertTrue((prompt_root / workspace.HUB_FILENAME).is_file())
 
     def test_untouched_starter_fails_before_creating_a_run(self) -> None:
         initialized = self.initialize()
@@ -199,6 +195,12 @@ class PromptWorkspaceTests(unittest.TestCase):
         next_run = self.intake(prompt.name)
         self.assertEqual(next_run["action"], "new")
         self.assertNotEqual(next_run["run_id"], first["run_id"])
+        next_binding = workspace.validate_binding(
+            Path(str(next_run["snapshot"])).parents[2]
+        )
+        self.assertEqual(next_binding["revisions"][0]["kind"], "completed_follow_up")
+        self.assertEqual(next_binding["predecessor"]["run_id"], first["run_id"])
+        self.assertEqual(next_binding["lineage_root"], first["run_id"])
 
     def test_active_prompt_conflict_preserves_existing_run(self) -> None:
         first_prompt = self.prompt_path()
@@ -211,12 +213,401 @@ class PromptWorkspaceTests(unittest.TestCase):
         )
         second_prompt.write_text(raw, encoding="utf-8")
         second_prompt.chmod(0o600)
-        with self.assertRaisesRegex(
-            workspace.PromptWorkspaceError, "another prompt"
-        ) as caught:
-            self.intake(second_prompt)
-        self.assertEqual(caught.exception.code, "ACTIVE_RUN_CONFLICT")
+        queued = self.intake(second_prompt)
+        self.assertEqual(queued["action"], "queued")
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["queue_position"], 1)
         self.assertEqual(self.intake(first_prompt)["run_id"], first["run_id"])
+
+    def test_queued_prompt_drift_requires_explicit_rerun_before_activation(
+        self,
+    ) -> None:
+        first_prompt = self.prompt_path()
+        first = self.intake(first_prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement a second queued objective",
+            id_factory=lambda: "2" * 32,
+        )
+        second_prompt = Path(str(created["path"]))
+        queued = self.intake(second_prompt)
+        self.assertEqual(queued["action"], "queued")
+        self.assertEqual(queued["queue_position"], 1)
+        self.assertEqual(
+            workspace.queue_rows(manifest)[0]["source_path"], second_prompt.name
+        )
+
+        second_prompt.write_text(
+            second_prompt.read_text(encoding="utf-8").rstrip()
+            + "\n\n## Context\n\nUse the updated queued context.\n",
+            encoding="utf-8",
+        )
+        second_prompt.chmod(0o600)
+        self.set_run_status(first, "complete")
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.activate_queue_head(manifest)
+        self.assertEqual(caught.exception.code, "QUEUED_PROMPT_DRIFT")
+
+        activated = self.intake(second_prompt)
+        self.assertEqual(activated["action"], "new")
+        self.assertEqual(activated["status"], "activated")
+        self.assertEqual(workspace.queue_rows(manifest), [])
+
+    def test_queued_prompt_raw_drift_requires_explicit_rerun(self) -> None:
+        first_prompt = self.prompt_path()
+        first = self.intake(first_prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement a second queued objective",
+            id_factory=lambda: "2" * 32,
+        )
+        second_prompt = Path(str(created["path"]))
+        self.intake(second_prompt)
+
+        second_prompt.write_text(
+            second_prompt.read_text(encoding="utf-8").replace(
+                "## Ask", "<!-- formatting after acceptance -->\n\n## Ask"
+            ),
+            encoding="utf-8",
+        )
+        second_prompt.chmod(0o600)
+        self.set_run_status(first, "complete")
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.activate_queue_head(manifest)
+        self.assertEqual(caught.exception.code, "QUEUED_PROMPT_DRIFT")
+
+        activated = self.intake(second_prompt)
+        self.assertEqual(activated["action"], "new")
+        self.assertEqual(activated["status"], "activated")
+        self.assertEqual(workspace.queue_rows(manifest), [])
+
+    def test_completed_follow_up_queues_until_resources_release(self) -> None:
+        prompt = self.prompt_path()
+        first = self.intake(prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        self.set_run_status(first, "complete")
+        self.edit_prompt(prompt, "Add a follow-up after resource release.")
+
+        with mock.patch.object(workspace, "run_resources_released", return_value=False):
+            queued = self.intake(prompt)
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["queue_position"], 1)
+
+        activated = workspace.activate_queue_head(manifest)
+        self.assertEqual(activated["status"], "activated")
+        binding = workspace.validate_binding(
+            Path(str(activated["snapshot"])).parents[2]
+        )
+        self.assertEqual(binding["predecessor"]["run_id"], first["run_id"])
+        self.assertEqual(binding["revisions"][0]["kind"], "completed_follow_up")
+
+    def test_queue_activation_reads_authoritative_execution_resources(self) -> None:
+        first_prompt = self.prompt_path()
+        first = self.intake(first_prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement another queued objective",
+            id_factory=lambda: "3" * 32,
+        )
+        second_prompt = Path(str(created["path"]))
+        self.intake(second_prompt)
+        self.set_run_status(first, "complete")
+        first_run_dir = Path(str(first["snapshot"])).parents[2]
+        integration = first_run_dir / "worktrees" / "FEAT-001" / "integration"
+        integration.mkdir(parents=True)
+        write_private(
+            first_run_dir / "execution" / "FEAT-001" / "coordinator.json",
+            {
+                "schema": "agentic-sdlc/execution-coordinator-v7",
+                "run_id": first["run_id"],
+                "status": "done",
+                "active_wave": None,
+                "cleanup_retained": [],
+                "integration_worktree": str(integration),
+            },
+        )
+
+        waiting = workspace.activate_queue_head(manifest)
+        self.assertEqual(waiting["status"], "waiting_for_resource_release")
+        integration.rmdir()
+        activated = workspace.activate_queue_head(manifest)
+        self.assertEqual(activated["status"], "activated")
+
+    def test_queue_activation_recovers_after_interrupted_dequeue(self) -> None:
+        first_prompt = self.prompt_path()
+        first = self.intake(first_prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement another queued objective",
+            id_factory=lambda: "3" * 32,
+        )
+        second_prompt = Path(str(created["path"]))
+        self.intake(second_prompt)
+        self.set_run_status(first, "complete")
+
+        with mock.patch.object(
+            workspace,
+            "resolve_queue_entry",
+            side_effect=RuntimeError("injected dequeue interruption"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected dequeue"):
+                workspace.activate_queue_head(manifest)
+
+        recovered = workspace.activate_queue_head(manifest)
+        self.assertEqual(recovered["status"], "activated")
+        self.assertTrue(recovered["recovered"])
+        self.assertEqual(recovered["prompt_id"], "prompt-" + "3" * 32)
+        self.assertEqual(workspace.queue_rows(manifest), [])
+
+    def test_queue_cancel_reports_already_committed_activation(self) -> None:
+        first_prompt = self.prompt_path()
+        first = self.intake(first_prompt)
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement another queued objective",
+            id_factory=lambda: "3" * 32,
+        )
+        second_prompt = Path(str(created["path"]))
+        self.intake(second_prompt)
+        self.set_run_status(first, "complete")
+        with mock.patch.object(
+            workspace,
+            "resolve_queue_entry",
+            side_effect=RuntimeError("injected dequeue interruption"),
+        ):
+            with self.assertRaises(RuntimeError):
+                workspace.activate_queue_head(manifest)
+
+        canceled = workspace.cancel_queued_prompt(manifest, second_prompt.name)
+        self.assertEqual(canceled["action"], "queue_already_activated")
+        self.assertEqual(canceled["prompt_id"], "prompt-" + "3" * 32)
+        self.assertEqual(workspace.queue_rows(manifest), [])
+
+    def test_formatting_only_edit_does_not_create_steering(self) -> None:
+        prompt = self.prompt_path()
+        first = self.intake(prompt)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "## Ask", "<!-- formatting-only -->\n\n## Ask"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        resumed = self.intake(prompt)
+        self.assertEqual(resumed["action"], "resume")
+        self.assertEqual(resumed["revision"], "r0001")
+        self.assertEqual(resumed["run_id"], first["run_id"])
+        self.assertEqual(
+            resumed["sha256"],
+            hashlib.sha256(Path(str(resumed["snapshot"])).read_bytes()).hexdigest(),
+        )
+
+    def test_fenced_code_indentation_is_semantic(self) -> None:
+        prompt = self.prompt_path()
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "Implement the requested behavior and verify its observable acceptance criteria.",
+                "Implement this YAML exactly:\n\n```yaml\nroot:\n  child: value\n```",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        first = self.intake(prompt)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "  child: value", "    child: value"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        changed = self.intake(prompt)
+        self.assertEqual(changed["run_id"], first["run_id"])
+        self.assertEqual(changed["revision"], "r0002")
+        self.assertEqual(changed["action"], "steering")
+
+    def test_fenced_markdown_headings_remain_inside_ask(self) -> None:
+        prompt = self.prompt_path()
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "Implement the requested behavior and verify its observable acceptance criteria.",
+                "Document these examples:\n\n"
+                "```markdown\n## Ask\nNested backtick example\n```\n\n"
+                "~~~markdown\n## Context\nNested tilde example\n~~~",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        document = workspace.parse_prompt(prompt)
+        self.assertIn("## Ask", document["sections"]["Ask"])
+        self.assertIn("## Context", document["sections"]["Ask"])
+        self.assertNotIn("Context", document["sections"])
+
+    def test_interrupted_refinement_reset_retries_from_binding_commit_point(
+        self,
+    ) -> None:
+        prompt = self.prompt_path()
+        first = self.intake(prompt)
+        self.edit_prompt(prompt, "Apply the accepted revision atomically.")
+        with mock.patch.object(
+            workspace,
+            "begin_requirements_refinement",
+            side_effect=OSError("injected refinement write failure"),
+        ):
+            with self.assertRaises(OSError):
+                self.intake(prompt)
+        run_dir = Path(str(first["snapshot"])).parents[2]
+        binding = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(binding["revisions"]), 1)
+
+        retried = self.intake(prompt)
+        self.assertEqual(retried["revision"], "r0002")
+        refinement = json.loads(
+            (run_dir / "requirements-refinement.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(refinement["revision"], "r0002")
+
+        self.edit_prompt(prompt, "Add one more accepted change.")
+        original_write = workspace.write_atomic
+
+        def fail_binding_commit(path: Path, content: bytes) -> None:
+            if path.name == "prompt.json":
+                raise OSError("injected binding commit failure")
+            original_write(path, content)
+
+        with mock.patch.object(
+            workspace, "write_atomic", side_effect=fail_binding_commit
+        ):
+            with self.assertRaises(OSError):
+                self.intake(prompt)
+        self.assertEqual(
+            len(
+                json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))[
+                    "revisions"
+                ]
+            ),
+            2,
+        )
+        committed = self.intake(prompt)
+        self.assertEqual(committed["revision"], "r0003")
+
+    def test_binding_validation_binds_intent_and_follow_up_kind(self) -> None:
+        prompt = self.prompt_path()
+        first = self.intake(prompt)
+        first_run_dir = Path(str(first["snapshot"])).parents[2]
+        binding_path = first_run_dir / "prompt.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["revisions"][0]["intent_sha256"] = "0" * 64
+        write_private(binding_path, binding)
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.validate_binding(first_run_dir)
+        self.assertEqual(caught.exception.code, "RUN_STATE_INVALID")
+
+        binding["revisions"][0]["intent_sha256"] = workspace.parse_prompt(prompt)[
+            "intent_sha256"
+        ]
+        write_private(binding_path, binding)
+        self.set_run_status(first, "complete")
+        self.edit_prompt(prompt, "Add a completed follow-up objective.")
+        follow_up = self.intake(prompt)
+        follow_up_dir = Path(str(follow_up["snapshot"])).parents[2]
+        follow_up_path = follow_up_dir / "prompt.json"
+        follow_up_binding = json.loads(follow_up_path.read_text(encoding="utf-8"))
+        follow_up_binding["revisions"][0]["kind"] = "initial"
+        write_private(follow_up_path, follow_up_binding)
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.validate_binding(follow_up_dir)
+        self.assertEqual(caught.exception.code, "RUN_STATE_INVALID")
+
+    def test_requirements_refinement_blocks_ready_with_material_question(
+        self,
+    ) -> None:
+        first = self.intake(self.prompt_path())
+        run_dir = Path(str(first["snapshot"])).parents[2]
+        state = workspace.load_requirements_refinement(run_dir, required=True)
+        assert state is not None
+        self.assertEqual(state["status"], "extracting")
+        state["questions"] = [
+            {
+                "id": "Q-001",
+                "question": "Which compatibility boundary is required?",
+                "material": True,
+                "status": "open",
+                "answer": None,
+                "source": None,
+                "source_revision": None,
+                "conflict": None,
+            }
+        ]
+        state["compiled_requirements_sha256"] = "c" * 64
+        state["status"] = "ready"
+        refinement_path = run_dir / "requirements-refinement.json"
+        valid_bytes = refinement_path.read_bytes()
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.save_requirements_refinement(run_dir, state)
+        self.assertEqual(caught.exception.code, "RUN_STATE_INVALID")
+        self.assertEqual(refinement_path.read_bytes(), valid_bytes)
+        state["questions"][0].update(
+            {
+                "status": "answered",
+                "answer": "Use only the prompt-v2 boundary.",
+                "source": "prompt",
+                "source_revision": "r0001",
+            }
+        )
+        saved = workspace.save_requirements_refinement(run_dir, state)
+        self.assertEqual(saved["status"], "ready")
+
+    def test_requirements_refinement_contract_binds_latest_compiled_file(
+        self,
+    ) -> None:
+        first = self.intake(self.prompt_path())
+        run_dir = Path(str(first["snapshot"])).parents[2]
+        manifest = run_dir.parent / "workspace.json"
+        requirements = self.project / "docs" / "requirements.md"
+        requirements.parent.mkdir()
+        requirements.write_text(
+            "# Requirements\n\n## REQ-001\n\nThe accepted behavior is observable.\n",
+            encoding="utf-8",
+        )
+        bound_requirements = requirements.read_bytes()
+        state = workspace.load_requirements_refinement(run_dir, required=True)
+        assert state is not None
+        state["status"] = "ready"
+        state["compiled_requirements_sha256"] = hashlib.sha256(
+            requirements.read_bytes()
+        ).hexdigest()
+        workspace.save_requirements_refinement(run_dir, state)
+
+        verified = workspace.verify_requirements_refinement_contract(
+            manifest, str(first["run_id"])
+        )
+        self.assertEqual(verified["revision"], "r0001")
+        requirements.write_text(
+            requirements.read_text(encoding="utf-8") + "\nUnbound drift.\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.verify_requirements_refinement_contract(
+                manifest, str(first["run_id"])
+            )
+        self.assertEqual(caught.exception.code, "REQUIREMENTS_REFINEMENT_REQUIRED")
+
+        requirements.unlink()
+        requirements.parent.rmdir()
+        foreign_docs = self.root / "foreign-docs"
+        foreign_docs.mkdir()
+        (foreign_docs / "requirements.md").write_bytes(bound_requirements)
+        requirements.parent.symlink_to(foreign_docs, target_is_directory=True)
+        with self.assertRaises(workspace.PromptWorkspaceError) as unsafe:
+            workspace.verify_requirements_refinement_contract(
+                manifest, str(first["run_id"])
+            )
+        self.assertEqual(unsafe.exception.code, "REQUIREMENTS_REFINEMENT_REQUIRED")
 
     def test_legacy_unfinished_run_fails_closed_and_completed_is_readable(self) -> None:
         prompt = self.prompt_path()
@@ -258,8 +649,8 @@ class PromptWorkspaceTests(unittest.TestCase):
         )
         for sensitive_assignment in assignments:
             with self.subTest(secret_kind=sensitive_assignment.split(" ", 1)[0]):
-                text = original.replace(
-                    "## Steering\n", f"## Steering\n\n{sensitive_assignment}\n", 1
+                text = original.rstrip() + (
+                    f"\n\n## Steering\n\n{sensitive_assignment}\n"
                 )
                 prompt.write_text(text, encoding="utf-8")
                 prompt.chmod(0o600)
@@ -408,7 +799,12 @@ class PromptWorkspaceTests(unittest.TestCase):
         labels = [task["label"] for task in editor["tasks"]["tasks"]]
         self.assertEqual(
             labels,
-            ["Agentic SDLC: New Prompt", "Agentic SDLC: Prompt History"],
+            [
+                "Agentic SDLC: New Prompt",
+                "Agentic SDLC: Prompt History",
+                "Agentic SDLC: Prompt Queue",
+                "Agentic SDLC: Cancel Queued Prompt",
+            ],
         )
         manifest = Path(str(initialized["workspace"]))
         created_at = datetime(2026, 7, 16, 12, 30, tzinfo=timezone.utc)

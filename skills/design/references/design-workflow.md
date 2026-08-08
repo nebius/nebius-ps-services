@@ -72,7 +72,7 @@ For each technology, capture design-relevant facts:
 If a fact cannot be verified from official docs, say that it is unverified and
 avoid making it a hard design dependency.
 
-### 4. Use `app-stack` For Stack Decisions
+### 4. Use `app-stack` And `ai-stack` For Stack Decisions
 
 When the application stack or any layer's technology is undecided, being
 reviewed, or being modernized, use `app-stack` before completing the solution
@@ -98,6 +98,17 @@ The handoff is scoped: `app-stack` returns the stack decision to the active
 If all applicable technologies are already approved and the request does not
 reconsider them, state that the design follows the fixed stack and skip
 `app-stack`.
+
+Use `ai-stack` for undecided or reconsidered AI-specific model access, training,
+inference, agent, durability, interoperability, retrieval, evaluation, safety,
+or operations choices. Pass workload contracts, data and model constraints,
+quality and safety gates, target environment, scale, cost, and owners. Preserve
+its component status and evidence classifications.
+
+When both scopes are open, `app-stack` owns the surrounding product stack and
+`ai-stack` owns the AI layers. Keep both handoffs scoped and let `design`
+synthesize their interfaces, data/control flow, failure behavior, rollout, and
+`/plan`. Skip either handoff when that scope is fixed.
 
 ### 5. Design Solution
 
@@ -194,6 +205,7 @@ Assumptions And Open Questions:
 Design Review:
 - `research` used/skipped: ...
 - `app-stack` used/skipped: ...
+- `ai-stack` used/skipped: ...
 - selected stack or fixed-stack boundary: ...
 - `system-design-rules` used/skipped: ...
 - Checklist findings that changed the design: ...
@@ -270,6 +282,9 @@ ownership, new platform, or costly rollback.
 - Design needs to select or reconsider the application stack or technology for
   any layer: use `app-stack`, then return to `design` for cross-layer synthesis
   and `/plan` handoff.
+- Design needs to select or reconsider model access, training, inference,
+  agent, interoperability, retrieval, or AI evaluation layers: use `ai-stack`,
+  then return to `design` for cross-layer synthesis and `/plan` handoff.
 - The application stack is approved and no stack decision remains: keep the
   fixed stack and continue `design` without `app-stack`.
 - Design exposes changed docs or contracts after implementation: run `align` on

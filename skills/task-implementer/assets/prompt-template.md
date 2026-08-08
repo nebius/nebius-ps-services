@@ -1,5 +1,5 @@
 ---
-schema: task-implementer/prompt-v1
+schema: task-implementer/prompt-v2
 prompt_id: {{PROMPT_ID}}
 title: {{TITLE_JSON}}
 created_at: {{CREATED_AT}}
@@ -14,39 +14,12 @@ created_at: {{CREATED_AT}}
 ## Ask
 
 {{ASK}}
-
-## Outcome
-
-<!-- Required: describe what must be true when the work is complete. -->
-
-## Context
-
-<!-- Optional: add relevant repository facts, paths, or background. -->
-
-## Constraints
-
-- None.
-
-## Acceptance criteria
-
-- [ ] <!-- Required: add an observable, testable completion criterion. -->
-
-## Verification
-
-<!-- Required: name expected checks or ask Codex to derive them from the repo. -->
-
-## Non-goals
-
-<!-- Optional: list intentionally excluded work. -->
-
-## References
-
-<!-- Optional: list repo-relative paths, tickets, or public URLs. No secrets. -->
-
-## Steering
-
 <!--
-Optional: append clarifications, corrections, priorities, removals, or new
-requirements here, then rerun the same `$task-implementer run <prompt>`
-command. No IDs or timestamps are required. Edits elsewhere remain supported.
+Only Ask is required. Add any helpful sections when needed, for example:
+Outcome, Context, Constraints, Acceptance criteria, Verification, Non-goals,
+References, Clarifications, Live Experiment Environment, or Steering.
+
+For active work, edit this prompt and repeat `$task-implementer run <prompt>`.
+After completion, the edited prompt becomes a linked fresh objective evaluated
+against current project truth. Do not add secrets or customer data.
 -->

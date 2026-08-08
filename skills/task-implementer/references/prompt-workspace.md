@@ -27,11 +27,15 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 ├── projects/<project-id>/scopes/<scope-id>/
 │   ├── workspace.json
 │   ├── activity.json
+│   ├── prompt-queue.json
+│   ├── queued-prompts/<prompt-id>/<digest>.md
 │   ├── <scope>-prompts.code-workspace
+│   ├── prompts/00-START-HERE.md
 │   ├── prompts/<created-at>--<slug>.md
 │   └── runs/<run-id>/
 │       ├── manifest.json
 │       ├── steering.json
+│       ├── requirements-refinement.json
 │       ├── inputs/<revision>/prompt.md
 │       ├── handoff.md
 │       └── orchestration/
@@ -54,10 +58,23 @@ The private root must be outside Git storage. On POSIX, managed directories are
 permissions, malformed UTF-8/JSON/Markdown, duplicate identities, and state
 whose canonical paths no longer match its manifest.
 
-Prompts remain `task-implementer/prompt-v1`, with a maximum of 256 KiB. Prompt
+Prompts use `task-implementer/prompt-v2`, with a maximum of 256 KiB. Generated
+metadata plus one meaningful `## Ask` is required. Known optional headings may
+be removed, reordered, or added, and custom headings are supplemental context.
+Each revision records exact raw SHA-256 plus a normalized intent digest so
+metadata, comments, section ordering, and whitespace-only formatting do not
+create work. Fenced-code bodies retain their exact indentation and content in
+the intent digest; Markdown headings inside matching backtick or tilde fences
+remain section content. HTML comments are non-operational; put instructions in the
+Ask or another visible heading. Prompt
 filenames and workflow-managed mtimes never change. The filename date is
 creation metadata; accepted invocation ordering comes from private
 `last_invoked_at` activity.
+
+An active revision stages its immutable snapshot and refinement reset before
+the manifest is atomically replaced as the commit point. A retry removes only
+the exact uncommitted next-revision directory, restores refinement to the last
+manifest revision when needed, and then reapplies the current editable prompt.
 
 ## Initialization
 
@@ -68,14 +85,16 @@ worktree from that commit or reuses the existing lane for the logical identity.
 Dirty source-checkout state is permitted, excluded, and never copied.
 
 Private `init` canonicalizes the lane and exact source scope, creates or
-verifies workspace-v2 metadata, and creates exactly one starter prompt only
-when no Markdown prompt exists. Repeated initialization preserves every prompt,
+verifies workspace-v2 metadata, ensures generated `00-START-HERE.md`, and
+creates exactly one starter prompt only when no actual prompt exists. The hub
+is excluded from parsing. Repeated initialization preserves every prompt,
 revision, run, result, branch, and worktree record. After explicit removal, it
 may rebind only the same logical workspace to a strictly newer lane
 incarnation. It never starts a run.
 
-The generated workspace exposes `CODE` and `PROMPTS`. The editor task creates a
-new prompt only; it does not invoke Codex.
+The generated workspace exposes `CODE` and `PROMPTS`. Its default build task
+creates a new prompt with a fresh ID only; it does not invoke Codex. Queue list
+and cancel tasks expose metadata only. Do not clone managed prompt files.
 
 After successful initialization, the helper asks VS Code to reuse its last
 active window for the generated workspace. The CLI does not bind this request
@@ -91,7 +110,13 @@ returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
 `finalize`, or `done`.
 
 - Acquire the scope lock before mutable private-state changes.
-- One unfinished prompt owns a scope.
+- One unfinished prompt owns a scope. Explicitly running another prompt
+  accepts or updates it in a private FIFO; creating or saving never queues it.
+- A queued edit is accepted only by explicitly running that prompt again.
+  Queue-head raw-byte or intent drift blocks activation; there is no priority
+  or reorder path.
+- If run creation commits before dequeue completes, the next queue transition
+  recognizes the exact accepted run and finishes the interrupted dequeue.
 - Snapshot each adjacent changed digest as one immutable revision.
 - Record steering dispositions as `pending`, `applied`, `blocked`, or
   `no_effect`.
@@ -101,7 +126,12 @@ returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
 - Contradictory steering preserves work and stops before promotion with
   `STEERING_QUEUED_AFTER_WAVE` or `HUMAN_INPUT_REQUIRED`.
 - An unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
-  prompt starts a new run.
+  prompt starts a linked fresh-full-objective run against current project truth.
+  Its `r0001` is `completed_follow_up`, never steering, and omission alone does
+  not delete accepted requirements.
+- After finalization releases the active lane generation, the private queue
+  activates its unchanged head automatically. A blocked active run is never
+  overtaken.
 - A terminal handoff whose lane generation was not released returns private
   `finalize`/`TASK_LEASE_RELEASE_REQUIRED` and resumes the same run.
 
@@ -158,10 +188,11 @@ assignments are a hard-cut unsupported execution surface.
 - validation and done criteria;
 - assignment digest and creation time.
 
-The worker passes the embedded assignment digest unchanged to `task-start`
-through those exact paths. That helper validates the canonical unsigned
-assignment digest and Git/cwd identity; workers must not guess or recompute the
-JSON serialization before starting.
+The worker passes the embedded assignment digest plus the coordinator-issued
+start lease unchanged to `task-start` through those exact paths. That helper
+validates the canonical unsigned assignment digest, exact current lease, and
+Git/cwd identity; workers must not guess or recompute the JSON serialization or
+reuse another launch before starting.
 
 The referenced `incoming-handoff-v1` record is private, immutable, and
 digest-bound. It contains an ordered list of accepted results from all earlier
@@ -185,9 +216,10 @@ prompt_workspace.py wave-prepare --workspace <manifest> --run-id <id>
 prompt_workspace.py wave-dispatch --workspace <manifest> --run-id <id> --contract-commit <sha>
 prompt_workspace.py batch-advance --workspace <manifest> --run-id <id>
 prompt_workspace.py task-arm --workspace <manifest> --run-id <id> --task-id <id>
-prompt_workspace.py task-start --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest>
+prompt_workspace.py task-start --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest> --start-lease <timestamp>
 prompt_workspace.py task-heartbeat --workspace <manifest> --run-id <id> --task-id <id> --assignment-sha256 <digest> --phase <phase>
 prompt_workspace.py task-watch --workspace <manifest> --run-id <id> --task-id <id>
+prompt_workspace.py task-rearm --workspace <manifest> --run-id <id> --task-id <id> --expected-start-lease <timestamp> --confirmed-stopped
 prompt_workspace.py task-recover --workspace <manifest> --run-id <id> --task-id <id> --confirmed-stopped
 prompt_workspace.py task-finish --workspace <manifest> --run-id <id> --task-id <id>
 prompt_workspace.py wave-integrate --workspace <manifest> --run-id <id>
@@ -205,11 +237,22 @@ the active lane generation's repository claims before writing replacement
 state and retains earlier claims until generation integration.
 After the last promoted wave is cleaned, `wave-replan` may append a new
 isolated correction tail discovered by integration review before finalization.
-`task-recover` requires confirmation that the previous worker stopped and must
-be invoked by the fresh replacement worker from the assigned scope cwd. The
-coordinator communicates the stop confirmation but never invokes recovery for
-the replacement because heartbeat and finish ownership bind to the caller.
-Recovery transfers only declared dirty state or one direct-child commit.
+For an expired assigned task, `task-rearm` requires confirmation that the
+previous worker stopped plus the exact observed start lease. The coordinator
+invokes it only after expiry at the exact clean locked base. Its compare-and-swap
+returns a fresh lease while preserving the immutable assignment and existing
+wave/generation resources. Any stale or conflicting lease is rejected. After
+an interrupted response, the coordinator re-observes `task-watch` and continues
+with its current active lease. The replacement supplies that fresh lease to
+normal `task-start`. A rearm mismatch is `WORKER_START_LEASE_CONFLICT`; the
+stopped worker's old lease is `WORKER_START_LEASE_INVALID`. An active deadline
+or any prestart mutation is also rejected.
+
+For an interrupted running task, `task-recover` requires the same stop
+confirmation and must be invoked by the fresh replacement worker from the
+assigned scope cwd. The coordinator communicates the confirmation but never
+invokes running-worker recovery because heartbeat and finish ownership bind to
+the caller. It transfers only declared dirty state or one direct-child commit.
 Blocked resources remain retained for operator-directed recovery;
 they are never silently discarded.
 
@@ -240,10 +283,12 @@ workspace only to the next recorded lane incarnation.
 ## Legacy Boundary
 
 Workspace-v1 is unsupported and must be backed up/removed before lane
-initialization. Prompt and run-manifest schemas are unchanged. The execution
+initialization. Prompt-v1 files and unfinished prompt-v1 bindings are preserved
+read-only and return `WORKFLOW_UPGRADE_REQUIRED`; there is no migration or
+execution compatibility path. Completed bytes remain historical. The execution
 state machine has no compatibility path: every
-`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4/v5 run returns
-`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v6 resources,
+`task-implementer/execution-plane-v1` or coordinator-v1/v2/v3/v4/v5/v6 run returns
+`WORKFLOW_UPGRADE_REQUIRED` without changing bytes or creating v7 resources,
 including completed records. Do not add a legacy read path, migration, or
 upgrade command.
 

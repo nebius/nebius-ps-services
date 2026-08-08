@@ -96,7 +96,7 @@ selected by ordinary prompt matching outside an active Agentic SDLC run.
 Every phase skill owns a narrow responsibility. For example,
 `sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
 owns `docs/design.md`, `project-agent-instructions` owns the conditional
-generated project-root `AGENTS.md`, `sdlc-create-plan` owns a locked private
+v2-managed selected-project `AGENTS.md`, `sdlc-create-plan` owns a locked private
 task graph, and `sdlc-prepare-execution` owns the persistent integration
 resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
@@ -109,24 +109,28 @@ The always-present committed SDLC truth inside a target project is:
 - `<project>/docs/requirements.md`
 - `<project>/docs/design.md`
 
-After both documents validate, `project-agent-instructions` decides whether
-durable project-specific operating rules add to the inherited instruction
-chain. Only when that evidence gate passes does committed project truth also
-include:
+After both tracked documents pass the Agentic owner validator with total
+status-aware feature traceability and receive a private full-file and
+traceability receipt, `project-agent-instructions` decides whether
+durable project-specific operating rules add to ancestor project instructions.
+Personal global instructions are conflict context only and never change the
+portable repository bytes. Only when the evidence gate passes does committed
+project truth also include:
 
 - `<project>/AGENTS.md`
 
 A missing file with no meaningful project-specific delta is a valid
-`not-needed` outcome. Other SDLC artifacts, including the decision manifest and
-receipt, are local runtime state and must not be committed.
+`not-needed` outcome. Other SDLC artifacts, including spec validation,
+effective-config, decision, ownership, and final-state receipts, are local
+runtime state and must not be committed.
 
 Ownership is strict:
 
 - Only `sdlc-create-requirements` writes `docs/requirements.md`.
 - Only `sdlc-create-design` writes `docs/design.md`.
-- Only `project-agent-instructions` may create or refresh a provenance-owned
-  generated project-root `AGENTS.md`; human-owned instruction files are
-  preserved.
+- Only `project-agent-instructions` may create, refresh, explicitly adopt, or
+  explicitly retire a v2-managed selected-project `AGENTS.md`; human-owned or
+  edited instruction files are preserved.
 - Other skills route changes back to the owning skill instead of editing those
   files directly.
 
@@ -140,12 +144,25 @@ $sdlc-start workspace init [project-folder]
 $sdlc-start run <prompt-path-or-unique-filename>
 ```
 
-Managed prompts use `agentic-sdlc/prompt-v1`. Editing the same prompt and
-repeating `run` is the only steering path; there is no bare `$sdlc-start`
-resume action. The generated editor workspace provides private new-prompt and
-metadata-only history tasks; these do not expand the public interface. Exact
-manual renames preserve identity and update the run mirror, while rename plus
-content edits and stale/duplicate prompt copies fail closed. Execution state
+Managed prompts use `agentic-sdlc/prompt-v2`. Only `## Ask` is required in
+addition to generated metadata; all structured and custom headings are
+optional. The coordinator compiles the Ask into full product requirements,
+inspects discoverable facts first, and persists stable private clarification
+questions only for material ambiguity. Editing the same active prompt and
+repeating `run` is the steering path; there is no bare `$sdlc-start` resume
+action. Editing a completed prompt creates a linked fresh-full-objective run,
+not steering. The generated editor workspace keeps `00-START-HERE.md` visible
+and provides private new-prompt, metadata-only history, and FIFO queue tasks;
+these do not expand the public interface. Explicitly running a different
+prompt while work is active durably queues it, while creating or saving does
+not. Queue-head drift requires an explicit rerun before post-completion
+activation; activation compares both accepted raw bytes and normalized intent
+and recovers a committed run after an interrupted dequeue. Requirements cannot
+advance to design until a private refinement gate binds the latest accepted
+prompt identity and intent to the exact current `docs/requirements.md`. Exact
+manual renames preserve identity and update the run mirror when normalized
+intent is unchanged, while rename plus intent edits and stale/duplicate prompt
+copies fail closed. Execution state
 lives under:
 
 ```text
@@ -153,11 +170,12 @@ lives under:
 ```
 
 The project-level SDLC state also has `workspace.json`, `activity.json`, a
-private prompt lock, managed prompt files, an `active-run.json` pointer, and an
+private prompt queue and accepted snapshots, a private prompt lock, managed
+prompt files, an `active-run.json` pointer, and an
 `active.lock` lock file under `~/.codex/sdlc-runs/<project-id>/`. The active
 run directory stores the active feature, run metadata, checkpoints, feature
 queue, fingerprints, steering, context packs, locked plans, evidence,
-screenshots, transcripts, failure logs, history, and short-lived authorization
+requirements refinement, screenshots, transcripts, failure logs, history, and short-lived authorization
 files. It is the recovery source when conversation context is lost.
 
 Important files include:
@@ -401,14 +419,16 @@ The design template also records:
 - an ID policy that forbids renumbering existing feature IDs
 
 Project instructions intentionally have no fill-every-section template.
-`project-agent-instructions/references/decision-contract.md` defines the
-evidence gate, generated section allowlist, provenance marker, ownership
-rules, and deterministic inspect/apply/verify helper. The skill runs only
-after both specifications validate. It creates a concise selected-project
-`AGENTS.md` only for durable, project-specific, actionable rules not already
-provided by inherited instructions; it omits empty sections, task state,
-acceptance criteria, architecture essays, generic advice, and reusable
-procedures.
+`sdlc-start/scripts/validate_project_specs.py` validates complete tracked
+Agentic-owned documents, managed blocks, ready-feature completeness,
+marker/body agreement, and total status-aware REQ-to-FEAT traceability before
+emitting the private v2 prerequisite receipt.
+`project-agent-instructions/references/decision-contract.md` defines layered
+discovery, structured evidence-backed rules, deterministic rendering, the 2 KiB
+preferred and 4 KiB hard body budgets, provenance plus private ownership,
+guarded adoption/retirement, recovery, and inspect/apply/verify behavior. A
+project-file change requires a fresh Codex session before the workflow
+continues.
 
 ## Workflow
 
@@ -535,7 +555,8 @@ The preflight must verify and record:
   source-installed parity for every required SDLC skill, both runtime support
   classes, and `sdlc-workflow-test`
 - named regression capabilities for prompt workspace/history/exact manual
-  rename/lifecycle; execution scope, sessions, `task-recover`, resource-free
+  rename/lifecycle, owner-issued full-spec validation receipts; execution
+  scope, sessions, `task-recover`, resource-free
   `replan-future`, secret gates, and sequential fallback; Task Implementer
   interoperability; and prompt-bound steering continuation
 - deterministic failure-event, diagnosis, repair-control, design-admission,
@@ -613,9 +634,9 @@ Required happy-path evidence:
 - `sdlc-gather-context` records a compact context pack, including layer and
   boundary facts when the feature may span a vertical slice.
 - `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
-- `project-agent-instructions` records a verified conditional decision and
-  creates or refreshes a selected-project `AGENTS.md` only when current
-  evidence requires durable rules beyond inherited instructions.
+- `project-agent-instructions` records verified spec, config, decision, and
+  ownership state and conditionally maintains a selected-project `AGENTS.md`
+  only when tracked evidence requires durable project rules.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked task graph with dependencies,
@@ -871,19 +892,24 @@ vN+1.
 
 ### `project-agent-instructions`
 
-Runs after validated requirements and design and before auto-steering or
-planning. It inspects the exact selected project, inherited instruction chain,
-active project instruction file, and relevant repository evidence. A new file
-is justified only by durable, project-specific, actionable rules that change
-agent behavior beyond inherited guidance.
+Runs after receipt-validated requirements and design and before auto-steering
+or planning. It inspects the exact selected project, layered effective Codex
+config, global conflict context, ancestor project instructions, active source,
+ownership receipt, recovery artifacts, and relevant tracked evidence. A new
+file is justified only by durable, project-specific, actionable rules.
 
-The deterministic helper records a private manifest, decision, and state.
-It creates `AGENTS.md` exclusively, refreshes it only when the provenance
-marker and body digest prove the generated file is unchanged, and explicitly
-reads the active file after a write. Human-owned files, same-directory
-`AGENTS.override.md`, and configured fallback files are never overwritten.
-Conflicts, material gaps, unsafe targets, stale provenance, or concurrent
-changes block the workflow instead of silently weakening instructions.
+Ignored target paths and untracked or ignored human project-instruction sources
+fail discovery. An empty effective `project_root_markers` list follows Codex
+semantics by disabling parent traversal at the selected project directory.
+
+The deterministic helper renders structured rules and records a private v2
+manifest, decision, ownership receipt, and final state. It creates exclusively,
+refreshes exact receipted bytes, adopts or retires only with exact-digest
+approval, and treats v1 as a manual-resolution blocker. Human-owned or edited
+files, same-directory `AGENTS.override.md`, and configured fallbacks are never
+overwritten. A surviving lock/backup blocks every transition. Created,
+refreshed, or retired output requires a fresh session and re-verification before
+the coordinator continues.
 
 ### `sdlc-auto-steering`
 

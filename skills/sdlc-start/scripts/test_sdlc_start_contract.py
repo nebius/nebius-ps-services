@@ -39,10 +39,11 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/references/prompt-workspace.md",
             [
-                "agentic-sdlc/prompt-v1",
-                "agentic-sdlc/prompt-binding-v1",
+                "agentic-sdlc/prompt-v2",
+                "agentic-sdlc/prompt-binding-v2",
                 "ALREADY_COMPLETE",
-                "ACTIVE_RUN_CONFLICT",
+                "private FIFO",
+                "QUEUED_PROMPT_DRIFT",
                 "WORKFLOW_UPGRADE_REQUIRED",
             ],
         )
@@ -87,9 +88,11 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/SKILL.md",
             [
-                "route to\n  `project-agent-instructions` before auto-steering",
+                "`scripts/validate_project_specs.py`",
+                "project-agent-instructions.spec-validation.v2",
+                "`project-agent-instructions` before auto-steering",
                 "`agentic-sdlc` ownership",
-                "`created`,\n  `refreshed`, `existing-sufficient`, or `not-needed`",
+                "`reload_required: true`",
                 "`project-agent-instructions-change`",
             ],
         )
@@ -105,8 +108,8 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-prepare-execution/SKILL.md",
             [
-                "provenance-owned generated project-root",
-                "Reject an\n   unverified or human-owned `AGENTS.md`",
+                "ownership-receipted v2 selected-project",
+                "Reject an\n   unverified, reload-pending, edited, or human-owned `AGENTS.md`",
             ],
         )
 
@@ -147,11 +150,42 @@ class SdlcStartContractTests(unittest.TestCase):
             "Agentic SDLC: Prompt History",
             '"new"',
             '"list"',
+            '"queue-list"',
+            '"queue-cancel"',
+            '"queue-next"',
             '"verify"',
+            '"refinement-verify"',
         ):
             self.assertIn(term, helper)
-        self.assertIn("private `new`, `list`, and `verify`", skill)
+        self.assertIn(
+            "private `new`, `list`, `queue-list`, `queue-cancel`, `queue-next`, and",
+            skill,
+        )
+        self.assertIn("requirements lock helper", skill)
         self.assertIn("Expose exactly these two actions", skill)
+
+    def test_requirements_refinement_is_mechanically_locked(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "prompt_workspace.py refinement-verify",
+                "exact current `docs/requirements.md`",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-create-requirements/SKILL.md",
+            [
+                "private `refinement-verify` action owned by `sdlc-start`",
+                "latest accepted prompt identity",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/scripts/prompt_workspace.py",
+            [
+                "def verify_requirements_refinement_contract",
+                "REQUIREMENTS_REFINEMENT_REQUIRED",
+            ],
+        )
 
 
 if __name__ == "__main__":

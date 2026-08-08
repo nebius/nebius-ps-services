@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable tests for project_agent_instructions.py."""
+"""Disposable v2 contract tests for project_agent_instructions.py."""
 
 from __future__ import annotations
 
@@ -10,25 +10,130 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 from typing import Optional
 import unittest
 from unittest import mock
 
-import project_agent_instructions as cli_module
 from project_agent_instructions_lib import contracts
 from project_agent_instructions_lib import discovery
 from project_agent_instructions_lib import private_state
 from project_agent_instructions_lib import target_io
 from project_agent_instructions_lib import workflow
 
+
 SCRIPT = Path(__file__).resolve().with_name("project_agent_instructions.py")
+AGENTIC_VALIDATOR = (
+    SCRIPT.parents[2] / "sdlc-start" / "scripts" / "validate_project_specs.py"
+)
+REQUIREMENTS = """---
+schema: agentic-sdlc.requirements.v1
+project: Example
+status: ready
+created_by_skill: sdlc-create-requirements
+updated_by_skill: sdlc-create-requirements
+---
+
+# Requirements
+
+<!-- REQUIREMENT: REQ-001 status=active priority=P0 type=feature -->
+### REQ-001: Enforce project instructions
+
+#### User Story
+
+As a maintainer, I want durable project rules, so that agents act consistently.
+
+#### Acceptance Criteria
+
+- AC-001: The selected project receives only evidence-backed rules.
+
+#### Negative Criteria
+
+- NC-001: Personal global instructions are not copied.
+
+#### Validation Method
+
+Contract validation.
+
+#### Test Method
+
+Unit and integration tests.
+
+#### Evaluation Method
+
+Manual review.
+
+<!-- /REQUIREMENT: REQ-001 -->
+"""
+DESIGN = """---
+schema: agentic-sdlc.design.v1
+project: Example
+status: ready
+created_by_skill: sdlc-create-design
+updated_by_skill: sdlc-create-design
+source_requirements: docs/requirements.md
+---
+
+# Design
+
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+### FEAT-001: Project instructions
+
+#### Requirements Covered
+
+- REQ-001
+
+#### Context Evidence
+
+- Codebase contract tests.
+
+#### Design Details
+
+Generate deterministic rules after validation.
+
+#### Selected Option
+
+Use a receipt-bound helper.
+
+#### Alternatives Considered
+
+- Human-only maintenance has drift risk.
+
+#### Implementation Boundaries
+
+- The helper owns generated AGENTS.md files.
+
+#### Test-First Success Criteria
+
+- TDD-001: Invalid ownership fails closed.
+
+#### Validation Plan
+
+Run syntax and contract checks.
+
+#### Test Plan
+
+Run unit and integration tests.
+
+#### Evaluation Plan
+
+Review the generated file.
+
+#### Rollout And Rollback
+
+Adopt and retire only with exact-digest approval.
+
+#### Done Definition
+
+Requirements mapped and checks passing.
+
+<!-- /FEATURE: FEAT-001 -->
+"""
 
 
 class ProjectAgentInstructionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
-            prefix="project-agent-instructions-test-"
+            prefix="project-agent-instructions-v2-"
         )
         self.root = Path(self.temporary.name).resolve()
         self.repo = self.root / "repo"
@@ -38,55 +143,66 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.private.mkdir()
         self.codex_home.mkdir()
         os.chmod(self.private, 0o700)
-        private_state._ensure_private_root(self.private, self.repo)
         subprocess.run(
-            ["git", "init", "-q", "-b", "feature/test"],
-            cwd=self.repo,
-            check=True,
+            ["git", "init", "-q", "-b", "feature/test"], cwd=self.repo, check=True
         )
         (self.repo / "docs").mkdir()
         (self.repo / "docs" / "requirements.md").write_text(
-            "---\nschema: agentic-sdlc.requirements.v1\n---\n# Requirements\n",
-            encoding="utf-8",
+            REQUIREMENTS, encoding="utf-8"
         )
         (self.repo / "docs" / "design.md").write_text(
-            "---\nschema: agentic-sdlc.design.v1\n---\n# Design\n",
-            encoding="utf-8",
+            DESIGN, encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "docs"], cwd=self.repo, check=True)
+        private_state._ensure_private_root(self.private, self.repo)
+        self.receipt_path = self.private / "spec-receipt.json"
+        self.write_json("spec-receipt.json", self.receipt())
+        self.runtime_path = self.write_json(
+            "runtime.json",
+            {
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": None,
+                "overrides": {},
+            },
         )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def inspect(
-        self,
-        *,
-        project: Optional[Path] = None,
-        owner: str = "agentic-sdlc",
-    ) -> dict[str, object]:
-        return discovery._manifest(
-            project or self.repo,
-            owner,
-            "docs/requirements.md",
-            "docs/design.md",
-            self.codex_home,
+    def receipt(self, project: Optional[Path] = None) -> dict[str, object]:
+        selected = (project or self.repo).resolve()
+        result = subprocess.run(
+            [sys.executable, str(AGENTIC_VALIDATOR), "--project-root", str(selected)],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
         )
+        value = json.loads(result.stdout)
+        assert isinstance(value, dict)
+        return value
 
     def write_json(self, name: str, value: object) -> Path:
         path = self.private / name
         path.write_text(
-            json.dumps(value, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         os.chmod(path, 0o600)
         return path
 
-    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *arguments],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+    def inspect(
+        self,
+        *,
+        project: Optional[Path] = None,
+        runtime_config: Optional[Path] = None,
+    ) -> dict[str, object]:
+        return discovery._manifest(
+            project or self.repo,
+            "agentic-sdlc",
+            "docs/requirements.md",
+            "docs/design.md",
+            self.codex_home,
+            self.receipt_path,
+            runtime_config or self.runtime_path,
         )
 
     def evidence(self, project: Optional[Path] = None) -> list[dict[str, str]]:
@@ -96,55 +212,35 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             {
                 "path": "docs/design.md",
                 "sha256": contracts._sha256_bytes(path.read_bytes()),
+                "locator": "# Design",
             }
         ]
 
-    def body(self, *, scope: str = ".", purpose: Optional[str] = None) -> str:
-        lines = [
-            "# Example Project Agent Instructions",
-            "",
-            "## Scope",
-            "",
-            "These instructions apply to this directory and all descendants.",
-            "",
-            f"Project root: `{scope}`",
-            "",
+    def rules(self) -> list[dict[str, object]]:
+        return [
+            {
+                "section": "Testing and verification",
+                "instruction": "Run the focused contract tests for every behavior change.",
+                "evidence": ["docs/design.md"],
+            }
         ]
-        if purpose is not None:
-            lines.extend(
-                [
-                    "## Project purpose",
-                    "",
-                    f"- {purpose}",
-                    "",
-                ]
-            )
-        lines.extend(
-            [
-                "## Read before changing",
-                "",
-                "- Requirements: `docs/requirements.md`",
-                "- Design: `docs/design.md`",
-                "",
-            ]
-        )
-        return "\n".join(lines)
 
     def decision(
         self,
         manifest: dict[str, object],
         disposition: str,
         *,
-        body: Optional[str] = None,
-        project: Optional[Path] = None,
+        approval: Optional[dict[str, str]] = None,
     ) -> dict[str, object]:
         return {
             "schema": contracts.DECISION_SCHEMA,
             "manifest_sha256": manifest["manifest_sha256"],
             "disposition": disposition,
-            "rationale": "Current project evidence supports this result.",
-            "evidence": self.evidence(project),
-            "body": body,
+            "rationale": "Tracked project evidence supports this decision.",
+            "evidence": self.evidence(),
+            "rules": self.rules() if disposition == "needed" else [],
+            "budget_exception": None,
+            "ownership_approval": approval,
         }
 
     def apply(
@@ -152,842 +248,679 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         manifest: dict[str, object],
         decision: dict[str, object],
     ) -> dict[str, object]:
-        manifest_path = self.write_json("manifest.json", manifest)
-        decision_path = self.write_json("decision.json", decision)
         return workflow.apply_decision(
-            manifest_path,
-            decision_path,
+            self.write_json("manifest.json", manifest),
+            self.write_json("decision.json", decision),
+            self.private / "ownership.json",
             self.private / "state.json",
             self.private,
         )
 
-    def test_missing_target_can_be_created_and_verified(self) -> None:
+    def test_missing_target_is_created_with_v2_provenance_and_verified(self) -> None:
         manifest = self.inspect()
-        self.assertEqual(manifest["target"]["file_status"], "missing")
-        state = self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
+        state = self.apply(manifest, self.decision(manifest, "needed"))
         target = self.repo / "AGENTS.md"
         self.assertEqual(state["outcome"], "created")
+        self.assertTrue(state["reload_required"])
         self.assertTrue(
-            target.read_text(encoding="utf-8").startswith(
-                "<!-- project-agent-instructions:generated-v1 "
-            )
+            target.read_bytes().startswith(contracts.GENERATED_MARKER_PREFIX)
         )
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+        ownership = json.loads((self.private / "ownership.json").read_text())
+        self.assertEqual(ownership["target_sha256"], state["target_sha256"])
         self.assertEqual(
-            stat.S_IMODE((self.private / "state.json").stat().st_mode),
-            0o600,
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "created",
         )
-        verified = workflow.verify_state(
-            self.private / "state.json",
-            self.private,
+
+    def test_render_is_deterministic_and_does_not_copy_global_instructions(
+        self,
+    ) -> None:
+        (self.codex_home / "AGENTS.md").write_text(
+            "# Global\n\n- Personal-only rule.\n", encoding="utf-8"
         )
-        self.assertEqual(verified["status"], "ok")
-        self.assertEqual(verified["outcome"], "created")
-
-    def test_exclusive_create_cleans_up_io_failure(self) -> None:
-        target = self.repo / "AGENTS.md"
-        with mock.patch.object(
-            target_io.os,
-            "fchmod",
-            side_effect=PermissionError("simulated"),
-        ):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                target_io._exclusive_create(target, b"content\n")
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-        self.assertFalse(target.exists())
-
-    def test_create_race_cannot_record_or_verify_a_human_file(self) -> None:
         manifest = self.inspect()
-        target = self.repo / "AGENTS.md"
-        real_create = target_io._exclusive_create
-
-        def replace_after_create(path: Path, content: bytes) -> None:
-            real_create(path, content)
-            path.write_text(
-                "# Human Instructions\n\n- Concurrent replacement.\n",
-                encoding="utf-8",
-            )
-
-        with mock.patch.object(
-            workflow,
-            "_exclusive_create",
-            side_effect=replace_after_create,
-        ):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                self.apply(
-                    manifest,
-                    self.decision(manifest, "needed", body=self.body()),
-                )
-        self.assertEqual(context.exception.code, "CONCURRENT_MODIFICATION")
-        self.assertTrue(target.read_text(encoding="utf-8").startswith("# Human"))
-        self.assertFalse((self.private / "state.json").exists())
-
-    def test_same_generated_body_preserves_bytes_mode_and_mtime(self) -> None:
-        manifest = self.inspect()
-        body = self.body()
-        self.apply(manifest, self.decision(manifest, "needed", body=body))
-        target = self.repo / "AGENTS.md"
-        before = (
-            target.read_bytes(),
-            target.stat().st_mtime_ns,
-            stat.S_IMODE(target.stat().st_mode),
+        decision = self.decision(manifest, "needed")
+        body1, normalized1 = contracts._render_body(
+            manifest, decision["rules"], None, {"docs/design.md"}
         )
-        time.sleep(0.01)
-        current = self.inspect()
-        state = self.apply(
-            current,
-            self.decision(current, "needed", body=body),
+        body2, normalized2 = contracts._render_body(
+            manifest, list(reversed(decision["rules"])), None, {"docs/design.md"}
         )
-        after = (
-            target.read_bytes(),
-            target.stat().st_mtime_ns,
-            stat.S_IMODE(target.stat().st_mode),
-        )
-        self.assertEqual(state["outcome"], "existing-sufficient")
-        self.assertEqual(after, before)
-
-    def test_unchanged_generated_file_can_be_refreshed(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        current = self.inspect()
-        state = self.apply(
-            current,
-            self.decision(
-                current,
-                "needed",
-                body=self.body(purpose="Owns the example service."),
+        self.assertEqual(body1, body2)
+        self.assertEqual(normalized1, normalized2)
+        self.assertNotIn(b"Personal-only", body1)
+        without_global = dict(manifest)
+        without_global["global_instructions"] = []
+        self.assertEqual(
+            target_io._generated_content(
+                body1,
+                contracts._generation_manifest_sha256(manifest),
+                contracts._generation_decision_sha256(
+                    "needed", body1, self.evidence()
+                ),
+            ),
+            target_io._generated_content(
+                body2,
+                contracts._generation_manifest_sha256(without_global),
+                contracts._generation_decision_sha256(
+                    "needed", body2, self.evidence()
+                ),
             ),
         )
+
+    def test_same_managed_body_with_receipt_preserves_target(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        before = (self.repo / "AGENTS.md").read_bytes()
+        current = self.inspect()
+        state = self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        self.assertFalse(state["reload_required"])
+        self.assertEqual((self.repo / "AGENTS.md").read_bytes(), before)
+
+    def test_spec_change_refreshes_provenance_when_body_is_unchanged(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        target = self.repo / "AGENTS.md"
+        before = target.read_bytes()
+        requirements = self.repo / "docs" / "requirements.md"
+        requirements.write_text(
+            REQUIREMENTS.replace(
+                "durable project rules",
+                "durable selected-project rules",
+            ),
+            encoding="utf-8",
+        )
+        self.write_json("spec-receipt.json", self.receipt())
+
+        current = self.inspect()
+        state = self.apply(current, self.decision(current, "needed"))
+
         self.assertEqual(state["outcome"], "refreshed")
-        self.assertIn(
-            "Owns the example service.",
-            (self.repo / "AGENTS.md").read_text(encoding="utf-8"),
+        self.assertTrue(state["reload_required"])
+        self.assertNotEqual(target.read_bytes(), before)
+        self.assertEqual(
+            contracts._parse_generated(target.read_bytes())["body_sha256"],
+            contracts._parse_generated(before)["body_sha256"],
         )
 
-    def test_refresh_install_preserves_competing_writer(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
+    def test_changed_rules_refresh_exact_owned_target(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        current = self.inspect()
+        decision = self.decision(current, "needed")
+        decision["rules"][0]["instruction"] = (
+            "Run focused tests and inspect their exact failure output."
         )
+        state = self.apply(current, decision)
+        self.assertEqual(state["outcome"], "refreshed")
+        self.assertIn(
+            "inspect their exact failure", (self.repo / "AGENTS.md").read_text()
+        )
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "refreshed",
+        )
+
+    def test_human_edit_transfers_ownership_and_blocks_refresh(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
         target = self.repo / "AGENTS.md"
-        generated_before = target.read_bytes()
+        target.write_text(target.read_text() + "\nHuman note.\n", encoding="utf-8")
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+        current = self.inspect()
+        self.assertEqual(current["target"]["file_status"], "human-edited")
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(caught.exception.code, "STALE_GENERATED_FILE")
+
+    def test_unreceipted_v2_file_requires_exact_adoption(self) -> None:
+        initial = self.inspect()
+        decision = self.decision(initial, "needed")
+        _, body, _, _ = workflow._validate_decision(decision, initial)
+        assert body is not None
+        (self.repo / "AGENTS.md").write_bytes(
+            target_io._generated_content(
+                body,
+                contracts._generation_manifest_sha256(initial),
+                contracts._generation_decision_sha256(
+                    "needed", body, self.evidence()
+                ),
+            )
+        )
+        current = self.inspect()
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
+        approved = self.decision(
+            current,
+            "needed",
+            approval={
+                "action": "adopt",
+                "target_sha256": str(current["target"]["sha256"]),
+            },
+        )
+        state = self.apply(current, approved)
+        self.assertEqual(state["outcome"], "adopted")
+
+    def test_retirement_requires_exact_approval_and_is_verified(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        current = self.inspect()
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "not-needed"))
+        self.assertEqual(caught.exception.code, "RETIREMENT_APPROVAL_REQUIRED")
+        decision = self.decision(
+            current,
+            "not-needed",
+            approval={
+                "action": "retire",
+                "target_sha256": str(current["target"]["sha256"]),
+            },
+        )
+        state = self.apply(current, decision)
+        self.assertEqual(state["outcome"], "retired")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "retired",
+        )
+
+    def test_retirement_preserves_a_concurrent_replacement(self) -> None:
+        target = self.repo / "AGENTS.md"
+        original = b"generated bytes\n"
+        replacement = b"human replacement\n"
+        target.write_bytes(original)
+        actual_replace = os.replace
+
+        def replace_after_concurrent_write(
+            source: object, destination: object, **kwargs: object
+        ) -> None:
+            target.write_bytes(replacement)
+            actual_replace(source, destination, **kwargs)
+
+        with (
+            mock.patch.object(
+                target_io.os,
+                "replace",
+                side_effect=replace_after_concurrent_write,
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError) as caught,
+        ):
+            target_io._guarded_delete(target, contracts._sha256_bytes(original))
+        self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
+        self.assertEqual(target.read_bytes(), replacement)
+        self.assertFalse(
+            (self.repo / ".AGENTS.md.project-agent-instructions.backup").exists()
+        )
+
+    def test_retirement_keeps_recovery_backup_until_state_is_durable(self) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        target = self.repo / "AGENTS.md"
+        before = target.read_bytes()
         current = self.inspect()
         decision = self.decision(
             current,
-            "needed",
-            body=self.body(purpose="Changed purpose."),
+            "not-needed",
+            approval={
+                "action": "retire",
+                "target_sha256": str(current["target"]["sha256"]),
+            },
         )
-        manifest_path = self.write_json("manifest.json", current)
-        decision_path = self.write_json("decision.json", decision)
-        real_link = os.link
+        write_private_json = workflow._write_private_json
 
-        def competing_link(source: Path, destination: Path) -> None:
-            if Path(destination) == target and Path(source).name.startswith(
-                ".AGENTS.md."
-            ):
-                target.write_text(
-                    "# Human Instructions\n\n- Preserve the competing write.\n",
-                    encoding="utf-8",
-                )
-                raise FileExistsError
-            real_link(source, destination)
-
-        with mock.patch.object(target_io.os, "link", side_effect=competing_link):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                workflow.apply_decision(
-                    manifest_path,
-                    decision_path,
-                    self.private / "state.json",
-                    self.private,
-                )
-        self.assertEqual(context.exception.code, "CONCURRENT_MODIFICATION")
-        self.assertEqual(
-            target.read_text(encoding="utf-8"),
-            "# Human Instructions\n\n- Preserve the competing write.\n",
-        )
-        backup = self.repo / ".AGENTS.md.project-agent-instructions.backup"
-        self.assertEqual(backup.read_bytes(), generated_before)
-        self.assertFalse(
-            (self.repo / ".AGENTS.md.project-agent-instructions.lock").exists()
-        )
-
-    def test_refresh_install_failure_restores_prior_file(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        target = self.repo / "AGENTS.md"
-        original = target.read_bytes()
-        current = self.inspect()
-        backup = self.repo / ".AGENTS.md.project-agent-instructions.backup"
-        real_link = os.link
-
-        def fail_install_once(source: Path, destination: Path) -> None:
-            if Path(destination) == target and Path(source) != backup:
-                raise PermissionError("simulated install failure")
-            real_link(source, destination)
-
-        with mock.patch.object(target_io.os, "link", side_effect=fail_install_once):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                self.apply(
-                    current,
-                    self.decision(
-                        current,
-                        "needed",
-                        body=self.body(purpose="Changed purpose."),
-                    ),
-                )
-        self.assertEqual(context.exception.code, "CONCURRENT_MODIFICATION")
-        self.assertEqual(target.read_bytes(), original)
-        self.assertFalse(backup.exists())
-
-    def test_refresh_race_cannot_record_or_verify_a_human_file(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        state_path = self.private / "state.json"
-        prior_state = state_path.read_bytes()
-        target = self.repo / "AGENTS.md"
-        current = self.inspect()
-        real_replace = target_io._guarded_replace
-
-        def replace_after_refresh(
-            path: Path, expected_sha256: str, content: bytes
+        def fail_state_write(
+            path: Path,
+            value: object,
+            git_root: Path,
+            private_root: Path,
         ) -> None:
-            real_replace(path, expected_sha256, content)
-            path.write_text(
-                "# Human Instructions\n\n- Concurrent replacement.\n",
-                encoding="utf-8",
-            )
-
-        with mock.patch.object(
-            workflow,
-            "_guarded_replace",
-            side_effect=replace_after_refresh,
-        ):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                self.apply(
-                    current,
-                    self.decision(
-                        current,
-                        "needed",
-                        body=self.body(purpose="Changed purpose."),
-                    ),
+            if path.name == "state.json":
+                raise contracts.ProjectInstructionsError(
+                    "UNSAFE_TARGET", "simulated state write failure"
                 )
-        self.assertEqual(context.exception.code, "CONCURRENT_MODIFICATION")
-        self.assertTrue(target.read_text(encoding="utf-8").startswith("# Human"))
-        self.assertEqual(state_path.read_bytes(), prior_state)
+            write_private_json(path, value, git_root, private_root)
 
-    def test_human_edit_transfers_ownership_and_blocks_refresh(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        target = self.repo / "AGENTS.md"
-        target.write_text(
-            target.read_text(encoding="utf-8") + "\nHuman note.\n",
-            encoding="utf-8",
-        )
-        current = self.inspect()
-        self.assertEqual(current["target"]["file_status"], "human-edited")
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                current,
-                self.decision(
-                    current,
-                    "needed",
-                    body=self.body(purpose="Changed purpose."),
-                ),
+        with (
+            mock.patch.object(
+                workflow,
+                "_write_private_json",
+                side_effect=fail_state_write,
+            ),
+            self.assertRaises(contracts.ProjectInstructionsError),
+        ):
+            self.apply(current, decision)
+        backup = self.repo / ".AGENTS.md.project-agent-instructions.backup"
+        self.assertFalse(target.exists())
+        self.assertEqual(backup.read_bytes(), before)
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+        self.assertEqual(caught.exception.code, "RECOVERY_REQUIRED")
+
+    def test_parent_directory_swap_cannot_redirect_creation(self) -> None:
+        identity = (self.repo.stat().st_dev, self.repo.stat().st_ino)
+        original = self.root / "original-repo"
+        self.repo.rename(original)
+        self.repo.mkdir()
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            target_io._exclusive_create(
+                self.repo / "AGENTS.md", b"content\n", identity
             )
-        self.assertEqual(context.exception.code, "STALE_GENERATED_FILE")
-
-    def test_human_owned_file_is_preserved_when_sufficient(self) -> None:
-        target = self.repo / "AGENTS.md"
-        target.write_text("# Human Instructions\n\n- Preserve me.\n", encoding="utf-8")
-        before = target.read_bytes()
-        manifest = self.inspect()
-        state = self.apply(
-            manifest,
-            self.decision(manifest, "existing-sufficient"),
-        )
-        self.assertEqual(state["outcome"], "existing-sufficient")
-        self.assertEqual(target.read_bytes(), before)
-
-    def test_generated_file_cannot_claim_existing_sufficient(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        current = self.inspect()
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                current,
-                self.decision(current, "existing-sufficient"),
-            )
-        self.assertEqual(context.exception.code, "EXISTING_INSTRUCTIONS_GAP")
-
-    def test_not_needed_writes_private_state_only(self) -> None:
-        manifest = self.inspect()
-        state = self.apply(
-            manifest,
-            self.decision(manifest, "not-needed"),
-        )
-        self.assertEqual(state["outcome"], "not-needed")
+        self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
         self.assertFalse((self.repo / "AGENTS.md").exists())
-        self.assertTrue((self.private / "state.json").is_file())
+        self.assertFalse((original / "AGENTS.md").exists())
 
-    def test_no_write_race_cannot_record_a_changed_target(self) -> None:
-        manifest = self.inspect()
+    def test_create_rechecks_recovery_artifacts_at_mutation_boundary(self) -> None:
         target = self.repo / "AGENTS.md"
-        real_fresh_manifest = workflow._fresh_manifest
-        calls = 0
-
-        def mutate_before_final(recorded: dict[str, object]) -> dict[str, object]:
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                target.write_text(
-                    "# Human Instructions\n\n- Concurrent creation.\n",
-                    encoding="utf-8",
-                )
-            return real_fresh_manifest(recorded)
-
-        with mock.patch.object(
-            workflow,
-            "_fresh_manifest",
-            side_effect=mutate_before_final,
-        ):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                self.apply(
-                    manifest,
-                    self.decision(manifest, "not-needed"),
-                )
-        self.assertEqual(context.exception.code, "CONCURRENT_MODIFICATION")
-        self.assertFalse((self.private / "state.json").exists())
-
-    def test_existing_private_state_with_loose_mode_is_rejected(self) -> None:
-        manifest = self.inspect()
-        state_path = self.private / "state.json"
-        self.apply(
-            manifest,
-            self.decision(manifest, "not-needed"),
-        )
-        os.chmod(state_path, 0o644)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                manifest,
-                self.decision(manifest, "not-needed"),
-            )
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-
-    def test_verify_rejects_loose_private_evidence_modes(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "not-needed"),
-        )
-        for name in ("manifest.json", "decision.json", "state.json"):
+        for name in discovery.RECOVERY_NAMES:
             with self.subTest(name=name):
-                path = self.private / name
-                os.chmod(path, 0o644)
+                artifact = self.repo / name
+                artifact.write_text("recovery\n", encoding="utf-8")
                 try:
                     with self.assertRaises(
                         contracts.ProjectInstructionsError
-                    ) as context:
-                        workflow.verify_state(
-                            self.private / "state.json",
-                            self.private,
-                        )
-                    self.assertEqual(context.exception.code, "UNSAFE_TARGET")
+                    ) as caught:
+                        target_io._exclusive_create(target, b"content\n")
+                    self.assertEqual(caught.exception.code, "RECOVERY_REQUIRED")
+                    self.assertFalse(target.exists())
                 finally:
-                    os.chmod(path, 0o600)
-        self.assertEqual(
-            workflow.verify_state(
-                self.private / "state.json",
-                self.private,
-            )["status"],
-            "ok",
-        )
+                    if target.exists():
+                        target.unlink()
+                    artifact.unlink()
 
-    def test_state_provenance_fields_cannot_be_tampered(self) -> None:
+    def test_human_owned_file_can_only_be_existing_sufficient(self) -> None:
+        target = self.repo / "AGENTS.md"
+        target.write_text(
+            "# Human instructions\n\n- Preserve this file.\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
         manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
+        state = self.apply(manifest, self.decision(manifest, "existing-sufficient"))
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        self.assertEqual(
+            target.read_text(), "# Human instructions\n\n- Preserve this file.\n"
         )
-        state_path = self.private / "state.json"
-        original = json.loads(state_path.read_text(encoding="utf-8"))
-        tampered_values = {
-            "outcome": "refreshed",
-            "decision_sha256": "0" * 64,
-            "target_path": str(self.repo / "OTHER.md"),
-            "target_sha256": "0" * 64,
-            "active_instruction_path": None,
-        }
-        for field, value in tampered_values.items():
-            with self.subTest(field=field):
-                tampered = dict(original)
-                tampered[field] = value
-                state_path.write_text(
-                    json.dumps(tampered, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                os.chmod(state_path, 0o600)
-                with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                    workflow.verify_state(state_path, self.private)
-                self.assertEqual(
-                    context.exception.code,
-                    "CONCURRENT_MODIFICATION",
-                )
-        state_path.write_text(
-            json.dumps(original, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+
+    def test_untracked_human_instruction_source_is_rejected(self) -> None:
+        (self.repo / "AGENTS.md").write_text(
+            "# Human instructions\n\n- Preserve this file.\n", encoding="utf-8"
         )
-        os.chmod(state_path, 0o600)
 
-    def test_private_outputs_cannot_escape_or_replace_unowned_files(self) -> None:
-        outside = self.root / "outside.json"
-        outside.write_text('{"schema": "other"}\n', encoding="utf-8")
-        os.chmod(outside, 0o600)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            private_state._write_private_json(
-                outside,
-                {"schema": contracts.STATE_SCHEMA},
-                self.repo,
-                self.private,
-            )
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-        self.assertEqual(outside.read_text(encoding="utf-8"), '{"schema": "other"}\n')
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
 
-        unowned = self.private / "unowned.json"
-        unowned.write_text('{"schema": "other"}\n', encoding="utf-8")
-        os.chmod(unowned, 0o600)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            private_state._write_private_json(
-                unowned,
-                {"schema": contracts.STATE_SCHEMA},
-                self.repo,
-                self.private,
-            )
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-        self.assertEqual(unowned.read_text(encoding="utf-8"), '{"schema": "other"}\n')
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
 
-    def test_malformed_manifest_returns_structured_cli_blocker(self) -> None:
-        manifest_path = self.write_json(
-            "manifest.json",
-            {"schema": contracts.MANIFEST_SCHEMA},
+    def test_dormant_managed_file_conflicts_with_active_override(self) -> None:
+        initial = self.inspect()
+        self.apply(initial, self.decision(initial, "needed"))
+        (self.repo / "AGENTS.override.md").write_text(
+            "# Human override\n\n- Follow this active file.\n", encoding="utf-8"
         )
-        decision_path = self.write_json("decision.json", {})
-        completed = self.run_cli(
-            "apply",
-            "--private-root",
-            str(self.private),
-            "--manifest",
-            str(manifest_path),
-            "--decision",
-            str(decision_path),
-            "--state",
-            str(self.private / "state.json"),
-        )
-        self.assertEqual(completed.returncode, 2)
-        self.assertEqual(json.loads(completed.stdout)["code"], "UNSAFE_TARGET")
-        self.assertNotIn("Traceback", completed.stderr)
+        subprocess.run(["git", "add", "AGENTS.override.md"], cwd=self.repo, check=True)
+        current = self.inspect()
+        self.assertEqual(current["target"]["file_status"], "managed")
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "existing-sufficient"))
+        self.assertEqual(caught.exception.code, "EXISTING_INSTRUCTIONS_GAP")
 
-    def test_cli_has_no_helper_reexports(self) -> None:
-        completed = self.run_cli("--help")
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn("{inspect,apply,verify}", completed.stdout)
-        self.assertEqual(completed.stderr, "")
-        for name in (
-            "_manifest",
-            "_ensure_private_root",
-            "_exclusive_create",
-            "_guarded_replace",
-            "_write_private_json",
-            "apply_decision",
-            "verify_state",
-        ):
+    def test_legacy_marker_fails_closed_without_compatibility(self) -> None:
+        body = b"# Legacy\n"
+        marker = (
+            b"<!-- project-agent-instructions:generated-v1 body-sha256="
+            + contracts._sha256_bytes(body).encode()
+            + b" -->\n\n"
+        )
+        (self.repo / "AGENTS.md").write_bytes(marker + body)
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+        manifest = self.inspect()
+        self.assertEqual(manifest["target"]["file_status"], "legacy")
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(manifest, self.decision(manifest, "needed"))
+        self.assertEqual(caught.exception.code, "LEGACY_GENERATED_FILE")
+
+    def test_lock_or_backup_blocks_every_inspection(self) -> None:
+        for name in discovery.RECOVERY_NAMES:
             with self.subTest(name=name):
-                self.assertFalse(hasattr(cli_module, name))
+                artifact = self.repo / name
+                artifact.write_text("recovery\n", encoding="utf-8")
+                try:
+                    with self.assertRaises(
+                        contracts.ProjectInstructionsError
+                    ) as caught:
+                        self.inspect()
+                    self.assertEqual(caught.exception.code, "RECOVERY_REQUIRED")
+                finally:
+                    artifact.unlink()
 
-    def test_cli_round_trip_preserves_contract(self) -> None:
-        manifest_path = self.private / "manifest.json"
-        inspect_result = self.run_cli(
-            "inspect",
-            "--project-root",
-            str(self.repo),
-            "--spec-owner",
-            "agentic-sdlc",
-            "--codex-home",
-            str(self.codex_home),
-            "--private-root",
-            str(self.private),
-            "--output",
-            str(manifest_path),
-        )
-        self.assertEqual(inspect_result.returncode, 0)
-        self.assertEqual(json.loads(inspect_result.stdout)["status"], "ok")
-        self.assertEqual(inspect_result.stderr, "")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        decision_path = self.write_json(
-            "decision.json",
-            self.decision(manifest, "needed", body=self.body()),
-        )
-        state_path = self.private / "state.json"
-        apply_result = self.run_cli(
-            "apply",
-            "--private-root",
-            str(self.private),
-            "--manifest",
-            str(manifest_path),
-            "--decision",
-            str(decision_path),
-            "--state",
-            str(state_path),
-        )
-        self.assertEqual(apply_result.returncode, 0)
-        self.assertEqual(json.loads(apply_result.stdout)["outcome"], "created")
-        self.assertEqual(apply_result.stderr, "")
-        verify_result = self.run_cli(
-            "verify",
-            "--private-root",
-            str(self.private),
-            "--state",
-            str(state_path),
-        )
-        self.assertEqual(verify_result.returncode, 0)
-        self.assertEqual(json.loads(verify_result.stdout)["status"], "ok")
-        self.assertEqual(verify_result.stderr, "")
+    def test_stale_spec_receipt_is_rejected(self) -> None:
+        (self.repo / "docs/design.md").write_text("changed\n", encoding="utf-8")
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+        self.assertEqual(caught.exception.code, "SPEC_VALIDATION_REQUIRED")
 
-    def test_private_root_rejects_symlinks_and_git_worktrees(self) -> None:
-        symlink = self.root / "private-link"
-        symlink.symlink_to(self.private, target_is_directory=True)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            private_state._ensure_private_root(symlink, self.repo)
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-
-        other_repo = self.root / "other-repo"
-        other_repo.mkdir()
-        os.chmod(other_repo, 0o700)
-        subprocess.run(["git", "init", "-q"], cwd=other_repo, check=True)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            private_state._ensure_private_root(other_repo, self.repo)
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-
-    def test_missing_toml_parser_is_a_structured_prerequisite(self) -> None:
-        with mock.patch.object(
-            discovery.importlib,
-            "import_module",
-            side_effect=ModuleNotFoundError,
-        ):
-            with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                discovery._toml_parser()
-        self.assertEqual(context.exception.code, "PREREQUISITE_MISSING")
-
-    def test_codex_config_is_parsed_or_reports_parser_prerequisite(self) -> None:
-        (self.codex_home / "config.toml").write_text(
-            'project_doc_fallback_filenames = ["PROJECT_AGENTS.md"]\n'
-            "project_doc_max_bytes = 4096\n",
+    def test_forged_receipt_cannot_authorize_marker_only_specs(self) -> None:
+        requirements = self.repo / "docs/requirements.md"
+        design = self.repo / "docs/design.md"
+        requirements.write_text(
+            "---\nschema: agentic-sdlc.requirements.v1\n---\n# Requirements\n",
             encoding="utf-8",
         )
-        try:
-            fallbacks, maximum = discovery._codex_settings(self.codex_home)
-        except contracts.ProjectInstructionsError as error:
-            self.assertEqual(error.code, "PREREQUISITE_MISSING")
-        else:
-            self.assertEqual(fallbacks, ["PROJECT_AGENTS.md"])
-            self.assertEqual(maximum, 4096)
+        design.write_text(
+            "---\nschema: agentic-sdlc.design.v1\n---\n# Design\n",
+            encoding="utf-8",
+        )
+        forged = json.loads(self.receipt_path.read_text())
+        forged["validator"] = "forged"
+        forged["traceability_sha256"] = "f" * 64
+        forged["requirements"]["sha256"] = contracts._sha256_bytes(
+            requirements.read_bytes()
+        )
+        forged["design"]["sha256"] = contracts._sha256_bytes(design.read_bytes())
+        self.write_json("spec-receipt.json", forged)
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+        self.assertEqual(caught.exception.code, "SPEC_VALIDATION_REQUIRED")
 
-    def test_body_limit_uses_remaining_project_capacity(self) -> None:
-        inherited_size = 25 * 1024
-        prefix = b"# Repository instructions\n"
-        (self.repo / "AGENTS.md").write_bytes(
-            prefix + b"x" * (inherited_size - len(prefix))
-        )
-        nested = self.repo / "services" / "example"
-        (nested / "docs").mkdir(parents=True)
-        (nested / "docs" / "requirements.md").write_text(
-            "---\nschema: agentic-sdlc.requirements.v1\n---\n",
-            encoding="utf-8",
-        )
-        (nested / "docs" / "design.md").write_text(
-            "---\nschema: agentic-sdlc.design.v1\n---\n",
-            encoding="utf-8",
-        )
-        manifest = self.inspect(project=nested)
-        marker_size = len(target_io._generated_content(b""))
-        expected = 32 * 1024 - inherited_size - marker_size
-        self.assertEqual(manifest["generated_body_max_bytes"], expected)
-        self.assertLess(expected, 7 * 1024)
-        self.assertEqual(
-            inherited_size + marker_size + expected,
-            manifest["configured_project_doc_max_bytes"],
-        )
-
-    def test_exhausted_capacity_still_allows_not_needed(self) -> None:
-        (self.codex_home / "config.toml").write_text(
-            "project_doc_max_bytes = 100\n",
-            encoding="utf-8",
-        )
-        prefix = b"# Repository instructions\n"
-        (self.repo / "AGENTS.md").write_bytes(prefix + b"x" * (100 - len(prefix)))
-        nested = self.repo / "services" / "example"
-        (nested / "docs").mkdir(parents=True)
-        (nested / "docs" / "requirements.md").write_text(
-            "---\nschema: agentic-sdlc.requirements.v1\n---\n",
-            encoding="utf-8",
-        )
-        (nested / "docs" / "design.md").write_text(
-            "---\nschema: agentic-sdlc.design.v1\n---\n",
-            encoding="utf-8",
-        )
-        manifest = self.inspect(project=nested)
-        self.assertEqual(manifest["generated_body_max_bytes"], 0)
-        state = self.apply(
-            manifest,
-            self.decision(manifest, "not-needed", project=nested),
-        )
-        self.assertEqual(state["outcome"], "not-needed")
-
-    def test_global_instructions_do_not_consume_project_budget(self) -> None:
-        prefix = b"# Global instructions\n"
-        (self.codex_home / "AGENTS.md").write_bytes(
-            prefix + b"x" * (31 * 1024 - len(prefix))
-        )
+    def test_evidence_requires_tracking_digest_and_locator(self) -> None:
         manifest = self.inspect()
-        self.assertEqual(manifest["generated_body_max_bytes"], 7 * 1024)
-        self.assertEqual(
-            manifest["generated_body_max_bytes"],
-            contracts.MAX_BODY_BYTES,
-        )
+        for field, value in (("locator", "absent"), ("sha256", "0" * 64)):
+            decision = self.decision(manifest, "needed")
+            decision["evidence"][0][field] = value
+            with (
+                self.subTest(field=field),
+                self.assertRaises(contracts.ProjectInstructionsError),
+            ):
+                self.apply(manifest, decision)
 
-    def test_ignored_decision_evidence_is_rejected(self) -> None:
-        evidence_path = self.repo / "local-evidence.txt"
-        evidence_path.write_text("local-only evidence\n", encoding="utf-8")
-        (self.repo / ".gitignore").write_text(
-            "local-evidence.txt\n",
-            encoding="utf-8",
+    def test_layered_profile_and_runtime_overrides_are_fingerprinted(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            "project_doc_max_bytes = 8000\n", encoding="utf-8"
         )
-        manifest = self.inspect()
-        decision = self.decision(manifest, "not-needed")
-        decision["evidence"] = [
+        profile = self.codex_home / "small.config.toml"
+        profile.write_text("project_doc_max_bytes = 7000\n", encoding="utf-8")
+        base_manifest = self.inspect()
+        self.assertEqual(
+            base_manifest["config_context"]["project_doc_max_bytes"],
+            8000,
+        )
+        runtime = self.write_json(
+            "runtime.json",
             {
-                "path": "local-evidence.txt",
-                "sha256": contracts._sha256_bytes(evidence_path.read_bytes()),
-            }
-        ]
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(manifest, decision)
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-        self.assertIn("ignored", context.exception.message)
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": "small",
+                "overrides": {"project_doc_max_bytes": 6000},
+            },
+        )
+        manifest = self.inspect(runtime_config=runtime)
+        config = manifest["config_context"]
+        self.assertEqual(config["project_doc_max_bytes"], 6000)
+        self.assertEqual(
+            [Path(item["path"]).resolve() for item in config["sources"]],
+            [
+                (self.codex_home / "config.toml").resolve(),
+                profile.resolve(),
+                runtime.resolve(),
+            ],
+        )
+        self.assertEqual(
+            config["runtime_config_sha256"],
+            contracts._sha256_bytes(runtime.read_bytes()),
+        )
+        profile.write_text("project_doc_max_bytes = 6500\n", encoding="utf-8")
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(manifest, self.decision(manifest, "needed"))
+        self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
 
-    def test_tracked_evidence_matching_ignore_pattern_is_allowed(self) -> None:
-        evidence_path = self.repo / "tracked-evidence.txt"
-        evidence_path.write_text("durable evidence\n", encoding="utf-8")
-        (self.repo / ".gitignore").write_text(
-            "tracked-evidence.txt\n",
+    def test_trusted_project_config_overrides_user_config_in_order(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            f'[projects."{self.repo}"]\ntrust_level = "trusted"\n'
+            "project_doc_max_bytes = 9000\n",
             encoding="utf-8",
+        )
+        project_config = self.repo / ".codex" / "config.toml"
+        project_config.parent.mkdir()
+        project_config.write_text("project_doc_max_bytes = 5000\n", encoding="utf-8")
+        manifest = self.inspect()
+        config = manifest["config_context"]
+        self.assertEqual(config["project_doc_max_bytes"], 5000)
+        self.assertEqual(
+            [Path(item["path"]).resolve() for item in config["sources"]],
+            [
+                (self.codex_home / "config.toml").resolve(),
+                project_config.resolve(),
+                self.runtime_path.resolve(),
+            ],
+        )
+
+    def test_stale_ownership_receipt_blocks_managed_refresh(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        receipt = json.loads((self.private / "ownership.json").read_text())
+        receipt["target_sha256"] = "0" * 64
+        self.write_json("ownership.json", receipt)
+        current = self.inspect()
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
+
+    def test_config_change_after_inspect_blocks_apply(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            "project_doc_max_bytes = 9000\n", encoding="utf-8"
+        )
+        manifest = self.inspect()
+        (self.codex_home / "config.toml").write_text(
+            "project_doc_max_bytes = 8000\n", encoding="utf-8"
+        )
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(manifest, self.decision(manifest, "needed"))
+        self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
+
+    def test_selected_subproject_requires_effective_root_marker(self) -> None:
+        project = self.repo / "service"
+        (project / "docs").mkdir(parents=True)
+        for name in ("requirements.md", "design.md"):
+            (project / "docs" / name).write_bytes(
+                (self.repo / "docs" / name).read_bytes()
+            )
+        subprocess.run(["git", "add", "service/docs"], cwd=self.repo, check=True)
+        self.write_json("spec-receipt.json", self.receipt(project))
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect(project=project)
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
+        (project / ".git").mkdir()
+        manifest = self.inspect(project=project)
+        self.assertEqual(manifest["project_scope"], "service")
+
+    def test_parent_directory_is_not_a_valid_project_root_marker(self) -> None:
+        project = self.repo / "service"
+        (project / "docs").mkdir(parents=True)
+        for name in ("requirements.md", "design.md"):
+            (project / "docs" / name).write_bytes(
+                (self.repo / "docs" / name).read_bytes()
+            )
+        subprocess.run(["git", "add", "service/docs"], cwd=self.repo, check=True)
+        self.write_json("spec-receipt.json", self.receipt(project))
+        runtime = self.write_json(
+            "runtime.json",
+            {
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": None,
+                "overrides": {"project_root_markers": [".."]},
+            },
+        )
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect(project=project, runtime_config=runtime)
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
+
+    def test_empty_root_markers_make_selected_directory_the_project_root(self) -> None:
+        project = self.repo / "service"
+        (project / "docs").mkdir(parents=True)
+        for name in ("requirements.md", "design.md"):
+            (project / "docs" / name).write_bytes(
+                (self.repo / "docs" / name).read_bytes()
+            )
+        subprocess.run(["git", "add", "service/docs"], cwd=self.repo, check=True)
+        self.write_json("spec-receipt.json", self.receipt(project))
+        runtime = self.write_json(
+            "runtime.json",
+            {
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": None,
+                "overrides": {"project_root_markers": []},
+            },
+        )
+
+        manifest = self.inspect(project=project, runtime_config=runtime)
+
+        self.assertEqual(manifest["project_scope"], "service")
+        self.assertEqual(manifest["config_context"]["project_root_markers"], [])
+
+    def test_ignored_target_is_rejected_before_generation(self) -> None:
+        (self.repo / ".gitignore").write_text("AGENTS.md\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.repo, check=True)
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
+        (self.repo / "AGENTS.md").write_text(
+            "# Human instructions\n\n- Keep this tracked file.\n", encoding="utf-8"
         )
         subprocess.run(
-            ["git", "add", "-f", "tracked-evidence.txt"],
-            cwd=self.repo,
-            check=True,
+            ["git", "add", "-f", "AGENTS.md"], cwd=self.repo, check=True
         )
-        manifest = self.inspect()
-        decision = self.decision(manifest, "not-needed")
-        decision["evidence"] = [
-            {
-                "path": "tracked-evidence.txt",
-                "sha256": contracts._sha256_bytes(evidence_path.read_bytes()),
-            }
-        ]
-        state = self.apply(manifest, decision)
-        self.assertEqual(state["outcome"], "not-needed")
-
-    def test_override_is_active_and_blocks_generated_file(self) -> None:
-        override = self.repo / "AGENTS.override.md"
-        override.write_text("# Human Override\n\n- Preserve me.\n", encoding="utf-8")
-        manifest = self.inspect()
-        self.assertEqual(
-            manifest["active_project_instruction"]["kind"],
-            "project-override",
-        )
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                manifest,
-                self.decision(manifest, "needed", body=self.body()),
-            )
-        self.assertEqual(context.exception.code, "EXISTING_INSTRUCTIONS_GAP")
-        self.assertFalse((self.repo / "AGENTS.md").exists())
-
-    def test_owner_mismatch_fails_closed(self) -> None:
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.inspect(owner="task-implementer")
-        self.assertEqual(context.exception.code, "SPEC_OWNER_CONFLICT")
-
-    def test_foreign_owner_markers_are_rejected(self) -> None:
-        cases = (
-            (
-                "task-implementer",
-                (
-                    "<!-- task-implementer:requirements:start "
-                    "schema=task-implementer/requirements-v1 -->\n"
-                    f"{contracts.AGENTIC_DESIGN_SCHEMA}\n"
-                ),
-                (
-                    "<!-- task-implementer:design:start "
-                    "schema=task-implementer/design-v1 -->\n"
-                    f"{contracts.AGENTIC_REQUIREMENTS_SCHEMA}\n"
-                ),
-            ),
-            (
-                "agentic-sdlc",
-                (
-                    "---\nschema: agentic-sdlc.requirements.v1\n---\n"
-                    f"{contracts.TASK_DESIGN_MARKER}\n"
-                ),
-                (
-                    "---\nschema: agentic-sdlc.design.v1\n---\n"
-                    f"{contracts.TASK_REQUIREMENTS_MARKER}\n"
-                ),
-            ),
-        )
-        for owner, requirements, design in cases:
-            with self.subTest(owner=owner):
-                (self.repo / "docs" / "requirements.md").write_text(
-                    requirements,
-                    encoding="utf-8",
-                )
-                (self.repo / "docs" / "design.md").write_text(
-                    design,
-                    encoding="utf-8",
-                )
-                with self.assertRaises(contracts.ProjectInstructionsError) as context:
-                    self.inspect(owner=owner)
-                self.assertEqual(
-                    context.exception.code,
-                    "SPEC_OWNER_CONFLICT",
-                )
-
-    def test_task_implementer_owned_specs_are_accepted(self) -> None:
-        (self.repo / "docs" / "requirements.md").write_text(
-            "<!-- task-implementer:requirements:start "
-            "schema=task-implementer/requirements-v1 -->\n"
-            "# Requirements\n"
-            "<!-- task-implementer:requirements:end -->\n",
-            encoding="utf-8",
-        )
-        (self.repo / "docs" / "design.md").write_text(
-            "<!-- task-implementer:design:start "
-            "schema=task-implementer/design-v1 -->\n"
-            "# Design\n"
-            "<!-- task-implementer:design:end -->\n",
-            encoding="utf-8",
-        )
-        manifest = self.inspect(owner="task-implementer")
-        self.assertEqual(manifest["spec_owner"], "task-implementer")
-
-    def test_empty_human_file_is_not_sufficient(self) -> None:
-        (self.repo / "AGENTS.md").write_text("", encoding="utf-8")
-        manifest = self.inspect()
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                manifest,
-                self.decision(manifest, "existing-sufficient"),
-            )
-        self.assertEqual(context.exception.code, "EXISTING_INSTRUCTIONS_GAP")
-
-    def test_symlink_target_is_rejected_without_touching_referent(self) -> None:
-        referent = self.root / "outside.md"
-        referent.write_text("outside\n", encoding="utf-8")
-        (self.repo / "AGENTS.md").symlink_to(referent)
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
             self.inspect()
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
-        self.assertEqual(referent.read_text(encoding="utf-8"), "outside\n")
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
 
-    def test_nested_selected_project_gets_nested_scope(self) -> None:
-        nested = self.repo / "services" / "example"
-        (nested / "docs").mkdir(parents=True)
-        (nested / "docs" / "requirements.md").write_text(
-            "---\nschema: agentic-sdlc.requirements.v1\n---\n",
-            encoding="utf-8",
-        )
-        (nested / "docs" / "design.md").write_text(
-            "---\nschema: agentic-sdlc.design.v1\n---\n",
-            encoding="utf-8",
-        )
-        manifest = self.inspect(project=nested)
-        self.assertEqual(manifest["project_scope"], "services/example")
-        state = self.apply(
-            manifest,
-            self.decision(
-                manifest,
-                "needed",
-                body=self.body(scope="services/example"),
-                project=nested,
-            ),
-        )
-        self.assertEqual(state["outcome"], "created")
-        self.assertTrue((nested / "AGENTS.md").is_file())
-        self.assertFalse((self.repo / "AGENTS.md").exists())
-
-    def test_placeholder_body_is_rejected(self) -> None:
+    def test_unsafe_rule_and_unjustified_budget_are_rejected(self) -> None:
         manifest = self.inspect()
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            contracts._validate_body(
-                self.body().replace("Example Project", "<Project>"),
-                manifest,
+        decision = self.decision(manifest, "needed")
+        decision["rules"][0]["instruction"] = (
+            "Use https://private.example.invalid for tests."
+        )
+        with self.assertRaises(contracts.ProjectInstructionsError):
+            self.apply(manifest, decision)
+        for separator in ("\r", "\u2028"):
+            changed_decision = self.decision(manifest, "needed")
+            changed_decision["rules"][0]["instruction"] = (
+                f"Run focused tests.{separator}## Injected"
             )
-        self.assertEqual(context.exception.code, "UNSAFE_TARGET")
+            with self.assertRaises(contracts.ProjectInstructionsError):
+                self.apply(manifest, changed_decision)
+        decision = self.decision(manifest, "needed")
+        decision["budget_exception"] = "No exception is needed."
+        with self.assertRaises(contracts.ProjectInstructionsError):
+            self.apply(manifest, decision)
 
-    def test_private_ipv6_and_secret_body_is_rejected(self) -> None:
+    def test_rendered_paths_and_common_secret_forms_are_rejected(self) -> None:
         manifest = self.inspect()
-        cases = (
-            "See https://[::1]:8443/status.",
-            "See https://[fd00::1]/status.",
-            "See https://[fe80::1%25en0]/status.",
-            "Use " + "Bearer " + "a" * 24 + ".",
-        )
-        for purpose in cases:
+        decision = self.decision(manifest, "needed")
+        for field, value in (
+            ("project_scope", "service`\n\n## Injected"),
+            ("requirements", "docs/requirements`bad.md"),
+        ):
+            changed = dict(manifest)
+            if field == "requirements":
+                changed[field] = dict(manifest[field])
+                changed[field]["path"] = value
+            else:
+                changed[field] = value
             with (
-                self.subTest(purpose=purpose),
-                self.assertRaises(contracts.ProjectInstructionsError) as context,
+                self.subTest(field=field),
+                self.assertRaises(contracts.ProjectInstructionsError),
             ):
-                contracts._validate_body(self.body(purpose=purpose), manifest)
-            self.assertEqual(context.exception.code, "UNSAFE_TARGET")
+                contracts._render_body(
+                    changed, decision["rules"], None, {"docs/design.md"}
+                )
+        for unsafe in (
+            "Use password=correct-horse-battery-staple.",
+            "Use npm_abcdefghijklmnopqrstuvwxyz123456 for releases.",
+            "Use eyJabcdefgh.eyJijklmnop.qrstuvwxyz12 for access.",
+        ):
+            changed_decision = self.decision(manifest, "needed")
+            changed_decision["rules"][0]["instruction"] = unsafe
+            with self.assertRaises(contracts.ProjectInstructionsError):
+                self.apply(manifest, changed_decision)
 
-    def test_public_ipv6_endpoint_body_is_allowed(self) -> None:
-        manifest = self.inspect()
-        body = self.body(purpose="See https://[2606:4700::1111]/status.")
-        self.assertEqual(contracts._validate_body(body, manifest), body.encode())
-
-    def test_generated_file_is_not_deleted_when_no_longer_needed(self) -> None:
-        manifest = self.inspect()
-        self.apply(
-            manifest,
-            self.decision(manifest, "needed", body=self.body()),
+    def test_symlinked_project_config_directory_is_rejected(self) -> None:
+        (self.codex_home / "config.toml").write_text(
+            f'[projects."{self.repo}"]\ntrust_level = "trusted"\n',
+            encoding="utf-8",
         )
-        current = self.inspect()
-        with self.assertRaises(contracts.ProjectInstructionsError) as context:
-            self.apply(
-                current,
-                self.decision(current, "not-needed"),
+        outside = self.root / "outside-codex"
+        outside.mkdir()
+        (outside / "config.toml").write_text(
+            "project_doc_max_bytes = 5000\n", encoding="utf-8"
+        )
+        (self.repo / ".codex").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+        self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
+
+    def test_create_io_failure_removes_only_owned_partial_file(self) -> None:
+        target = self.repo / "AGENTS.md"
+        with mock.patch.object(
+            target_io.os, "fchmod", side_effect=PermissionError("simulated")
+        ):
+            with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+                target_io._exclusive_create(target, b"content\n")
+        self.assertEqual(caught.exception.code, "UNSAFE_TARGET")
+        self.assertFalse(target.exists())
+
+    def test_private_state_fsyncs_file_then_directory(self) -> None:
+        observed_directory: list[bool] = []
+        actual_fsync = os.fsync
+
+        def track_fsync(descriptor: int) -> None:
+            observed_directory.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+            actual_fsync(descriptor)
+
+        with mock.patch.object(
+            private_state.os,
+            "fsync",
+            side_effect=track_fsync,
+        ):
+            private_state._write_private_json(
+                self.private / "durable.json",
+                {"schema": "test.durable.v1"},
+                self.repo,
+                self.private,
             )
-        self.assertEqual(context.exception.code, "STALE_GENERATED_FILE")
-        self.assertTrue((self.repo / "AGENTS.md").is_file())
+        self.assertEqual(observed_directory, [False, True])
+
+    def test_cli_inspect_requires_private_receipt_and_emits_v2_manifest(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "inspect",
+                "--project-root",
+                str(self.repo),
+                "--spec-owner",
+                "agentic-sdlc",
+                "--codex-home",
+                str(self.codex_home),
+                "--private-root",
+                str(self.private),
+                "--spec-receipt",
+                str(self.receipt_path),
+                "--runtime-config",
+                str(self.runtime_path),
+                "--output",
+                "cli-manifest.json",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((self.private / "cli-manifest.json").read_text())
+        self.assertEqual(manifest["schema"], contracts.MANIFEST_SCHEMA)
 
 
 if __name__ == "__main__":

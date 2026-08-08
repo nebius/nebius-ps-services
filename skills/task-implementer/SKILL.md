@@ -92,6 +92,8 @@ $task-implementer workspace remove [project-folder]
 
 - Read `references/prompt-workspace.md` before workspace, routing, steering,
   state recovery, or sandbox decisions.
+- Read `references/prompt-requirements-refinement.md` before compiling a new or
+  revised prompt into managed requirements or asking clarification questions.
 - Read `references/implementation-loop.md` before decomposition, wave planning,
   worker dispatch, integration, promotion, or cleanup.
 - Read the run manifest, exact bound snapshot, steering ledger, full handoff,
@@ -99,8 +101,9 @@ $task-implementer workspace remove [project-folder]
 - Inspect relevant `AGENTS.md`, code, tests, README/design docs, changelog, Git
   state, managed requirements, and managed design records.
 - After managed requirements and design are valid, explicitly route to
-  `$project-agent-instructions` and read its final decision plus any active
-  selected-project instruction file before locking the coordinator contract.
+  `$project-agent-instructions` with the exact `spec-inspect` receipt. Verify
+  its final v2 state and read any active selected-project instruction file
+  before locking the coordinator contract.
 - Use `brainstorm` and `design` when their routing conditions apply.
 - Every worker uses `code-review` and exactly one `$commit`; the coordinator
   uses combined validation, integration `code-review`, and final `$align`.
@@ -114,15 +117,25 @@ Private state stays outside Git:
 ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 ├── projects/<project>/<scope>/
 │   ├── workspace.json
+│   ├── prompt-queue.json
+│   ├── queued-prompts/<prompt>/<digest>.md
+│   ├── prompts/00-START-HERE.md
 │   ├── prompts/*.md
 │   └── runs/<run>/
 │       ├── manifest.json
 │       ├── steering.json
+│       ├── requirements-refinement.json
 │       ├── inputs/<revision>/prompt.md
 │       ├── handoff.md
 │       └── orchestration/
 │           ├── coordinator.json
 │           ├── interop.json
+│           ├── project-agent-spec-receipt.json
+│           ├── project-agent-instructions/
+│           │   ├── manifest.json
+│           │   ├── decision.json
+│           │   ├── ownership.json
+│           │   └── state.json
 │           ├── waves/wave-001.json
 │           ├── tasks/wave-001/task-1.json
 │           ├── assignments/wave-001/task-1.json
@@ -159,8 +172,10 @@ and private result record.
    reuse the existing lane for the same common directory, primary checkout,
    source ref, and scope. Do not copy source-checkout dirt.
 3. Invoke private `init`. Create, verify, or safely rebind workspace-v2 to a
-   newer lane incarnation. Create exactly one starter prompt only when the
-   prompt directory is empty; preserve all existing prompts and run history.
+   newer lane incarnation. Ensure generated `00-START-HERE.md`; exclude it from
+   prompt parsing. Create exactly one starter prompt only when no actual prompt
+   exists; preserve all existing prompts and run history. The default VS Code
+   build task creates a fresh prompt ID. Do not clone prompt files manually.
 4. Ask VS Code to reuse its last active window for the generated workspace when
    available. Loading the workspace restarts that window's extension host and
    may interrupt its terminal or Codex UI; editor failure does not invalidate
@@ -170,10 +185,22 @@ and private result record.
 
 ### `run <prompt-path-or-unique-filename>`
 
-1. Invoke private `intake`; validate the managed prompt, acquire the scope
-   lock, select one run, and snapshot accepted steering once.
-2. For a new or safely reconcilable run, inspect source and normalize stable
-   requirements, task IDs, dependencies, write claims, conflict domains,
+1. Invoke private `intake`; validate prompt-v2, acquire the scope lock, and
+   snapshot the accepted intent once. If another prompt owns active work,
+   persist this explicit run request in the private FIFO queue and stop this
+   invocation with its queue position. Saving or creating a prompt never
+   queues it. Re-running an edited queued prompt updates its accepted snapshot
+   in place; an unaccepted queue-head edit blocks activation.
+2. For a new or safely reconcilable run, apply
+   `references/prompt-requirements-refinement.md`: inspect discoverable facts,
+   extract the Ask and optional headings into outcome, context, constraints,
+   acceptance, verification, non-goals, and related managed requirement
+   fields. Persist stable clarification IDs privately. Ask only for material
+   ambiguity and block contract lock while such a question is open or
+   reopened. Render and validate the managed requirements/design regions,
+   then require private `wave-plan` to bind the latest accepted intent and
+   `ready` refinement digest to the exact current managed requirements region
+   before acquiring resources. Normalize task IDs, dependencies, write claims, conflict domains,
    validation, done criteria, and prompt/repository constraints in stable task
    order. Repeat every applicable constraint in each task's stop context. Do
    not decide project instructions until the managed requirements and design
@@ -205,10 +232,14 @@ and private result record.
    handoff done, seals an immutable generation receipt, and releases the
    generation for later lane integration. It does not integrate the source
    branch, push, or open a PR. An unchanged completed prompt returns
-   `ALREADY_COMPLETE`; an interrupted generation release returns a private
+   `ALREADY_COMPLETE`. Editing it creates a linked fresh-full-objective run
+   against current project truth; `r0001` is not steering and omission does not
+   delete prior accepted product truth. An interrupted generation release returns a private
    finalization-pending outcome and repeats the same final transition. A fresh
    explicit `run` may immediately acquire the next generation, so multiple
-   pending generations can accumulate before `integrate`.
+   pending generations can accumulate before `integrate`. After finalization
+   releases the active generation, activate the unchanged FIFO queue head
+   automatically; never overtake blocked active work or reorder the queue.
 
 ### `integrate [project-folder]`
 
@@ -272,16 +303,32 @@ For each wave:
 2. Register resource intent in the active lane generation, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
-3. Preallocate and validate coordinator-owned requirement/design records.
+3. In the integration checkout, preallocate and validate coordinator-owned
+   requirement/design records, then stage both complete spec files so the owner
+   validator can issue a Git-bound receipt. Every non-superseded requirement
+   must be covered by a current design record.
    Explicitly invoke `$project-agent-instructions` with spec owner
-   `task-implementer`, store its receipt under private orchestration state, and
-   stop on any structured blocker. Read any active selected-project instruction
-   file explicitly in the current coordinator session.
-4. Commit the locked contract only if tracked coordinator files changed. A
+   `task-implementer`. Persist the exact receipt emitted for that integration
+   selected-project root by the private spec validator as mode `0600`, pass it
+   to `inspect`, and keep manifest, decision, ownership, and state under
+   private orchestration. Stop on any structured blocker. If `reload_required`
+   is true, stop this execution
+   boundary, start a fresh coordinator session, rerun and verify the unchanged
+   decision, then read the active selected-project instruction file.
+4. Require verified project-agent-instructions v2 state with current full-file
+   spec digests and `reload_required: false`. Commit the locked contract only
+   if tracked coordinator files changed. A
    created or refreshed selected-project `AGENTS.md` is permitted in that one
-   coordinator-owned commit; that commit is every worker base. A `not-needed`
-   or `existing-sufficient` outcome changes only private state.
-5. Invoke private `wave-dispatch`. It creates a unique validated branch and
+   coordinator-owned commit; that commit is every worker base. An
+   `existing-sufficient`, `adopted`, or `not-needed` outcome changes only
+   private state. Explicit guarded retirement may remove the managed file in
+   the coordinator-owned commit.
+5. Invoke private `wave-dispatch`. After proving the exact clean integration
+   `contract_commit`, it revalidates that checkout's current managed-spec
+   receipt against the committed blobs, proves the active and ancestor project
+   instructions belong to that commit, and invokes the shared
+   project-agent state verifier; stale, missing, or reload-pending v2 state
+   blocks dispatch. It then creates a unique validated branch and
    locked full-repository worktree only for the active capacity batch, plus an
    immutable v7 assignment with absolute scope cwd, exact helper/workspace
    paths, base, digest, claims, domains, validation, criteria, canonical worker guardrails, and a
@@ -291,24 +338,25 @@ For each wave:
 6. Reserve the main thread for coordination. Dispatch native worker agents up
    to available capacity. If unavailable, use fresh sequential `codex exec`
    workers in the same isolated worktrees; the coordinator never implements a worker task.
-   Start every worker with only its immutable assignment and incoming handoff,
-   without inherited coordinator transcript or unrelated conversation context.
+   Start every worker with only its immutable assignment, incoming handoff, and
+   opaque coordinator-issued start lease, without inherited coordinator
+   transcript or unrelated conversation context.
    Invoke private `task-arm` only when a real worker slot is available, then
    spawn that worker immediately. Queued assignments remain unarmed and do not
    consume a start budget. The worker reads the assignment and makes
    `task-start` its first private transition after verifying immediate Git/cwd
    identity. It invokes the assignment's exact embedded helper/workspace paths
-   and passes the embedded digest unchanged; `task-start` performs the
-   authoritative canonical digest check, so the worker never invents JSON
-   serialization. It reads the incoming handoff and performs deeper preflight
-   only after that transition. An armed worker must reach `task-start` within
-   60 seconds.
+   and passes the embedded digest plus coordinator-issued start lease unchanged;
+   `task-start` performs authoritative canonical digest and exact lease checks,
+   so the worker never invents JSON serialization or reuses another launch. It
+   reads the incoming handoff and performs deeper preflight only after that
+   transition. An armed worker must reach `task-start` within 60 seconds.
    After one failure, stop dispatching new batch members while
    active workers finish.
 7. Every worker first verifies its real worktree root, branch, base SHA, and
    absolute cwd, then invokes `task-start` with the embedded helper/workspace
-   paths and the embedded digest unchanged. The helper verifies the canonical
-   assignment digest. It next
+   paths, embedded digest, and coordinator-issued start lease unchanged. The
+   helper verifies the canonical assignment digest and exact current lease. It next
    verifies the incoming-handoff digest and claims; starts from a
    worker session never used by another task in the run; implements one task; validates; runs
    `code-review`; fixes scoped findings; creates exactly one direct-child
@@ -332,13 +380,23 @@ For each wave:
    coordinator-only state.
    `task-start` is single-use. Only mutations inside the immutable write claims
    count as progress; any other mutation is `WORKER_SCOPE_VIOLATION`.
-   If a running worker stops, the coordinator confirms that it stopped, then
-   the fresh replacement worker invokes private `task-recover
-   --confirmed-stopped` from the assigned scope cwd as its first transition.
-   Recovery transfers only declared dirty state or one direct-child commit to
-   that replacement session; the coordinator must not invoke recovery on the
-   worker's behalf because session ownership is bound to the caller. Session
-   hashes are append-only history: a
+   If an armed worker misses `task-start`, the coordinator confirms that it
+   stopped, then invokes private `task-rearm --confirmed-stopped` with the exact
+   observed start lease. That compare-and-swap accepts only expired assigned
+   state at the exact clean locked base and returns a fresh lease. Any stale or
+   conflicting lease fails closed; after an interrupted response, the
+   coordinator re-observes `task-watch` and continues with its current active
+   lease. An active deadline or prestart mutation also fails closed. The
+   replacement uses that fresh lease with normal `task-start` as its first
+   transition. A rearm mismatch is `WORKER_START_LEASE_CONFLICT`; the stopped
+   worker's old lease is rejected by `task-start` as
+   `WORKER_START_LEASE_INVALID` and cannot start the task. If a running worker
+   stops,
+   a fresh replacement invokes private `task-recover --confirmed-stopped` from
+   the assigned scope cwd; that transition transfers only declared dirty state
+   or one direct-child commit. The coordinator must not invoke running-worker
+   recovery on the worker's behalf because session ownership is bound to the
+   caller. Session hashes are append-only history: a
    recovered-away or completed identity can never be reused.
 8. The coordinator independently verifies a clean branch, exactly one
    direct-child task commit, exact changed paths within claims, and complete
@@ -381,9 +439,9 @@ For each wave:
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
-- Reuse an unchanged project-agent-instructions decision. Changed managed specs
-  or inherited guidance require a fresh decision at a safe wave boundary before
-  future workers dispatch.
+- Reuse only a verified v2 project-agent-instructions state whose owner receipt,
+  full-file spec receipt, effective config, evidence, and target still match.
+  Any drift requires a fresh decision at a safe wave boundary before dispatch.
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.
@@ -393,7 +451,7 @@ For each wave:
   receipts and repository claims remain pending until `$task-implementer
   integrate` consumes their contiguous range. Missing or malformed
   coordination state fails closed.
-- Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5 runs are unsupported and return
+- Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5/v6 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.
 

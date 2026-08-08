@@ -69,9 +69,13 @@ def main() -> int:
             "READ_ONLY_DEADLINE_NEAR",
             "WORKER_SCOPE_VIOLATION",
             "task-start` is single-use",
-            "replacement worker invokes private `task-recover",
+            "coordinator confirms that it",
+            "task-rearm --confirmed-stopped",
+            "WORKER_START_LEASE_CONFLICT",
+            "WORKER_START_LEASE_INVALID",
+            "cannot start the task",
             "isolated correction tail",
-            "coordinator-v1/v2/v3/v4/v5 runs are unsupported",
+            "coordinator-v1/v2/v3/v4/v5/v6 runs are unsupported",
             "$project-agent-instructions",
             "spec owner",
             "public `$worktree` lifecycle actions",
@@ -85,7 +89,7 @@ def main() -> int:
             "every 30 seconds",
             "300 seconds",
             "420 seconds",
-            "assignment-only fresh context",
+            "assignment-scoped fresh context",
             "first private transition",
             "background or autonomous heartbeat loops",
             "WORKER_SCOPE_VIOLATION",
@@ -96,18 +100,23 @@ def main() -> int:
             "four-action",
             "pending generations",
             "expected-old",
+            "Five Git Roles Plus Private State",
+            "Internal wave integration during `run`",
+            "Cleanliness is a precondition",
             "workspace remove",
         ),
         "prompt workspace": (
             "coordinator.json",
             "worker-assignment-v7",
-            "embedded assignment digest unchanged",
+            "embedded assignment digest plus the coordinator-issued",
             "must not guess or recompute",
             "wave-plan",
             "wave-replan",
             "task-arm",
+            "task-rearm",
             "task-recover",
             "replacement worker",
+            "exact observed start lease",
             "isolated correction tail",
             "task-heartbeat",
             "task-watch",
@@ -129,6 +138,8 @@ def main() -> int:
             "first private transition",
             "$project-agent-instructions",
             "selected project root `AGENTS.md`",
+            "For an expired prestart task",
+            "For an interrupted running task",
             "Persistent Lane Integration",
             "$task-implementer integrate",
             "two-parent candidate",
@@ -140,11 +151,16 @@ def main() -> int:
             "Worker assignment: private immutable record",
             "Tasks become done only after",
             "## Project Agent Instructions",
-            "project-agent-instructions.decision.v1",
+            "project-agent-instructions.spec-validation.v2",
+            "project-agent-instructions.decision.v2",
+            "project-agent-instructions.state.v2",
+            "Reload required",
         ),
         "wave helper": (
             '"path": f"{prefix}AGENTS.md"',
             "coordinator_write_claims",
+            "verify_project_agent_contract",
+            "verify_requirements_refinement_contract",
         ),
         "metadata": (
             "allow_implicit_invocation: false",
@@ -193,9 +209,10 @@ def main() -> int:
             required.pop(label)
     failures: list[str] = []
     for label, needles in required.items():
-        folded = surfaces[label].casefold()
+        folded = " ".join(surfaces[label].casefold().split())
         for needle in needles:
-            if needle.casefold() not in folded:
+            normalized_needle = " ".join(needle.casefold().split())
+            if normalized_needle not in folded:
                 failures.append(f"{label}: missing {needle!r}")
 
     stale = (

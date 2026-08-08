@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import json
 import os
@@ -151,7 +152,7 @@ class TaskSpecificationTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def write_specs(self) -> tuple[Path, Path]:
+    def write_specs(self, *, tracked: bool = True) -> tuple[Path, Path]:
         self.docs.mkdir(exist_ok=True)
         requirements = self.docs / "requirements.md"
         design = self.docs / "design.md"
@@ -161,6 +162,12 @@ class TaskSpecificationTest(unittest.TestCase):
         design.write_bytes(specs.new_spec_document("design", design_body()))
         requirements.chmod(0o644)
         design.chmod(0o644)
+        if tracked:
+            git(
+                "add",
+                "services/example/docs",
+                cwd=Path(str(self.workspace_value["repo_root"])),
+            )
         return requirements, design
 
     def assert_error(
@@ -174,6 +181,19 @@ class TaskSpecificationTest(unittest.TestCase):
         missing = pw.inspect_spec_documents(self.workspace_value)
         self.assertEqual(missing["next_requirement_id"], "TI-REQ-001")
         self.assertEqual(missing["next_design_id"], "TI-DES-001")
+        self.assertIsNone(missing["project_agent_spec_receipt"])
+        with self.assertRaises(pw.PromptWorkspaceError) as caught:
+            specs.verify_project_agent_contract(
+                self.workspace_value,
+                self.root / "missing-run",
+                self.scope,
+                git(
+                    "rev-parse",
+                    "HEAD",
+                    cwd=Path(str(self.workspace_value["repo_root"])),
+                ),
+            )
+        self.assertEqual(caught.exception.code, "SPEC_CONFLICT")
         requirements, design = self.write_specs()
 
         inspected = pw.inspect_spec_documents(self.workspace_value)
@@ -186,10 +206,219 @@ class TaskSpecificationTest(unittest.TestCase):
         )
         self.assertEqual(inspected["next_requirement_id"], "TI-REQ-002")
         self.assertEqual(inspected["next_design_id"], "TI-DES-002")
+        receipt = inspected["project_agent_spec_receipt"]
+        self.assertEqual(
+            receipt["schema"], "project-agent-instructions.spec-validation.v2"
+        )
+        self.assertEqual(receipt["owner"], "task-implementer")
+        self.assertEqual(receipt["project_scope"], "services/example")
+        self.assertEqual(
+            receipt["requirements"]["sha256"],
+            inspected["requirements"]["file_sha256"],
+        )
+        self.assertRegex(receipt["traceability_sha256"], r"^[0-9a-f]{64}$")
         before = (requirements.read_bytes(), design.read_bytes())
         repeated = pw.inspect_spec_documents(self.workspace_value)
         self.assertEqual(repeated, inspected)
         self.assertEqual(before, (requirements.read_bytes(), design.read_bytes()))
+
+    def test_untracked_specs_do_not_emit_a_validation_receipt(self) -> None:
+        self.write_specs(tracked=False)
+
+        inspected = pw.inspect_spec_documents(self.workspace_value)
+
+        self.assertIsNone(inspected["project_agent_spec_receipt"])
+
+    def test_every_applicable_requirement_must_be_mapped(self) -> None:
+        requirements, _design = self.write_specs()
+        second_record = """### TI-REQ-002: Preserve traceability
+
+- Status: active
+- Requirement: Map every applicable requirement.
+- Constraints: Ignore superseded requirements.
+- Non-goals: Duplicate mappings.
+
+#### Acceptance criteria
+
+- Every applicable requirement is covered.
+
+#### Verification
+
+- Run focused tests.
+
+"""
+        requirements.write_bytes(
+            specs.new_spec_document(
+                "requirements",
+                requirement_body().replace(
+                    "## Task Implementer Open Questions",
+                    second_record + "## Task Implementer Open Questions",
+                ),
+            )
+        )
+
+        self.assert_error(
+            "SPEC_CONFLICT",
+            pw.inspect_spec_documents,
+            self.workspace_value,
+        )
+
+    def test_superseded_requirement_and_design_are_not_current_coverage(self) -> None:
+        requirements, design = self.write_specs()
+        requirements.write_bytes(
+            specs.new_spec_document(
+                "requirements",
+                requirement_body().replace("- Status: active", "- Status: superseded"),
+            )
+        )
+        design.write_bytes(
+            specs.new_spec_document(
+                "design",
+                design_body().replace("- Status: planned", "- Status: superseded"),
+            )
+        )
+
+        inspected = pw.inspect_spec_documents(self.workspace_value)
+
+        self.assertIsInstance(inspected["project_agent_spec_receipt"], dict)
+
+    def test_project_agent_contract_gate_verifies_owner_receipt_and_state(self) -> None:
+        self.write_specs()
+        (self.scope / "AGENTS.md").write_text(
+            "# Human project instructions\n\n- Preserve the validated contract.\n",
+            encoding="utf-8",
+        )
+        repo_root = Path(str(self.workspace_value["repo_root"]))
+        git("add", "services/example/docs", "services/example/AGENTS.md", cwd=repo_root)
+        git(
+            "-c",
+            "user.name=Spec Test",
+            "-c",
+            "user.email=spec@example.invalid",
+            "commit",
+            "-qm",
+            "lock project contract",
+            cwd=repo_root,
+        )
+        contract_commit = git("rev-parse", "HEAD", cwd=repo_root)
+        inspected = pw.inspect_spec_documents(self.workspace_value)
+        run_dir = self.root / "private-run"
+        orchestration = run_dir / "orchestration"
+        private_root = orchestration / "project-agent-instructions"
+        private_root.mkdir(parents=True)
+        private_root.chmod(0o700)
+        receipt_path = orchestration / "project-agent-spec-receipt.json"
+        receipt_path.write_text(
+            json.dumps(
+                inspected["project_agent_spec_receipt"], indent=2, sort_keys=True
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        receipt_path.chmod(0o600)
+        runtime_path = orchestration / "project-agent-runtime.json"
+        runtime_path.write_text(
+            json.dumps(
+                {
+                    "schema": "project-agent-instructions.runtime-config.v1",
+                    "profile": None,
+                    "overrides": {"project_root_markers": ["scope.txt"]},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        runtime_path.chmod(0o600)
+        helper = (
+            Path(__file__).resolve().parents[2]
+            / "project-agent-instructions"
+            / "scripts"
+            / "project_agent_instructions.py"
+        )
+        inspect_result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "inspect",
+                "--project-root",
+                str(self.scope),
+                "--spec-owner",
+                "task-implementer",
+                "--spec-receipt",
+                str(receipt_path),
+                "--runtime-config",
+                str(runtime_path),
+                "--codex-home",
+                str(self.codex_home),
+                "--private-root",
+                str(private_root),
+                "--output",
+                "manifest.json",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(inspect_result.returncode, 0, inspect_result.stdout)
+        manifest = json.loads((private_root / "manifest.json").read_text())
+        design = self.scope / "docs/design.md"
+        decision = {
+            "schema": "project-agent-instructions.decision.v2",
+            "manifest_sha256": manifest["manifest_sha256"],
+            "disposition": "existing-sufficient",
+            "rationale": "The tracked human project instructions are sufficient.",
+            "evidence": [
+                {
+                    "path": "docs/design.md",
+                    "sha256": hashlib.sha256(design.read_bytes()).hexdigest(),
+                    "locator": "Task Implementer Design Change Log",
+                }
+            ],
+            "rules": [],
+            "budget_exception": None,
+            "ownership_approval": None,
+        }
+        decision_path = private_root / "decision.json"
+        decision_path.write_text(
+            json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        decision_path.chmod(0o600)
+        apply_result = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "apply",
+                "--private-root",
+                str(private_root),
+                "--manifest",
+                "manifest.json",
+                "--decision",
+                "decision.json",
+                "--ownership",
+                "ownership.json",
+                "--state",
+                "state.json",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(apply_result.returncode, 0, apply_result.stdout)
+        verified = specs.verify_project_agent_contract(
+            self.workspace_value, run_dir, self.scope, contract_commit
+        )
+        self.assertEqual(verified["outcome"], "existing-sufficient")
+
+        receipt_path.write_text("{}\n", encoding="utf-8")
+        with self.assertRaises(pw.PromptWorkspaceError) as caught:
+            specs.verify_project_agent_contract(
+                self.workspace_value, run_dir, self.scope, contract_commit
+            )
+        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
 
     def test_generic_unicode_crlf_envelope_is_byte_preserved(self) -> None:
         self.docs.mkdir()
@@ -348,6 +577,87 @@ class TaskSpecificationTest(unittest.TestCase):
                     self.workspace_value,
                 )
 
+    def test_requirements_refinement_tracks_material_questions_and_ready_digest(
+        self,
+    ) -> None:
+        requirements, _design = self.write_specs()
+        created = pw.create_prompt(
+            self.workspace,
+            "Implement prompt refinement",
+            clock=lambda: FIXED,
+            id_factory=lambda: "a" * 32,
+        )
+        snapshot = pw.snapshot_prompt(
+            self.workspace,
+            Path(str(created["path"])),
+            run_id=None,
+            force_new_run=False,
+            clock=lambda: FIXED,
+        )
+        run_dir = Path(str(snapshot["manifest"])).parent
+        state = specs.load_requirements_refinement(run_dir, required=True)
+        assert state is not None
+        self.assertEqual(state["status"], "extracting")
+        self.assertEqual(state["revision"], "r0001")
+        state["questions"] = [
+            {
+                "id": "Q-001",
+                "question": "Which external contract is authoritative?",
+                "material": True,
+                "status": "open",
+                "answer": None,
+                "source": None,
+                "source_revision": None,
+                "conflict": None,
+            }
+        ]
+        requirements_digest = specs.inspect_spec_documents(self.workspace_value)[
+            "requirements"
+        ]["managed_sha256"]
+        state["compiled_requirements_sha256"] = requirements_digest
+        state["status"] = "ready"
+        refinement_path = run_dir / "requirements-refinement.json"
+        valid_bytes = refinement_path.read_bytes()
+        self.assert_error(
+            "RUN_STATE_INVALID",
+            specs.save_requirements_refinement,
+            run_dir,
+            state,
+        )
+        self.assertEqual(refinement_path.read_bytes(), valid_bytes)
+        state["questions"][0].update(
+            {
+                "status": "answered",
+                "answer": "Use the documented v2 contract.",
+                "source": "chat",
+                "source_revision": "r0001",
+            }
+        )
+        saved = specs.save_requirements_refinement(run_dir, state)
+        self.assertEqual(saved["status"], "ready")
+        run_state = pw.verify_run(self.workspace_value, str(snapshot["run_id"]), None)
+        verified = specs.verify_requirements_refinement_contract(
+            self.workspace_value, run_dir, run_state
+        )
+        self.assertEqual(
+            verified["refinement"]["compiled_requirements_sha256"],
+            requirements_digest,
+        )
+        requirements.write_text(
+            requirements.read_text(encoding="utf-8").replace(
+                "Apply steering at a safe boundary.",
+                "Apply revised steering at a safe boundary.",
+            ),
+            encoding="utf-8",
+        )
+        self.assert_error(
+            "REQUIREMENTS_REFINEMENT_REQUIRED",
+            specs.verify_requirements_refinement_contract,
+            self.workspace_value,
+            run_dir,
+            run_state,
+        )
+
     def test_steering_ledger_orders_aba_and_resolves_idempotently(self) -> None:
         prompt = Path(
             pw.create_prompt(
@@ -358,19 +668,10 @@ class TaskSpecificationTest(unittest.TestCase):
             )["path"]
         )
         text = prompt.read_text(encoding="utf-8")
-        text = (
-            text.replace(
-                "<!-- Required: describe what must be true when the work is complete. -->",
-                "Outcome A.",
-            )
-            .replace(
-                "- [ ] <!-- Required: add an observable, testable completion criterion. -->",
-                "- [ ] Acceptance A.",
-            )
-            .replace(
-                "<!-- Required: name expected checks or ask Codex to derive them from the repo. -->",
-                "Verification A.",
-            )
+        text = text.rstrip() + (
+            "\n\n## Outcome\n\nOutcome A.\n"
+            "\n## Acceptance criteria\n\n- [ ] Acceptance A.\n"
+            "\n## Verification\n\nVerification A.\n"
         )
         prompt.write_text(text, encoding="utf-8")
         prompt.chmod(0o600)

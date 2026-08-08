@@ -73,17 +73,30 @@ integration branch and full-repository worktree from the exact project base,
 then lock it. Never include prompt text or secrets in branch names.
 
 The coordinator preallocates and validates managed requirement/design IDs and
-records, then explicitly routes to `$project-agent-instructions` with spec
-owner `task-implementer`. The shared skill writes its decision receipt only
-under the private run root and may create or provenance-safely refresh only the
-selected project root `AGENTS.md`. Read an active project instruction file
-explicitly before continuing. Missing distinct rules is `not-needed`, not a
-generic file.
+records in the integration checkout, then stages both complete spec files. The
+private validator emits a `project-agent-instructions.spec-validation.v2`
+receipt only after both tracked managed regions validate and every
+non-superseded requirement is covered by a current design record. Persist that
+exact object as mode `0600`, then route to `$project-agent-instructions` with spec owner
+`task-implementer` and that integration selected-project root. Keep its
+manifest, decision, ownership receipt, and state under
+`orchestration/project-agent-instructions/`; keep the prerequisite receipt
+beside that directory so its private-root marker can initialize from an empty
+directory.
+
+The shared helper alone may create, refresh, adopt, or retire its v2-managed
+selected project root `AGENTS.md`. A human-owned or edited file remains preserved.
+If state reports `reload_required: true`, stop this execution boundary, start a
+fresh coordinator session, rerun and verify the unchanged result, and read the
+active project instruction file before locking the contract. Missing distinct
+rules is `not-needed`, not a generic file.
 
 Shared specifications, the selected-project `AGENTS.md`, README/design
 documentation, and changelog are coordinator-owned commit paths. If this
 changes tracked files, create one locked contract commit in the integration
-worktree. Every worker branch starts at that exact commit. Human-owned project
+worktree. Dispatch replays the receipt against that commit's spec blobs and
+requires its active and ancestor project instruction bytes to belong to the
+same clean exact commit. Every worker branch starts at that exact commit. Human-owned project
 instructions remain byte-for-byte unchanged; a material gap or conflict blocks
 dispatch.
 
@@ -99,25 +112,28 @@ available capacity. If native agents are unavailable, start fresh sequential
 `codex exec` workers in the same isolated worktrees. Never let the coordinator
 implement worker tasks. After one worker fails, stop dispatching new batch
 members but allow already-active workers to finish and report.
-Give each worker only its immutable assignment and incoming handoff; do not
-inherit the coordinator transcript or unrelated conversation history. The
-coordinator invokes private `task-arm` only after a real worker slot is
-available, then spawns the worker immediately. Queued assignments remain
-unarmed without consuming a deadline. The worker reads its assignment and
-makes `task-start` the first private transition after verifying immediate
-Git/cwd identity. It invokes the assignment's exact `helper_path` with its
-`workspace_manifest` and passes the embedded `assignment_sha256` unchanged;
-`task-start` performs authoritative canonical digest validation, so workers do
-not recompute it with ad hoc JSON. The worker reads the incoming handoff and
-does deeper preflight only afterward. An armed worker must reach `task-start`
-within 60 seconds.
+Give each worker only its immutable assignment, incoming handoff, and opaque
+coordinator-issued start lease; do not inherit the coordinator transcript or
+unrelated conversation history. The coordinator invokes private `task-arm`
+only after a real worker slot is available, then spawns the worker immediately
+with the returned lease. Queued assignments remain unarmed without consuming a
+deadline. The worker reads its assignment and makes `task-start` the first
+private transition after verifying immediate Git/cwd identity. It invokes the
+assignment's exact `helper_path` with its
+`workspace_manifest` and passes the embedded `assignment_sha256` plus the
+coordinator-issued start lease unchanged; `task-start` performs authoritative
+canonical digest and exact lease validation, so workers do not recompute the
+digest with ad hoc JSON or reuse another launch. The worker reads the incoming
+handoff and does deeper preflight only afterward. An armed worker must reach
+`task-start` within 60 seconds.
 
 Each worker must:
 
 1. Read its immutable assignment; verify absolute cwd, real worktree root,
    branch, exact base SHA, and clean state; invoke `task-start` as its first
    private transition through the embedded helper/workspace paths, passing the
-   embedded digest unchanged for the helper's canonical validation.
+   embedded digest and coordinator-issued start lease unchanged for the
+   helper's canonical validation.
 2. Verify the incoming-handoff path and digest, then verify scope, claims, and
    conflict domains before deeper preflight.
 3. Enforce the assignment's canonical worker guardrails. Stay inside the
@@ -185,10 +201,13 @@ the project branch unchanged, and retains all worktrees/branches.
 
 After worker merges, the coordinator may update only shared managed specs,
 provenance-owned project instructions, README/design docs, and changelog
-evidence. Requirements/design or inherited-instruction drift invalidates the
-project-agent-instructions receipt; rerun it at the safe boundary before future
-dispatch. Make a final integration commit only for a non-empty shared-file
-diff. Any product-code correction becomes a new isolated task.
+evidence. Requirements/design, validation-receipt, effective-config, evidence,
+ancestor-instruction, ownership, or target drift invalidates the
+project-agent-instructions state. Dispatch revalidates the exact clean
+integration contract checkout, not the persistent lane. Rerun and verify it at
+the safe boundary before future dispatch. Make a final integration commit only
+for a non-empty shared-file diff. Any product-code correction becomes a new
+isolated task.
 
 ## Validation And Promotion
 
@@ -252,20 +271,35 @@ assignment/result, or force cleanup.
 Before resources exist, replanning replaces the active planned tail in the
 coordinator schedule. Completed waves remain indexed; superseded planned wave
 files are retained as blocked history but are not part of final completion or
-semantic validation. After the final wave is promoted and cleaned, integration
+semantic validation. Each coordinator plan records the exact accepted prompt
+revision and intent digest. Preparation fails with `REPLAN_REQUIRED` when
+pending steering, reconciliation, refinement, or a newer bound intent makes
+that plan stale. After the final wave is promoted and cleaned, integration
 review may append a newly discovered isolated correction tail before
 finalization. Before any replacement wave or coordinator record is written,
 replanning atomically extends the active generation's Worktree-owned repository
 claims. Earlier claims remain held as a conservative superset until generation
 integration.
 
-For an interrupted running task, require explicit confirmation that the old
-worker stopped, then have the fresh replacement worker invoke `task-recover`
-from its assigned scope cwd as its first transition. The coordinator must not
-invoke recovery for it because session ownership binds to the caller.
-Recovery accepts only the locked base, one direct-child commit, and dirty paths
-inside the assignment claims. A blocked task or undeclared path stays retained
-for operator-directed recovery; do not delete or replace unmerged evidence.
+For an expired prestart task, require explicit confirmation that the old worker
+stopped, then have the coordinator invoke `task-rearm` with the exact observed
+start lease. The compare-and-swap accepts only the exact clean locked base,
+preserves the immutable assignment and all existing wave and generation
+resources, and returns a fresh lease. Any stale or conflicting lease fails
+closed. After an interrupted response, re-observe `task-watch` and continue
+with its current active lease. An active deadline or prestart mutation also
+fails closed. The replacement invokes normal `task-start` from its assigned
+scope cwd with the fresh lease as its first transition. A rearm mismatch is
+`WORKER_START_LEASE_CONFLICT`; `task-start` rejects the old worker's lease as
+`WORKER_START_LEASE_INVALID`.
+
+For an interrupted running task, require the same stop confirmation, then have
+the fresh replacement invoke `task-recover` from its assigned scope cwd as its
+first transition. The coordinator must not invoke running-worker recovery
+because session ownership binds to the caller. Recovery accepts only the locked
+base or one direct-child commit with dirty paths inside the assignment claims.
+A blocked task or undeclared path stays retained for operator-directed
+recovery; do not delete or replace unmerged evidence.
 
 Failure rules:
 

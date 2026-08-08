@@ -2,60 +2,102 @@
 
 ## Contents
 
-- [Evidence gate](#evidence-gate)
+- [Prerequisite receipts](#prerequisite-receipts)
+- [Discovery contract](#discovery-contract)
 - [Decision schema](#decision-schema)
-- [Generated content](#generated-content)
-- [Ownership and conflicts](#ownership-and-conflicts)
+- [Deterministic rendering](#deterministic-rendering)
+- [Ownership and transitions](#ownership-and-transitions)
+- [Recovery and reload](#recovery-and-reload)
 - [Helper commands](#helper-commands)
 
-## Evidence gate
+## Prerequisite receipts
 
-Create a project file only when at least one candidate instruction:
+The workflow owner validates both complete spec files before inspection. The
+mode-`0600` receipt uses schema
+`project-agent-instructions.spec-validation.v2` and binds:
 
-1. follows from current requirements, design, or repository evidence;
-2. applies durably to future work in the selected project;
-3. changes agent behavior beyond inherited instructions;
-4. is actionable and can be checked; and
-5. belongs in agent guidance rather than product specs, task state, detailed
-   architecture documentation, or a reusable skill.
+- owner, validator, and validator version;
+- exact selected project, Git root, and project scope;
+- relative requirements/design paths and full-file SHA-256 digests; and
+- a deterministic traceability-validation digest.
 
-Requirements and design may establish boundaries, public contracts, generated
-artifacts, security controls, rollout rules, or verification obligations.
-Commands require separate proof from current project configuration, scripts,
-task runners, or CI.
+Task Implementer issues this object from private `spec-inspect` only when both
+managed files are tracked, their managed regions validate, and every
+non-superseded requirement is covered by current design. Agentic SDLC issues it
+with `sdlc-start/scripts/validate_project_specs.py` after validating tracked
+owner files, managed blocks, required fields, ready-feature completeness,
+feature marker/body agreement, and total non-superseded requirement coverage.
+During every inspection and replay, the shared helper reruns the fixed validator
+selected by `owner` and requires its complete output to equal the supplied
+receipt. Marker presence or a caller-named validator is never sufficient.
 
-Both documents must belong exclusively to the declared workflow. The helper
-requires the expected requirements and design markers in their corresponding
-files and rejects every marker from the other workflow in either document.
+The receipt stays in the caller's private workflow directory outside Git. Any
+path, digest, owner, validator, or scope mismatch is
+`SPEC_VALIDATION_REQUIRED`.
 
-The following alone do not justify a file:
+## Discovery contract
 
-- generic advice such as "write clean code";
-- restating acceptance criteria;
-- a generic instruction to read requirements and design;
-- global security or Git rules that already apply;
-- empty template sections; or
-- temporary task decisions.
+`inspect` resolves the exact selected project and fingerprints the effective
+Codex discovery inputs in this order:
+
+1. user `config.toml`;
+2. declared active profile from `$CODEX_HOME/PROFILE.config.toml`;
+3. trusted project `.codex/config.toml` files from Git root through selected
+   project; and
+4. declared discovery-sensitive runtime overrides.
+
+Only fallback filenames, project-document byte capacity, and project-root
+markers affect this workflow. The runtime declaration is mandatory: `null`
+explicitly selects the base configuration, while a non-null profile loads the
+current Codex 0.134+ profile file and fails closed if its name or file is
+invalid. A nested selected project must contain an effective root marker unless
+the effective marker list is empty; an empty list disables parent traversal and
+makes the selected working directory the discovery root.
+
+The manifest separates global instructions from ancestor project
+instructions. Global instructions are conflict context only: their presence or
+absence does not change generated project bytes. Ancestor project files count
+toward capacity and redundancy. At the selected directory,
+`AGENTS.override.md`, then `AGENTS.md`, then configured fallbacks determine the
+active source.
+
+Git-ignored target paths are rejected before generation. Ancestor project
+instructions and human-owned active instruction sources must be tracked and
+non-ignored. A newly generated non-ignored `AGENTS.md` may remain untracked only
+until the owning workflow stages and commits its locked contract.
+
+Inspection fails with `RECOVERY_REQUIRED` if either managed lock or backup
+artifact exists. This applies before every disposition, including no-write
+decisions.
 
 ## Decision schema
 
-Store the decision outside the Git worktree:
+Store the exact decision outside Git:
 
 <!-- markdownlint-disable MD013 -->
 
 ```json
 {
-  "schema": "project-agent-instructions.decision.v1",
-  "manifest_sha256": "<sha256 from inspect>",
+  "schema": "project-agent-instructions.decision.v2",
+  "manifest_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "disposition": "needed",
-  "rationale": "Compact, public-safe reason for the decision.",
+  "rationale": "The project has one durable verification rule not supplied by ancestor project instructions.",
   "evidence": [
     {
       "path": "docs/design.md",
-      "sha256": "<current file sha256>"
+      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "locator": "## Cross-Cutting Validation Strategy"
     }
   ],
-  "body": "# Example Agent Instructions\n\n## Scope\n\nThese instructions apply to this directory and all descendants.\n\nProject root: `.`\n\n## Read before changing\n\n- Requirements: `docs/requirements.md`\n- Design: `docs/design.md`\n"
+  "rules": [
+    {
+      "section": "Testing and verification",
+      "instruction": "Run the service contract suite for every public behavior change.",
+      "evidence": ["docs/design.md"]
+    }
+  ],
+  "budget_exception": null,
+  "ownership_approval": null
 }
 ```
 
@@ -63,94 +105,105 @@ Store the decision outside the Git worktree:
 
 `disposition` is exactly one of:
 
-- `needed`: `body` is a complete generated body and evidence is non-empty;
-- `not-needed`: target is absent, `body` is null, and no meaningful delta
-  survives the evidence gate;
-- `existing-sufficient`: an active human-owned project instruction file already
-  supplies the needed contract and `body` is null.
+- `needed`: one to twelve structured rules; the helper renders Markdown;
+- `not-needed`: no rules because no durable project delta remains; or
+- `existing-sufficient`: no rules because an active human-owned project file
+  already supplies the contract.
 
-Every evidence path is relative to the selected project and is digest-checked
-by the helper. Untracked paths classified as ignored by
-`git check-ignore --quiet` are rejected. Tracked files remain eligible even
-when they match an ignore pattern because Git does not classify them as
-ignored. Do not cite private state, symlinks, files outside the selected
-project, or raw prompt snapshots.
+Every disposition needs non-empty tracked evidence. Each evidence record binds
+a canonical project-relative path, full-file digest, and one exact single-line
+locator present in the UTF-8 file. Git-ignored or untracked evidence is
+rejected. Each generated rule references at least one evidence path.
 
-## Generated content
+`ownership_approval` is normally null. It is exactly
+`{"action":"adopt","target_sha256":"..."}` for explicit adoption or
+`{"action":"retire","target_sha256":"..."}` for explicit retirement.
+Approvals are applicable only to the exact inspected digest.
 
-The helper adds the provenance marker. `inspect` reports
-`generated_body_max_bytes` as the smaller of 7 KiB and the remaining
-`project_doc_max_bytes` capacity after ancestor project instruction bytes and
-the generated marker. Global instructions and join separators do not consume
-Codex's project-document counter. Only ancestor project files are charged
-before the target; a selected-project target refresh replaces its prior bytes,
-while an alternate active file blocks generation. The helper floors exhausted
-capacity at zero.
+## Deterministic rendering
 
-Generate the complete body within that advertised limit. The helper rejects an
-oversized body and never truncates it. The decision body must:
+The helper, not the decision author, renders the complete body. It always
+includes scope, the selected Git-relative project root, context authority for
+requirements/design, and a nested-refinement statement. It then sorts rules
+under these optional sections:
 
-- be UTF-8 Markdown no larger than `generated_body_max_bytes`, with exactly one
-  trailing newline;
-- start with `# <Project Name> Agent Instructions`;
-- contain `## Scope` and `## Read before changing`;
-- state that scope applies to the directory and descendants;
-- identify the project root relative to the Git root;
-- cite `docs/requirements.md` and `docs/design.md`;
-- omit secrets, private endpoints including private IPv6 literals, and absolute
-  user-home paths;
-- use only these optional second-level headings, in order:
-  - `Project purpose`
-  - `Architecture and boundaries`
-  - `Development commands`
-  - `Change requirements`
-  - `Testing strategy`
-  - `Security requirements`
-  - `Operational requirements`
-  - `Verification requirements`
-  - `Context authority`
-  - `Definition of done`
-- omit empty sections, placeholders, `TODO`, and `TBD`.
+1. Architecture and boundaries
+2. Development commands
+3. Change requirements
+4. Testing and verification
+5. Security and operations
+6. Definition of done
 
-Prefer terse bullets. Put detailed explanations in project documentation and
-repeatable procedures in skills.
+Rule IDs are deterministic hashes of section, instruction, and sorted evidence
+paths. IDs remain private decision metadata and are not printed in the project
+file.
 
-## Ownership and conflicts
+The preferred budget is eight rules and 2 KiB. Exceeding either needs a compact
+`budget_exception`. The hard limits are twelve rules, 256 UTF-8 bytes per rule,
+and 4 KiB for the body; effective Codex capacity may be smaller. Rendering
+never truncates. Empty sections, duplicate rules, multiline or control-bearing bullets,
+placeholders, URLs, IP literals, recognized secret forms, and absolute user
+home paths are rejected.
 
-The marker has this form:
+## Ownership and transitions
+
+The generated marker is:
+
+<!-- markdownlint-disable MD013 -->
 
 ```text
-<!-- project-agent-instructions:generated-v1 body-sha256=<digest> -->
+<!-- project-agent-instructions:managed-v2 manifest-sha256=DIGEST decision-sha256=DIGEST body-sha256=DIGEST -->
 ```
 
-The digest covers all bytes after the marker and separating blank line. A
-matching marker permits compare-before-replace refresh. Missing or mismatched
-provenance makes the file human-owned.
+<!-- markdownlint-enable MD013 -->
 
-Apply rules:
+The marker digests are deterministic projections of repository-portable spec,
+scope, evidence, and rendered-decision inputs. Absolute paths, private receipt
+locations, personal global instructions, and rationale never change committed
+bytes. The full private manifest and decision retain those runtime bindings. A
+separate private `project-agent-instructions.ownership.v2` receipt binds the
+exact target digest and marker fields. Marker-only ownership is insufficient.
 
-- missing target plus `needed` -> exclusive create;
-- unchanged generated target plus changed `needed` body -> guarded refresh;
-- unchanged generated target plus identical body -> no project write;
-- missing target plus `not-needed` -> private state only;
-- active human-owned target plus `existing-sufficient` -> private state only;
-- unchanged provenance-owned generated content never qualifies for an
-  `existing-sufficient` decision; use `needed` with the complete body so the
-  helper can compare or refresh it;
-- active human-owned target plus `needed` -> block without mutation;
-- same-directory override or configured fallback -> treat it as the active
-  human-owned file;
-- stale generated content that is no longer needed -> preserve and report;
-- every create, refresh, and no-write decision must satisfy its exact final
-  target ownership, digest, active-source, and transition postconditions before
-  private state is written or verified;
-- any concurrent target or active-source change -> block;
-- if refresh installation fails and no competing target appeared, restore the
-  verified prior generated file when possible; preserve the recovery backup if
-  restoration also fails;
-- if a competing file appears at the final refresh boundary, preserve that file
-  at `AGENTS.md` and retain the prior generated bytes in
-  `.AGENTS.md.project-agent-instructions.backup` for explicit recovery.
+Transitions are:
+
+- missing plus `needed` -> exclusive `created` and active ownership receipt;
+- receipted intact v2 plus identical rules and current portable marker
+  projections -> `existing-sufficient`, no project write;
+- receipted intact v2 plus changed spec, renderer, or evidence projection ->
+  guarded `refreshed`, even when the rendered body is unchanged;
+- receipted intact v2 plus changed rules -> guarded `refreshed` and new receipt;
+- unreceipted intact v2 plus exact `adopt` approval -> `adopted`, or guarded
+  `refreshed` when rules changed;
+- intact v2 plus `not-needed` and exact `retire` approval -> guarded `retired`
+  and a retired receipt;
+- missing plus `not-needed` -> private state only;
+- active human-owned file plus `existing-sufficient` -> private state only.
+
+An edited marker/body mismatch is human-owned. Human-owned files are never
+overwritten or deleted. An intact v1 marker returns `LEGACY_GENERATED_FILE`;
+there is no migration or compatibility shim.
+
+## Recovery and reload
+
+Create is exclusive and rechecks lock/backup absence at its descriptor-anchored
+mutation boundary. Refresh and retirement compare the exact inspected bytes
+under a mode-`0600` lock. Mutations are anchored to the inspected project-root
+directory identity so a parent-directory swap cannot redirect them. Refresh
+and retirement retain and fsync a same-directory backup until ownership and
+final state are durable; only then is the backup removed and the directory
+fsynced again. A surviving lock or backup blocks all later actions until a
+human inspects the exact files and resolves the artifact; automation never
+removes it speculatively.
+
+Final state uses `project-agent-instructions.state.v2` and binds the manifest,
+decision, ownership receipt, current target, active instruction, and outcome.
+`verify` replays discovery and all final postconditions.
+
+`created`, `refreshed`, and `retired` report `reload_required: true`. Because
+Codex discovers project instructions once per run, the coordinator must stop
+that execution boundary, start a fresh session, rerun/verify the decision, and
+read the active instruction file before continuing. Adoption changes private
+ownership only and does not require reload.
 
 ## Helper commands
 
@@ -158,35 +211,43 @@ Use the installed skill path and caller-owned private paths:
 
 ```text
 python3 scripts/project_agent_instructions.py inspect \
-  --project-root <selected-project> \
-  --spec-owner <task-implementer|agentic-sdlc> \
+  --project-root SELECTED_PROJECT \
+  --spec-owner task-implementer \
   --requirements docs/requirements.md \
   --design docs/design.md \
-  --private-root <private-project-agent-instructions-dir> \
-  --output <private-manifest.json>
+  --spec-receipt SPEC_RECEIPT.json \
+  --runtime-config RUNTIME_CONFIG.json \
+  --private-root PRIVATE_PROJECT_AGENT_DIR \
+  --output manifest.json
 
 python3 scripts/project_agent_instructions.py apply \
-  --private-root <private-project-agent-instructions-dir> \
-  --manifest <private-manifest.json> \
-  --decision <private-decision.json> \
-  --state <private-state.json>
+  --private-root PRIVATE_PROJECT_AGENT_DIR \
+  --manifest manifest.json \
+  --decision decision.json \
+  --ownership ownership.json \
+  --state state.json
 
 python3 scripts/project_agent_instructions.py verify \
-  --private-root <private-project-agent-instructions-dir> \
-  --state <private-state.json>
+  --private-root PRIVATE_PROJECT_AGENT_DIR \
+  --state state.json
 ```
 
-The private root is a dedicated mode-`0700` directory outside every Git
-worktree. The helper creates or validates its private ownership marker and
-accepts no manifest, decision, or state path outside that root. Existing
-workflow-owned JSON must retain its complete expected schema and mode `0600`;
-both `apply` and `verify` recheck those modes and reject malformed evidence with
-a structured blocker.
-The helper uses Python 3.9-compatible annotations. Reading an existing Codex
-`config.toml` requires the standard-library `tomllib` from Python 3.11+ or the
-optional `tomli` package on older Python versions.
+Use `--spec-owner agentic-sdlc` for that coordinator. The runtime declaration
+is always required so that the active profile and discovery-sensitive CLI
+overrides are explicit. Declare the base profile and no overrides as:
 
-The helper prints a bounded JSON result. A nonzero exit with
-`"status": "blocked"` is authoritative; do not bypass it with direct file
-editing. A reported recovery backup blocks later refreshes until a human
-compares both files, resolves the intended content, and removes the backup.
+```json
+{
+  "schema": "project-agent-instructions.runtime-config.v1",
+  "profile": null,
+  "overrides": {}
+}
+```
+
+The helper private root is a dedicated initially empty mode-`0700` directory
+outside every Git worktree. Manifest, decision, ownership, and state are direct
+children with mode `0600`. The owner-issued spec receipt and required runtime
+declaration are mode-`0600` caller inputs outside Git and may sit beside that
+directory so the helper can initialize its ownership marker safely. The helper
+prints bounded JSON; a nonzero result with `status: blocked` is authoritative
+and must not be bypassed with direct editing.

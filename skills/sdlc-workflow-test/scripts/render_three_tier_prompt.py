@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 
-PROMPT_SCHEMA = "agentic-sdlc/prompt-v1"
+PROMPT_SCHEMA = "agentic-sdlc/prompt-v2"
 FRONTMATTER_KEYS = ("schema", "prompt_id", "title", "created_at")
 PLACEHOLDERS = (
     "PROJECT_ROOT",

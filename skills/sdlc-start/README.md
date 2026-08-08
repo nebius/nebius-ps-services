@@ -42,12 +42,27 @@ $sdlc-start run <prompt-path-or-unique-filename>
 
 Initialization preserves prompt and run history and creates one starter prompt
 only when the workspace is empty. Its editor workspace includes private new
-prompt and metadata-only history tasks. Edit the same prompt and repeat `run` to
-steer an active run. Unchanged runs resume idempotently; an unchanged completed
-prompt returns `ALREADY_COMPLETE`; editing a completed prompt starts a new run.
-An exact manual rename is repaired, while rename-plus-edit or duplicate copies
-fail closed so prompt history and Stop continuation cannot drift.
+prompt, metadata-only history, and queue tasks. `00-START-HERE.md` stays visible
+as a guide but is never parsed. Only `## Ask` is required; all other structured
+or custom headings are optional. Use the default New Prompt task for a fresh ID
+instead of cloning files. Edit the same prompt and repeat `run` to steer an
+active run. Unchanged runs resume idempotently; an unchanged completed prompt
+returns `ALREADY_COMPLETE`; editing a completed prompt starts a linked fresh
+objective against current product truth. Explicitly running a different prompt
+while work is active accepts it into a private FIFO queue; creating or saving
+never does. Queued edits require another explicit run, and drift blocks the
+head until then. Activation compares exact accepted bytes and normalized intent
+and recovers an interrupted dequeue without creating a duplicate run.
+An exact manual rename with unchanged normalized intent is repaired, while a
+rename plus intent edit or duplicate copies fail closed so prompt history and
+Stop continuation cannot drift.
 There is no bare `$sdlc-start` resume action.
+
+Before design or planning, the requirements owner records the compiled
+`docs/requirements.md` digest in private refinement state. A private mechanical
+gate verifies that it belongs to the latest accepted prompt revision and still
+matches the exact requirements file; ambiguity or later drift returns to
+requirements instead of being treated as implementation truth.
 
 For an unmanaged Git-backed workspace, intake resolves the actual symbolic
 `origin` default. A new run on that clean branch moves to a deterministic
@@ -73,9 +88,10 @@ worktree.
 - `docs/requirements.md`.
 - `docs/design.md` when present.
 - The active selected-project instruction file and latest private
-  `project-agent-instructions` decision when present.
+  `project-agent-instructions` spec receipt, decision, ownership receipt, and
+  verified state when present.
 - Existing local run state when present.
-- One managed `agentic-sdlc/prompt-v1` file and its accepted immutable revision.
+- One managed `agentic-sdlc/prompt-v2` file and its accepted immutable revision.
 - Optional live experiment environment details to route through requirements.
 - Active `STEERING.md` and `steering/auto-steering.json` when present.
 
@@ -84,8 +100,11 @@ worktree.
 - Active run state is accurate and backed by a checkpoint.
 - Current feature and next skill are explicit.
 - Steering is refreshed or routed through `sdlc-auto-steering` when pending.
-- The conditional project-instruction decision is verified after requirements
-  and design and before auto-steering or planning.
+- Agentic SDLC validates tracked complete specs, total status-aware feature
+  coverage, and feature marker/body agreement into a private v2 receipt, then
+  verifies the conditional project-instruction decision and ownership after
+  design and before auto-steering or planning. A project-file change requires a
+  fresh Codex session before the workflow continues.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss from the same prompt-bound command.

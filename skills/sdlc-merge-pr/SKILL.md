@@ -55,6 +55,10 @@ Merge only after explicit human instruction and final readiness verification.
 - `permissions/merge-authorization.json`, immediately before the merge, with a
   short expiry and specific PR scope.
 - Final run status when this completes the SDLC run.
+- When this transition completes the run and all execution resources are
+  released, invoke the private Agentic SDLC `queue-next` transition. Activate
+  only the unchanged FIFO head; queue-head drift requires the user to rerun the
+  edited prompt, and a blocked active run is never overtaken.
 
 ## Process
 

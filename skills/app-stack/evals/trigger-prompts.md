@@ -64,6 +64,14 @@ stack and route only the narrow requested implementation work.
 ## Should Not Trigger
 
 ```text
+Choose between hosted models and vLLM, select Pydantic AI or LangGraph, and
+decide whether MCP, A2A, pgvector, and MLflow belong in this AI system.
+```
+
+Use `ai-stack`; this is an AI-specific stack decision rather than the
+surrounding application stack.
+
+```text
 Add one FastAPI endpoint to this existing service using its current patterns.
 ```
 
@@ -137,7 +145,9 @@ For should-trigger prompts, verify that the result:
 - stays read-only for advice-only prompts;
 - stops before unconfirmed live, production, destructive, credential, or paid
   external-service mutation;
-- coordinates narrow specialist skills only when implementation is requested.
+- coordinates narrow specialist skills only when implementation is requested;
+- routes undecided AI-specific layers through `ai-stack` while retaining the
+  surrounding product-stack decision;
 - returns a scoped stack decision to an active `design` workflow instead of
   recursively handing the full request back to `design`.
 - emits only logical technology decisions in a scaffold handoff and leaves

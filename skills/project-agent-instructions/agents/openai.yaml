@@ -1,6 +1,6 @@
 interface:
   display_name: "Project Agent Instructions"
   short_description: "Create project-specific agent instructions"
-  default_prompt: "Use $project-agent-instructions after validated requirements and design to decide whether the selected project needs a root AGENTS.md."
+  default_prompt: "Use $project-agent-instructions only after a coordinator issues a validation receipt for current requirements and design; conditionally maintain the selected-project AGENTS.md with deterministic rules and explicit ownership."
 policy:
   allow_implicit_invocation: false

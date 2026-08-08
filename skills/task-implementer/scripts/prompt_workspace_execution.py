@@ -16,7 +16,7 @@ from prompt_workspace_core import (
 from prompt_workspace_runs import markdown_section
 
 
-COORDINATOR_SCHEMA = "task-implementer/coordinator-v6"
+COORDINATOR_SCHEMA = "task-implementer/coordinator-v7"
 WAVE_SCHEMA = "task-implementer/wave-v4"
 ASSIGNMENT_SCHEMA = "task-implementer/worker-assignment-v7"
 RESULT_SCHEMA = "task-implementer/worker-result-v3"
@@ -474,10 +474,11 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         "task-implementer/coordinator-v3",
         "task-implementer/coordinator-v4",
         "task-implementer/coordinator-v5",
+        "task-implementer/coordinator-v6",
     }:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "legacy coordinator state is unsupported; start a new v6 run",
+            "legacy coordinator state is unsupported; start a new v7 run",
         )
     required = {
         "schema",
@@ -489,6 +490,8 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         "default_ref",
         "default_head",
         "promotion_source",
+        "prompt_revision",
+        "prompt_intent_sha256",
         "plan_sha256",
         "waves",
         "active_wave",
@@ -500,6 +503,9 @@ def load_coordinator_state(run_dir: Path) -> dict[str, object] | None:
         set(value) != required
         or value.get("schema") != COORDINATOR_SCHEMA
         or value.get("run_id") != run_dir.name
+        or re.fullmatch(r"r[0-9]{4}", str(value.get("prompt_revision") or "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("prompt_intent_sha256") or ""))
+        is None
     ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "coordinator state is invalid"

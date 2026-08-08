@@ -45,6 +45,13 @@ complete design and /plan handoff.
 ```
 
 ```text
+Design a customer-support AI product. Use app-stack for the surrounding web,
+API, backend, and deployment stack; use ai-stack for providers, agent runtime,
+retrieval, interoperability, evaluation, and operations; then integrate the
+decisions and create the /plan handoff.
+```
+
+```text
 Design a feature for this established application using its approved React,
 FastAPI, and PostgreSQL stack. Do not reconsider the stack.
 ```
@@ -84,6 +91,14 @@ components are required, conditional, deferred, or rejected.
 
 Use `app-stack` directly because the user requested a stack decision, not a
 complete solution design and `/plan` handoff.
+
+```text
+Choose an effective, efficient AI stack for hosted models, bounded tools, RAG,
+evaluation, and provider portability. Do not design the surrounding product.
+```
+
+Use `ai-stack` directly because the user requested only an AI-specific stack
+decision.
 
 ```text
 Run the Agentic SDLC workflow and update docs/design.md for FEAT-123.
@@ -135,10 +150,11 @@ where the source skill is installed or discoverable:
 - Should-trigger prompts should load `design` or produce a response that
   follows its design workflow, routes substantial due diligence through
   `research`, routes undecided application-stack or layer technology choices
-  through `app-stack`, applies `system-design-rules` for non-trivial solution
-  decisions, and ends with a `/plan` handoff.
+  through `app-stack`, routes undecided AI-specific choices through `ai-stack`,
+  applies `system-design-rules` for non-trivial solution decisions, and ends
+  with a `/plan` handoff.
 - Fixed-stack design prompts should remain in `design` without reopening the
-  technology decision through `app-stack`.
+  technology decision through `app-stack` or `ai-stack`.
 - Should-not-trigger prompts should route to brainstorming, checklist review,
   stack selection, Agentic SDLC, implementation, or PR workflows.
 - If `design` steals open-ended ideation, SDLC-owned design artifacts,

@@ -29,6 +29,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     inspect_parser.add_argument("--requirements", default="docs/requirements.md")
     inspect_parser.add_argument("--design", default="docs/design.md")
+    inspect_parser.add_argument("--spec-receipt", type=Path, required=True)
+    inspect_parser.add_argument("--runtime-config", type=Path, required=True)
     inspect_parser.add_argument("--codex-home", type=Path)
     inspect_parser.add_argument("--private-root", type=Path, required=True)
     inspect_parser.add_argument("--output", type=Path, required=True)
@@ -37,6 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     apply_parser.add_argument("--manifest", type=Path, required=True)
     apply_parser.add_argument("--decision", type=Path, required=True)
+    apply_parser.add_argument("--ownership", type=Path, required=True)
     apply_parser.add_argument("--state", type=Path, required=True)
     apply_parser.add_argument("--private-root", type=Path, required=True)
     verify_parser = subparsers.add_parser(
@@ -51,15 +54,20 @@ def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "inspect":
+            _, git_root, _ = discovery._project_identity(args.project_root)
+            private_root = private_state._ensure_private_root(
+                args.private_root, git_root
+            )
+            spec_receipt = args.spec_receipt.expanduser().resolve()
+            runtime_config = args.runtime_config.expanduser().resolve()
             result = discovery._manifest(
                 args.project_root,
                 args.spec_owner,
                 args.requirements,
                 args.design,
                 args.codex_home,
-            )
-            private_root = private_state._ensure_private_root(
-                args.private_root, Path(str(result["git_root"]))
+                spec_receipt,
+                runtime_config,
             )
             output_path = private_state._private_member(
                 private_root, args.output, "manifest"
@@ -81,6 +89,7 @@ def main(argv: list[str]) -> int:
             output = workflow.apply_decision(
                 args.manifest,
                 args.decision,
+                args.ownership,
                 args.state,
                 args.private_root,
             )

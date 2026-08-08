@@ -21,13 +21,17 @@ from prompt_workspace_core import (
 from prompt_workspace_execution import load_coordinator_state
 from prompt_workspace_interop import load_interop, managed
 from prompt_workspace_runs import (
+    _activate_next_queued_prompt_unlocked,
     _snapshot_prompt_unlocked,
+    enqueue_prompt_unlocked,
+    load_prompt_queue,
     load_prompt_activity,
     load_run_manifests,
     manifest_revisions,
     prompt_rows,
     read_handoff_text,
     record_prompt_invocation,
+    recover_incomplete_revisions_unlocked,
     scope_lock,
     touch_handoff_invocation,
     verify_run,
@@ -48,6 +52,7 @@ def _existing_route_result(
         "revision": revision_id,
         "prompt_id": manifest["prompt_id"],
         "sha256": revision["sha256"],
+        "intent_sha256": revision.get("intent_sha256") or revision["sha256"],
         "snapshot": str(run_dir / str(revision["snapshot"])),
         "manifest": str(run_dir / "manifest.json"),
     }
@@ -66,6 +71,7 @@ def _latest_route_result(
         "revision": revision_id,
         "prompt_id": manifest["prompt_id"],
         "sha256": revision["sha256"],
+        "intent_sha256": revision.get("intent_sha256") or revision["sha256"],
         "snapshot": str(run_dir / str(revision["snapshot"])),
         "manifest": str(run_dir / "manifest.json"),
         "created_revision": False,
@@ -107,6 +113,13 @@ def _steering_action(
     )
 
 
+def _run_resources_active(run_dir: Path) -> bool:
+    interop = load_interop(run_dir, required=False)
+    return bool(
+        interop is not None and managed(interop) and interop["released"] is False
+    )
+
+
 def route_project_prompt(
     project_path: Path,
     codex_home: Path,
@@ -145,6 +158,8 @@ def route_project_prompt(
         )
         load_prompt_activity(runs_root.parent)
         all_runs = load_run_manifests(runs_root)
+        if recover_incomplete_revisions_unlocked(all_runs, clock=clock):
+            all_runs = load_run_manifests(runs_root)
         coordinator_states = {
             run_dir.name: load_coordinator_state(run_dir) for run_dir, _ in all_runs
         }
@@ -162,6 +177,7 @@ def route_project_prompt(
                 coordinator_states[run_dir.name] is not None
                 and coordinator_states[run_dir.name]["status"] == "running"
             )
+            or _run_resources_active(run_dir)
         ]
         matching = [
             (run_dir, manifest)
@@ -180,20 +196,86 @@ def route_project_prompt(
         outcome: str | None = None
         if active:
             active_dir, active_manifest = active[0]
+            active_latest = manifest_revisions(active_manifest)[-1]
+            if "intent_sha256" not in active_latest or "kind" not in active_latest:
+                raise PromptWorkspaceError(
+                    "WORKFLOW_UPGRADE_REQUIRED",
+                    "unfinished prompt-v1 run is read-only; finish or retire its private state before running prompt-v2",
+                )
             source_name = str(active_manifest.get("source_path", "prompt.md"))
             if active_manifest.get("prompt_id") != document.prompt_id:
-                prompt_root = Path(
-                    required_string(workspace, "prompt_root", "workspace manifest")
+                latest_matching = matching[-1] if matching else None
+                if latest_matching is not None:
+                    latest_dir, latest_manifest = latest_matching
+                    latest_verified = verified_runs[latest_dir.name]
+                    latest_revision = manifest_revisions(latest_manifest)[-1]
+                    latest_intent = str(
+                        latest_revision.get("intent_sha256")
+                        or latest_revision["sha256"]
+                    )
+                    if (
+                        str(latest_verified["status"]) in TERMINAL_RUN_STATUSES
+                        and latest_intent == document.intent_sha256
+                    ):
+                        internal = _existing_route_result(
+                            latest_dir, latest_manifest, latest_verified
+                        )
+                        invoked_at_text = record_prompt_invocation(
+                            runs_root.parent, document.prompt_id, invoked_at
+                        )
+                        rows = prompt_rows(manifest_path, None, None)
+                        return {
+                            "action": "done",
+                            "prompt": str(document.path),
+                            "last_invoked_at": invoked_at_text,
+                            "status": "done",
+                            "prompts": rows,
+                            "_internal": internal,
+                        }
+                queued = enqueue_prompt_unlocked(runs_root.parent, document, invoked_at)
+                invoked_at_text = record_prompt_invocation(
+                    runs_root.parent, document.prompt_id, invoked_at
                 )
-                raise PromptWorkspaceError(
-                    "ACTIVE_RUN_EXISTS",
-                    "another unfinished prompt must finish first: "
-                    f"{prompt_root / source_name}",
-                )
+                rows = prompt_rows(manifest_path, None, None)
+                return {
+                    "action": str(queued["action"]),
+                    "prompt": str(document.path),
+                    "last_invoked_at": invoked_at_text,
+                    "status": "queued",
+                    "outcome": "PROMPT_QUEUED",
+                    "queue_position": queued["position"],
+                    "active_prompt": source_name,
+                    "prompts": rows,
+                    "_internal": queued["entry"],
+                }
             verified = verified_runs[active_dir.name]
             status = str(verified["status"])
-            latest_sha256 = str(verified["latest_sha256"])
-            if status in TERMINAL_RUN_STATUSES and bool(
+            latest_intent_sha256 = str(verified["latest_intent_sha256"])
+            if status in TERMINAL_RUN_STATUSES and _run_resources_active(active_dir):
+                if document.intent_sha256 != latest_intent_sha256:
+                    queued = enqueue_prompt_unlocked(
+                        runs_root.parent, document, invoked_at
+                    )
+                    invoked_at_text = record_prompt_invocation(
+                        runs_root.parent, document.prompt_id, invoked_at
+                    )
+                    rows = prompt_rows(manifest_path, None, None)
+                    return {
+                        "action": str(queued["action"]),
+                        "prompt": str(document.path),
+                        "last_invoked_at": invoked_at_text,
+                        "status": "queued",
+                        "outcome": "PROMPT_QUEUED",
+                        "queue_position": queued["position"],
+                        "active_prompt": source_name,
+                        "prompts": rows,
+                        "_internal": queued["entry"],
+                    }
+                internal = _existing_route_result(active_dir, active_manifest, verified)
+                action = "finalize"
+                status = "finalization_pending"
+                outcome = "TASK_LEASE_RELEASE_REQUIRED"
+            elif status in TERMINAL_RUN_STATUSES and bool(
                 verified["reconciliation_pending"]
             ):
                 internal = _latest_route_result(active_dir, active_manifest, verified)
@@ -205,7 +287,9 @@ def route_project_prompt(
                     manifest_path,
                     document.path,
                     run_id=(
-                        None if document.sha256 == latest_sha256 else active_dir.name
+                        None
+                        if document.intent_sha256 == latest_intent_sha256
+                        else active_dir.name
                     ),
                     force_new_run=False,
                     clock=clock,
@@ -215,7 +299,7 @@ def route_project_prompt(
                     _record_steering(active_dir, internal, invoked_at)
                 action = "new"
             elif status == "running":
-                if document.sha256 != latest_sha256:
+                if document.intent_sha256 != latest_intent_sha256:
                     internal = _snapshot_prompt_unlocked(
                         manifest_path,
                         document.path,
@@ -249,7 +333,7 @@ def route_project_prompt(
                     action, status, outcome = _steering_action(
                         coordinator_states[active_dir.name], active_dir
                     )
-            elif document.sha256 == latest_sha256:
+            elif document.intent_sha256 == latest_intent_sha256:
                 if bool(verified["reconciliation_pending"]):
                     internal = _snapshot_prompt_unlocked(
                         manifest_path,
@@ -289,11 +373,59 @@ def route_project_prompt(
                 datetime.fromisoformat(invoked_at_text),
             )
         else:
+            queue = load_prompt_queue(runs_root.parent)
+            if queue["entries"]:
+                queued = enqueue_prompt_unlocked(runs_root.parent, document, invoked_at)
+                head = load_prompt_queue(runs_root.parent)["entries"][0]
+                if head["prompt_id"] != document.prompt_id:
+                    activated = _activate_next_queued_prompt_unlocked(
+                        manifest_path, clock=clock
+                    )
+                    invoked_at_text = record_prompt_invocation(
+                        runs_root.parent, document.prompt_id, invoked_at
+                    )
+                    rows = prompt_rows(manifest_path, None, None)
+                    result = {
+                        "action": str(queued["action"]),
+                        "prompt": str(document.path),
+                        "last_invoked_at": invoked_at_text,
+                        "status": "queued",
+                        "outcome": "PROMPT_QUEUED",
+                        "queue_position": queued["position"],
+                        "prompts": rows,
+                        "_internal": queued["entry"],
+                    }
+                    if activated is not None:
+                        result["activated_queue_head"] = activated
+                    return result
+                activated = _activate_next_queued_prompt_unlocked(
+                    manifest_path, clock=clock
+                )
+                if (
+                    activated is not None
+                    and activated.get("status") == "activated"
+                    and activated.get("prompt_id") == document.prompt_id
+                ):
+                    internal = activated
+                    action = "new"
+                    status = "snapshot_only"
+                    invoked_at_text = record_prompt_invocation(
+                        runs_root.parent, document.prompt_id, invoked_at
+                    )
+                    rows = prompt_rows(manifest_path, None, None)
+                    return {
+                        "action": action,
+                        "prompt": str(document.path),
+                        "last_invoked_at": invoked_at_text,
+                        "status": status,
+                        "prompts": rows,
+                        "_internal": internal,
+                    }
             latest_matching = matching[-1] if matching else None
             if latest_matching is not None:
                 latest_dir, latest_manifest = latest_matching
                 verified = verified_runs[latest_dir.name]
-                latest_sha256 = str(verified["latest_sha256"])
+                latest_intent_sha256 = str(verified["latest_intent_sha256"])
                 if str(verified["status"]) == "done":
                     completed_handoff = read_handoff_text(latest_dir)
                     if completed_handoff is None:
@@ -305,7 +437,7 @@ def route_project_prompt(
                     load_coordinator_state(latest_dir)
                 if (
                     str(verified["status"]) == "done"
-                    and document.sha256 == latest_sha256
+                    and document.intent_sha256 == latest_intent_sha256
                 ):
                     internal = _existing_route_result(
                         latest_dir, latest_manifest, verified
@@ -336,17 +468,12 @@ def route_project_prompt(
                         manifest_path,
                         document.path,
                         run_id=None,
-                        force_new_run=document.sha256 == latest_sha256,
+                        force_new_run=document.intent_sha256 == latest_intent_sha256,
                         clock=clock,
                         expected_sha256=document.sha256,
                     )
                     action = "new"
                     status = "snapshot_only"
-                    _record_steering(
-                        Path(str(internal["manifest"])).parent,
-                        internal,
-                        invoked_at,
-                    )
                     invoked_at_text = record_prompt_invocation(
                         runs_root.parent,
                         document.prompt_id,

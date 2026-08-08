@@ -641,7 +641,7 @@ def _bound_prompt_filename(active, run_state: dict[str, Any]) -> str | None:
     except (json.JSONDecodeError, OSError):
         return None
     if (
-        binding.get("schema") != "agentic-sdlc/prompt-binding-v1"
+        binding.get("schema") != "agentic-sdlc/prompt-binding-v2"
         or binding.get("run_id") != active.run_id
     ):
         return None

@@ -11,14 +11,18 @@ All run artifacts are private local state under
   <project-id>/
     workspace.json
     activity.json
+    prompt-queue.json
+    queued-prompts/
     prompt.lock
     prompts/
+      00-START-HERE.md
       <created-at>--<slug>.md
     <project>-prompts.code-workspace
     active-run.json
     active.lock
     <run-id>/
       prompt.json
+      requirements-refinement.json
       inputs/
         r0001/prompt.md
       run.json
@@ -90,13 +94,27 @@ editable prompt mtimes. `active-run.json` is a small project-level pointer to
 the active run ID. Read `prompt-workspace.md` for the prompt and revision
 schemas.
 
-Each managed run has `prompt.json` with schema
-`agentic-sdlc/prompt-binding-v1`, one stable prompt ID and filename, and an
-ordered revision list. Each revision records `rNNNN`, accepted timestamp,
-SHA-256 digest, immutable snapshot pointer, and steering status. The run's
+Each new managed run has `prompt.json` with schema
+`agentic-sdlc/prompt-binding-v2`, one stable prompt ID and filename, lineage
+root, optional terminal predecessor, and an ordered revision list. Each
+revision records `rNNNN`, accepted timestamp, raw and normalized-intent SHA-256
+digests, revision kind, immutable snapshot pointer, and steering status. The run's
 `run.json` must mirror the bound prompt ID, filename, latest accepted revision,
-digest, and snapshot pointer so hooks can continue without reading prompt
+digests, kind, and snapshot pointer so hooks can continue without reading prompt
 bodies.
+
+`requirements-refinement.json` uses
+`agentic-sdlc/requirements-refinement-v1`. It binds the latest accepted intent
+to categorized extraction, stable `Q-*` clarification state and provenance,
+the compiled requirements digest, and `extracting`, `needs_clarification`, or
+`ready` status. Material open or reopened questions prevent `ready`.
+
+`prompt-queue.json` is a private FIFO of explicit run requests for prompts that
+cannot yet become active. Its immutable accepted snapshots live under
+`queued-prompts/`. Creation and saving never add entries; an edited queued
+prompt changes its entry only after another explicit run. Queue-head drift
+blocks activation, and the coordinator activates the head only after the
+active run and execution resources are terminal and released.
 
 ## Minimum current-state.json
 
@@ -142,8 +160,12 @@ bodies.
   "project_agent_instructions": {
     "outcome": "not-needed",
     "decision_fingerprint": "<sha256>",
+    "spec_receipt": "project-agent-instructions/spec-receipt.json",
+    "ownership_receipt": "project-agent-instructions/ownership.json",
     "state": "project-agent-instructions/state.json",
-    "active_instruction": null
+    "active_instruction": null,
+    "effective_config_fingerprint": "<sha256>",
+    "reload_required": false
   },
   "repair": null,
   "execution": {
@@ -273,8 +295,12 @@ without conversation history.
   "project_agent_instructions": {
     "outcome": "not-needed",
     "decision_fingerprint": "<sha256>",
+    "spec_receipt": "project-agent-instructions/spec-receipt.json",
+    "ownership_receipt": "project-agent-instructions/ownership.json",
     "state": "project-agent-instructions/state.json",
-    "active_instruction": null
+    "active_instruction": null,
+    "effective_config_fingerprint": "<sha256>",
+    "reload_required": false
   },
   "repair": null,
   "fingerprint_ids": [

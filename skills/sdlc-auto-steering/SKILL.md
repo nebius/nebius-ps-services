@@ -89,6 +89,10 @@ changing committed product-truth documents directly.
   compact redacted summary, never raw prompt text, and redact secrets,
   credentials, private endpoints, customer data, raw logs, or other unsafe
   material.
+- Accept only `active_steering` revisions from the current non-terminal run.
+  A completed-prompt edit starts a linked run whose `r0001` kind is
+  `completed_follow_up`; route it through requirements refinement as a fresh
+  objective and never record it as steering.
 - Classify every unresolved steering entry as one of:
   `runtime-only`, `requirements-change`, `design-change`,
   `project-agent-instructions-change`, `docs-update`, `resolved`,
@@ -159,12 +163,13 @@ changing committed product-truth documents directly.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
-  provenance-owned generated project-root `AGENTS.md` as committed project
+  ownership-receipted v2 selected-project `AGENTS.md` as committed project
   truth.
 - Only `sdlc-create-requirements` writes `docs/requirements.md`; only
   `sdlc-create-design` writes `docs/design.md`; only
-  `project-agent-instructions` creates or refreshes its generated project-root
-  `AGENTS.md`. Other skills route changes to those owners.
+  `project-agent-instructions` creates, refreshes, adopts, or retires its
+  v2-managed selected-project `AGENTS.md`. Other skills route changes to those
+  owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under
   `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest

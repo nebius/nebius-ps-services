@@ -219,7 +219,7 @@ EVIDENCE_PROFILES = {
     "safety",
 }
 PROFILE_SOURCE_SCHEMAS = {
-    "lightweight": "agentic-sdlc/prompt-binding-v1",
+    "lightweight": "agentic-sdlc/prompt-binding-v2",
     "three-tier": "agentic-sdlc/three-tier-results-v2",
 }
 SKILL_REQUIRED_PROFILES = {
@@ -247,6 +247,7 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "prompt.history",
         "prompt.rename",
         "prompt.lifecycle",
+        "spec.validation-receipt",
     },
     "sdlc-prepare-execution": {
         "execution.scope",
@@ -869,7 +870,11 @@ def check_design(ctx: Context) -> None:
         "$sdlc-start",
         "$sdlc-start workspace init [project-folder]",
         "$sdlc-start run <prompt-path-or-unique-filename>",
-        "agentic-sdlc/prompt-v1",
+        "agentic-sdlc/prompt-v2",
+        "Only `## Ask` is required",
+        "requirements-refinement",
+        "refinement gate binds the latest accepted",
+        "FIFO queue",
         "ALREADY_COMPLETE",
         "allow_implicit_invocation: false",
         "~/.codex/sdlc-verification/report.md",
@@ -2144,14 +2149,18 @@ def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     write_json(
         run_dir / "prompt.json",
         {
-            "schema": "agentic-sdlc/prompt-binding-v1",
+            "schema": "agentic-sdlc/prompt-binding-v2",
             "run_id": DEFAULT_RUN_ID,
             "prompt_id": "prompt-" + "1" * 32,
             "prompt_filename": prompt_filename,
+            "lineage_root": DEFAULT_RUN_ID,
+            "predecessor": None,
             "revisions": [
                 {
                     "revision": "r0001",
                     "sha256": "a" * 64,
+                    "intent_sha256": "b" * 64,
+                    "kind": "initial",
                     "snapshot": "inputs/r0001/prompt.md",
                     "steering_status": "initial",
                 }
@@ -2256,6 +2265,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 "-v",
                 "sdlc-start/scripts/test_prompt_workspace.py",
                 "sdlc-start/scripts/test_sdlc_start_contract.py",
+                "sdlc-start/scripts/test_validate_project_specs.py",
             ],
             ctx.skills_root,
         ),
@@ -2520,6 +2530,18 @@ def check_capability_regressions(ctx: Context) -> None:
             (
                 ("prompt", "test_init_is_idempotent_and_survives_git_init"),
                 ("prompt", "test_concurrent_init_creates_one_starter_prompt"),
+            ),
+        ),
+        "spec.validation-receipt": (
+            "Owner-issued project-spec validation receipt",
+            (
+                (
+                    "prompt",
+                    "test_valid_specs_emit_full_file_and_traceability_receipt",
+                ),
+                ("prompt", "test_ready_feature_with_placeholder_is_rejected"),
+                ("prompt", "test_unknown_requirement_mapping_is_rejected"),
+                ("prompt", "test_foreign_owner_marker_is_rejected"),
             ),
         ),
         "prompt.history": (
@@ -4098,7 +4120,7 @@ def report(ctx: Context) -> str:
     lines.extend(["", "## Validation commands", ""])
     lines.extend(
         [
-            "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py`",
+            "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py sdlc-start/scripts/test_validate_project_specs.py`",
             "- `python3 -m unittest discover -v -s sdlc-prepare-execution/scripts -p 'test_*.py'`",
             "- `python3 sdlc-implement-plan/scripts/test_worker_dispatch.py -v`",
             "- `python3 worktree/scripts/test-worktree-manager.py -v`",

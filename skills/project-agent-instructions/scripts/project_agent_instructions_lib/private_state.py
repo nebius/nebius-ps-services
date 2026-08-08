@@ -229,6 +229,16 @@ def _write_private_json(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, target)
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            directory_flags |= os.O_NOFOLLOW
+        directory_descriptor = os.open(target.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     except OSError as error:
         raise ProjectInstructionsError(
             "UNSAFE_TARGET", "private evidence could not be written safely"

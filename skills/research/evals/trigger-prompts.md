@@ -39,6 +39,23 @@ Use $research to study this RFC and turn it into actionable design guidance.
 ## Should Not Trigger
 
 ```text
+Select the complete AI stack for model providers, inference, agents, MCP,
+retrieval, evaluation, safety, and operations.
+```
+
+Use `ai-stack`; route only disputed or unfamiliar individual choices back to
+`research` for bounded due diligence.
+
+```text
+Compare Pydantic AI and LangGraph and choose which one should own our bounded
+agent loop.
+```
+
+Use `ai-stack` because the request chooses technology for an AI layer. A
+separate request to investigate one framework or disputed capability belongs to
+`research`.
+
+```text
 Help me brainstorm whether we should build this product idea.
 ```
 
@@ -78,7 +95,8 @@ where the source skill is installed or discoverable:
   matters, external technical verification, provenance labels, internals,
   operations, limitations, alternatives, and recommendations.
 - Should-not-trigger prompts should route to brainstorming, design,
-  implementation, design-review, or SDLC skills as appropriate.
+  application-stack, AI-stack, implementation, design-review, or SDLC skills as
+  appropriate.
 - If `research` steals open-ended ideation, design planning, implementation, or
   SDLC tasks, narrow the front matter `description` before changing the
   workflow body.

@@ -45,7 +45,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
-| `research` | Implicit allowed | Senior-engineer technical due diligence with internal Slack/Confluence context first where relevant, MCP fallback for internal systems, vendor verification, alternatives, and recommendations. |
+| `research` | Implicit allowed | Senior-engineer due diligence on one focal subject or disputed claim, with relevant internal context first, vendor verification, alternatives, and bounded findings for an owning decision. |
 
 ### Local Setup and Information
 
@@ -78,10 +78,11 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
+| `ai-stack` | Implicit allowed | Select or review an effective, efficient AI stack that satisfies workload requirements across model access, training, inference, agents, interoperability, retrieval, evaluation, safety, and operations with explicit component and evidence classifications. |
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, and `system-design-rules` before `/plan`. |
+| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, `ai-stack`, and `system-design-rules` before `/plan`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -91,7 +92,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
-| `project-agent-instructions` | Explicit only | Decide after validated requirements and design whether the exact selected project needs a concise root `AGENTS.md`, preserving human-owned files and safely refreshing only provenance-owned guidance. |
+| `project-agent-instructions` | Explicit only | Conditionally maintain a concise selected-project `AGENTS.md` from owner-validated specs and tracked evidence, with deterministic rendering, explicit ownership, guarded retirement, and fail-closed recovery. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
@@ -228,9 +229,11 @@ $create-learning-course Create a public-safe course workspace for engineers lear
 
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
-$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for any undecided application-layer technology choices, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for undecided application layers, use $ai-stack for undecided AI layers, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
 
 $app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
+
+$ai-stack Select an effective, efficient AI stack that satisfies these workload requirements, classify every component and evidence claim, and define validation and switch conditions.
 
 $scaffold-project Plan a multi-component repository from this approved architecture, show every owner and brownfield merge, and do not apply it until I approve the exact digest.
 
@@ -369,15 +372,18 @@ teaching-skill pattern that inspired the learning model.
 
 ### `research`
 
-`research` performs senior-engineer technical due diligence on technologies,
-frameworks, APIs, protocols, RFCs, products, architecture patterns, and feature
-requirements. For organization-tied questions, it searches internal Slack and
-Confluence context through available connectors first, uses MCP or app-tool
+`research` performs senior-engineer technical due diligence on one focal
+technology, framework, API, protocol, RFC, product, architecture pattern,
+feature requirement, or disputed claim. For organization-tied questions, it
+searches internal Slack and Confluence context through available connectors
+first, uses MCP or app-tool
 access for internal systems when connectors are unavailable, then verifies
 technical claims against official vendor documentation and authoritative
 external sources. The output cross-checks internal and external evidence and
 labels organization-specific guidance, vendor-documented behavior, general
-industry practice, and unverified claims. Use `brainstorm` for open-ended
+industry practice, and unverified claims. It may compare alternatives as
+evidence but does not choose technology for an application or AI layer; those
+decisions belong to `app-stack` or `ai-stack`. Use `brainstorm` for open-ended
 ideation, `design` for solution design and `/plan` handoff, and
 `system-design-rules` for checklist review of an existing proposal.
 
@@ -388,16 +394,18 @@ topic, requirement, and technology due diligence into a concrete software
 design before implementation. It follows a phased workflow: understand
 requirements, understand the existing system or greenfield context, route
 missing knowledge through `research` when available, route undecided
-application-stack or layer technology choices through `app-stack`, design the
-solution, apply `system-design-rules` to non-trivial solution decisions,
+application-stack or layer technology choices through `app-stack`, route
+undecided AI-specific choices through `ai-stack`, design the solution, apply
+`system-design-rules` to non-trivial solution decisions,
 evaluate alternatives, define vertical end-to-end slices for serial multi-layer
 applications, and create a Codex `/plan` handoff. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
 checklist review of an existing proposal, `app-stack` directly for a
-stack-selection-only request, and `sdlc-create-design` for Agentic SDLC-owned
-`docs/design.md`. It also accepts a proven causal handoff from `troubleshoot`
+product-stack-only request, `ai-stack` directly for an AI-stack-only request,
+and `sdlc-create-design` for Agentic SDLC-owned `docs/design.md`. It also
+accepts a proven causal handoff from `troubleshoot`
 when the durable remediation changes a system contract such as a component
 boundary, public interface, data owner, migration, or cross-component workflow.
 Unknown causes and complex repairs inside one existing private boundary remain
@@ -420,10 +428,10 @@ remains read-only for advisory requests. When implementation is requested, it
 owns cross-layer sequencing and coordinates the narrow installed specialist
 skills that match the selected stack instead of duplicating their workflows.
 Use `research` for deep technology due diligence, `design` for a complete
-solution design, and stack-specific skills directly when the stack is already
-fixed and no selection decision remains. When `design` delegates a scoped stack
-decision, `app-stack` returns it to the active design workflow instead of
-starting a recursive handoff.
+solution design, `ai-stack` for undecided AI-specific layers, and stack-specific
+skills directly when the stack is already fixed and no selection decision
+remains. When `design` delegates a scoped stack decision, `app-stack` returns it
+to the active design workflow instead of starting a recursive handoff.
 
 For a complete scaffold, its schema-v2 handoff is logical only: closed
 component class, component status, canonical technology name,
@@ -431,6 +439,28 @@ technology/profile/version decisions, selected capabilities, constraints,
 validation expectations, and revisit triggers. It never assigns repository
 paths, materialization units, runtime units, candidate sets, file owners, or
 apply authority.
+
+### `ai-stack`
+
+`ai-stack` selects, reviews, simplifies, or modernizes the AI-specific layers of
+a system: model access, training and tuning, inference and serving, agents and
+durable execution, MCP/A2A and agent-facing UI, retrieval and RAG, evaluation,
+safety, and operations. It freezes materially different workload contracts,
+starts from the current or no-new-component baseline, applies hard gates before
+scoring candidates, and assigns every component `Required`, `Conditional`,
+`Deferred`, or `Rejected` plus every material claim `Measured`, `Officially
+documented`, or `Assumed`.
+
+The skill keeps its dated Python-first baseline replaceable: Pydantic AI for a
+bounded typed agent, LangGraph only for explicit graph semantics, Temporal for
+durable cross-service execution, an internal capability-aware provider contract
+only when semantic portability is real, official Tier 1 MCP SDKs as conformance
+authority, and benchmark-gated PyTorch, serving, retrieval, MLflow, and
+OpenTelemetry layers. Use `app-stack` for the surrounding product stack,
+`research` for deep due diligence on one choice, and `design` for cross-layer
+synthesis and `/plan`. Its optional implementation handoff is logical-only and
+does not assign repository paths, runtime units, candidate manifests, or file
+owners.
 
 ### `scaffold-project`
 
@@ -569,12 +599,15 @@ outside them. Agentic SDLC ownership or malformed/unsafe managed state fails
 closed. Workers never edit these shared specifications concurrently.
 
 After both managed specifications validate, the coordinator explicitly routes
-to `project-agent-instructions`. It creates the exact selected-project
-`AGENTS.md` only when current specs and repository evidence establish durable
-rules beyond inherited instructions. Human-owned files are preserved and only
-an unchanged provenance-owned file may refresh. Its private decision receipt
-and any tracked file change are resolved before the contract commit and worker
-dispatch; `workspace init` remains private-state-only.
+to `project-agent-instructions` with a private receipt binding both complete
+files and their traceability. It deterministically renders the exact
+selected-project `AGENTS.md` only when tracked evidence establishes durable
+project rules. Personal global instructions never change repository bytes.
+Human-owned or edited files are preserved; adoption and retirement require
+exact-digest approval, and recovery artifacts block every transition. Its
+private manifest, decision, ownership, and verified state are resolved before
+the contract commit and worker dispatch. A project-file change requires a fresh
+Codex session; `workspace init` remains private-state-only.
 
 Parallel-capable tasks receive unique branches and full-repository linked
 worktrees under the private task-implementer root. For monorepo scopes, workers
@@ -940,7 +973,9 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   prompts, tickets, approved change requests, and optional safe live experiment
   environment details while preserving stable `REQ-*` IDs.
 - `sdlc-start`: initializes the private prompt workspace, accepts immutable
-  prompt revisions, coordinates the active SDLC run, reads steering and local
+  prompt-v2 revisions with Ask-only required input, compiles requirements with
+  selective stable clarifications, durably queues explicit cross-prompt run
+  requests, coordinates the active SDLC run, reads steering and local
   checkpoints plus authoritative repair pointers, and chooses one next skill
   without duplicating history. It keeps troubleshooting conditional and routes
   every diagnosis back through classification. At run start, it encourages
@@ -955,13 +990,12 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   additionally requires positive system-contract proof, valid
   evaluator/environment, reproducibility, high confidence, affected-feature
   closure, rollback, and durable approval for broader changes.
-- `project-agent-instructions`: after validated requirements and design,
-  decides whether durable selected-project rules add to inherited instructions;
-  creates or safely refreshes only a provenance-owned project-root `AGENTS.md`
-  and preserves human-owned instruction files. Its manifest advertises the
-  exact remaining generated-body capacity under Codex's cumulative project-doc
-  limit with a 7 KiB ceiling, and its decision gate rejects Git-ignored
-  evidence.
+- `project-agent-instructions`: after an owner receipt validates requirements,
+  design, and traceability, decides whether tracked evidence justifies durable
+  selected-project rules; deterministically renders within a 2 KiB preferred
+  and 4 KiB hard budget, preserves human-owned files, binds v2 output to private
+  ownership, guards adoption/retirement, fingerprints effective Codex config,
+  and rejects untracked evidence or unresolved recovery state.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
   and routes requirements, design, project-instruction, docs, or human-input
