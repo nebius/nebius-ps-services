@@ -7,13 +7,51 @@ blocks supported tool calls after exhaustion, and requires the final report.
 
 ## Files
 
-- `remediation_attempt_guard.py`: shared `UserPromptSubmit`, `PreToolUse`, and
-  `Stop` handler.
+- `remediation_attempt_guard.py`: `UserPromptSubmit` and `PreToolUse` handler,
+  plus the troubleshooting Stop evaluator called by the arbiter.
+- `stop_lifecycle_arbiter.py`: byte-identical single Stop registration shared
+  with project-contract and SDLC bundles.
 - `tests/test_remediation_attempt_guard.py`: disposable unit tests.
 
 At runtime the handler may create
 `remediation-budget-authorization.json` beside the advertised `current.md`.
 That private sidecar is session state, never a repository artifact.
+Every explicit `$troubleshoot` invocation also creates a separate
+`troubleshoot-report-obligation.json` in that 0700 same-session directory, mode
+0600, without changing the remediation authorization schema. It requires a
+terminal report containing `Current workflow state: REPORTED` for success,
+blocking, tool error, early stop, unresolved work, and exhaustion. An
+undelivered duty survives a later turn in the same session. One incomplete
+assistant response gets a corrective continuation; the next incomplete
+response closes with an honest bounded UI fallback and records that the
+assistant-authored report was not delivered. A valid report is finalized only
+after the shared Stop arbiter proves that no project-contract or SDLC delegate
+still needs continuation. A later terminal peer result keeps precedence but
+first finalizes the already validated report, so its obligation cannot leak
+into another turn. A peer continuation leaves the obligation active for the
+later terminal Stop.
+All outcomes use one canonical report envelope. The validator requires the
+architecture verdict, component matrix, incident timeline, logs, hypotheses,
+code debugging, root cause, remediation, post-fix validation, and exactly one
+`PASS`, `FAIL`, or `UNKNOWN` row for Design, Infrastructure, Connectivity,
+Configuration, Runtime health, Logs, and Relevant code paths. It rejects
+`VERIFIED_FIXED` unless every row is `PASS`. Every `PASS` row requires its exact
+canonical section reference and no-gap sentinel, then cross-validates the
+referenced architecture verdict, component-matrix cells, log coverage statuses,
+or code-debugging and post-fix fields. Structured status and referenced detail
+are validated separately: a token cannot override explicit missing,
+unavailable, unexamined, unverified, or otherwise insufficient evidence.
+The Failure Contract also requires explicit included and excluded boundaries,
+exercised control and data paths, and incident-window start and end. The
+component table names DNS and restart-history evidence. The log ledger requires
+exactly one ordered row for each canonical layer: component, application or
+job, container or orchestrator, service manager, OS and kernel, network and
+firewall, storage, and GPU or hardware. Coverage status is exactly `examined`,
+`unavailable`, `unsafe`, or `not applicable`; aliases and differently cased
+values fail closed.
+Evidence-bearing component and log cells are validated independently, and the
+detail after `PASS:` must be substantive; a fixed layer name, neighboring prose,
+or verdict token cannot make a placeholder cell satisfy the report gate.
 
 ## Runtime Contract
 
@@ -22,7 +60,8 @@ The event payload and output shapes follow the current
 `UserPromptSubmit` turn/prompt fields, bounded `additionalContext`, prompt
 blocking, and concurrent same-event command handlers.
 
-- Missing task state or a missing marker fails open.
+- Missing task state or a missing remediation marker fails open for budget
+  enforcement. An active report obligation remains independently enforced.
 - A present malformed marker fails closed until the parent repairs the exact
   advertised `current.md` file. The denial includes a bounded public-safe
   validation reason without reflecting marker content or filesystem exception
@@ -55,7 +94,18 @@ blocking, and concurrent same-event command handlers.
   value, and explicit 5/120 resets the defaults. Active changes require both
   resulting limits to remain strictly above consumed attempts and active time.
   While the marker update is pending, only the exact advertised `current.md`
-  patch is admitted.
+  patch is admitted. Pending feedback reports a precise bounded missing-marker,
+  invalid-marker, or invalid-transition reason before the repair action instead
+  of masking it with generic pending guidance. Next-tranche guidance requires
+  one complete canonical fresh marker, including a public-safe
+  `blocker_summary`, and distinguishes exact-key same-blocker continuation from
+  a new-key causally independent blocker. It refers to the source as the prior
+  terminal marker because the handoff can follow either resolved or exhausted
+  state. For an invalid active-resize marker,
+  it requires atomic restoration of every non-profile field plus the authorized
+  profile fields. A deleted resize marker remains fail-closed: bounded sidecar
+  metadata cannot reconstruct it, so guidance requires the exact prior marker
+  or a fresh user-authorized troubleshoot session and never suggests a reset.
 - Attempt labels are derived from list order as `attempt-1` through the
   configured limit, up to `attempt-10`; an authored ID is ignored. Every active
   recorded retry must have
@@ -88,14 +138,16 @@ blocking, and concurrent same-event command handlers.
   the user, model capacity, or an external event does not consume the tranche.
 - Once the attempt or time limit is exhausted, every supported tool call is
   denied except an `apply_patch` that updates only that `current.md` file.
-- For exhausted state, the Stop hook requests one corrected report with the
+- For exhausted state, the Stop evaluator requests one corrected report with the
   exact validation issue and includes a bounded, redacted report as the minimum
-  assistant response. Validation requires substantive `Remediation`,
-  `Verification`, `Result`, and `Evidence` fields for every positional attempt,
-  bound to the guard's bounded, redacted marker-derived summaries. A report
+  assistant response in that same canonical envelope. Validation requires
+  substantive `Remediation`, `Verification`, `Result`, and `Evidence` fields
+  for every positional attempt, bound to the guard's bounded, redacted
+  marker-derived summaries under `## Remediation` and
+  `## Post-Fix Validation`. A report
   containing a detected sensitive value is rejected for correction. The
-  marker-derived report fields are capped at 70 characters so all ten attempts
-  remain inside the existing fallback preview bound. The
+  marker-derived report fields are capped at 70 characters so the canonical
+  fallback remains bounded even with all ten attempts. The
   fallback normalizes pipe characters in attempt remediation and verification
   summaries so marker text cannot collide with the report field delimiters.
   The assistant must return the supplied bounded report verbatim; paraphrasing
@@ -103,10 +155,12 @@ blocking, and concurrent same-event command handlers.
   mismatch reason rather than the missing-field reason.
   If the continued response remains incomplete, the hook terminates and emits
   the same fallback as a UI/event-stream `systemMessage` warning; that warning
-  is not an assistant-authored conversation response. Secret-, URL-, private
-  IPv4/IPv6-, internal-hostname/localhost-, cloud-access-key-, and Unix/Windows
-  personal-path-shaped values are replaced with generic summaries even though
-  the marker contract already requires public-safe content. For invalid state,
+  is not an assistant-authored conversation response. Secret-, private-URL-,
+  private-IPv4/IPv6-, internal-hostname/localhost-, cloud-access-key-, and
+  Unix/Windows personal-path-shaped values are replaced with generic summaries
+  even though the marker contract already requires public-safe content. Public
+  vendor documentation URLs, public FQDNs, commit SHAs, and image digests remain
+  admissible evidence. For invalid state,
   it requests exact marker repair instead of an exhaustion report; one failed
   repair request then stops with an explicit warning.
 - Hosted tools outside Codex's local hook path remain governed by the skill
@@ -139,3 +193,4 @@ Installation is explicit because hooks change local Codex behavior:
 Set `CODEX_HOME` first to target a disposable or non-default Codex home. After
 installing, restart Codex and review and trust all three hook registrations in
 `/hooks`. The normal skill installer does not install or trust this bundle.
+The Stop entry is the shared arbiter, not a concurrent remediation-only owner.

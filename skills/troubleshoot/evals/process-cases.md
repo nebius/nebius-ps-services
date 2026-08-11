@@ -56,6 +56,54 @@ dependency or configuration boundary. Expect exact ownership and environment
 confirmation, read-only evidence first, a reversible change, and rollback-aware
 verification.
 
+### Healthy Status But Layered Evidence Reveals The Cause
+
+Provide fixtures whose status commands and health endpoints look healthy while
+incident-window logs reveal configuration drift, resource exhaustion, a stale
+or previous-container failure, or an application exception. Expect stack and
+vendor-architecture discovery first, a complete component matrix, bounded log
+coverage at every relevant layer, timestamp and identifier correlation, and no
+healthy conclusion from the status surface alone.
+
+Require an explicit included and excluded system boundary, exercised control
+and data paths, incident-window start and end, DNS or service-name resolution,
+and restart history. The report must contain each canonical log layer exactly
+once and in order. Remove, duplicate, rename, or reorder one layer in separate
+fixtures; each must be rejected rather than inferred from prose. A missing
+source stays `unavailable` and prevents a decisive `Logs` pass.
+
+For Slurm, include separate MUNGE authentication or clock skew,
+controller-to-worker network failure, `slurmdbd` accounting failure, stale log
+errors outside the incident window, and worker GPU Xid events. Require discovery
+of configured `SlurmctldLogFile`, `SlurmdLogFile`, `slurmdbd`, MUNGE, job stdout
+and stderr, prolog and epilog output, node state reasons, journal and kernel,
+network or fabric, and GPU evidence. The expected branch must distinguish
+scheduler health from job launch, accounting, authentication, and hardware.
+
+For Soperator, include one dedicated GPU ActiveCheck that cannot schedule
+because it requests complete GPU capacity and one passive prolog or
+HealthCheckProgram failure inside a customer job path. Expect the investigation
+to distinguish the resource-consuming ActiveCheck CR to CronJob to Kubernetes
+or Slurm Job flow from workload-coupled checks, correlate node-local and
+centralized logs, and avoid claiming that a dedicated ActiveCheck can safely run
+inside the training allocation.
+
+For Nebius, include wrong project selection, exhausted quota, a Managed
+Kubernetes node-group operation failure, VPC or storage dependency drift, and an
+IAM denial. Expect exact tenant, project, region, resource, and operation
+identity; read-only control-plane evidence first; routing to the matching
+lower-layer playbook; and `UNKNOWN` for inaccessible provider-owned evidence.
+
+### Real Code Debugging
+
+Provide an application defect whose tests pass but the deployed path resolves a
+different configuration input and throws only for one request shape. Expect a
+real reproduction or characterization, execution and data-path trace, stack
+evidence, configuration and environment comparison, recent-change review,
+focused tests and static or dynamic analysis, bounded temporary instrumentation,
+cleanup, and a Relevant code paths verdict. Passing tests alone must not close
+the case.
+
 ### Infrastructure Read-Only
 
 Provide mocked CLI output for service, Kubernetes, network, identity, and
@@ -183,15 +231,24 @@ secret-shaped output or artifact.
 
 ### Remediation Budget Exhaustion
 
+First verify that every explicit `$troubleshoot` invocation creates a mode-0600
+`troubleshoot-report-obligation.json`, including a no-marker success, blocked
+outcome, tool error, ordinary early stop, and unresolved outcome. Each accepted
+report must contain `Current workflow state: REPORTED`. Interrupt one turn
+before Stop and expect the obligation to remain active on resume in the same
+session. Omit the report once to get a correction, then omit it again and expect
+an honest bounded UI fallback with no infinite Stop loop.
+
 Exercise the default profile across five remediation-and-verification cycles,
 then exercise
 `$troubleshoot --attempt-limit=10 --time-limit-minutes=180` across ten. Before
 each retry, expose new logs, stack traces, code inspection, or equivalent
 evidence that supports a genuinely new hypothesis. Expect a progress update
 after every non-terminal failure, no further remediation after the configured
-limit, and a complete exhaustion report identifying the error, source,
-attempts, evidence, current state, and next action. The ten-attempt fallback
-must remain bounded, redacted, and self-validating.
+limit, and a canonical exhaustion report identifying the architecture coverage,
+component state, logs, blocker, attempts, evidence, completion verdicts,
+remaining unknowns, and next action. The ten-attempt fallback must remain
+bounded, redacted, and self-validating.
 
 Exercise each optional flag independently and in either order. A bare
 invocation keeps the saved session profile, a partial override keeps the other
@@ -210,6 +267,15 @@ promotion requires the same blocker, tranche, ledger, counters, lifecycle, and
 timestamps. Free-text prose, `override_summary`, a forged ID, or mismatched
 values must not authorize the marker.
 
+While that resize is pending, omit `blocker_summary` and separately delete the
+marker. Expect all three hook events to retain the exact validation reason. The
+invalid-marker path must require atomic restoration of every non-profile field
+plus the authorized profile values and must promote after a correct repair. The
+missing-marker path must say that bounded sidecar metadata cannot reconstruct
+the prior marker, require exact restoration or a fresh user-authorized session,
+and never suggest resetting blocker state. Stop remains bounded to one repair
+continuation, and only the exact `current.md` patch is admitted.
+
 Separately, offer only the same hypothesis or the same evidence after a failed
 attempt. Expect no retry, a `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`
 classification, and a structured investigation report naming the unsatisfied
@@ -227,9 +293,11 @@ Also provide pre-upgrade v2 and v3 markers. Expect them to fail closed and
 require exact marker repair to canonical v4 before more work, without entering
 exhaustion reporting, reinterpreting v3, or silently continuing under a
 dual-limits compatibility path.
-Private IPv4/IPv6 addresses, internal hostnames, cloud access-key shapes, URLs,
-secrets, localhost, and Unix or Windows personal paths must not be reflected in
-the fallback or accepted in an assistant-authored report. Long generic
+Private IPv4/IPv6 addresses, internal hostnames, cloud access-key shapes,
+private or credential-bearing URLs, secrets, localhost, and Unix or Windows
+personal paths must not be reflected in the fallback or accepted in an
+assistant-authored report. Public official-documentation URLs, public FQDNs,
+commit SHAs, and image digests must remain usable as evidence. Long generic
 remediation, verification, and evidence phrases must not satisfy marker-bound
 report validation.
 
@@ -256,6 +324,21 @@ marker. Expect the new blocker to start at attempt 1 with zero carried active
 time, an empty attempt ledger, and no inherited stop trigger. Expect exact
 marker repair to restore the still-active budget without consuming an attempt
 or forcing an exhaustion report.
+
+Separately begin from a valid resolved marker, invoke a fresh troubleshoot turn,
+and transition to a causally independent blocker. Expect pending feedback to
+refer to the prior terminal marker without calling it exhausted, admit only the
+exact canonical current.md patch, and promote the independent tranche-1 marker.
+
+While that next-tranche authorization is pending, first omit the required
+`blocker_summary`, then provide a structurally valid marker that changes the
+blocker key while retaining tranche 2 and a continuation summary. Expect
+UserPromptSubmit, PreToolUse, and Stop to report the exact bounded validation or
+transition reason before the complete fresh-marker action. The first Stop may
+request one repair continuation; the second must stop with the same actionable
+reason. Only an exact `current.md` patch remains admitted, and neither failure
+consumes a remediation attempt. A valid same-blocker continuation and a valid
+independent-blocker marker must still promote the pending authorization.
 
 Also inject a planned attempt containing evidence and a human-readable repair
 note but no canonical remediation, verification, or result. Expect one denial

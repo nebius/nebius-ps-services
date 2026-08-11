@@ -76,10 +76,18 @@ that baseline.
   confirmation.
 - Treat full-access settings as intended only for trusted local developer
   machines.
-- If a local hook or permission guard blocks an otherwise safe local Codex
-  config patch, do not bypass the guard. Report the exact blocked surface,
-  the smallest intended change, and the manual out-of-band step the user can
-  apply after reviewing it.
+- Never evade a guard by choosing an alternate writer, using shell redirection,
+  editing only the installed payload, changing the working directory to escape
+  classification, or attempting to disable or unregister it.
+- If a repo-owned guard blocks an otherwise safe local Codex patch, first prove
+  the exact denying registration, canonical source, installed provenance, and
+  documented ownership boundary. When the request authorizes that repair,
+  reproduce the false denial in a focused test, repair canonical source first,
+  validate it, sync it through the documented installer, report the restart and
+  trust boundary, then retry the identical authorized edit.
+- If the denial is external or unrepairable in the current scope, including an
+  OS, sandbox, enterprise, unknown-provenance, conflicting, or out-of-authority
+  policy, report the smallest manual out-of-band action and do not bypass it.
 - Never create the optional task-implementer directory inside a Git worktree,
   follow a symlink for it, expose prompt contents, or loosen its `0700` mode.
 
@@ -247,11 +255,13 @@ recovery boundary.
     after the operator approves a content-preserving one-time mode repair. When
     prompt-workspace integration was requested, run the idempotency preflight
     with `--require-task-implementer-workspace`.
-11. Produce an alignment report that lists each checked surface as
-    `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for
-    every `Not aligned` or `Blocked` item. Include the minimal file/scope to
-    change, whether Codex attempted the patch, whether a backup was made, and
-    which files must not be touched.
+11. Produce an alignment report that lists each checked surface as `Aligned`,
+    `Not aligned`, `Repo-owned guard repair pending`, or `Blocked external or
+    unrepairable`. For a repo-owned defect, report canonical source, installed
+    provenance, validation, install, restart, and identical authorized edit
+    retry status. Give exact manual out-of-band remediation only for a genuinely
+    external or unrepairable item. Include the minimal file/scope, whether Codex
+    attempted the patch, whether a backup was made, and files left untouched.
 12. Tell the user to restart Codex, open `/hooks`, review the two
     global-context hooks, and trust them only after confirming the paths are
     expected. If other workflows add their own hooks, review those separately
@@ -371,9 +381,11 @@ Return:
 - which values still need user-specific replacement
 - which private, plugin-managed, generated, or machine-specific config layers
   were intentionally excluded from public recovery
-- for every `Not aligned` or `Blocked` item, the exact manual out-of-band
-  action the user can take, including the narrow file or bullet to edit and
-  any files that should be left untouched
+- for every repo-owned guard denial, its owner/provenance evidence, canonical
+  source repair, installation/restart state, and identical authorized edit
+  retry; for every external or unrepairable denial, the exact manual
+  out-of-band action, including the narrow file or bullet to edit and files
+  that should be left untouched
 - how to restart Codex and trust hooks
 - whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior

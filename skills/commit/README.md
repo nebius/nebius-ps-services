@@ -6,6 +6,25 @@ It is intentionally smaller than `commit-push`, `create-pr`, and
 It may also execute one exact commit delegated by a fresh explicit
 `$worktree integrate` after that workflow proves the checkout is eligible.
 
+## Usage
+
+```text
+$commit [commit-message]
+run $commit [commit-message]
+apply $commit [commit-message]
+execute $commit [commit-message]
+```
+
+The message is optional. The bounded grammar accepts optional `please`, then
+either `$commit` directly or one of `run`, `apply`, `execute`, `invoke`, or
+`use` immediately before `$commit`. Casual mentions, questions, quotations,
+and later prose references remain inert. There are no additional public flags;
+all transaction state and helper arguments stay internal. On a known default
+branch, explicit
+authorization uses `$commit on <current-branch> [commit-message]` (or a bounded
+leading directive before it), or `$commit on the default branch
+[commit-message]`; other invocations stop.
+
 ## What It Does
 
 - Resolves the Git repository root and runs Git commands from there.
@@ -16,26 +35,25 @@ It may also execute one exact commit delegated by a fresh explicit
 - Uses a provided commit message or generates a concise imperative one.
 - Creates a local commit with normal hooks enabled.
 - Reports the final branch status and whether anything remains dirty.
+- Uses a hidden one-shot authorization and claim so the lifecycle hook can
+  admit exactly this whole-repository commit without allowing raw Git mutation.
 
 ## Architecture
 
 ```text
-Current git branch
+Explicit `$commit` authorization
   |
   v
-Fast safety checks
+Current branch and fast safety checks
   |
   v
-Complete diff inspection
+Temporary-index candidate and complete diff inspection
   |
   v
-Full repository staging
+Common-repository lock and drift revalidation
   |
   v
-Lightweight staged validation
-  |
-  v
-Local commit
+Exact full-repository staging, validation, and local commit
   |
   v
 Final status report
@@ -46,7 +64,16 @@ Final status report
 - The skill is current-branch only.
 - `git add -A` is mandatory and always runs from the Git repository root
   because monorepo changes often span projects.
+- The public workflow stays `$commit [commit-message]`; authorization, the
+  temporary index, token, lock, and claim states are internal implementation
+  details.
 - The current working directory never narrows the commit scope.
+- Repository-shaping Git environment is rejected before discovery or
+  mutation; only the transaction-owned temporary preview may override
+  `GIT_INDEX_FILE`.
+- Direct execution requires the current selected-project lifecycle to be
+  sealed, or a bounded waiver for a fresh commit-only turn with no project
+  writes. It never asks every changed sibling project for an attestation.
 - The skill never pushes, opens PRs, repairs branches, or writes Agentic SDLC
   run state.
 - Commit hooks should run normally.
@@ -56,8 +83,31 @@ Final status report
   durable source-scoped preparation claim blocks competing lifecycle owners
   while the commit runs. Delegation is never permitted for nested/coordinated
   children or active integration attempts.
+- Direct transactions move through `PREPARED`, `STAGED`, and `COMMITTED`;
+  drift becomes `STALE`, while a hook-altered or otherwise uncertain commit
+  becomes `REVIEW_REQUIRED`. The private review transition can complete only
+  the currently checked-out, clean, exact direct child after its actual commit
+  and tree have been reviewed. Failed hooks that create no commit become stale
+  for a fresh explicit retry. Recovery never resets, amends, or unstages user
+  work.
+- Worktree ownership and direct commits share one common-repository lock. A
+  direct claim refuses an active Worktree preparation or reservation for the
+  same source ref, and malformed ownership or coordination records fail closed
+  before staging. Active Agentic SDLC runs continue to own commits through
+  `sdlc-commit`.
+- Task Implementer workers receive the same hidden transaction interface from
+  `task-start`, bound to their immutable assignment, running task plane, worker
+  session, branch, and base commit. It can refresh a stale preview before the
+  one direct-child commit, but cannot authorize a second commit. The helper
+  revalidates live worker ownership before adopting an interrupted exact-child
+  commit. This is delegated worker authorization, not an implicit root-user
+  `$commit`.
 
 ## Files
 
 - `SKILL.md`: Runtime workflow, guardrails, commands, and output contract.
 - `agents/openai.yaml`: UI metadata and default prompt.
+- `assets/hooks/commit_intent.py`: Bounded root-turn `$commit` authorization.
+- `scripts/commit_transaction.py`: Temporary-index preview, one-shot claim,
+  locked staging, normal-hook commit, exact recovery verification, and private
+  acknowledgement of a reviewed hook-modified direct child.

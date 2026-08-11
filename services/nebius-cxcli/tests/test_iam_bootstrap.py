@@ -172,11 +172,15 @@ def test_bootstrap_result_sensitive_fields_are_excluded_from_repr() -> None:
     auth_fields = {
         item.name: item.repr for item in fields(iam_bootstrap.ServiceAccountAuthKeyResult)
     }
+    object_storage_fields = {
+        item.name: item.repr for item in fields(iam_bootstrap.ObjectStorageAccessKeyResult)
+    }
     static_fields = {item.name: item.repr for item in fields(iam_bootstrap.StaticKeyIssueResult)}
 
     assert ci_fields["auth_" + "private_key_pem"] is False
     assert ci_fields["s3_" + "secret_" + "access_key"] is False
     assert auth_fields["auth_" + "private_key_pem"] is False
+    assert object_storage_fields["s3_" + "secret_" + "access_key"] is False
     assert static_fields["to" + "ken"] is False
 
 
@@ -299,6 +303,146 @@ def test_access_permits_reject_repeated_page_token(monkeypatch: pytest.MonkeyPat
     ]
 
 
+def test_strict_access_permits_reject_unexpected_project_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_access_permit_modules(monkeypatch)
+
+    class _UnexpectedRoleAccessPermits(_FakeAccessPermits):
+        def list(self, request: _FakeListAccessPermitRequest):  # type: ignore[no-untyped-def]
+            self.list_requests.append(request)
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        spec=SimpleNamespace(resource_id="project-abc", role="editor")
+                    ),
+                    SimpleNamespace(
+                        spec=SimpleNamespace(resource_id="project-abc", role="viewer")
+                    ),
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    access_permits = _UnexpectedRoleAccessPermits()
+
+    with pytest.raises(RuntimeError, match="unexpected project role permits: viewer"):
+        iam_bootstrap._ensure_project_role_permits(
+            access_permits=access_permits,
+            permit_parent_id="group-123",
+            principal_label="IAM group 'demo'",
+            project_id="project-abc",
+            role_ids=["editor"],
+            reject_unexpected_role_ids=True,
+        )
+
+    assert access_permits.create_requests == []
+
+
+def test_read_only_access_permit_validation_rejects_missing_role_without_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_access_permit_modules(monkeypatch)
+    access_permits = _FakeAccessPermits()
+
+    with pytest.raises(RuntimeError, match="missing required project role permits: editor"):
+        iam_bootstrap._ensure_project_role_permits(
+            access_permits=access_permits,
+            permit_parent_id="group-123",
+            principal_label="IAM group 'demo'",
+            project_id="project-abc",
+            role_ids=["editor"],
+            reject_unexpected_role_ids=True,
+            create_missing=False,
+        )
+
+    assert access_permits.create_requests == []
+
+
+def test_strict_access_permits_reject_unexpected_resource_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_access_permit_modules(monkeypatch)
+
+    class _UnexpectedScopeAccessPermits(_FakeAccessPermits):
+        def list(self, request: _FakeListAccessPermitRequest):  # type: ignore[no-untyped-def]
+            self.list_requests.append(request)
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        spec=SimpleNamespace(resource_id="project-abc", role="editor")
+                    ),
+                    SimpleNamespace(
+                        spec=SimpleNamespace(resource_id="project-other", role="editor")
+                    ),
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    access_permits = _UnexpectedScopeAccessPermits()
+
+    with pytest.raises(RuntimeError, match="unexpected resource-scoped access permits"):
+        iam_bootstrap._ensure_project_role_permits(
+            access_permits=access_permits,
+            permit_parent_id="group-123",
+            principal_label="IAM group 'demo'",
+            project_id="project-abc",
+            role_ids=["editor"],
+            reject_unexpected_role_ids=True,
+        )
+
+    assert access_permits.create_requests == []
+
+
+def test_strict_service_account_rejects_same_name_with_different_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass
+    class _FakeGetServiceAccountByNameRequest:
+        parent_id: str
+        name: str
+
+    @dataclass
+    class _FakeServiceAccountSpec:
+        description: str
+
+    @dataclass
+    class _FakeCreateServiceAccountRequest:
+        metadata: object
+        spec: object
+
+    common_module = ModuleType("nebius.api.nebius.common.v1")
+    common_module.ResourceMetadata = _FakeResourceMetadata  # type: ignore[attr-defined]
+    iam_module = ModuleType("nebius.api.nebius.iam.v1")
+    iam_module.GetServiceAccountByNameRequest = _FakeGetServiceAccountByNameRequest  # type: ignore[attr-defined]
+    iam_module.ServiceAccountSpec = _FakeServiceAccountSpec  # type: ignore[attr-defined]
+    iam_module.CreateServiceAccountRequest = _FakeCreateServiceAccountRequest  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
+
+    class _ServiceAccounts:
+        def get_by_name(self, request: object):  # type: ignore[no-untyped-def]
+            assert request == _FakeGetServiceAccountByNameRequest(
+                parent_id="project-abc",
+                name="nebius-cxcli-sa",
+            )
+            existing = SimpleNamespace(
+                metadata=SimpleNamespace(id="serviceaccount-conflict"),
+                spec=SimpleNamespace(description="owned by another tool"),
+            )
+            return SimpleNamespace(wait=lambda: existing)
+
+    with pytest.raises(RuntimeError, match="not the cxcli-managed identity"):
+        iam_bootstrap._ensure_service_account(
+            service_accounts=_ServiceAccounts(),
+            project_id="project-abc",
+            service_account_name="nebius-cxcli-sa",
+            service_account_description="canonical cxcli runtime identity",
+            strict_description=True,
+        )
+
+
 def test_group_member_ids_reject_repeated_page_token(monkeypatch: pytest.MonkeyPatch) -> None:
     @dataclass
     class _FakeListGroupMembershipsRequest:
@@ -347,6 +491,6 @@ def test_group_name_for_service_account_is_stable_and_bounded() -> None:
 
 
 def test_generate_rsa_key_pair_returns_pem_material() -> None:
-    private_pem, public_pem = iam_bootstrap._generate_rsa_key_pair_pem()
+    private_pem, public_pem = iam_bootstrap.generate_service_account_auth_key_pair()
     assert private_pem.startswith("-----BEGIN PRIVATE KEY-----")
     assert public_pem.startswith("-----BEGIN PUBLIC KEY-----")

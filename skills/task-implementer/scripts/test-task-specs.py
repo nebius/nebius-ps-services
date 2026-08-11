@@ -102,7 +102,7 @@ def design_body(
 class TaskSpecificationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.origin = self.root / "origin.git"
         git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "repo"
@@ -208,9 +208,9 @@ class TaskSpecificationTest(unittest.TestCase):
         self.assertEqual(inspected["next_design_id"], "TI-DES-002")
         receipt = inspected["project_agent_spec_receipt"]
         self.assertEqual(
-            receipt["schema"], "project-agent-instructions.spec-validation.v2"
+            receipt["schema"], "project-agent-instructions.spec-validation.v3"
         )
-        self.assertEqual(receipt["owner"], "task-implementer")
+        self.assertEqual(receipt["owner"], "maintain-project-specs")
         self.assertEqual(receipt["project_scope"], "services/example")
         self.assertEqual(
             receipt["requirements"]["sha256"],
@@ -226,6 +226,25 @@ class TaskSpecificationTest(unittest.TestCase):
         self.write_specs(tracked=False)
 
         inspected = pw.inspect_spec_documents(self.workspace_value)
+
+        self.assertIsNone(inspected["project_agent_spec_receipt"])
+
+    def test_commit_snapshot_does_not_fabricate_authoritative_receipt(self) -> None:
+        self.write_specs()
+        repo_root = Path(str(self.workspace_value["repo_root"]))
+        git(
+            "-c",
+            "user.name=Spec Test",
+            "-c",
+            "user.email=spec@example.invalid",
+            "commit",
+            "-qm",
+            "record specs",
+            cwd=repo_root,
+        )
+        commit = git("rev-parse", "HEAD", cwd=repo_root)
+
+        inspected = pw.inspect_spec_documents(self.workspace_value, commit=commit)
 
         self.assertIsNone(inspected["project_agent_spec_receipt"])
 
@@ -345,7 +364,7 @@ class TaskSpecificationTest(unittest.TestCase):
                 "--project-root",
                 str(self.scope),
                 "--spec-owner",
-                "task-implementer",
+                "maintain-project-specs",
                 "--spec-receipt",
                 str(receipt_path),
                 "--runtime-config",
@@ -366,7 +385,7 @@ class TaskSpecificationTest(unittest.TestCase):
         manifest = json.loads((private_root / "manifest.json").read_text())
         design = self.scope / "docs/design.md"
         decision = {
-            "schema": "project-agent-instructions.decision.v2",
+            "schema": "project-agent-instructions.decision.v3",
             "manifest_sha256": manifest["manifest_sha256"],
             "disposition": "existing-sufficient",
             "rationale": "The tracked human project instructions are sufficient.",
@@ -386,19 +405,19 @@ class TaskSpecificationTest(unittest.TestCase):
             json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         decision_path.chmod(0o600)
-        apply_result = subprocess.run(
+        render_result = subprocess.run(
             [
                 sys.executable,
                 str(helper),
-                "apply",
+                "render",
                 "--private-root",
                 str(private_root),
                 "--manifest",
                 "manifest.json",
                 "--decision",
                 "decision.json",
-                "--ownership",
-                "ownership.json",
+                "--output",
+                "rules.md",
                 "--state",
                 "state.json",
             ],
@@ -407,11 +426,12 @@ class TaskSpecificationTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self.assertEqual(apply_result.returncode, 0, apply_result.stdout)
+        self.assertEqual(render_result.returncode, 0, render_result.stdout)
         verified = specs.verify_project_agent_contract(
             self.workspace_value, run_dir, self.scope, contract_commit
         )
-        self.assertEqual(verified["outcome"], "existing-sufficient")
+        self.assertEqual(verified["disposition"], "existing-sufficient")
+        self.assertFalse(verified["repository_mutated"])
 
         receipt_path.write_text("{}\n", encoding="utf-8")
         with self.assertRaises(pw.PromptWorkspaceError) as caught:

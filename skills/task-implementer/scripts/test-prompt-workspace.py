@@ -726,15 +726,16 @@ class PromptWorkspaceTest(unittest.TestCase):
         second = self.new_prompt(prompt_hex="b" * 32)
         self.assertEqual(
             first.name,
-            "2026-07-12_1430--add-prompt-workspace-support.md",
+            "aaaaa--2026-07-12_1430--add-prompt-workspace-support.md",
         )
         self.assertEqual(
             second.name,
-            "2026-07-12_1430--add-prompt-workspace-support--02.md",
+            "bbbbb--2026-07-12_1430--add-prompt-workspace-support.md",
         )
         text = first.read_text(encoding="utf-8")
         self.assertIn(f"schema: {pw.PROMPT_SCHEMA}", text)
         self.assertIn(f"prompt_id: prompt-{'a' * 32}", text)
+        self.assertIn("prompt_ref: aaaaa", text)
         self.assertIn('title: "Add prompt workspace support"', text)
         self.assertIn("created_at: 2026-07-12T14:30:00+00:00", text)
         self.assertNotIn("## Acceptance criteria", text)
@@ -754,6 +755,272 @@ class PromptWorkspaceTest(unittest.TestCase):
             second,
         ):
             self.assertEqual(mode(file_path), 0o600)
+
+    def test_v2_prompt_migrates_once_and_resolves_by_ref_or_full_id(self) -> None:
+        prompt = self.new_prompt()
+        original = prompt.read_text(encoding="utf-8")
+        v2 = original.replace(
+            "schema: task-implementer/prompt-v3",
+            "schema: task-implementer/prompt-v2",
+        ).replace("prompt_ref: aaaaa\n", "") + (
+            "\n## Context\n\n"
+            "schema: body-schema-must-stay\n"
+            "prompt_id: body-identity-must-stay\n"
+        )
+        legacy_name = self.prompt_root / prompt.name.removeprefix("aaaaa--")
+        prompt.unlink()
+        legacy_name.write_text(v2, encoding="utf-8")
+        legacy_name.chmod(0o600)
+
+        migrated = core.migrate_prompt_files_v2(self.prompt_root)
+        self.assertEqual(len(migrated), 1)
+        target = self.prompt_root / migrated[0]["new_name"]
+        document = core.read_prompt(target, self.prompt_root, require_content=True)
+        self.assertEqual(document.prompt_ref, "aaaaa")
+        self.assertEqual(document.prompt_id, "prompt-" + "a" * 32)
+        self.assertIn("schema: body-schema-must-stay", document.text)
+        self.assertIn("prompt_id: body-identity-must-stay", document.text)
+        self.assertEqual(document.text.count("prompt_ref: aaaaa"), 1)
+        self.assertFalse(legacy_name.exists())
+        self.assertEqual(core.migrate_prompt_files_v2(self.prompt_root), migrated)
+        core.complete_prompt_files_v3_migration(self.prompt_root)
+        self.assertEqual(core.migrate_prompt_files_v2(self.prompt_root), [])
+        self.assertEqual(
+            core.resolve_prompt_reference(self.workspace, "aaaaa", require_content=True).path,
+            target,
+        )
+        self.assertEqual(
+            core.resolve_prompt_reference(
+                self.workspace, "prompt-" + "a" * 32, require_content=True
+            ).path,
+            target,
+        )
+        history_root = self.root / "immutable-history"
+        history_root.mkdir(mode=0o700)
+        history = history_root / "prompt.md"
+        history.write_text(v2, encoding="utf-8")
+        history.chmod(0o600)
+        with self.assertRaises(core.PromptWorkspaceError) as blocked:
+            core.read_prompt(history, history_root, require_content=True)
+        self.assertEqual(blocked.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+        historical = core.read_prompt(
+            history,
+            history_root,
+            require_content=True,
+            allow_migration_history=True,
+        )
+        self.assertEqual(historical.prompt_id, document.prompt_id)
+        self.assertEqual(historical.prompt_ref, "")
+
+    def test_prompt_ref_collision_extends_new_ref_without_changing_identity(self) -> None:
+        first = self.new_prompt(prompt_hex="abcde0" + "0" * 26)
+        second = self.new_prompt(prompt_hex="abcde1" + "1" * 26)
+        first_document = core.read_prompt(first, self.prompt_root, require_content=True)
+        second_document = core.read_prompt(second, self.prompt_root, require_content=True)
+        self.assertEqual(first_document.prompt_ref, "abcde")
+        self.assertEqual(second_document.prompt_ref, "abcde1")
+        self.assertEqual(
+            core.resolve_prompt_reference(
+                self.workspace, second_document.prompt_ref, require_content=True
+            ).prompt_id,
+            second_document.prompt_id,
+        )
+
+    def test_v2_migration_recovers_from_journaled_source_and_rejects_escape(self) -> None:
+        prompt = self.new_prompt()
+        original = prompt.read_bytes()
+        v2 = original.replace(
+            b"schema: task-implementer/prompt-v3",
+            b"schema: task-implementer/prompt-v2",
+        ).replace(b"prompt_ref: aaaaa\n", b"")
+        legacy = self.prompt_root / prompt.name.removeprefix("aaaaa--")
+        prompt.unlink()
+        legacy.write_bytes(v2)
+        legacy.chmod(0o600)
+        migrated = core._render_migrated_prompt(v2, "aaaaa")
+        item = {
+            "prompt_id": "prompt-" + "a" * 32,
+            "prompt_ref": "aaaaa",
+            "old_name": legacy.name,
+            "new_name": f"aaaaa--{legacy.name}",
+            "old_sha256": hashlib.sha256(v2).hexdigest(),
+            "new_sha256": hashlib.sha256(migrated).hexdigest(),
+        }
+        marker = self.prompt_root.parent / "prompt-v3-migration.json"
+        core.write_atomic(
+            marker,
+            core.stable_json(
+                {"schema": core.PROMPT_V3_MIGRATION_SCHEMA, "migrations": [item]}
+            ),
+        )
+        self.assertEqual(core.migrate_prompt_files_v2(self.prompt_root), [item])
+        self.assertFalse(legacy.exists())
+        self.assertEqual((self.prompt_root / item["new_name"]).read_bytes(), migrated)
+
+        escaped = {**item, "new_name": "../outside.md"}
+        core.write_atomic(
+            marker,
+            core.stable_json(
+                {"schema": core.PROMPT_V3_MIGRATION_SCHEMA, "migrations": [escaped]}
+            ),
+        )
+        with self.assertRaises(core.PromptWorkspaceError) as caught:
+            core.migrate_prompt_files_v2(self.prompt_root)
+        self.assertEqual(caught.exception.code, "WORKSPACE_STATE_INVALID")
+
+    def test_v3_queue_pointer_rewrite_is_replay_safe(self) -> None:
+        prompt = self.new_prompt(ask="Queued migration objective")
+        document = core.read_prompt(prompt, self.prompt_root, require_content=True)
+        scope_dir = self.workspace.parent
+        runs.enqueue_prompt_unlocked(scope_dir, document, FIXED_UTC)
+        v2 = prompt.read_bytes().replace(
+            b"schema: task-implementer/prompt-v3",
+            b"schema: task-implementer/prompt-v2",
+        ).replace(f"prompt_ref: {document.prompt_ref}\n".encode(), b"")
+        legacy = prompt.with_name(prompt.name.removeprefix(f"{document.prompt_ref}--"))
+        prompt.unlink()
+        legacy.write_bytes(v2)
+        legacy.chmod(0o600)
+        queue = runs.load_prompt_queue(scope_dir)
+        queue["entries"][0]["source_path"] = legacy.name
+        runs._save_prompt_queue(scope_dir, queue)
+
+        migrations = core.migrate_prompt_files_v2(self.prompt_root)
+        runs._rewrite_prompt_v3_references(scope_dir, self.prompt_root, migrations)
+        runs._rewrite_prompt_v3_references(scope_dir, self.prompt_root, migrations)
+        repaired = runs.load_prompt_queue(scope_dir)["entries"][0]
+        self.assertEqual(repaired["source_path"], migrations[0]["new_name"])
+        self.assertEqual(
+            Path(scope_dir / str(repaired["snapshot"])).read_bytes(),
+            (self.prompt_root / migrations[0]["new_name"]).read_bytes(),
+        )
+
+    def test_session_refinement_creates_lossless_prompt_and_rejects_stale_merge(self) -> None:
+        refined = self.root / "refined.md"
+        refinement = (
+            "Implement automatic prompt intake.\n\n"
+            "- Preserve exact session provenance.\n"
+            "- Keep manual edits inert until explicit run.\n"
+        )
+        refined.write_text(refinement, encoding="utf-8")
+        refined.chmod(0o600)
+        created = runs.merge_session_refinement(
+            self.workspace,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="1" * 64,
+            clock=lambda: FIXED_UTC,
+        )
+        prompt = Path(str(created["path"]))
+        self.assertIn(refinement.strip(), prompt.read_text(encoding="utf-8"))
+        base = core.read_prompt(prompt, self.prompt_root, require_content=True)
+
+        delta = self.root / "delta.md"
+        delta.write_text("Also retain collision-safe prompt references.", encoding="utf-8")
+        delta.chmod(0o600)
+        merged = runs.merge_session_refinement(
+            self.workspace,
+            delta,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id="2" * 64,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(merged["prompt_id"], base.prompt_id)
+        self.assertIn("Also retain collision-safe", prompt.read_text(encoding="utf-8"))
+        self.assert_error(
+            "PROMPT_DRIFT",
+            runs.merge_session_refinement,
+            self.workspace,
+            delta,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id="3" * 64,
+        )
+
+        retried = runs.merge_session_refinement(
+            self.workspace,
+            delta,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id="2" * 64,
+        )
+        self.assertEqual(retried["sha256"], merged["sha256"])
+        recreated = runs.merge_session_refinement(
+            self.workspace,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="1" * 64,
+        )
+        self.assertEqual(recreated["prompt_id"], created["prompt_id"])
+
+    def test_session_refinement_new_objective_recovers_after_create_interruption(
+        self,
+    ) -> None:
+        refined = self.root / "interrupted-refinement.md"
+        refined.write_text("Create exactly one crash-safe objective.\n", encoding="utf-8")
+        refined.chmod(0o600)
+        before = set(self.prompt_root.glob("*.md"))
+        original_write = core.write_exclusive
+
+        def interrupt_after_write(path: Path, data: bytes) -> None:
+            original_write(path, data)
+            raise KeyboardInterrupt("simulated process termination")
+
+        with mock.patch.object(core, "write_exclusive", side_effect=interrupt_after_write):
+            with self.assertRaises(KeyboardInterrupt):
+                runs.merge_session_refinement(
+                    self.workspace,
+                    refined,
+                    prompt_reference=None,
+                    expected_sha256=None,
+                    new_objective=True,
+                    operation_id="4" * 64,
+                    clock=lambda: FIXED_UTC,
+                )
+
+        recovered = runs.merge_session_refinement(
+            self.workspace,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="4" * 64,
+            clock=lambda: FIXED_UTC,
+        )
+        created = set(self.prompt_root.glob("*.md")) - before
+        self.assertEqual(len(created), 1)
+        self.assertEqual(
+            Path(str(recovered["path"])).read_text(encoding="utf-8").count(
+                f"<!-- prompt-session-operation:{'4' * 64} -->"
+            ),
+            1,
+        )
+
+    def test_session_refinement_rejects_reserved_operation_marker(self) -> None:
+        refined = self.root / "reserved-marker.md"
+        refined.write_text(
+            f"Do not inject <!-- prompt-session-operation:{'5' * 64} -->.\n",
+            encoding="utf-8",
+        )
+        refined.chmod(0o600)
+        self.assert_error(
+            "PROMPT_INPUT_INVALID",
+            runs.merge_session_refinement,
+            self.workspace,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="5" * 64,
+        )
 
     def test_new_treats_metacharacters_as_data(self) -> None:
         ask = "Add '$() ; & pipes' and café 🔒 safely"
@@ -2258,8 +2525,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        exact = self.prompt_root / "renamed-exact.md"
-        edited = self.prompt_root / "renamed-edited.md"
+        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        exact = self.prompt_root / f"{prompt_ref}--renamed-exact.md"
+        edited = self.prompt_root / f"{prompt_ref}--renamed-edited.md"
         shutil.copyfile(prompt, exact)
         shutil.copyfile(prompt, edited)
         exact.chmod(0o600)
@@ -2291,7 +2559,8 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        stale = self.prompt_root / "stale-copy.md"
+        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        stale = self.prompt_root / f"{prompt_ref}--stale-copy.md"
         shutil.copyfile(prompt, stale)
         stale.chmod(0o600)
         self.assert_error(
@@ -2329,7 +2598,8 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        renamed = self.prompt_root / "renamed-prompt.md"
+        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        renamed = self.prompt_root / f"{prompt_ref}--renamed-prompt.md"
         prompt.rename(renamed)
         verified = pw.verify_command(self.workspace, None, snapshot["run_id"])
         self.assertEqual(verified["run"]["prompt_id"], snapshot["prompt_id"])

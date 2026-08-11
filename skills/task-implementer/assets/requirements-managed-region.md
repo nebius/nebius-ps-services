@@ -1,4 +1,4 @@
-<!-- task-implementer:requirements:start schema=task-implementer/requirements-v1 -->
+<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
 # Task Implementer Requirements
 
 ## Requirement Records
@@ -25,4 +25,4 @@
 ## Task Implementer Requirements Change Log
 
 - YYYY-MM-DD: Added or updated TI-REQ-001 from accepted user steering.
-<!-- task-implementer:requirements:end -->
+<!-- maintain-project-specs:requirements:end -->

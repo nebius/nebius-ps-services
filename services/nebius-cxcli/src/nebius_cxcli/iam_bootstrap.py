@@ -42,6 +42,16 @@ class ServiceAccountAuthKeyResult:
 
 
 @dataclass(frozen=True)
+class ObjectStorageAccessKeyResult:
+    """One-time Object Storage access-key material for an existing service account."""
+
+    project_id: str
+    service_account_id: str
+    s3_access_key_id: str
+    s3_secret_access_key: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class CIIdentityEnsureResult:
     """Idempotent identity state for CI automation."""
 
@@ -125,6 +135,8 @@ def _ensure_service_account(
     project_id: str,
     service_account_name: str,
     service_account_description: str,
+    strict_description: bool = False,
+    create_missing: bool = True,
 ) -> tuple[str, bool]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import (
@@ -139,12 +151,26 @@ def _ensure_service_account(
         ).wait()
         existing_id = getattr(getattr(existing, "metadata", None), "id", "")
         if existing_id:
+            existing_description = str(
+                getattr(getattr(existing, "spec", None), "description", "") or ""
+            )
+            if strict_description and existing_description != service_account_description:
+                raise RuntimeError(
+                    f"Service account '{service_account_name}' already exists but is not "
+                    "the cxcli-managed identity (description mismatch)."
+                )
             return existing_id, False
     except Exception as exc:
         if not _is_not_found_error(exc):
             raise RuntimeError(
                 f"Failed to fetch service account '{service_account_name}': {exc}"
             ) from exc
+
+    if not create_missing:
+        raise RuntimeError(
+            f"Service account '{service_account_name}' is missing; read-only identity "
+            "validation cannot create it."
+        )
 
     try:
         operation = service_accounts.create(
@@ -160,6 +186,14 @@ def _ensure_service_account(
             ).wait()
             existing_id = getattr(getattr(existing, "metadata", None), "id", "")
             if existing_id:
+                existing_description = str(
+                    getattr(getattr(existing, "spec", None), "description", "") or ""
+                )
+                if strict_description and existing_description != service_account_description:
+                    raise RuntimeError(
+                        f"Service account '{service_account_name}' already exists but is not "
+                        "the cxcli-managed identity (description mismatch)."
+                    ) from exc
                 return existing_id, False
         raise RuntimeError(
             f"Failed to create service account '{service_account_name}': {exc}"
@@ -174,6 +208,14 @@ def _ensure_service_account(
     ).wait()
     existing_id = getattr(getattr(existing, "metadata", None), "id", "")
     if existing_id:
+        existing_description = str(
+            getattr(getattr(existing, "spec", None), "description", "") or ""
+        )
+        if strict_description and existing_description != service_account_description:
+            raise RuntimeError(
+                f"Service account '{service_account_name}' was created concurrently but is not "
+                "the cxcli-managed identity (description mismatch)."
+            )
         return existing_id, True
 
     raise RuntimeError(
@@ -188,6 +230,8 @@ def _ensure_project_role_permits(
     principal_label: str,
     project_id: str,
     role_ids: list[str],
+    reject_unexpected_role_ids: bool = False,
+    create_missing: bool = True,
 ) -> tuple[list[str], list[str]]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import (
@@ -197,6 +241,7 @@ def _ensure_project_role_permits(
     )
 
     existing_roles: set[str] = set()
+    unexpected_resource_permits: set[tuple[str, str]] = set()
     page_token: str | None = None
     seen_tokens: set[str] = set()
     while True:
@@ -207,10 +252,13 @@ def _ensure_project_role_permits(
             spec = getattr(item, "spec", None)
             if spec is None:
                 continue
-            if getattr(spec, "resource_id", "") == project_id:
-                role = _normalize_role_id(getattr(spec, "role", ""))
-                if role:
+            resource_id = str(getattr(spec, "resource_id", "") or "").strip()
+            role = _normalize_role_id(getattr(spec, "role", ""))
+            if role:
+                if resource_id == project_id:
                     existing_roles.add(role)
+                else:
+                    unexpected_resource_permits.add((resource_id, role))
         page_token = getattr(response, "next_page_token", "") or None
         if not page_token:
             break
@@ -220,6 +268,27 @@ def _ensure_project_role_permits(
                 "the Nebius API; aborting to avoid an infinite list loop."
             )
         seen_tokens.add(page_token)
+
+    expected_roles = {_normalize_role_id(role_id) for role_id in role_ids}
+    expected_roles.discard("")
+    if reject_unexpected_role_ids and unexpected_resource_permits:
+        raise RuntimeError(
+            f"{principal_label} has unexpected resource-scoped access permits outside "
+            f"the canonical project ({len(unexpected_resource_permits)} found)"
+        )
+    unexpected_roles = sorted(existing_roles - expected_roles)
+    if reject_unexpected_role_ids and unexpected_roles:
+        raise RuntimeError(
+            f"{principal_label} has unexpected project role permits: "
+            + ", ".join(unexpected_roles)
+        )
+
+    missing_roles = sorted(expected_roles - existing_roles)
+    if missing_roles and not create_missing:
+        raise RuntimeError(
+            f"{principal_label} is missing required project role permits: "
+            + ", ".join(missing_roles)
+        )
 
     created: list[str] = []
     already_present: list[str] = []
@@ -268,6 +337,7 @@ def _ensure_group(
     groups,
     project_id: str,
     group_name: str,
+    create_missing: bool = True,
 ) -> tuple[str, bool]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import CreateGroupRequest, GetGroupByNameRequest, GroupSpec
@@ -282,6 +352,11 @@ def _ensure_group(
     except Exception as exc:
         if not _is_not_found_error(exc):
             raise RuntimeError(f"Failed to fetch IAM group '{group_name}': {exc}") from exc
+
+    if not create_missing:
+        raise RuntimeError(
+            f"IAM group '{group_name}' is missing; read-only identity validation cannot create it."
+        )
 
     try:
         operation = groups.create(
@@ -375,7 +450,9 @@ def _ensure_group_membership(
         ) from exc
 
 
-def _generate_rsa_key_pair_pem() -> tuple[str, str]:
+def generate_service_account_auth_key_pair() -> tuple[str, str]:
+    """Generate private/public PEM values for a recoverable authorized-key intent."""
+
     try:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
@@ -401,17 +478,17 @@ def _generate_rsa_key_pair_pem() -> tuple[str, str]:
     return private_pem, public_pem
 
 
-def _create_auth_public_key(
+def _upload_auth_public_key(
     *,
     auth_keys,
     project_id: str,
     service_account_id: str,
     description: str,
-) -> tuple[str, str]:
+    public_key_pem: str,
+) -> str:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import AuthPublicKeySpec, CreateAuthPublicKeyRequest
 
-    private_pem, public_pem = _generate_rsa_key_pair_pem()
     try:
         operation = auth_keys.create(
             CreateAuthPublicKeyRequest(
@@ -419,7 +496,7 @@ def _create_auth_public_key(
                 spec=AuthPublicKeySpec(
                     account=_account_ref(service_account_id),
                     description=description,
-                    data=public_pem,
+                    data=public_key_pem,
                 ),
             )
         ).wait()
@@ -432,6 +509,24 @@ def _create_auth_public_key(
     if not auth_public_key_id:
         raise RuntimeError("Auth public key was created but key ID could not be resolved")
 
+    return auth_public_key_id
+
+
+def _create_auth_public_key(
+    *,
+    auth_keys,
+    project_id: str,
+    service_account_id: str,
+    description: str,
+) -> tuple[str, str]:
+    private_pem, public_pem = generate_service_account_auth_key_pair()
+    auth_public_key_id = _upload_auth_public_key(
+        auth_keys=auth_keys,
+        project_id=project_id,
+        service_account_id=service_account_id,
+        description=description,
+        public_key_pem=public_pem,
+    )
     return auth_public_key_id, private_pem
 
 
@@ -492,6 +587,138 @@ def _create_object_storage_access_key(
     return aws_access_key_id, s3_secret_access_key
 
 
+def create_service_account_auth_public_key(
+    *,
+    project_id: str,
+    service_account_id: str,
+    public_key_pem: str,
+    description: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+    allow_cli_token: bool = True,
+) -> str:
+    """Upload a caller-owned public key and return its Nebius resource ID."""
+
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+        allow_cli_token=allow_cli_token,
+    )
+    try:
+        from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
+
+        return _upload_auth_public_key(
+            auth_keys=AuthPublicKeyServiceClient(sdk),
+            project_id=project_id,
+            service_account_id=service_account_id,
+            description=description,
+            public_key_pem=public_key_pem,
+        )
+    finally:
+        _close_sdk(sdk)
+
+
+def service_account_auth_public_key_ids_by_description(
+    *,
+    project_id: str,
+    service_account_id: str,
+    description: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+    allow_cli_token: bool = True,
+) -> tuple[str, ...]:
+    """Return exact authorized-key IDs for one account/description pair."""
+
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=True,
+        allow_cli_token=allow_cli_token,
+    )
+    try:
+        from nebius.api.nebius.iam.v1 import (
+            AuthPublicKeyServiceClient,
+            ListAuthPublicKeyRequest,
+        )
+
+        auth_keys = AuthPublicKeyServiceClient(sdk)
+        matches: list[str] = []
+        page_token: str | None = None
+        seen_tokens: set[str] = set()
+        while True:
+            response = auth_keys.list(
+                ListAuthPublicKeyRequest(parent_id=project_id, page_token=page_token)
+            ).wait()
+            for item in list(getattr(response, "items", [])):
+                spec = getattr(item, "spec", None)
+                metadata = getattr(item, "metadata", None)
+                account = getattr(spec, "account", None)
+                account_id = getattr(getattr(account, "service_account", None), "id", "")
+                key_description = str(getattr(spec, "description", "") or "")
+                key_id = str(getattr(metadata, "id", "") or "")
+                if (
+                    account_id == service_account_id
+                    and key_description == description
+                    and key_id
+                ):
+                    matches.append(key_id)
+            page_token = getattr(response, "next_page_token", "") or None
+            if not page_token:
+                break
+            if page_token in seen_tokens:
+                raise RuntimeError(
+                    "IAM auth public key listing received a repeated pagination token from "
+                    "the Nebius API; aborting to avoid an infinite list loop."
+                )
+            seen_tokens.add(page_token)
+        return tuple(sorted(set(matches)))
+    finally:
+        _close_sdk(sdk)
+
+
+def issue_service_account_object_storage_access_key(
+    *,
+    project_id: str,
+    service_account_id: str,
+    description: str,
+    profile: str | None,
+    endpoint: str | None,
+    config_file: Path | None,
+    allow_cli_token: bool = False,
+) -> ObjectStorageAccessKeyResult:
+    """Issue one Object Storage key for an existing service account."""
+
+    sdk = _init_sdk(
+        profile=profile,
+        endpoint=endpoint,
+        config_file=config_file,
+        prefer_operator_auth=False,
+        allow_cli_token=allow_cli_token,
+    )
+    try:
+        from nebius.api.nebius.iam.v2 import AccessKeyServiceClient
+
+        access_key_id, secret_access_key = _create_object_storage_access_key(
+            access_keys=AccessKeyServiceClient(sdk),
+            project_id=project_id,
+            service_account_id=service_account_id,
+            description=description,
+        )
+        return ObjectStorageAccessKeyResult(
+            project_id=project_id,
+            service_account_id=service_account_id,
+            s3_access_key_id=access_key_id,
+            s3_secret_access_key=secret_access_key,
+        )
+    finally:
+        _close_sdk(sdk)
+
+
 def bootstrap_ci_service_account(
     *,
     project_id: str,
@@ -514,6 +741,8 @@ def bootstrap_ci_service_account(
         profile=profile,
         endpoint=endpoint,
         config_file=config_file,
+        prefer_operator_auth=True,
+        allow_mutation=True,
     )
 
     sdk = _init_sdk(
@@ -582,6 +811,8 @@ def bootstrap_service_account_auth_key(
         endpoint=endpoint,
         config_file=config_file,
         allow_cli_token=allow_cli_token,
+        prefer_operator_auth=True,
+        allow_mutation=True,
     )
 
     sdk = _init_sdk(
@@ -636,6 +867,8 @@ def issue_observability_static_key(
         profile=profile,
         endpoint=endpoint,
         config_file=config_file,
+        prefer_operator_auth=True,
+        allow_mutation=True,
     )
     sdk = _init_sdk(
         profile=profile,
@@ -695,9 +928,12 @@ def ensure_ci_service_account_identity(
     profile: str | None,
     endpoint: str | None,
     config_file: Path | None,
+    prefer_operator_auth: bool,
+    allow_mutation: bool,
     allow_cli_token: bool = True,
+    strict_managed_identity: bool = False,
 ) -> CIIdentityEnsureResult:
-    """Ensure service-account identity + role grants without creating new keys."""
+    """Validate or ensure service-account identity and roles without creating keys."""
     if not role_ids:
         raise ValueError("role_ids must not be empty")
 
@@ -705,7 +941,7 @@ def ensure_ci_service_account_identity(
         profile=profile,
         endpoint=endpoint,
         config_file=config_file,
-        prefer_operator_auth=True,
+        prefer_operator_auth=prefer_operator_auth,
         allow_cli_token=allow_cli_token,
     )
     try:
@@ -726,6 +962,8 @@ def ensure_ci_service_account_identity(
             project_id=project_id,
             service_account_name=service_account_name,
             service_account_description=service_account_description,
+            strict_description=strict_managed_identity,
+            create_missing=allow_mutation,
         )
 
         permit_group_name = _group_name_for_service_account(service_account_name)
@@ -733,12 +971,29 @@ def ensure_ci_service_account_identity(
             groups=groups,
             project_id=project_id,
             group_name=permit_group_name,
+            create_missing=allow_mutation,
         )
-        _ensure_group_membership(
+        existing_members = _group_member_ids(
             group_memberships=group_memberships,
             group_id=permit_group_id,
-            member_id=service_account_id,
         )
+        unexpected_members = sorted(existing_members - {service_account_id})
+        if strict_managed_identity and unexpected_members:
+            raise RuntimeError(
+                f"IAM group '{permit_group_name}' contains unexpected members; "
+                "refusing to reuse it for the canonical cxcli identity."
+            )
+        if service_account_id not in existing_members and not allow_mutation:
+            raise RuntimeError(
+                f"IAM group '{permit_group_name}' is missing the canonical service-account "
+                "member; read-only identity validation cannot add it."
+            )
+        if allow_mutation:
+            _ensure_group_membership(
+                group_memberships=group_memberships,
+                group_id=permit_group_id,
+                member_id=service_account_id,
+            )
 
         roles_created, roles_already_present = _ensure_project_role_permits(
             access_permits=access_permits,
@@ -746,6 +1001,8 @@ def ensure_ci_service_account_identity(
             principal_label=f"IAM group '{permit_group_name}'",
             project_id=project_id,
             role_ids=role_ids,
+            reject_unexpected_role_ids=strict_managed_identity,
+            create_missing=allow_mutation,
         )
 
         return CIIdentityEnsureResult(

@@ -18,6 +18,123 @@ def _squash(text: str) -> str:
     return " ".join(text.split())
 
 
+def test_manager_pause_successor_docs_bind_exact_rolling_authority_roles() -> None:
+    requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "receipt-generation predecessor or an exact same-generation" in requirements
+    assert "records the rolling role and bridge epoch" in design
+    assert "checkpoints that role and bridge-bound adoption" in readme
+    assert "seals the role" in changelog
+    assert "immediately following unique durable history successor" in requirements
+    assert "timestamps bracket the adoption" in design
+    assert "does not rewrite the adoption receipt" in readme
+    assert "historical source-HA adoption" in changelog
+
+
+def test_post_switch_login_surge_docs_bind_protected_dispatch_authority() -> None:
+    requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "already applied the temporary login-surge replica count" in requirements
+    assert "temporary in-memory intent material" in design
+    assert "does not synthesize a retroactive surge intent" in readme
+    assert "protected-dispatch-bound proof and adoption receipt" in changelog
+    assert "historical applied values fingerprint remains" in readme
+    assert "freshly reconstructed desired values are bound separately" in changelog
+    assert "verifier separately evaluates the current desired values" in design
+    assert "continues only into the restore lifecycle" in readme
+    assert "enters restore instead of demanding a nonexistent" in changelog
+    assert "before routing directly into restore" in design
+    assert "wall-clock legacy recovery remain blocked" in changelog
+    assert "pre-retirement scheduling snapshot" in design
+    assert "pre-retirement scheduling snapshot" in readme
+    assert "pre-retirement source-presence snapshot" in changelog
+    assert "freshly reject any reappeared source" in readme
+    assert "continuous-pause reuse receipt" in readme
+    assert "canonical `post-switch-resume` pause unchanged" in changelog
+    assert "live Helm history still exposes that same deployed head with no successor" in design
+    assert "restore Helm pulse is itself a protected dispatch" in readme
+    assert "exact Kubernetes ambiguous release-create timeout" in changelog
+    assert "disables Go HTTP/2 client negotiation" in readme
+    assert "TLS continues over HTTP/1.1" in changelog
+    assert "protected-successor owner adoption" in readme
+    assert "performs no duplicate SlurmCluster patch" in changelog
+    assert "re-reads both immutable revision manifests" in design
+    assert "exact verified workload restore receipt" in design
+    assert "removal of only the surge ordinal" in readme
+    assert "bridge consumer-successor journal" in changelog
+    assert "without a synthetic SlurmCluster-regression receipt" in requirements
+    assert "separate protected post-switch route" in design
+    assert "without inventing the absent ordinary SlurmCluster-regression receipt" in readme
+    assert "without synthesizing the absent ordinary" in changelog
+    assert "normalize only those proven replacement identities" in requirements
+    assert "existing session-free replacement validator only over that retained set" in design
+    assert "journals one combined replacement-and-removal successor" in readme
+    assert "journals one combined successor bound to the same workload and target" in changelog
+
+
+def test_external_upgrade_docs_bind_transient_crd_and_dependency_retries() -> None:
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "endpoint's `:443` port cannot suppress a transport retry" in design
+    assert "did not complete within the requested timeout" in design
+    assert "endpoint's `:443` port does not turn a connection timeout" in readme
+    assert "Exact declarative Soperator CRD server-side applies" in readme
+    assert "did not complete within the requested timeout" in readme
+    assert "applied one named document at a time" in readme
+    assert "contains every declared field" in readme
+    assert "HTTPS port `443` is no longer misclassified" in changelog
+    assert "did not complete before its context deadline" in changelog
+    assert "Multi-document CRD bundles are prevalidated" in changelog
+    assert "read-only GET proves the exact declared" in changelog
+    assert "non-apply mutations and authorization failures remain fail-closed" in changelog
+
+
+def test_topology_client_config_docs_keep_absent_and_partial_lifecycles_distinct() -> None:
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "specialized canonicalizer is a strict no-op" in design
+    assert "specialized client-config recovery is a strict no-op" in readme
+    assert "any partial topology lifecycle still fails closed" in changelog
+
+
+def test_worker_bridge_config_docs_classify_digest_before_readiness() -> None:
+    requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "Recover an exact projected worker bridge-config successor" in requirements
+    assert "Route both exact predecessor and exact projected-successor sources" in design
+    assert "binds that exact runtime as the replacement source" in readme
+    assert "routes that exact Pod through the existing" in changelog
+    assert "sealed standard, bootstrap, or rearm authority" in readme
+    assert "standard-pause-only Kubernetes resource version" in changelog
+
+
+def test_bridge_client_docs_bind_exact_accepted_successor_before_propagation() -> None:
+    requirements = _squash((REPO_ROOT / "docs" / "requirements.md").read_text(encoding="utf-8"))
+    design = _squash((REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8"))
+    readme = _squash((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    changelog = _squash((REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    assert "Resume an exact accepted bridge-client successor before first propagation" in (
+        requirements
+    )
+    assert "requires `accepted` handoff status, no propagation mapping" in design
+    assert "does not invent or rewrite the absent proof" in readme
+    assert "no legacy checkpoint path is added" in changelog
+
+
 def test_readme_quick_start_uses_current_create_target_contract() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     quick_start = _section(readme, "## Quick Start Guide", "## Core Concepts")
@@ -88,6 +205,9 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
         "`PluginDir` config"
     ) in design_flat
     assert "sets the target SConfig writer size to zero" in design_flat
+    assert "OpenMetrics restoration uses the rolling migration phase as the canonical" in (
+        design_flat
+    )
     assert "actual target service account and active slot" in design_flat
     assert "non-v6 journal evidence fails closed instead of using a markerless fallback" in (
         design_flat
@@ -524,8 +644,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--validate-config/--no-validate-config`, `--no-interactive`, `--force`"
     ) in common_flags
     assert (
-        "- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`, "
+        "- `deploy`: `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`, "
         "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
         "`--job-refresh-interval`"
     ) in common_flags_flat
@@ -543,7 +662,6 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `upgrade node-template`: `--to-version`, `--to-os`, "
         "`--to-gpu-stack-preset`, `--node-group`, `--dry-run`, "
         "`--strategy`, `--strategy-max-surge-count`, `--drain-timeout`, "
-        "`--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
         "`--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
@@ -662,18 +780,11 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--password-env`"
     ) in common_flags
     assert (
-        "- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--target`, `--all-targets`, `--job-policy`, `--cancel-job`, "
+        "- `flux apply`: `--target`, `--all-targets`, `--job-policy`, `--cancel-job`, "
         "`--requeue-job`, `--job-wait-timeout`, `--job-refresh-interval`"
     ) in common_flags_flat
-    assert (
-        "- `flux destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--yes`, `--target`, `--all-targets`"
-    ) in common_flags
-    assert (
-        "- `flux bootstrap`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--target`, `--all-targets`"
-    ) in common_flags
+    assert ("- `flux destroy`: `--yes`, `--target`, `--all-targets`") in common_flags
+    assert ("- `flux bootstrap`: `--target`, `--all-targets`") in common_flags
 
 
 def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
@@ -1369,20 +1480,20 @@ def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
 def test_docs_define_auth_target_modes() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    readme_flat = _squash(readme)
+    design_flat = _squash(design)
 
     assert (
-        "`--project-config <config.yaml>` resolves both `project_id` and `client_name` "
-        "from the config and must not be combined with `--project-id` or `--client-name`."
-    ) in readme
+        "A targeted invocation with `--project-config <config.yaml>` or `--project-id <id>` "
+        "performs the same automatic idempotent ensure used by all project commands."
+    ) in readme_flat
     assert (
-        "`--project-id <id>` is the manual target mode; use `--client-name <name>` "
-        "when creating or when the project id cannot be mapped to exactly one cached profile."
-    ) in readme
-    assert "Omitting both target options is valid only for global `--validate-profile`" in readme
-    assert (
-        "Targets either `--project-config <config.yaml>` or `--project-id`; "
-        "`--client-name` belongs only to the manual `--project-id` path."
-    ) in design
+        "`--client-name` with `--project-id` is only an optional CI environment label; the "
+        "cache and service account remain project-keyed."
+    ) in readme_flat
+    assert "With no target it checks all canonical project caches." in readme_flat
+    assert "`--client-name` affects only the GitHub" in design_flat
+    assert "never cache or cloud identity ownership" in design_flat
 
 
 def test_docs_define_destroy_as_project_wide_destructive_teardown() -> None:
@@ -2020,6 +2131,17 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`--approve` / `--no-approve`: record customer approval" in readme_flat
     assert "auto-detects source worker node groups" in readme_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in readme_flat
+    assert "chart/Jail-only segment intentionally has no segment-local MK8s rows" in readme_flat
+    assert "immutable campaign-wide node-group inventory" in readme_flat
+    assert "exact checkpointed worker scope" in readme_flat
+    assert "segment operation intent correctly contains no provider node-group mutation" in (
+        readme_flat
+    )
+    assert "Later provider-handoff and login-spread replays consume that durable binding" in (
+        readme_flat
+    )
+    assert "chart/Jail segment therefore binds `1.33 -> 1.33`" in readme_flat
+    assert "multi-hop campaign never substitutes the campaign-final version" in readme_flat
     assert "net-new upgrade quota preflight before any SFS or node-group mutation" in readme_flat
     assert "two temporary, fixed one-node CPU controller groups" in readme_flat
     assert "every target replacement node group while its source group remains retained" in (
@@ -2435,6 +2557,14 @@ def test_docs_define_component_selector_contract() -> None:
         design_flat
     )
     assert "The login handoff journal owns exact source Pod protection" in design_flat
+    assert "segment-local MK8s list remains empty" in design_flat
+    assert "payload-aware in-place dispatcher resolves the login group" in design_flat
+    assert "both the ownership-only segment and each later normal compute segment" in (design_flat)
+    assert "active segment operation intent's source/target versions" in design_flat
+    assert "multi-hop provider rollover bound to its current hop" in design_flat
+    assert "Deeper provider-peer and gateway-spread replay paths require that binding" in (
+        design_flat
+    )
     assert "Current managed and external upgrades do not wait for SSH" in design_flat
     assert "active SSH sockets do not gate the subsequent serial replacement" in design_flat
     assert "No mechanism moves an established TCP connection between Pods" in design_flat
@@ -2484,6 +2614,9 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "auto-detects source worker node groups" in design_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in design_flat
+    assert "chart/Jail-only segment intentionally has no segment-local MK8s rows" in design_flat
+    assert "immutable campaign-wide node-group inventory" in design_flat
+    assert "exact checkpointed worker scope" in design_flat
     assert "Before the first mutation, quota preflight requires two temporary fixed" in (
         design_flat
     )
@@ -2607,16 +2740,16 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Nebius API-backed replacement node-group table" in readme_flat
     assert "one node-group snapshot per refresh" in readme_flat
     assert (
-        "provider state, API-reported Kubernetes version, total, provider-current, "
-        "provider-updating, provider-outdated, ready/current"
+        "provider state, API-reported Kubernetes version, total, current, updating, "
+        "not-started, ready/current"
     ) in readme_flat
     assert "without mixing in Kubernetes registered-node counts" in readme_flat
     assert "separate `MK8s Control Plane` signal" in readme_flat
     assert "Nebius API-backed replacement node-group table" in design_flat
     assert "one node-group snapshot per refresh" in design_flat
     assert (
-        "provider state, API-reported Kubernetes version, total, provider-current, "
-        "provider-updating, provider-outdated" in design_flat
+        "provider state, API-reported Kubernetes version, total, current, updating, "
+        "not-started" in design_flat
     )
     assert "without mixing in Kubernetes registered-node counts" in design_flat
     assert "separate `MK8s Control Plane` signal" in design_flat

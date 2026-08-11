@@ -41,7 +41,7 @@ def main() -> int:
         + (
             "Requires explicit invocation",
             "$task-implementer workspace init [project-folder]",
-            "$task-implementer run <prompt-path-or-unique-filename>",
+            "$task-implementer run <prompt-ref-or-file>",
             "$task-implementer integrate [project-folder]",
             "$task-implementer workspace remove [project-folder]",
             "$task-implementer --help",
@@ -137,7 +137,7 @@ def main() -> int:
             "Never cherry-pick",
             "first private transition",
             "$project-agent-instructions",
-            "selected project root `AGENTS.md`",
+            "selected-project root `AGENTS.md` tail",
             "For an expired prestart task",
             "For an interrupted running task",
             "Persistent Lane Integration",
@@ -151,9 +151,10 @@ def main() -> int:
             "Worker assignment: private immutable record",
             "Tasks become done only after",
             "## Project Agent Instructions",
-            "project-agent-instructions.spec-validation.v2",
-            "project-agent-instructions.decision.v2",
-            "project-agent-instructions.state.v2",
+            "project-agent-instructions.spec-validation.v3",
+            "project-agent-instructions.decision.v3",
+            "project-agent-instructions.state.v3",
+            "attached",
             "Reload required",
         ),
         "wave helper": (
@@ -222,6 +223,8 @@ def main() -> int:
         "STEERING_QUEUED_AFTER_TASK",
         "Do not run parallel write-capable",
         "implements exactly one dependency-ready task per fresh session",
+        "final v2 state",
+        "verified v2 project-agent-instructions state",
     )
     for label, text in surfaces.items():
         for needle in stale:

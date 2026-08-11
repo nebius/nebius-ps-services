@@ -10,6 +10,7 @@ import subprocess
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,6 +71,33 @@ _OTHER_VALID_ED25519_PUBLIC_KEY = _VALID_ED25519_PUBLIC_KEY.replace(
     "demo@example",
     "other@example",
 )
+
+
+def _minimal_project_identity_payload() -> dict[str, object]:
+    return {
+        "client_info": {
+            "client_name": "test-client",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {},
+        }
+    }
+
+
+@pytest.fixture(autouse=True)
+def _stub_external_upgrade_renewable_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep non-auth command tests isolated from local Nebius credentials."""
+
+    monkeypatch.setattr(
+        cli_module,
+        "_mk8s_cluster_handoff_spec_for_identity",
+        lambda **_kwargs: _test_provider_generated_kubeconfig_spec(),
+    )
 
 
 def test_managed_soperator_upgrade_continues_typed_checkpoint_under_same_locks(
@@ -819,7 +847,6 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
         config,
         paths,
         manifest,
-        auto_auth_bootstrap=False,
         skip_validations=False,
         skip_validation_kinds=set(),
         requested_target_ref="mk8s",
@@ -846,13 +873,7 @@ def test_deploy_stabilizes_soperator_login_load_balancer_allocation(
     config_path = tmp_path / "config.yaml"
     paths = cli_module.resolve_project_paths(config_path)
     payload = {
-        "client_info": {
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            }
-        },
+        **_minimal_project_identity_payload(),
         "infra": {"components": []},
         "apps": {
             "charts": [
@@ -1171,6 +1192,11 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "assess_live_quotas",
         lambda *_args, **_kwargs: _empty_quota_report(),
     )
+    monkeypatch.setattr(
+        cli_module,
+        "_ensure_runtime_auth_material",
+        lambda *_args, **_kwargs: None,
+    )
     set_component_sources_file_override(None)
     set_component_sources_profile_override(None)
     reset_component_sources_cache()
@@ -1199,6 +1225,21 @@ def _mock_bootstrap_ci_github_sync(
     github_token: str = "token-123",
     email_sync_result: cli_module.GitHubEmailSyncResult | None = None,
 ) -> None:
+    material = cli_module.RuntimeAuthCacheMaterial(
+        project_id="project-456",
+        client_name="client-a",
+        service_account_id="serviceaccount-cxcli",
+        auth_public_key_id="publickey-cxcli",
+        private_key_file=Path("/tmp/nebius-cxcli-test-auth.pem"),
+        private_key_pem="TEST-PRIVATE-KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    material_with_s3 = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
     monkeypatch.setattr(
         cli_module,
         "_resolve_bootstrap_ci_github_target",
@@ -1220,6 +1261,18 @@ def _mock_bootstrap_ci_github_sync(
                 removed_secrets=[],
             )
         ),
+    )
+    monkeypatch.setattr(cli_module, "_runtime_auth_cache_material", lambda **_kwargs: material)
+    monkeypatch.setattr(
+        cli_module,
+        "_ensure_runtime_auth_s3_material",
+        lambda _material: material_with_s3,
+    )
+    monkeypatch.setattr(cli_module, "_export_runtime_auth_material", lambda _material: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_sync_runtime_auth_profile_to_ci_environment",
+        lambda **_kwargs: (repo_slug, "client-a-project-456", ["NEBIUS_SA_ID"]),
     )
 
 
@@ -1522,7 +1575,10 @@ def test_region_or_prompt_rejects_unsupported_explicit_region(tmp_path: Path) ->
     assert cli_module._region_or_prompt(" eu-north1 ", interactive=False) == "eu-north1"
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("{}\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_minimal_project_identity_payload(), sort_keys=False),
+        encoding="utf-8",
+    )
     with pytest.raises(RuntimeError, match="Unsupported region id 'eu-north'"):
         cli_module._resolve_soperator_onboard_config_target(
             config_path,
@@ -3550,31 +3606,89 @@ def test_live_waypoint_ignores_only_exact_journaled_controller_bridge_groups() -
 
 
 def test_controller_bridge_temporary_groups_require_terminal_provider_identity() -> None:
+    intended_postcondition = {
+        "cluster_id": "cluster-1",
+        "name": "cxcli-bridge-a-campaign",
+        "fixed_node_count": 1,
+        "version": "1.33",
+        "bridge_slot": 0,
+        "excluded_from_provider_upgrade": True,
+    }
     group = {
         "id": "nodegroup-bridge-a",
         "name": "cxcli-bridge-a-campaign",
+        "slot": 0,
+        "ownership": "external-temporary",
+        "ready_capacity": 1,
+        "kubernetes_version": "1.33",
         "created": True,
         "operation": {
+            "operation_kind": "mk8s-node-group-create",
+            "resource_id": "cluster-1/node-groups/cxcli-bridge-a-campaign",
+            "resource_uid": "nodegroup-bridge-a",
+            "resource_version": 0,
+            "intended_postcondition": intended_postcondition,
+            "provider_operation_id": "operation-create-nodegroup-bridge-a",
+            "idempotency_key": "a" * 64,
             "attempt_state": "provider-terminal",
             "verified_postcondition": {
+                **intended_postcondition,
                 "node_group_id": "nodegroup-bridge-a",
-                "name": "cxcli-bridge-a-campaign",
             },
         },
     }
+    terminal_checkpoint = {
+        "operation_intent": {"provider_operations": [copy.deepcopy(group["operation"])]},
+        "controller_bridge": {"cluster_id": "cluster-1", "node_groups": [group]},
+    }
     transitions = cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
-        {"controller_bridge": {"node_groups": [group]}}
+        terminal_checkpoint
     )
     assert transitions["temporary_groups"] == [
         {"id": "nodegroup-bridge-a", "name": "cxcli-bridge-a-campaign"}
     ]
 
+    missing_terminal_mirror = copy.deepcopy(terminal_checkpoint)
+    missing_terminal_mirror["operation_intent"]["provider_operations"] = []
+    with pytest.raises(RuntimeError, match="exact terminal provider proof"):
+        cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
+            missing_terminal_mirror
+        )
+
     missing_proof = copy.deepcopy(group)
     missing_proof["operation"]["attempt_state"] = "provider-pending"
-    with pytest.raises(RuntimeError, match="terminal provider proof"):
+    missing_proof["operation"].pop("verified_postcondition")
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "recovery-required: created controller bridge node-group identity lacks an "
+            "exact terminal provider proof"
+        ),
+    ):
         cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
-            {"controller_bridge": {"node_groups": [missing_proof]}}
+            {
+                "controller_bridge": {
+                    "cluster_id": "cluster-1",
+                    "node_groups": [missing_proof],
+                }
+            }
         )
+
+    recoverable = copy.deepcopy(missing_proof)
+    recoverable["operation"]["resource_uid"] = recoverable["name"]
+    recoverable_checkpoint = {
+        "operation_intent": {"provider_operations": [copy.deepcopy(recoverable["operation"])]},
+        "controller_bridge": {
+            "cluster_id": "cluster-1",
+            "node_groups": [recoverable],
+        },
+    }
+    transitions = cli_module._external_soperator_journal_node_group_transitions(  # noqa: SLF001
+        recoverable_checkpoint
+    )
+    assert transitions["temporary_groups"] == [
+        {"id": "nodegroup-bridge-a", "name": "cxcli-bridge-a-campaign"}
+    ]
 
 
 def test_zero_segment_campaign_still_enforces_exact_node_group_inventory(
@@ -6202,7 +6316,6 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
             {},
             paths,
             manifest,
-            auto_auth_bootstrap=False,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -15716,7 +15829,7 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
 
     assert result.exit_code == 0, result.output
     assert "Kubernetes version: 1.31 -> 1.32" not in result.output
-    assert "Campaign final target - Kubernetes path: 1.31 -> 1.34" in result.output
+    assert "Locked campaign Kubernetes path: 1.31 -> 1.34" in result.output
     assert "Locked source migration profile: legacy-v1-to-target" in result.output
     assert "Current-segment support policy:" in result.output
     assert "rule=k8s-before-1-33-soperator-1-22-plus-supported; status=supported" in result.output
@@ -15751,6 +15864,36 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     assert "Remaining segments: Kubernetes 1.32 -> 1.33, Kubernetes 1.33 -> 1.34" in (result.output)
     assert "one approved command continues across every remaining locked segment" in (result.output)
     assert "ext-soperator onboard" not in result.output
+
+
+def test_ext_soperator_upgrade_dry_run_distinguishes_staging_from_locked_k8s_hop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.33",
+        target_k8s_version="1.34",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version="1.22.3",
+            current_k8s_version="1.33",
+        ),
+    )
+
+    result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "Locked campaign Kubernetes path: 1.33 -> 1.34" in result.output
+    assert "current-segment target Kubernetes=1.33" in result.output
+    assert "Current segment Kubernetes state: remains 1.33." in result.output
+    assert "Kubernetes remains 1.33; rule=k8s-1-33-soperator-4-supported" in result.output
+    assert "segment-2-kubernetes-1-33-1-34: pending" in result.output
+    assert "Remaining segments: Kubernetes 1.33 -> 1.34" in result.output
 
 
 def test_ext_soperator_upgrade_dry_run_rejects_malformed_v3_journal_without_write(
@@ -17358,10 +17501,10 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
         "[MK8s control-plane-only upgrade] (degraded): MK8s Node Groups degraded: "
         "Provider node groups (source=Nebius API, groups=4)\n"
-        "total=8 provider-current=7 provider-updating=1 provider-outdated=1 "
+        "total=8 current=7 updating=1 not-started=1 "
         "ready/current=7/8\n"
-        "group       state         k8s   total  provider-current  provider-updating  "
-        "provider-outdated  ready/current  event\n"
+        "group       state         k8s   total  current  updating  "
+        "not-started  ready/current  event\n"
         "gpu-pool    PROVISIONING  1.32  4      3         1          1          3/4            "
         "WaitingForNodeRef\n"
         "login       RUNNING       1.32  2      2         0          0          2/2            -\n"
@@ -17378,13 +17521,13 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold cyan]Provider node groups[/bold cyan]" in styled
     assert "[dim]source=Nebius API[/dim]" in styled
     assert "[bold cyan]total[/bold cyan]=8" in styled
-    assert "[bold cyan]provider-current[/bold cyan]=7" in styled
-    assert "[bold yellow]provider-updating[/bold yellow]=1" in styled
-    assert "[bold cyan]provider-outdated[/bold cyan]=1" in styled
+    assert "[bold cyan]current[/bold cyan]=7" in styled
+    assert "[bold yellow]updating[/bold yellow]=1" in styled
+    assert "[bold cyan]not-started[/bold cyan]=1" in styled
     assert "[bold cyan]ready/current[/bold cyan]=7/8" in styled
     assert (
-        "[bold black]group       state         k8s   total  provider-current  "
-        "provider-updating  provider-outdated  ready/current  event[/bold black]"
+        "[bold black]group       state         k8s   total  current  updating  "
+        "not-started  ready/current  event[/bold black]"
     ) in styled
     assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]  1.32" in styled
     assert "login       [green]RUNNING[/green]       1.32" in styled
@@ -17422,10 +17565,10 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
             "[MK8s control-plane-only upgrade] (degraded): MK8s Node Groups degraded: "
             "Provider node groups (source=Nebius API, groups=1)\n"
-            "total=4 provider-current=3 provider-updating=1 provider-outdated=1 "
+            "total=4 current=3 updating=1 not-started=1 "
             "ready/current=3/4\n"
-            "group     state         k8s   total  provider-current  provider-updating  "
-            "provider-outdated  ready/current  event\n"
+            "group     state         k8s   total  current  updating  "
+            "not-started  ready/current  event\n"
             "gpu-pool  PROVISIONING  1.32  4      3         1          1          3/4            "
             "WaitingForNodeRef"
         )
@@ -17439,16 +17582,16 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "MK8s control-plane-only upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
     assert "[bold cyan]Provider node groups[/bold cyan]" in updates[0]
-    assert "[bold cyan]provider-current[/bold cyan]=3" in updates[0]
-    assert "[bold yellow]provider-updating[/bold yellow]=1" in updates[0]
-    assert "[bold cyan]provider-outdated[/bold cyan]=1" in updates[0]
+    assert "[bold cyan]current[/bold cyan]=3" in updates[0]
+    assert "[bold yellow]updating[/bold yellow]=1" in updates[0]
+    assert "[bold cyan]not-started[/bold cyan]=1" in updates[0]
     assert "[bold yellow]PROVISIONING[/bold yellow]" in updates[0]
 
 
 def test_soperator_migration_status_table_header_renders_bold_black_only_with_color() -> None:
     plain = (
-        "group  state    k8s   total  provider-current  provider-updating  "
-        "provider-outdated  ready/current  event\n"
+        "group  state    k8s   total  current  updating  "
+        "not-started  ready/current  event\n"
         "login RUNNING  1.31  2      2                 0                  "
         "0                  2/2            -\n"
         "| Slurm Workers serving: workers idle=2; jobs pending=6 | "
@@ -17481,6 +17624,37 @@ def test_soperator_migration_status_table_header_renders_bold_black_only_with_co
     assert "\x1b[" not in rendered_plain
     assert plain.splitlines()[0] == rendered_plain.splitlines()[0]
     assert rendered_plain.splitlines()[-1].startswith("| Slurm Workers serving:")
+
+
+def test_phase_validation_failure_colors_only_fail_token_when_supported() -> None:
+    line = "Phase validation populate-jail-refresh: FAIL - [literal] summary"
+    styled = cli_module._phase_validation_terminal_markup(line)  # noqa: SLF001
+
+    color_output = StringIO()
+    cli_module.Console(
+        file=color_output,
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+        width=220,
+    ).print(styled, soft_wrap=True)
+    rendered_color = color_output.getvalue()
+
+    assert "\x1b[31mFAIL\x1b[0m" in rendered_color
+    assert "\x1b[31mPhase validation" not in rendered_color
+    assert unstyle(rendered_color).rstrip("\n") == line
+
+    plain_output = StringIO()
+    cli_module.Console(
+        file=plain_output,
+        force_terminal=False,
+        color_system=None,
+        width=220,
+    ).print(styled, soft_wrap=True)
+    rendered_plain = plain_output.getvalue()
+
+    assert "\x1b[" not in rendered_plain
+    assert rendered_plain.rstrip("\n") == line
 
 
 def test_soperator_migration_status_spinner_suppresses_stray_enter_echo(
@@ -18011,6 +18185,7 @@ def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
             mutation_performed=True,
             lines=(
                 "Execute preflight checkpoint: checkpoint.json",
+                "Phase validation populate-jail-refresh: FAIL - [literal] summary",
                 "Pending phase: validation-and-rollback-hold",
                 "Pending reason: Slurm NCCL benchmark failed",
             ),
@@ -18042,6 +18217,7 @@ def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
     assert "approve_service_role_downtime" not in observed
     assert "Pending phase: validation-and-rollback-hold" in result.output
     assert "Pending reason: Slurm NCCL benchmark failed" in result.output
+    assert "Phase validation populate-jail-refresh: FAIL - [literal] summary" in result.output
 
 
 def test_ext_soperator_upgrade_forwards_stop_after_phase(
@@ -19523,7 +19699,10 @@ def test_soperator_discover_command_routes_to_shared_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("{}\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_minimal_project_identity_payload(), sort_keys=False),
+        encoding="utf-8",
+    )
     bundle_path = (
         tmp_path
         / "generated"
@@ -19603,7 +19782,10 @@ def test_soperator_discover_command_uses_terminal_spinner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("{}\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_minimal_project_identity_payload(), sort_keys=False),
+        encoding="utf-8",
+    )
     bundle_path = (
         tmp_path
         / "generated"
@@ -19640,7 +19822,10 @@ def test_soperator_backup_command_uses_terminal_spinner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("{}\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_minimal_project_identity_payload(), sort_keys=False),
+        encoding="utf-8",
+    )
     events: list[object] = []
 
     def _fake_backup(**_kwargs):
@@ -19740,7 +19925,8 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "  - Recommended order: Soperator chart 1.22.3 -> 4.0.2-ps.3 while Kubernetes "
         "stays 1.32; Kubernetes 1.32 -> 1.33 -> 1.34.",
         "- Soperator upgrade path: status=supported, rule=k8s-1-33-soperator-4-supported, "
-        "source Soperator=1.22.3, target Soperator=4.0.2-ps.3, target Kubernetes=1.34",
+        "source Soperator=1.22.3, target Soperator=4.0.2-ps.3, "
+        "current-segment target Kubernetes=1.34",
         "  - The cxcli-pinned Soperator target on Kubernetes 1.33+ matches the "
         "committed cxcli upgrade-path policy, including ActiveChecks hostUsers "
         "handling.",
@@ -20021,7 +20207,10 @@ def test_ext_soperator_discover_command_routes_to_shared_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("client_info: {}\n", encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_minimal_project_identity_payload(), sort_keys=False),
+        encoding="utf-8",
+    )
     bundle_path = (
         tmp_path
         / "generated"
@@ -20985,11 +21174,14 @@ def test_external_discovery_merges_sdk_capabilities_for_generated_cluster_contex
         cluster_id="mk8scluster-external",
     )
     observed_contexts: list[str] = []
+    handoff_calls: list[dict[str, object]] = []
     monkeypatch.setattr(cli_module, "_runtime_auth_env_available", lambda: True)
     monkeypatch.setattr(
         cli_module,
         "_mk8s_cluster_handoff_spec_for_identity",
-        lambda **_kwargs: _test_provider_generated_kubeconfig_spec(),
+        lambda **kwargs: (
+            handoff_calls.append(dict(kwargs)) or _test_provider_generated_kubeconfig_spec()
+        ),
     )
     monkeypatch.setattr(
         cli_module,
@@ -21008,6 +21200,7 @@ def test_external_discovery_merges_sdk_capabilities_for_generated_cluster_contex
     with cli_module._soperator_migration_execute_payload(
         payload,
         target_ref="external-cluster",
+        require_renewable_auth=True,
     ) as execution_payload:
         path = _run_existing_external_soperator_discovery_for_test(
             config_path=config_path,
@@ -21016,10 +21209,107 @@ def test_external_discovery_merges_sdk_capabilities_for_generated_cluster_contex
 
     bundle = cli_module.load_soperator_discovery_bundle(path)
     assert observed_contexts == ["provider-generated-context"]
+    assert handoff_calls == [
+        {
+            "project_id": "project-456",
+            "client_name": "client-a",
+            "cluster_id": "mk8scluster-external",
+            "access": "external",
+            "require_renewable_auth": True,
+        }
+    ]
     assert bundle["snapshot"]["provider"]["capabilities_source"] == "nebius-sdk"
     assert all(
         node_group.get("provider") for node_group in bundle["snapshot"]["node_groups"].values()
     )
+
+
+def test_execute_payload_rebinds_existing_kube_context_to_renewable_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-456"},
+            "notifications": {},
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "cluster_id": "mk8scluster-123",
+                    "kube_context": "existing-context",
+                }
+            ]
+        },
+    }
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli_module,
+        "_mk8s_cluster_handoff_spec_for_identity",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or cli_module._Mk8sKubeconfigSpec(
+                cluster_entry_name="generated-cluster",
+                user_entry_name="generated-user",
+                context_name="generated-context",
+                server="https://mk8s.example.invalid",
+                ca_pem="FAKE-CA",
+                exec_command="/current/python",
+                exec_args=("-m", "nebius_cxcli", "mk8s-token", "--require-renewable-auth"),
+            )
+        ),
+    )
+
+    with cli_module._soperator_migration_execute_payload(
+        payload,
+        target_ref="external-cluster",
+        require_renewable_auth=True,
+    ) as execution_payload:
+        target = execution_payload["deploy"]["targets"][0]
+        assert target["kube_context"] == "generated-context"
+        assert os.environ["KUBECONFIG"].endswith("/config")
+
+    assert calls == [
+        {
+            "project_id": "project-456",
+            "client_name": "client-a",
+            "cluster_id": "mk8scluster-123",
+            "access": "external",
+            "require_renewable_auth": True,
+        }
+    ]
+
+
+def test_execute_payload_rejects_kube_context_only_renewal_authority() -> None:
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-456"},
+            "notifications": {},
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kube_context": "existing-context",
+                }
+            ]
+        },
+    }
+
+    with (
+        pytest.raises(
+            RuntimeError,
+            match="cluster_id-backed renewable MK8s handoff",
+        ),
+        cli_module._soperator_migration_execute_payload(
+            payload,
+            target_ref="external-cluster",
+            require_renewable_auth=True,
+        ),
+    ):
+        pytest.fail("execute payload must fail before yielding")
 
 
 def test_external_discovery_fails_closed_when_sdk_capabilities_are_unavailable(
@@ -26890,7 +27180,7 @@ def test_create_force_does_not_reuse_existing_chart_overrides(tmp_path: Path) ->
     assert str(n8n_row.get("repo", "")).strip() == original_repo
 
 
-def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
+def test_bootstrap_ci_writes_workflow_in_repo_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -26905,7 +27195,7 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(deployments_root)
-    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert bootstrap.exit_code == 0, bootstrap.output
 
     workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
@@ -26926,6 +27216,10 @@ def test_bootstrap_ci_no_auth_writes_workflow_in_repo_root(
     assert 'echo "NEBIUS_SA_ID=${NEBIUS_SA_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PUBLIC_KEY_ID=${NEBIUS_AUTH_PUBLIC_KEY_ID}"' in content
     assert 'echo "NEBIUS_AUTH_PRIVATE_KEY_FILE=${KEY_PATH}"' in content
+    assert (
+        'echo "NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID=${NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID}"'
+        in content
+    )
     assert "NEBIUS_DISCOVER_TARGET: customer/deployments-root" in content
     assert "customer/deployments-root" in content
     assert 'if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then' in content
@@ -26971,7 +27265,7 @@ def test_bootstrap_ci_repo_root_deployments_uses_clean_generated_glob(
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(repo_root)
-    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert bootstrap.exit_code == 0, bootstrap.output
 
     workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
@@ -26982,7 +27276,7 @@ def test_bootstrap_ci_repo_root_deployments_uses_clean_generated_glob(
     assert "**/./*/*/generated/**" not in content
 
 
-def test_bootstrap_ci_no_auth_is_idempotent_without_force(
+def test_bootstrap_ci_is_idempotent_without_force(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -26996,17 +27290,17 @@ def test_bootstrap_ci_no_auth_is_idempotent_without_force(
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(deployments_root)
-    first = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    first = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert first.exit_code == 0, first.output
     assert "Created:" in first.output
 
-    second = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    second = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert second.exit_code == 0, second.output
     assert "Workflow already aligned:" in second.output
-    assert "Skipped Nebius CI auth bootstrap/secrets sync." in second.output
+    assert "Canonical Nebius auth secrets synced: 1 secret(s)" in second.output
 
 
-def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(
+def test_bootstrap_ci_reconciles_workflow_drift_automatically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27020,13 +27314,13 @@ def test_bootstrap_ci_no_auth_reconciles_workflow_drift_automatically(
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(deployments_root)
-    first = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    first = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert first.exit_code == 0, first.output
 
     workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
     workflow.write_text("name: Drifted Customer Workflow\n", encoding="utf-8")
 
-    second = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    second = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert second.exit_code == 0, second.output
     assert "Updated:" in second.output
     content = workflow.read_text(encoding="utf-8")
@@ -27053,7 +27347,7 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert not gitignore_path.exists()
 
     config_path = _project_config_path(deployments_root)
-    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert bootstrap.exit_code == 0, bootstrap.output
     assert "Ensured deployments .gitignore:" in bootstrap.output
     assert gitignore_path.exists()
@@ -27089,7 +27383,7 @@ def test_bootstrap_ci_rejects_config_under_nested_deployments_root_with_managed_
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(nested_root)
-    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path)])
 
     assert result.exit_code == 1, result.output
     assert "nested under existing cxcli-managed deployments root" in " ".join(result.output.split())
@@ -27116,7 +27410,6 @@ def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(
         [
             "bootstrap-ci",
             str(config_path),
-            "--no-auth-bootstrap",
             "--cli-ref",
             "feature/test-portable-catalog",
         ],
@@ -27132,7 +27425,7 @@ def test_bootstrap_ci_cli_ref_overrides_generated_workflow_pin(
     )
 
 
-def test_bootstrap_ci_no_auth_uses_release_tag_default_for_stable_version(
+def test_bootstrap_ci_uses_release_tag_default_for_stable_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27149,7 +27442,7 @@ def test_bootstrap_ci_no_auth_uses_release_tag_default_for_stable_version(
     _mock_bootstrap_ci_github_sync(monkeypatch)
 
     config_path = _project_config_path(deployments_root)
-    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    bootstrap = runner.invoke(app, ["bootstrap-ci", str(config_path)])
     assert bootstrap.exit_code == 0, bootstrap.output
 
     workflow = repo_root / ".github" / "workflows" / "nebius-deployments.yml"
@@ -27157,7 +27450,7 @@ def test_bootstrap_ci_no_auth_uses_release_tag_default_for_stable_version(
     assert "NEBIUS_CXCLI_REF: ${{ vars.NEBIUS_CXCLI_REF || 'nebius-cxcli-v1.2.3' }}" in content
 
 
-def test_bootstrap_ci_auth_bootstrap_fails_before_writing_workflow_when_repo_unresolved(
+def test_bootstrap_ci_fails_before_writing_workflow_when_repo_unresolved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27182,7 +27475,7 @@ def test_bootstrap_ci_auth_bootstrap_fails_before_writing_workflow_when_repo_unr
     assert not workflow.exists()
 
 
-def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
+def test_bootstrap_ci_accepts_explicit_github_repo_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27196,7 +27489,6 @@ def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
     assert create_result.exit_code == 0, create_result.output
 
     _mock_bootstrap_ci_github_sync(monkeypatch)
-    monkeypatch.setattr(cli_module, "_auto_bootstrap_ci_auth_and_secrets", lambda **_kwargs: None)
 
     config_path = _project_config_path(deployments_root)
     bootstrap = runner.invoke(
@@ -27215,7 +27507,7 @@ def test_bootstrap_ci_auth_bootstrap_accepts_explicit_github_repo_override(
     assert workflow.exists()
 
 
-def test_bootstrap_ci_accepts_github_flags_when_no_auth(
+def test_bootstrap_ci_accepts_github_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27234,7 +27526,6 @@ def test_bootstrap_ci_accepts_github_flags_when_no_auth(
         [
             "bootstrap-ci",
             str(config_path),
-            "--no-auth-bootstrap",
             "--github-repo",
             "owner/repo",
         ],
@@ -27243,7 +27534,7 @@ def test_bootstrap_ci_accepts_github_flags_when_no_auth(
     assert "GitHub repository: owner/repo" in result.output
 
 
-def test_bootstrap_ci_no_auth_requires_github_token_for_email_reconcile(
+def test_bootstrap_ci_requires_github_token_for_email_reconcile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = tmp_path / "customer-repo"
@@ -27263,7 +27554,6 @@ def test_bootstrap_ci_no_auth_requires_github_token_for_email_reconcile(
         [
             "bootstrap-ci",
             str(config_path),
-            "--no-auth-bootstrap",
             "--github-repo",
             "owner/repo",
         ],
@@ -27272,7 +27562,7 @@ def test_bootstrap_ci_no_auth_requires_github_token_for_email_reconcile(
     assert "GitHub bootstrap reconciliation requires a GitHub token." in result.output
 
 
-def test_bootstrap_ci_auth_bootstrap_syncs_local_email_settings(
+def test_bootstrap_ci_syncs_local_email_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -27286,7 +27576,6 @@ def test_bootstrap_ci_auth_bootstrap_syncs_local_email_settings(
     assert create_result.exit_code == 0, create_result.output
 
     _mock_bootstrap_ci_github_sync(monkeypatch, github_token="token-123")
-    monkeypatch.setattr(cli_module, "_auto_bootstrap_ci_auth_and_secrets", lambda **_kwargs: None)
     monkeypatch.setattr(
         cli_module,
         "_load_local_email_settings",
@@ -27347,7 +27636,7 @@ def test_bootstrap_ci_auth_bootstrap_syncs_local_email_settings(
     )
 
 
-def test_bootstrap_ci_no_auth_reports_skipped_email_sync_when_local_email_enabled(
+def test_bootstrap_ci_reports_skipped_email_sync_when_local_email_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -27376,11 +27665,11 @@ def test_bootstrap_ci_no_auth_reports_skipped_email_sync_when_local_email_enable
     )
 
     config_path = _project_config_path(deployments_root)
-    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path)])
 
     assert result.exit_code == 0, result.output
     assert "Email settings synced: 3 environment variable(s), 0 secret(s)" in result.output
-    assert "Skipped Nebius CI auth bootstrap/secrets sync." in result.output
+    assert "Canonical Nebius auth secrets synced: 1 secret(s)" in result.output
 
 
 def test_bootstrap_ci_clears_github_email_settings_when_local_email_disabled(
@@ -27412,7 +27701,7 @@ def test_bootstrap_ci_clears_github_email_settings_when_local_email_disabled(
     )
 
     config_path = _project_config_path(deployments_root)
-    result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
+    result = runner.invoke(app, ["bootstrap-ci", str(config_path)])
 
     assert result.exit_code == 0, result.output
     assert "cleared GitHub email settings: 4 environment variable(s), 2 secret(s)" in " ".join(

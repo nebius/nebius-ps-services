@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-design
-description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, vertical end-to-end feature flow, and implementation-ready validation boundaries."
+description: "Use only as the Agentic SDLC design-authoring adapter to maintain-project-specs; use when canonical FEAT records in docs/design.md must be created or updated from requirements and evidence. Preserve stable FEAT IDs and return validation to the shared owner."
 ---
 
 # Create Design
@@ -167,8 +167,9 @@ and feature designs in `docs/design.md`.
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` owns both canonical documents. This skill may write
+  design only while routed as its Agentic SDLC authoring adapter;
+  `sdlc-create-requirements` has the corresponding requirements boundary.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/prompt_session_intake.py\"",
+            "timeout": 10,
+            "statusMessage": "Staging bound-session prompt intent"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/stop_lifecycle_arbiter.py\"",
+            "timeout": 30,
+            "statusMessage": "Arbitrating workflow completion"
+          }
+        ]
+      }
+    ]
+  }
+}

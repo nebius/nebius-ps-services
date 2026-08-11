@@ -199,7 +199,6 @@ from .github_secrets import (
     delete_environment_variable,
     detect_github_repo_slug,
     ensure_github_environment,
-    environment_secrets_presence,
     read_github_token,
     upsert_environment_secrets,
     upsert_environment_variables,
@@ -237,9 +236,12 @@ from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_find
 from .helm_readiness import SubprocessHelmCommandRunner, verify_helm_chart_ready
 from .iam_bootstrap import (
     auth_public_key_exists,
-    bootstrap_ci_service_account,
     bootstrap_service_account_auth_key,
+    create_service_account_auth_public_key,
     ensure_ci_service_account_identity,
+    generate_service_account_auth_key_pair,
+    issue_service_account_object_storage_access_key,
+    service_account_auth_public_key_ids_by_description,
 )
 from .infra_render import (
     is_portable_module_source,
@@ -344,7 +346,11 @@ from .mysterybox_eso import (
     mysterybox_eso_validation_specs,
     normalize_mysterybox_eso_project_settings,
 )
-from .nebius_api_helpers import sdk_message_to_mapping, wait_nebius_operation
+from .nebius_api_helpers import (
+    bounded_nebius_request_kwargs,
+    sdk_message_to_mapping,
+    wait_nebius_operation,
+)
 from .nfs_csi import (
     NFS_CSI_APP_ID,
     ensure_nfs_csi_app_rows,
@@ -772,6 +778,15 @@ from .wireguard_clients import (
 )
 
 console = Console()
+
+
+def _phase_validation_terminal_markup(line: str) -> str:
+    """Color only an exact phase-validation FAIL token for terminal output."""
+
+    match = re.fullmatch(r"(Phase validation [^:\r\n]+: )FAIL( - .+)", line)
+    if match is None:
+        return line
+    return escape(match.group(1)) + error_markup("FAIL") + escape(match.group(2))
 
 
 @dataclass(frozen=True)
@@ -1222,7 +1237,6 @@ def _adjust_quota_report_for_existing_generated_state(
         _ensure_runtime_auth_material(
             config,
             need_terraform=True,
-            auto_bootstrap=False,
         )
         _ensure_backend_s3_env_aliases()
         runtime_env = _terraform_runtime_env(config)
@@ -2047,13 +2061,6 @@ _VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS_BY_REGION: dict[str, tuple[str, ...]] = {
 _VPC_SUBNET_CHILD_CIDR_SUGGESTION_LIMIT = 4
 _VPC_SUBNET_CHILD_LARGE_PARENT_PREFIXLEN = 16
 _VPC_SUBNET_CHILD_SMALL_PARENT_PREFIXLEN = 24
-NEBIUS_CI_SECRET_KEYS = [
-    "NEBIUS_SA_ID",
-    "NEBIUS_AUTH_PUBLIC_KEY_ID",
-    "NEBIUS_AUTH_PRIVATE_KEY_PEM",
-    "NEBIUS_S3_ACCESS_KEY_ID",
-    "NEBIUS_S3_SECRET_ACCESS_KEY",
-]
 FLUX_SECRET_KEY = "FLUX_GITHUB_TOKEN"
 WIZARD_EXIT_TOKEN = "q"
 WIZARD_ABORT_TOKEN = "qq"
@@ -2062,15 +2069,42 @@ _WIZARD_QUIT_CHOICE = "__wizard_quit__"
 PayloadPath = tuple[str | int, ...]
 _MAX_COLLECT_LEAF_DEPTH = 128
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
-_RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
+_RUNTIME_SERVICE_ACCOUNT_NAME = "nebius-cxcli-sa"
 _MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME = "mysterybox-sa"
 _RUNTIME_AUTH_CACHE_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_DIR"
 _RUNTIME_AUTH_CACHE_FILE = "runtime-auth.json"
+_RUNTIME_AUTH_KEY_INTENT_FILE = "auth-key-intent.json"
+_RUNTIME_AUTH_CACHE_SCHEMA = "nebius-cxcli/runtime-auth/v2"
+_RUNTIME_AUTH_CACHE_STATE_READY = "ready"
+_RUNTIME_AUTH_CACHE_STATE_AUTH_KEY_INTENT = "auth-key-intent"
+_RUNTIME_AUTH_ACTIVE_PROJECT_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID"
+_RUNTIME_AUTH_LOCK_FILE = ".runtime-auth.lock"
 _MYSTERYBOX_ESO_TLS_CHECK_IMAGE = "curlimages/curl:8.7.1"
 _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS"
 _RUNTIME_AUTH_TOKEN_READY_POLL_ENV = "NEBIUS_CXCLI_RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS"
 _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS = 60.0
 _RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS = 2.0
+_RUNTIME_AUTH_READY_PROJECTS: dict[str, bool] = {}
+_RUNTIME_AUTH_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
+_RUNTIME_AUTH_FALLBACK_LOCKS_GUARD = threading.Lock()
+_RUNTIME_AUTH_OPERATOR_ENV_KEYS = (
+    "NEBIUS_AUTH_CREDENTIALS_FILE",
+    "NEBIUS_IAM_TOKEN",
+    "CXCLI_NEBIUS_DELEGATE_ID",
+    "NEBIUS_PROFILE",
+    "NEBIUS_ENDPOINT",
+    "NEBIUS_SA_ID",
+    "NEBIUS_AUTH_PUBLIC_KEY_ID",
+    "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+    "NEBIUS_AUTH_PRIVATE_KEY_PEM",
+)
+_RUNTIME_AUTH_OPERATOR_IDENTITY_ENV_KEYS = (
+    "NEBIUS_SA_ID",
+    "NEBIUS_AUTH_PUBLIC_KEY_ID",
+    "NEBIUS_AUTH_PRIVATE_KEY_FILE",
+    "NEBIUS_AUTH_PRIVATE_KEY_PEM",
+)
+_RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT: dict[str, str | None] | None = None
 _MYSTERYBOX_ESO_ROLE_IDS = ("mysterybox.payload-viewer",)
 _SOPERATOR_APP_ID = "soperator"
 _SOPERATOR_INSTALL_MODE_FIELD = "install_mode"
@@ -2264,8 +2298,8 @@ _UPGRADE_NODE_TEMPLATE_EPILOG = (
     "changes together so each selected node group rolls once. It does not change "
     "hardware platform, hardware preset, CPU/GPU kind, GPU cluster, or fabric; "
     "use upgrade node-group for those migrations. Use --no-interactive for "
-    "automation; keep --auto-auth-bootstrap enabled for generated-bundle "
-    "validation unless automation provides auth another way. "
+    "automation; canonical project authentication is ensured automatically before "
+    "generated-bundle validation. "
     "Safe-surge count: "
     "--strategy-max-surge-count <n> sets temporary extra nodes per active node "
     "group; default 1. Non-dry runs finish with a final MK8s readiness check "
@@ -2519,7 +2553,11 @@ def main_callback(
         ),
     ] = None,
 ) -> None:
+    global _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
+
     _ = version
+    _RUNTIME_AUTH_READY_PROJECTS.clear()
+    _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
     try:
         set_component_sources_file_override(component_sources_file)
         set_component_sources_profile_override(source_profile)
@@ -2527,7 +2565,19 @@ def main_callback(
         _exit_with_error(RuntimeError(str(exc)))
 
 
+def _ensure_project_auth_identity(*, project_id: str, client_name: str) -> None:
+    auth_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name=client_name or "project",
+            nebius=SimpleNamespace(project_id=project_id),
+        )
+    )
+    _ensure_runtime_auth_material(auth_config, need_terraform=False)
+
+
 def _load_context(config_path: Path) -> tuple:
+    readonly_config = load_config(config_path, persist_normalized=False)
+    _ensure_runtime_auth_material(readonly_config, need_terraform=False)
     config = load_config(config_path, persist_normalized=True)
     payload = to_plain_data(config)
     if isinstance(payload, dict) and materialize_compute_boot_disk_defaults(payload):
@@ -2540,6 +2590,7 @@ def _load_context(config_path: Path) -> tuple:
 
 def _load_context_readonly(config_path: Path) -> tuple:
     config = load_config(config_path, persist_normalized=False)
+    _ensure_runtime_auth_material(config, need_terraform=False)
     payload = to_plain_data(config)
     if isinstance(payload, dict) and materialize_compute_boot_disk_defaults(payload):
         strip_app_chart_target_refs(payload)
@@ -2616,6 +2667,7 @@ def _load_deploy_context_readonly(target_path: Path) -> tuple:
     manifest = load_generated_manifest(paths.generated_dir)
     _apply_generated_tool_version_overrides(manifest)
     config = runtime_config_from_manifest(manifest)
+    _ensure_runtime_auth_material(config, need_terraform=False)
     return config, paths, manifest
 
 
@@ -2630,6 +2682,10 @@ def _load_source_payload(config_path: Path) -> dict[str, Any]:
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError("config.yaml root must be a mapping")
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(
+        payload
+    )
+    _ensure_project_auth_identity(project_id=project_id, client_name=client_name)
     return payload
 
 
@@ -4070,12 +4126,9 @@ def _append_drain_timeout_arg(args: list[str], drain_timeout: DrainTimeout) -> N
 def _append_upgrade_validation_args(
     args: list[str],
     *,
-    auto_auth_bootstrap: bool = True,
     skip_validations: bool = False,
     skip_validation: Sequence[str] | None = None,
 ) -> None:
-    if not auto_auth_bootstrap:
-        args.append("--no-auto-auth-bootstrap")
     if skip_validations:
         args.append("--skip-validations")
     for kind in skip_validation or ():
@@ -4093,7 +4146,6 @@ def _upgrade_node_template_dry_run_command(
     disruption_policy: str,
     drain_timeout: DrainTimeout,
     strategy_max_surge_count: int | None = None,
-    auto_auth_bootstrap: bool = True,
     skip_validations: bool = False,
     skip_validation: Sequence[str] | None = None,
 ) -> str:
@@ -4122,7 +4174,6 @@ def _upgrade_node_template_dry_run_command(
     _append_drain_timeout_arg(args, drain_timeout)
     _append_upgrade_validation_args(
         args,
-        auto_auth_bootstrap=auto_auth_bootstrap,
         skip_validations=skip_validations,
         skip_validation=skip_validation,
     )
@@ -10151,6 +10202,7 @@ def _run_external_soperator_worker_scale(
             f"ext-soperator {direction} requires --kube-context; --project-id and "
             "--cluster-id identify Nebius node groups but do not provide Kubernetes access."
         )
+    _ensure_project_auth_identity(project_id=str(project_id), client_name="project")
     _soperator_scale_require_execute_approval(
         dry_run=dry_run,
         approve=approve,
@@ -11840,7 +11892,7 @@ def _verify_helm_chart_upgrade_ready(
             f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
             f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
         )
-    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
+    _ensure_terraform_backend_ready(config)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -11968,7 +12020,7 @@ def _verify_soperator_static_upgrade_ready(
     cluster_name = str(validation.get("cluster_name") or plan.target.target_ref or "mk8s").strip()
     expected_label = _soperator_upgrade_chart_label(plan.target_version)
 
-    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
+    _ensure_terraform_backend_ready(config)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -12607,13 +12659,6 @@ def upgrade_node_template_command(
             ),
         ),
     ] = None,
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth material for generated-bundle validation.",
-        ),
-    ] = True,
     skip_validations: Annotated[
         bool,
         typer.Option(
@@ -12976,7 +13021,6 @@ def upgrade_node_template_command(
                         disruption_policy=policy,
                         drain_timeout=resolved_timeout,
                         strategy_max_surge_count=resolved_max_surge_count,
-                        auto_auth_bootstrap=auto_auth_bootstrap,
                         skip_validations=skip_validations,
                         skip_validation=skip_validation,
                     )
@@ -13128,7 +13172,6 @@ def upgrade_node_template_command(
             _run_generated_bundle_validation(
                 generated_config,
                 paths,
-                auto_auth_bootstrap=auto_auth_bootstrap,
                 title="Node-template upgrade preflight",
                 quota_phase="upgrade",
                 flux_command_name="upgrade",
@@ -13221,7 +13264,6 @@ def upgrade_node_template_command(
                 mysterybox_payload_env = _run_generated_bundle_validation(
                     staged_config,
                     staged_paths,
-                    auto_auth_bootstrap=auto_auth_bootstrap,
                     title=f"Validate rendered {stage_label}: {title}",
                     quota_phase="upgrade",
                     flux_command_name="upgrade",
@@ -17129,7 +17171,6 @@ def _run_soperator_mk8s_node_template_phase(
             disruption_policy=disruption_policy,
             drain_timeout=drain_timeout,
             strategy_max_surge_count=strategy_max_surge_count,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation=None,
             interactive=False,
@@ -17195,7 +17236,6 @@ def _run_soperator_mk8s_node_template_phase(
                 disruption_policy=disruption_policy,
                 drain_timeout=drain_timeout,
                 strategy_max_surge_count=strategy_max_surge_count,
-                auto_auth_bootstrap=True,
                 skip_validations=False,
                 skip_validation=None,
                 interactive=False,
@@ -18319,7 +18359,6 @@ def _run_managed_soperator_cluster_upgrade_locked(
         _run_generated_bundle_validation(
             staged_config,
             staged_paths,
-            auto_auth_bootstrap=True,
             title=validation_title,
             quota_phase="upgrade",
             flux_command_name="upgrade",
@@ -18328,7 +18367,6 @@ def _run_managed_soperator_cluster_upgrade_locked(
         )
         flux_apply_command(
             staged_paths.generated_dir,
-            auto_auth_bootstrap=True,
             target_ref=target.target_ref,
             all_targets=False,
         )
@@ -18597,15 +18635,15 @@ def _run_managed_soperator_cluster_upgrade_locked(
             checks=checks,
         )
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
-        console.print(
+        summary_line = (
             "Phase validation "
             + phase_id
             + ": "
             + status_label(str(payload.get("status", "") or "not_run"))
             + " - "
-            + str(payload.get("summary", "") or "No summary recorded."),
-            soft_wrap=True,
+            + str(payload.get("summary", "") or "No summary recorded.")
         )
+        console.print(_phase_validation_terminal_markup(summary_line), soft_wrap=True)
         if payload.get("status") == "failed":
             _write_soperator_upgrade_report(report_paths or paths, checkpoint)
             failed = [
@@ -18884,7 +18922,6 @@ def _run_managed_soperator_cluster_upgrade_locked(
             _run_generated_bundle_validation(
                 generated_config,
                 paths,
-                auto_auth_bootstrap=True,
                 title="Soperator cluster upgrade preflight",
                 quota_phase="upgrade",
                 flux_command_name="upgrade",
@@ -19213,7 +19250,10 @@ def _run_managed_soperator_cluster_upgrade_locked(
             client_info = _state_mapping(source_payload.get("client_info"))
             nebius_config = _state_mapping(client_info.get("nebius"))
             project_id = _non_empty_text(nebius_config.get("project_id"))
-            bridge_api = _SdkSoperatorMigrationNebiusApi(project_id=project_id)
+            bridge_api = _SdkSoperatorMigrationNebiusApi(
+                project_id=project_id,
+                require_renewable_auth=True,
+            )
             try:
                 bridge_mutation, bridge_lines = _execute_controller_ha_bridge_phase(
                     checkpoint=checkpoint,
@@ -22161,7 +22201,8 @@ def _run_managed_soperator_cluster_upgrade_locked(
                     _state_mapping(
                         _state_mapping(source_payload.get("client_info")).get("nebius")
                     ).get("project_id")
-                )
+                ),
+                require_renewable_auth=True,
             )
             try:
                 _restore_slurm_partitions_before_controller_bridge_cleanup(
@@ -22760,7 +22801,6 @@ def _run_helm_chart_upgrade_command(
             _run_generated_bundle_validation(
                 staged_config,
                 staged_paths,
-                auto_auth_bootstrap=True,
                 title=validation_title,
                 quota_phase="upgrade",
                 flux_command_name="upgrade",
@@ -22769,7 +22809,6 @@ def _run_helm_chart_upgrade_command(
             )
             flux_apply_command(
                 staged_paths.generated_dir,
-                auto_auth_bootstrap=True,
                 target_ref=target.target_ref,
                 all_targets=False,
             )
@@ -22786,7 +22825,6 @@ def _run_helm_chart_upgrade_command(
             _run_generated_bundle_validation(
                 generated_config,
                 paths,
-                auto_auth_bootstrap=True,
                 title="Soperator upgrade preflight",
                 quota_phase="upgrade",
                 flux_command_name="upgrade",
@@ -22950,7 +22988,6 @@ def _run_helm_chart_upgrade_command(
     _run_generated_bundle_validation(
         generated_config,
         paths,
-        auto_auth_bootstrap=True,
         title="Helm chart upgrade preflight",
         quota_phase="upgrade",
         flux_command_name="upgrade",
@@ -22975,7 +23012,6 @@ def _run_helm_chart_upgrade_command(
     _run_generated_bundle_validation(
         staged_config,
         staged_paths,
-        auto_auth_bootstrap=True,
         title=f"Validate rendered Helm chart upgrade to {target_version}",
         quota_phase="upgrade",
         flux_command_name="upgrade",
@@ -22984,7 +23020,6 @@ def _run_helm_chart_upgrade_command(
     )
     flux_apply_command(
         staged_paths.generated_dir,
-        auto_auth_bootstrap=True,
         target_ref=target.target_ref,
         all_targets=False,
     )
@@ -23036,8 +23071,9 @@ def _select_deployed_day2_component(
 def _load_manifest_backed_context(paths: ProjectPaths) -> tuple:
     manifest = load_generated_manifest(paths.generated_dir)
     _apply_generated_tool_version_overrides(manifest)
-    _materialize_generated_terraform_tfvars(paths, manifest)
     config = runtime_config_from_manifest(manifest)
+    _ensure_runtime_auth_material(config, need_terraform=False)
+    _materialize_generated_terraform_tfvars(paths, manifest)
     return config, paths, manifest
 
 
@@ -23743,6 +23779,10 @@ def _load_config_payload(config_path: Path) -> dict[str, Any]:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise RuntimeError("config.yaml root must be a mapping")
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(
+        payload
+    )
+    _ensure_project_auth_identity(project_id=project_id, client_name=client_name)
     return payload
 
 
@@ -26205,7 +26245,7 @@ def _soperator_support_finding_label(finding: Mapping[str, Any]) -> str:
     target_k8s = _non_empty_text(evidence.get("target_k8s_version")) or "unknown"
     return (
         f"status={status}, rule={rule_id}, source Soperator={source_version}, "
-        f"target Soperator={target_version}, target Kubernetes={target_k8s}"
+        f"target Soperator={target_version}, current-segment target Kubernetes={target_k8s}"
     )
 
 
@@ -34956,7 +34996,6 @@ def _apply_jail_sfs_resize_with_terraform(
     mysterybox_payload_env = _run_generated_bundle_validation(
         staged_config,
         staged_paths,
-        auto_auth_bootstrap=True,
         title=f"Validate rendered {stage_label} jail SFS resize",
         quota_phase="upgrade",
         flux_command_name="upgrade",
@@ -49071,10 +49110,11 @@ def _runtime_auth_cache_segment(value: str, *, fallback: str) -> str:
 
 
 def _runtime_auth_cache_dir(*, project_id: str, client_name: str) -> Path:
+    _ = client_name
     root = _runtime_auth_cache_root()
-    client_token = _runtime_auth_cache_segment(client_name, fallback="client")
     project_token = _runtime_auth_cache_segment(project_id, fallback="project")
-    return root / f"{client_token}-{project_token}"
+    project_digest = hashlib.sha256(project_id.strip().encode("utf-8")).hexdigest()[:12]
+    return root / "projects" / f"{project_token}-{project_digest}"
 
 
 def _runtime_auth_cache_root() -> Path:
@@ -49111,6 +49151,37 @@ def _runtime_auth_cache_write_text(path: Path, content: str, *, mode: int = 0o60
                 tmp_path.unlink(missing_ok=True)
 
 
+@contextmanager
+def _runtime_auth_project_lock(*, project_id: str, client_name: str) -> Iterator[None]:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if cache_dir.is_symlink():
+        raise RuntimeError("Canonical runtime auth cache directory must not be a symlink")
+    cache_dir.parent.chmod(0o700)
+    cache_dir.chmod(0o700)
+    lock_path = cache_dir / _RUNTIME_AUTH_LOCK_FILE
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    os.fchmod(lock_fd, 0o600)
+    fallback_lock: threading.Lock | None = None
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(lock_fd, _fcntl.LOCK_EX)
+        else:  # pragma: no cover - non-POSIX fallback
+            with _RUNTIME_AUTH_FALLBACK_LOCKS_GUARD:
+                fallback_lock = _RUNTIME_AUTH_FALLBACK_LOCKS.setdefault(
+                    project_id, threading.Lock()
+                )
+            fallback_lock.acquire()
+        yield
+    finally:
+        if _fcntl is not None:
+            with suppress(OSError):
+                _fcntl.flock(lock_fd, _fcntl.LOCK_UN)
+        elif fallback_lock is not None:  # pragma: no cover - non-POSIX fallback
+            fallback_lock.release()
+        os.close(lock_fd)
+
+
 def _runtime_auth_cache_write_metadata(
     metadata_file: Path,
     payload: Mapping[str, Any],
@@ -49131,14 +49202,20 @@ def _runtime_auth_cache_write(
 ) -> None:
     cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if cache_dir.is_symlink():
+        raise RuntimeError("Canonical runtime auth cache directory must not be a symlink")
     cache_dir.chmod(0o700)
 
-    private_key_file = cache_dir / "auth-private.pem"
+    key_generation = hashlib.sha256(auth_public_key_id.encode("utf-8")).hexdigest()[:16]
+    private_key_file = cache_dir / f"auth-private-{key_generation}.pem"
     _runtime_auth_cache_write_text(private_key_file, private_key_pem.rstrip() + "\n")
 
     payload = {
+        "schema": _RUNTIME_AUTH_CACHE_SCHEMA,
+        "state": _RUNTIME_AUTH_CACHE_STATE_READY,
         "client_name": client_name,
         "project_id": project_id,
+        "service_account_name": _RUNTIME_SERVICE_ACCOUNT_NAME,
         "service_account_id": service_account_id,
         "auth_public_key_id": auth_public_key_id,
         "private_key_file": private_key_file.name,
@@ -49149,41 +49226,63 @@ def _runtime_auth_cache_write(
         payload["s3_secret_access_key"] = s3_secret_access_key
     metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
     _runtime_auth_cache_write_metadata(metadata_file, payload)
+    for superseded_key in cache_dir.glob("auth-private-*.pem"):
+        if superseded_key.name != private_key_file.name:
+            with suppress(OSError):
+                superseded_key.unlink()
+    legacy_key = cache_dir / "auth-private.pem"
+    if legacy_key != private_key_file:
+        with suppress(OSError):
+            legacy_key.unlink()
+
+
+def _runtime_auth_cache_payload(
+    *, project_id: str, client_name: str
+) -> tuple[Path, dict[str, Any]] | None:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
+    if not metadata_file.exists() and not metadata_file.is_symlink():
+        return None
+    if cache_dir.is_symlink():
+        raise RuntimeError("Canonical runtime auth cache directory must not be a symlink")
+    if metadata_file.is_symlink():
+        raise RuntimeError("Canonical runtime auth metadata file must not be a symlink")
+    try:
+        cache_stat = cache_dir.stat()
+        metadata_stat = metadata_file.stat()
+    except OSError as exc:
+        raise RuntimeError("Canonical runtime auth cache metadata cannot be inspected") from exc
+    if stat.S_IMODE(cache_stat.st_mode) != 0o700:
+        raise RuntimeError("Canonical runtime auth cache directory permissions must be 0700")
+    if stat.S_IMODE(metadata_stat.st_mode) != 0o600:
+        raise RuntimeError("Canonical runtime auth metadata file permissions must be 0600")
+    if hasattr(os, "getuid") and (
+        cache_stat.st_uid != os.getuid() or metadata_stat.st_uid != os.getuid()
+    ):
+        raise RuntimeError("Canonical runtime auth cache must be owned by the current user")
+    try:
+        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError("Canonical runtime auth metadata is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Canonical runtime auth metadata must be a JSON object")
+    if payload.get("schema") != _RUNTIME_AUTH_CACHE_SCHEMA:
+        raise RuntimeError("Canonical runtime auth metadata has an unsupported schema")
+    if payload.get("project_id") != project_id:
+        raise RuntimeError("Canonical runtime auth metadata belongs to a different project")
+    if payload.get("service_account_name") != _RUNTIME_SERVICE_ACCOUNT_NAME:
+        raise RuntimeError(
+            "Canonical runtime auth metadata is not bound to the canonical "
+            "nebius-cxcli-sa identity"
+        )
+    return cache_dir, payload
 
 
 def _runtime_auth_cache_load(*, project_id: str, client_name: str) -> bool:
-    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
-    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
-    if not metadata_file.exists():
+    material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+    if material is None:
         return False
-    try:
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if not isinstance(payload, dict):
-        return False
-
-    service_account_id = str(payload.get("service_account_id") or "").strip()
-    auth_public_key_id = str(payload.get("auth_public_key_id") or "").strip()
-    private_key_file_token = str(payload.get("private_key_file") or "").strip()
-    s3_access_key_id = str(payload.get("s3_access_key_id") or "").strip()
-    s3_secret_access_key = str(payload.get("s3_secret_access_key") or "").strip()
-    if not service_account_id or not auth_public_key_id or not private_key_file_token:
-        return False
-
-    private_key_file = (cache_dir / private_key_file_token).resolve()
-    if not private_key_file.exists() or not private_key_file.is_file():
-        return False
-
-    os.environ["NEBIUS_SA_ID"] = service_account_id
-    os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = auth_public_key_id
-    os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(private_key_file)
-    if s3_access_key_id:
-        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = s3_access_key_id
-        os.environ["AWS_ACCESS_KEY_ID"] = s3_access_key_id
-    if s3_secret_access_key:
-        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = s3_secret_access_key
-        os.environ["AWS_SECRET_ACCESS_KEY"] = s3_secret_access_key
+    _export_runtime_auth_material(material)
     return True
 
 
@@ -49210,9 +49309,9 @@ class RuntimeAuthCacheMaterial:
     service_account_id: str
     auth_public_key_id: str
     private_key_file: Path
-    private_key_pem: str
+    private_key_pem: str = field(repr=False)
     s3_access_key_id: str | None
-    s3_secret_access_key: str | None
+    s3_secret_access_key: str | None = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -49293,68 +49392,43 @@ def _wait_for_runtime_auth_token_ready(material: RuntimeAuthCacheMaterial) -> No
                     close()
 
 
-def _runtime_auth_profile_recreate_reason(
-    status: RuntimeAuthProfileStatus,
-) -> str | None:
-    def _cloud_error_looks_like_deleted_key() -> bool:
-        error = str(status.cloud_check_error or "").strip().lower()
-        if not error:
-            return False
-        return (
-            "public key not exists" in error
-            or "jwtkeynotexists" in error
-            or "expired or deactivated" in error
-        )
-
-    if not status.metadata_exists:
-        return f"runtime-auth metadata file is missing: {status.metadata_file}"
-    if not status.service_account_id:
-        return "runtime-auth metadata is missing service_account_id"
-    if not status.auth_public_key_id:
-        return "runtime-auth metadata is missing auth_public_key_id"
-    if status.private_key_file is None:
-        return "runtime-auth metadata is missing private_key_file"
-    if not status.private_key_exists:
-        return f"runtime-auth private key file is missing: {status.private_key_file}"
-    if status.cloud_public_key_exists is False:
-        return (
-            "cached Nebius auth public key "
-            f"'{status.auth_public_key_id}' no longer exists or is not accessible"
-        )
-    if _cloud_error_looks_like_deleted_key():
-        return (
-            "cached Nebius auth public key "
-            f"'{status.auth_public_key_id}' no longer exists or is not accessible"
-        )
-    return None
-
-
 def _runtime_auth_cache_material(
     *, project_id: str, client_name: str
 ) -> RuntimeAuthCacheMaterial | None:
-    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
-    metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
-    if not metadata_file.exists():
+    cache = _runtime_auth_cache_payload(project_id=project_id, client_name=client_name)
+    if cache is None:
         return None
-    try:
-        payload = json.loads(metadata_file.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
+    cache_dir, payload = cache
+    if payload.get("state") != _RUNTIME_AUTH_CACHE_STATE_READY:
+        raise RuntimeError("Canonical runtime auth metadata is not in the ready state")
 
     service_account_id = _non_empty_text(payload.get("service_account_id"))
     auth_public_key_id = _non_empty_text(payload.get("auth_public_key_id"))
     private_key_file_token = _non_empty_text(payload.get("private_key_file"))
     if not service_account_id or not auth_public_key_id or not private_key_file_token:
-        return None
+        raise RuntimeError("Canonical runtime auth metadata is incomplete")
 
-    private_key_file = (cache_dir / private_key_file_token).resolve()
-    if not private_key_file.exists() or not private_key_file.is_file():
-        return None
+    if Path(private_key_file_token).name != private_key_file_token:
+        raise RuntimeError("Canonical runtime auth private key path must be cache-local")
+    private_key_candidate = cache_dir / private_key_file_token
+    if private_key_candidate.is_symlink():
+        raise RuntimeError("Canonical runtime auth private key file must not be a symlink")
+    private_key_file = private_key_candidate.resolve()
+    if private_key_file.parent != cache_dir.resolve():
+        raise RuntimeError("Canonical runtime auth private key path escapes its cache directory")
+    if (
+        not private_key_file.exists()
+        or not private_key_file.is_file()
+    ):
+        raise RuntimeError("Canonical runtime auth private key file is missing")
+    private_key_stat = private_key_file.stat()
+    if stat.S_IMODE(private_key_stat.st_mode) != 0o600:
+        raise RuntimeError("Canonical runtime auth private key file permissions must be 0600")
+    if hasattr(os, "getuid") and private_key_stat.st_uid != os.getuid():
+        raise RuntimeError("Canonical runtime auth private key must be owned by the current user")
     private_key_pem = private_key_file.read_text(encoding="utf-8").strip()
     if not private_key_pem:
-        return None
+        raise RuntimeError("Canonical runtime auth private key file is empty")
 
     return RuntimeAuthCacheMaterial(
         project_id=project_id,
@@ -49368,6 +49442,269 @@ def _runtime_auth_cache_material(
     )
 
 
+def _runtime_auth_key_intent(
+    *, project_id: str, client_name: str, service_account_id: str
+) -> dict[str, Any] | None:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    intent_file = cache_dir / _RUNTIME_AUTH_KEY_INTENT_FILE
+    if not intent_file.exists():
+        return None
+    if (
+        cache_dir.is_symlink()
+        or intent_file.is_symlink()
+        or stat.S_IMODE(intent_file.stat().st_mode) != 0o600
+        or (hasattr(os, "getuid") and intent_file.stat().st_uid != os.getuid())
+    ):
+        raise RuntimeError("Runtime auth key intent has unsafe filesystem permissions")
+    try:
+        payload = json.loads(intent_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Runtime auth key intent is not valid JSON: {intent_file}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runtime auth key intent payload is not a JSON object")
+    expected = {
+        "schema": _RUNTIME_AUTH_CACHE_SCHEMA,
+        "state": _RUNTIME_AUTH_CACHE_STATE_AUTH_KEY_INTENT,
+        "project_id": project_id,
+        "service_account_name": _RUNTIME_SERVICE_ACCOUNT_NAME,
+        "service_account_id": service_account_id,
+    }
+    mismatches = [name for name, value in expected.items() if payload.get(name) != value]
+    if mismatches:
+        raise RuntimeError(
+            "Runtime auth key intent does not match the canonical project identity: "
+            + ", ".join(mismatches)
+        )
+    required = ("description", "public_key_pem", "private_key_file")
+    missing = [name for name in required if not _non_empty_text(payload.get(name))]
+    if missing:
+        raise RuntimeError(
+            "Runtime auth key intent is incomplete: " + ", ".join(sorted(missing))
+        )
+    private_key_token = str(payload["private_key_file"])
+    if Path(private_key_token).name != private_key_token:
+        raise RuntimeError("Runtime auth key intent private_key_file is not cache-local")
+    private_key_candidate = cache_dir / private_key_token
+    if private_key_candidate.is_symlink():
+        raise RuntimeError("Runtime auth key intent private key file is missing")
+    private_key_file = private_key_candidate.resolve()
+    if (
+        private_key_file.parent != cache_dir.resolve()
+        or not private_key_file.is_file()
+        or stat.S_IMODE(private_key_file.stat().st_mode) != 0o600
+        or (hasattr(os, "getuid") and private_key_file.stat().st_uid != os.getuid())
+    ):
+        raise RuntimeError("Runtime auth key intent private key file is missing")
+    payload["private_key_pem"] = private_key_file.read_text(encoding="utf-8").strip()
+    return payload
+
+
+def _runtime_auth_create_key_intent(
+    *, project_id: str, client_name: str, service_account_id: str
+) -> dict[str, Any]:
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    private_key_pem, public_key_pem = generate_service_account_auth_key_pair()
+    fingerprint = hashlib.sha256(public_key_pem.encode("utf-8")).hexdigest()
+    description = f"nebius-cxcli authorized key intent {fingerprint}"
+    private_key_file = cache_dir / "auth-private.pending.pem"
+    _runtime_auth_cache_write_text(private_key_file, private_key_pem.rstrip() + "\n")
+    payload = {
+        "schema": _RUNTIME_AUTH_CACHE_SCHEMA,
+        "state": _RUNTIME_AUTH_CACHE_STATE_AUTH_KEY_INTENT,
+        "client_name": client_name,
+        "project_id": project_id,
+        "service_account_name": _RUNTIME_SERVICE_ACCOUNT_NAME,
+        "service_account_id": service_account_id,
+        "description": description,
+        "public_key_pem": public_key_pem,
+        "private_key_file": private_key_file.name,
+    }
+    _runtime_auth_cache_write_metadata(cache_dir / _RUNTIME_AUTH_KEY_INTENT_FILE, payload)
+    payload["private_key_pem"] = private_key_pem
+    return payload
+
+
+def _runtime_auth_finalize_key_intent(
+    *,
+    project_id: str,
+    client_name: str,
+    service_account_id: str,
+    auth_public_key_id: str,
+    intent: Mapping[str, Any],
+    s3_access_key_id: str | None,
+    s3_secret_access_key: str | None,
+) -> RuntimeAuthCacheMaterial:
+    _runtime_auth_cache_write(
+        project_id=project_id,
+        client_name=client_name,
+        service_account_id=service_account_id,
+        auth_public_key_id=auth_public_key_id,
+        private_key_pem=str(intent["private_key_pem"]),
+        s3_access_key_id=s3_access_key_id,
+        s3_secret_access_key=s3_secret_access_key,
+    )
+    cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+    with suppress(OSError):
+        (cache_dir / _RUNTIME_AUTH_KEY_INTENT_FILE).unlink()
+    with suppress(OSError):
+        (cache_dir / str(intent["private_key_file"])).unlink()
+    material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+    if material is None:
+        raise RuntimeError("Runtime auth profile was created but cache material could not be loaded")
+    return material
+
+
+def _capture_runtime_auth_operator_environment() -> None:
+    global _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
+
+    if _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT is None:
+        _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = {
+            name: os.environ.get(name) for name in _RUNTIME_AUTH_OPERATOR_ENV_KEYS
+        }
+
+
+def _discard_canonical_identity_from_operator_snapshot(
+    material: RuntimeAuthCacheMaterial,
+) -> None:
+    snapshot = _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
+    if snapshot is None:
+        return
+    if (
+        snapshot.get("NEBIUS_SA_ID") != material.service_account_id
+        or snapshot.get("NEBIUS_AUTH_PUBLIC_KEY_ID") != material.auth_public_key_id
+    ):
+        return
+    for name in _RUNTIME_AUTH_OPERATOR_IDENTITY_ENV_KEYS:
+        snapshot[name] = None
+
+
+def _runtime_auth_environment_material(
+    *, project_id: str, client_name: str
+) -> RuntimeAuthCacheMaterial | None:
+    active_project_id = os.environ.get(_RUNTIME_AUTH_ACTIVE_PROJECT_ENV, "").strip()
+    if not active_project_id:
+        return None
+    if active_project_id != project_id:
+        raise RuntimeError(
+            "Canonical runtime auth environment belongs to a different Nebius project"
+        )
+
+    service_account_id = os.environ.get("NEBIUS_SA_ID", "").strip()
+    auth_public_key_id = os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID", "").strip()
+    private_key_token = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE", "").strip()
+    if not service_account_id or not auth_public_key_id or not private_key_token:
+        raise RuntimeError("Canonical runtime auth environment is incomplete")
+
+    private_key_candidate = Path(private_key_token).expanduser()
+    if private_key_candidate.is_symlink():
+        raise RuntimeError("Canonical runtime auth environment private key must not be a symlink")
+    private_key_file = private_key_candidate.resolve()
+    if not private_key_file.exists() or not private_key_file.is_file():
+        raise RuntimeError("Canonical runtime auth environment private key file is missing")
+    private_key_stat = private_key_file.stat()
+    if stat.S_IMODE(private_key_stat.st_mode) != 0o600:
+        raise RuntimeError(
+            "Canonical runtime auth environment private key permissions must be 0600"
+        )
+    if hasattr(os, "getuid") and private_key_stat.st_uid != os.getuid():
+        raise RuntimeError(
+            "Canonical runtime auth environment private key must be owned by the current user"
+        )
+    private_key_pem = private_key_file.read_text(encoding="utf-8").strip()
+    if not private_key_pem:
+        raise RuntimeError("Canonical runtime auth environment private key file is empty")
+    inline_private_key = os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_PEM", "").strip()
+    if inline_private_key and inline_private_key != private_key_pem:
+        raise RuntimeError(
+            "Canonical runtime auth environment private key file and PEM value disagree"
+        )
+
+    s3_access_key_id = (
+        os.environ.get("NEBIUS_S3_ACCESS_KEY_ID", "").strip()
+        or os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
+    )
+    s3_secret_access_key = (
+        os.environ.get("NEBIUS_S3_SECRET_ACCESS_KEY", "").strip()
+        or os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    )
+    if bool(s3_access_key_id) != bool(s3_secret_access_key):
+        raise RuntimeError("Canonical runtime auth environment has incomplete Object Storage keys")
+
+    return RuntimeAuthCacheMaterial(
+        project_id=project_id,
+        client_name=client_name,
+        service_account_id=service_account_id,
+        auth_public_key_id=auth_public_key_id,
+        private_key_file=private_key_file,
+        private_key_pem=private_key_pem,
+        s3_access_key_id=s3_access_key_id or None,
+        s3_secret_access_key=s3_secret_access_key or None,
+    )
+
+
+@contextmanager
+def _canonical_runtime_auth_environment(material: RuntimeAuthCacheMaterial) -> Iterator[None]:
+    with _temporary_env(
+        {
+            "NEBIUS_AUTH_CREDENTIALS_FILE": "",
+            "NEBIUS_IAM_TOKEN": "",
+            "CXCLI_NEBIUS_DELEGATE_ID": "",
+            "NEBIUS_SA_ID": material.service_account_id,
+            "NEBIUS_AUTH_PUBLIC_KEY_ID": material.auth_public_key_id,
+            "NEBIUS_AUTH_PRIVATE_KEY_FILE": str(material.private_key_file),
+            "NEBIUS_AUTH_PRIVATE_KEY_PEM": material.private_key_pem,
+        }
+    ):
+        yield
+
+
+def _import_runtime_auth_environment(
+    *, project_id: str, client_name: str
+) -> RuntimeAuthCacheMaterial | None:
+    material = _runtime_auth_environment_material(
+        project_id=project_id,
+        client_name=client_name,
+    )
+    if material is None:
+        return None
+    _wait_for_runtime_auth_token_ready(material)
+    with _canonical_runtime_auth_environment(material):
+        identity = ensure_ci_service_account_identity(
+            project_id=project_id,
+            service_account_name=_RUNTIME_SERVICE_ACCOUNT_NAME,
+            service_account_description=(
+                "Canonical service account used by nebius-cxcli project automation"
+            ),
+            role_ids=["editor"],
+            profile=None,
+            endpoint=None,
+            config_file=None,
+            prefer_operator_auth=False,
+            allow_mutation=False,
+            allow_cli_token=False,
+            strict_managed_identity=True,
+        )
+    if identity.service_account_id != material.service_account_id:
+        raise RuntimeError(
+            "Canonical runtime auth environment service-account ID does not match "
+            "nebius-cxcli-sa"
+        )
+    _runtime_auth_cache_write(
+        project_id=project_id,
+        client_name=client_name,
+        service_account_id=material.service_account_id,
+        auth_public_key_id=material.auth_public_key_id,
+        private_key_pem=material.private_key_pem,
+        s3_access_key_id=material.s3_access_key_id,
+        s3_secret_access_key=material.s3_secret_access_key,
+    )
+    imported = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+    if imported is None:
+        raise RuntimeError("Canonical runtime auth environment import did not commit its cache")
+    _discard_canonical_identity_from_operator_snapshot(imported)
+    return imported
+
+
 def _create_or_recreate_runtime_auth_profile(
     *,
     project_id: str,
@@ -49377,36 +49714,90 @@ def _create_or_recreate_runtime_auth_profile(
     endpoint: str | None,
     sdk_config_file: Path | None,
 ) -> tuple[RuntimeAuthCacheMaterial, bool]:
-    existing = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
-    if existing is not None and not recreate:
-        return existing, False
+    _capture_runtime_auth_operator_environment()
+    with _runtime_auth_project_lock(project_id=project_id, client_name=client_name):
+        existing = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+        if existing is not None:
+            _discard_canonical_identity_from_operator_snapshot(existing)
+        cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
+        has_pending_intent = (cache_dir / _RUNTIME_AUTH_KEY_INTENT_FILE).exists()
+        if existing is not None and not recreate and not has_pending_intent:
+            # The caller validates this key against the token service before any
+            # cloud mutation. A deleted key must reach the operator-authenticated
+            # recreate path instead of being used to reconcile its own IAM state.
+            return existing, False
+        if not recreate and not has_pending_intent:
+            imported = _import_runtime_auth_environment(
+                project_id=project_id,
+                client_name=client_name,
+            )
+            if imported is not None:
+                return imported, False
 
-    result = bootstrap_ci_service_account(
-        project_id=project_id,
-        service_account_name=_RUNTIME_TF_SERVICE_ACCOUNT_NAME,
-        service_account_description="Service account used by nebius-cxcli Terraform runtime automation",
-        role_ids=["editor"],
-        auth_key_description="nebius-cxcli Terraform runtime authorized key",
-        access_key_description="nebius-cxcli Terraform runtime Object Storage access key",
-        profile=profile,
-        endpoint=endpoint,
-        config_file=sdk_config_file,
-    )
-    _runtime_auth_cache_write(
-        project_id=project_id,
-        client_name=client_name,
-        service_account_id=result.service_account_id,
-        auth_public_key_id=result.auth_public_key_id,
-        private_key_pem=result.auth_private_key_pem,
-        s3_access_key_id=result.s3_access_key_id,
-        s3_secret_access_key=result.s3_secret_access_key,
-    )
-    material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
-    if material is None:
-        raise RuntimeError(
-            "Runtime auth profile was created but cache material could not be loaded"
+        with _operator_auth_env_without_runtime_auth(
+            project_id=project_id,
+            client_name=client_name,
+        ):
+            identity = ensure_ci_service_account_identity(
+                project_id=project_id,
+                service_account_name=_RUNTIME_SERVICE_ACCOUNT_NAME,
+                service_account_description=(
+                    "Canonical service account used by nebius-cxcli project automation"
+                ),
+                role_ids=["editor"],
+                profile=profile,
+                endpoint=endpoint,
+                config_file=sdk_config_file,
+                prefer_operator_auth=True,
+                allow_mutation=True,
+                strict_managed_identity=True,
+            )
+            intent = _runtime_auth_key_intent(
+                project_id=project_id,
+                client_name=client_name,
+                service_account_id=identity.service_account_id,
+            )
+            if intent is None:
+                intent = _runtime_auth_create_key_intent(
+                    project_id=project_id,
+                    client_name=client_name,
+                    service_account_id=identity.service_account_id,
+                )
+            matches = service_account_auth_public_key_ids_by_description(
+                project_id=project_id,
+                service_account_id=identity.service_account_id,
+                description=str(intent["description"]),
+                profile=profile,
+                endpoint=endpoint,
+                config_file=sdk_config_file,
+            )
+            if len(matches) > 1:
+                raise RuntimeError(
+                    "Runtime auth key intent matched multiple Nebius authorized keys; "
+                    "refusing to choose an ambiguous credential."
+                )
+            auth_public_key_id = matches[0] if matches else create_service_account_auth_public_key(
+                project_id=project_id,
+                service_account_id=identity.service_account_id,
+                public_key_pem=str(intent["public_key_pem"]),
+                description=str(intent["description"]),
+                profile=profile,
+                endpoint=endpoint,
+                config_file=sdk_config_file,
+            )
+
+        material = _runtime_auth_finalize_key_intent(
+            project_id=project_id,
+            client_name=client_name,
+            service_account_id=identity.service_account_id,
+            auth_public_key_id=auth_public_key_id,
+            intent=intent,
+            s3_access_key_id=(existing.s3_access_key_id if existing is not None else None),
+            s3_secret_access_key=(
+                existing.s3_secret_access_key if existing is not None else None
+            ),
         )
-    return material, True
+        return material, True
 
 
 def _runtime_auth_profile_status(
@@ -49419,7 +49810,7 @@ def _runtime_auth_profile_status(
 ) -> RuntimeAuthProfileStatus:
     cache_dir = _runtime_auth_cache_dir(project_id=project_id, client_name=client_name)
     metadata_file = cache_dir / _RUNTIME_AUTH_CACHE_FILE
-    metadata_exists = metadata_file.exists()
+    metadata_exists = metadata_file.exists() or metadata_file.is_symlink()
 
     service_account_id: str | None = None
     auth_public_key_id: str | None = None
@@ -49429,18 +49820,47 @@ def _runtime_auth_profile_status(
     cloud_check_error: str | None = None
     issues: list[str] = []
 
+    if cache_dir.exists():
+        if cache_dir.is_symlink():
+            issues.append("runtime-auth cache directory must not be a symlink")
+        else:
+            cache_stat = cache_dir.stat()
+            if stat.S_IMODE(cache_stat.st_mode) != 0o700:
+                issues.append("runtime-auth cache directory permissions must be 0700")
+            if hasattr(os, "getuid") and cache_stat.st_uid != os.getuid():
+                issues.append("runtime-auth cache directory must be owned by the current user")
+
     payload: dict[str, Any] = {}
     if metadata_exists:
-        try:
-            parsed = json.loads(metadata_file.read_text(encoding="utf-8"))
-            if isinstance(parsed, dict):
-                payload = parsed
-            else:
-                issues.append("runtime-auth metadata payload is not a JSON object")
-        except Exception as exc:
-            issues.append(f"runtime-auth metadata is not valid JSON: {exc}")
+        if metadata_file.is_symlink():
+            issues.append("runtime-auth metadata file must not be a symlink")
+        else:
+            metadata_stat = metadata_file.stat()
+            if stat.S_IMODE(metadata_stat.st_mode) != 0o600:
+                issues.append("runtime-auth metadata file permissions must be 0600")
+            if hasattr(os, "getuid") and metadata_stat.st_uid != os.getuid():
+                issues.append("runtime-auth metadata file must be owned by the current user")
+            try:
+                parsed = json.loads(metadata_file.read_text(encoding="utf-8"))
+                if isinstance(parsed, dict):
+                    payload = parsed
+                else:
+                    issues.append("runtime-auth metadata payload is not a JSON object")
+            except Exception as exc:
+                issues.append(f"runtime-auth metadata is not valid JSON: {exc}")
     else:
         issues.append(f"runtime-auth metadata file not found: {metadata_file}")
+
+    if payload and payload.get("schema") != _RUNTIME_AUTH_CACHE_SCHEMA:
+        issues.append("runtime-auth metadata has an unsupported schema")
+    if payload and payload.get("project_id") != project_id:
+        issues.append("runtime-auth metadata project_id does not match the selected project")
+    if payload and payload.get("service_account_name") != _RUNTIME_SERVICE_ACCOUNT_NAME:
+        issues.append(
+            "runtime-auth metadata is not bound to the canonical nebius-cxcli-sa identity"
+        )
+    if payload and payload.get("state") != _RUNTIME_AUTH_CACHE_STATE_READY:
+        issues.append("runtime-auth metadata does not contain a completed key lifecycle")
 
     service_account_id = _non_empty_text(payload.get("service_account_id"))
     auth_public_key_id = _non_empty_text(payload.get("auth_public_key_id"))
@@ -49452,10 +49872,28 @@ def _runtime_auth_profile_status(
         issues.append("missing auth_public_key_id in runtime-auth metadata")
 
     if private_key_file_token:
-        private_key_file = (cache_dir / private_key_file_token).resolve()
-        private_key_exists = private_key_file.exists() and private_key_file.is_file()
+        if Path(private_key_file_token).name != private_key_file_token:
+            issues.append("private_key_file must be a cache-local filename")
+        else:
+            private_key_candidate = cache_dir / private_key_file_token
+            if private_key_candidate.is_symlink():
+                issues.append("private key file must not be a symlink")
+            else:
+                private_key_file = private_key_candidate.resolve()
+        private_key_exists = bool(
+            private_key_file is not None
+            and private_key_file.parent == cache_dir.resolve()
+            and private_key_file.exists()
+            and private_key_file.is_file()
+        )
         if not private_key_exists:
             issues.append(f"private key file missing: {private_key_file}")
+        elif private_key_file is not None:
+            private_key_stat = private_key_file.stat()
+            if stat.S_IMODE(private_key_stat.st_mode) != 0o600:
+                issues.append("private key file permissions must be 0600")
+            if hasattr(os, "getuid") and private_key_stat.st_uid != os.getuid():
+                issues.append("private key file must be owned by the current user")
     else:
         issues.append("missing private_key_file in runtime-auth metadata")
 
@@ -49492,7 +49930,7 @@ def _runtime_auth_profile_status(
 
 
 def _discover_runtime_auth_profiles() -> list[tuple[str, str]]:
-    root = _runtime_auth_cache_root()
+    root = _runtime_auth_cache_root() / "projects"
     if not root.exists() or not root.is_dir():
         return []
 
@@ -49512,17 +49950,8 @@ def _discover_runtime_auth_profiles() -> list[tuple[str, str]]:
                 project_id = _non_empty_text(payload.get("project_id")) or ""
         except Exception:
             pass
-        if not client_name or not project_id:
-            folder = child.name.strip()
-            project_marker = "-project-"
-            marker_index = folder.rfind(project_marker)
-            if marker_index > 0:
-                inferred_client = folder[:marker_index]
-                inferred_project = folder[marker_index + 1 :]
-                client_name = client_name or inferred_client
-                project_id = project_id or inferred_project
-        if client_name and project_id:
-            profiles.append((client_name, project_id))
+        if project_id:
+            profiles.append((client_name or "project", project_id))
 
     deduped: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -49550,172 +49979,156 @@ def _resolve_client_name_for_runtime_profile(
     unique = sorted(set(matches))
     if len(unique) == 1:
         return unique[0]
-    if len(unique) > 1:
-        raise RuntimeError(
-            "Multiple runtime auth profiles exist for this project_id. "
-            "Provide --client-name (or --project-config)."
+    if unique:
+        return unique[0]
+    return "project"
+
+
+def _runtime_auth_error_requires_rotation(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "public key not exists",
+            "jwtkeynotexists",
+            "expired or deactivated",
         )
-    raise RuntimeError("Missing required option: --client-name (or provide --project-config)")
+    )
 
 
-def _runtime_auth_missing_envs(
-    *,
-    need_terraform: bool,
-) -> list[str]:
-    required: list[str] = []
-    credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
-    has_credentials_file = bool(credentials_file)
-    if need_terraform and not has_credentials_file:
-        required.extend(["NEBIUS_SA_ID", "NEBIUS_AUTH_PUBLIC_KEY_ID"])
-
-    missing = [name for name in required if not os.environ.get(name)]
-    has_private_key_file = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"))
-    has_private_key_pem = bool(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_PEM"))
-    if (
-        (need_terraform and not has_credentials_file)
-        and not (has_private_key_file or has_private_key_pem)
-        and "NEBIUS_AUTH_PRIVATE_KEY_PEM" not in missing
+def _export_runtime_auth_material(material: RuntimeAuthCacheMaterial) -> None:
+    # Bootstrap credentials are not runtime authority. Remove snapshot/user
+    # surfaces in this process before any product SDK can select them.
+    for name in (
+        "NEBIUS_AUTH_CREDENTIALS_FILE",
+        "NEBIUS_IAM_TOKEN",
+        "CXCLI_NEBIUS_DELEGATE_ID",
+        "NEBIUS_S3_ACCESS_KEY_ID",
+        "NEBIUS_S3_SECRET_ACCESS_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
     ):
-        missing.append("NEBIUS_AUTH_PRIVATE_KEY_PEM")
-    if need_terraform:
-        aws_access = (
-            os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-            or os.environ.get("NEBIUS_S3_ACCESS_KEY_ID", "").strip()
+        os.environ.pop(name, None)
+    os.environ["NEBIUS_SA_ID"] = material.service_account_id
+    os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = material.auth_public_key_id
+    os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] = material.private_key_pem
+    os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(material.private_key_file)
+    os.environ[_RUNTIME_AUTH_ACTIVE_PROJECT_ENV] = material.project_id
+    if material.s3_access_key_id:
+        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = material.s3_access_key_id
+        os.environ["AWS_ACCESS_KEY_ID"] = material.s3_access_key_id
+    if material.s3_secret_access_key:
+        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
+        os.environ["AWS_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
+
+
+def _ensure_runtime_auth_s3_material(
+    material: RuntimeAuthCacheMaterial,
+) -> RuntimeAuthCacheMaterial:
+    if material.s3_access_key_id and material.s3_secret_access_key:
+        return material
+    with _runtime_auth_project_lock(
+        project_id=material.project_id,
+        client_name=material.client_name,
+    ):
+        current = _runtime_auth_cache_material(
+            project_id=material.project_id,
+            client_name=material.client_name,
         )
-        aws_secret = (
-            os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
-            or os.environ.get("NEBIUS_S3_SECRET_ACCESS_KEY", "").strip()
+        if current is None:
+            raise RuntimeError("Canonical runtime auth cache disappeared before S3 key issuance")
+        if current.s3_access_key_id and current.s3_secret_access_key:
+            return current
+        with _operator_auth_env_without_runtime_auth(
+            project_id=current.project_id,
+            client_name=current.client_name,
+        ):
+            result = issue_service_account_object_storage_access_key(
+                project_id=current.project_id,
+                service_account_id=current.service_account_id,
+                description="nebius-cxcli Terraform state Object Storage access key",
+                profile=None,
+                endpoint=None,
+                config_file=None,
+                allow_cli_token=True,
+            )
+        _runtime_auth_cache_write(
+            project_id=current.project_id,
+            client_name=current.client_name,
+            service_account_id=current.service_account_id,
+            auth_public_key_id=current.auth_public_key_id,
+            private_key_pem=current.private_key_pem,
+            s3_access_key_id=result.s3_access_key_id,
+            s3_secret_access_key=result.s3_secret_access_key,
         )
-        if not aws_access:
-            missing.append("AWS_ACCESS_KEY_ID")
-        if not aws_secret:
-            missing.append("AWS_SECRET_ACCESS_KEY")
-    return missing
+        updated = _runtime_auth_cache_material(
+            project_id=current.project_id,
+            client_name=current.client_name,
+        )
+        if updated is None or not updated.s3_access_key_id or not updated.s3_secret_access_key:
+            raise RuntimeError("Object Storage key was issued but the canonical cache is incomplete")
+        console.print("[green]Issued canonical runtime Object Storage key[/green] for Terraform.")
+        return updated
 
 
 def _ensure_runtime_auth_material(
     config: Any,
     *,
     need_terraform: bool,
-    auto_bootstrap: bool = False,
 ) -> None:
-    def _export_material_to_env(material: RuntimeAuthCacheMaterial) -> None:
-        os.environ["NEBIUS_SA_ID"] = material.service_account_id
-        os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = material.auth_public_key_id
-        os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] = material.private_key_pem
-        os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(material.private_key_file)
-        if material.s3_access_key_id:
-            os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = material.s3_access_key_id
-            os.environ["AWS_ACCESS_KEY_ID"] = material.s3_access_key_id
-        if material.s3_secret_access_key:
-            os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
-            os.environ["AWS_SECRET_ACCESS_KEY"] = material.s3_secret_access_key
-
-    missing = _runtime_auth_missing_envs(
-        need_terraform=need_terraform,
-    )
+    _capture_runtime_auth_operator_environment()
     project_id = str(config.client_info.nebius.project_id).strip()
-    client_name = str(config.client_info.client_name).strip()
-    loaded_from_cache = False
-    if missing:
-        loaded_from_cache = _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
-        missing = _runtime_auth_missing_envs(
-            need_terraform=need_terraform,
-        )
-    if not missing and loaded_from_cache:
-        status = _runtime_auth_profile_status(
-            project_id=project_id,
-            client_name=client_name,
-            profile=None,
-            endpoint=None,
-            sdk_config_file=None,
-        )
-        recreate_reason = _runtime_auth_profile_recreate_reason(status)
-        if recreate_reason:
-            if not auto_bootstrap:
-                raise RuntimeError(
-                    "Cached runtime auth profile is stale: "
-                    + recreate_reason
-                    + "\nRun `nebius-cxcli auth --project-id "
-                    + project_id
-                    + " --client-name "
-                    + client_name
-                    + " --recreate`, or rerun with --auto-auth-bootstrap."
-                )
-            console.print(
-                f"{warning_markup('WARNING:', bold=True)} Cached runtime auth profile is stale; "
-                f"recreating because {recreate_reason}."
-            )
-            material, _ = _create_or_recreate_runtime_auth_profile(
-                project_id=project_id,
-                client_name=client_name,
-                recreate=True,
-                profile=None,
-                endpoint=None,
-                sdk_config_file=None,
-            )
-            _export_material_to_env(material)
-            _wait_for_runtime_auth_token_ready(material)
-            missing = _runtime_auth_missing_envs(
-                need_terraform=need_terraform,
-            )
-    if missing:
-        if not auto_bootstrap:
-            raise RuntimeError(
-                "Missing runtime auth environment values:\n  - "
-                + "\n  - ".join(sorted(missing))
-                + "\nSet these variables explicitly (or provide NEBIUS_AUTH_CREDENTIALS_FILE), "
-                "or rerun with --auto-auth-bootstrap."
-            )
-        material, created = _create_or_recreate_runtime_auth_profile(
-            project_id=project_id,
-            client_name=client_name,
-            recreate=False,
-            profile=None,
-            endpoint=None,
-            sdk_config_file=None,
-        )
-        _export_material_to_env(material)
-        if created:
-            _wait_for_runtime_auth_token_ready(material)
+    client_name = str(config.client_info.client_name).strip() or "project"
+    if not project_id:
+        raise RuntimeError("Cannot authenticate nebius-cxcli without an exact project_id")
+    already_ready = _RUNTIME_AUTH_READY_PROJECTS.get(project_id, False)
+    if (
+        project_id in _RUNTIME_AUTH_READY_PROJECTS
+        and (already_ready or not need_terraform)
+        and os.environ.get(_RUNTIME_AUTH_ACTIVE_PROJECT_ENV) == project_id
+    ):
+        return
 
-        # Handle stale runtime-auth caches created before S3 key fields existed.
-        still_missing = _runtime_auth_missing_envs(
-            need_terraform=need_terraform,
-        )
-        if still_missing:
-            material, _ = _create_or_recreate_runtime_auth_profile(
-                project_id=project_id,
-                client_name=client_name,
-                recreate=True,
-                profile=None,
-                endpoint=None,
-                sdk_config_file=None,
-            )
-            _export_material_to_env(material)
-            _wait_for_runtime_auth_token_ready(material)
-            still_missing = _runtime_auth_missing_envs(
-                need_terraform=need_terraform,
-            )
-            if still_missing:
-                raise RuntimeError(
-                    "Runtime auth bootstrap did not provide required values:\n  - "
-                    + "\n  - ".join(sorted(still_missing))
-                    + "\nRun `nebius-cxcli auth --project-id "
-                    + project_id
-                    + " --client-name "
-                    + client_name
-                    + " --recreate` and retry."
-                )
+    material, created = _create_or_recreate_runtime_auth_profile(
+        project_id=project_id,
+        client_name=client_name,
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+    try:
+        _wait_for_runtime_auth_token_ready(material)
+    except Exception as exc:
+        # A freshly uploaded key may return the same not-found signal while it
+        # propagates. Its bounded readiness failure must remain recoverable and
+        # must not create a second cloud key. Automatic rotation is reserved for
+        # a previously completed cached key that is now proven deleted.
+        if created or not _runtime_auth_error_requires_rotation(exc):
+            raise
         console.print(
-            "[green]Auto-bootstrapped runtime auth[/green] "
-            "(service account + Object Storage key + auth key) for this command run."
-            if created
-            else "[green]Loaded runtime auth from cache[/green] for this command run."
+            f"{warning_markup('WARNING:', bold=True)} Canonical runtime authorized key is "
+            "no longer usable; rotating it with the active operator credentials."
         )
+        material, _ = _create_or_recreate_runtime_auth_profile(
+            project_id=project_id,
+            client_name=client_name,
+            recreate=True,
+            profile=None,
+            endpoint=None,
+            sdk_config_file=None,
+        )
+        _wait_for_runtime_auth_token_ready(material)
 
-    if need_terraform and not os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"):
-        _ensure_private_key_file_env()
+    if need_terraform:
+        material = _ensure_runtime_auth_s3_material(material)
+    _export_runtime_auth_material(material)
+    _RUNTIME_AUTH_READY_PROJECTS[project_id] = need_terraform or already_ready
+    if created:
+        console.print(
+            "[green]Created canonical Nebius project authentication[/green] "
+            f"({_RUNTIME_SERVICE_ACCOUNT_NAME}, editor)."
+        )
 
 
 def _mysterybox_eso_service_account_description() -> str:
@@ -49723,14 +50136,35 @@ def _mysterybox_eso_service_account_description() -> str:
 
 
 @contextmanager
-def _operator_auth_env_without_runtime_auth():
-    """Avoid using Terraform runtime service-account env for operator IAM bootstrap."""
+def _operator_auth_env_without_runtime_auth(
+    *, project_id: str | None = None, client_name: str = "project"
+):
+    """Restore captured operator auth while suppressing cxcli runtime identity."""
+    snapshot = _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
+    if snapshot is not None:
+        with _temporary_env(
+            {name: snapshot.get(name) or "" for name in _RUNTIME_AUTH_OPERATOR_ENV_KEYS}
+        ):
+            yield
+        return
+
     runtime_auth_keys = (
         "NEBIUS_SA_ID",
         "NEBIUS_AUTH_PUBLIC_KEY_ID",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM",
     )
+    is_cxcli_runtime = bool(os.environ.get(_RUNTIME_AUTH_ACTIVE_PROJECT_ENV))
+    if project_id and not is_cxcli_runtime:
+        cached = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+        is_cxcli_runtime = bool(
+            cached is not None
+            and os.environ.get("NEBIUS_SA_ID") == cached.service_account_id
+            and os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID") == cached.auth_public_key_id
+        )
+    if not is_cxcli_runtime:
+        yield
+        return
     saved = {key: os.environ.get(key) for key in runtime_auth_keys}
     for key in runtime_auth_keys:
         os.environ.pop(key, None)
@@ -49761,6 +50195,8 @@ def _ensure_mysterybox_eso_service_account_identity(*, project_id: str):
                 profile=None,
                 endpoint=None,
                 config_file=None,
+                prefer_operator_auth=True,
+                allow_mutation=True,
                 allow_cli_token=True,
             )
     except Exception as exc:
@@ -50986,7 +51422,6 @@ def _ensure_mysterybox_eso_credentials_secret(
     *,
     spec: Mapping[str, Any],
     extra_env: dict[str, str] | None,
-    auto_auth_bootstrap: bool,
     fresh_credentials: MysteryBoxEsoCredentials | None,
 ) -> MysteryBoxEsoCredentials | None:
     project_id = str(config.client_info.nebius.project_id).strip()
@@ -51004,29 +51439,21 @@ def _ensure_mysterybox_eso_credentials_secret(
     credentials = _mysterybox_eso_credentials_from_json(raw_credentials)
     replacing_stale_credentials = False
 
-    if raw_credentials is not None and credentials is None and not auto_auth_bootstrap:
-        raise RuntimeError(
-            f"ESO MysteryBox credential Secret {label} exists but does not contain "
-            "valid Subject Credentials JSON. Rerun with --auto-auth-bootstrap so cxcli "
-            "can create a fresh authorized key and replace the runtime Secret."
-        )
-
     if credentials is not None:
         stale_reasons: list[str] = []
-        if auto_auth_bootstrap:
-            identity = _ensure_mysterybox_eso_service_account_identity(project_id=project_id)
-            if identity.roles_created:
-                console.print(
-                    "[green]Granted MysteryBox payload viewer role[/green] "
-                    f"to {_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME} for ESO."
-                )
-            if credentials.service_account_id != identity.service_account_id:
-                stale_reasons.append(
-                    "the Secret references service account "
-                    f"'{credentials.service_account_id}', but "
-                    f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}' is "
-                    f"'{identity.service_account_id}'"
-                )
+        identity = _ensure_mysterybox_eso_service_account_identity(project_id=project_id)
+        if identity.roles_created:
+            console.print(
+                "[green]Granted MysteryBox payload viewer role[/green] "
+                f"to {_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME} for ESO."
+            )
+        if credentials.service_account_id != identity.service_account_id:
+            stale_reasons.append(
+                "the Secret references service account "
+                f"'{credentials.service_account_id}', but "
+                f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}' is "
+                f"'{identity.service_account_id}'"
+            )
 
         try:
             with _mysterybox_eso_operator_auth_env():
@@ -51052,27 +51479,12 @@ def _ensure_mysterybox_eso_credentials_secret(
             )
             return fresh_credentials
 
-        if not auto_auth_bootstrap:
-            raise RuntimeError(
-                f"ESO MysteryBox credential Secret {label} is stale: "
-                + "; ".join(stale_reasons)
-                + ". Rerun with --auto-auth-bootstrap so cxcli can create a fresh "
-                "authorized key and replace the runtime Secret."
-            )
         console.print(
             f"{warning_markup('WARNING:', bold=True)} ESO MysteryBox credential Secret "
             f"{namespace}/{name} is stale; replacing it because " + "; ".join(stale_reasons) + "."
         )
         replacing_stale_credentials = True
         credentials = None
-
-    if credentials is None and raw_credentials is None and not auto_auth_bootstrap:
-        raise RuntimeError(
-            f"ESO MysteryBox credential Secret {label} is missing. Rerun with "
-            "--auto-auth-bootstrap so cxcli can create "
-            f"'{_MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME}', upload an authorized public key, "
-            "and store Subject Credentials in the cluster Secret."
-        )
 
     if credentials is None:
         if raw_credentials is not None and not replacing_stale_credentials:
@@ -51100,7 +51512,6 @@ def _ensure_mysterybox_eso_runtime_before_flux(
     *,
     extra_env: dict[str, str] | None,
     target_ref: str | None = None,
-    auto_auth_bootstrap: bool,
 ) -> None:
     if not mysterybox_eso_enabled(config, target_ref=target_ref):
         return
@@ -51111,7 +51522,6 @@ def _ensure_mysterybox_eso_runtime_before_flux(
             config,
             spec=spec,
             extra_env=extra_env,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             fresh_credentials=fresh_credentials,
         )
     probe_namespace = specs[0]["namespace"] if specs else "external-secrets"
@@ -51140,12 +51550,11 @@ def _ensure_backend_s3_env_aliases() -> None:
         os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = secret_key
 
 
-def _ensure_terraform_backend_ready(config: Any, *, auto_auth_bootstrap: bool) -> None:
+def _ensure_terraform_backend_ready(config: Any) -> None:
     _configure_quiet_native_logs()
     _ensure_runtime_auth_material(
         config,
         need_terraform=True,
-        auto_bootstrap=auto_auth_bootstrap,
     )
     _ensure_backend_s3_env_aliases()
     settings = backend_settings_from_config(config)
@@ -53358,6 +53767,23 @@ def _runtime_auth_env_available() -> bool:
     )
 
 
+def _renewable_runtime_auth_env_available() -> bool:
+    credentials_file = _non_empty_text(os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"))
+    if credentials_file:
+        path = Path(credentials_file).expanduser()
+        if path.exists() and path.is_file():
+            return True
+    service_account_values = all(
+        _non_empty_text(os.environ.get(name))
+        for name in ("NEBIUS_SA_ID", "NEBIUS_AUTH_PUBLIC_KEY_ID")
+    )
+    private_key_file = _non_empty_text(os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"))
+    if not service_account_values or not private_key_file:
+        return False
+    key_path = Path(private_key_file).expanduser()
+    return key_path.exists() and key_path.is_file()
+
+
 def _iso8601_utc(value: object | None) -> str | None:
     if not isinstance(value, datetime):
         return None
@@ -53379,6 +53805,7 @@ def _mk8s_token_exec_command(
     project_id: str,
     client_name: str,
     endpoint: str | None,
+    require_renewable_auth: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     args = ["mk8s-token"]
     if project_id:
@@ -53387,6 +53814,11 @@ def _mk8s_token_exec_command(
         args.extend(["--client-name", client_name])
     if endpoint:
         args.extend(["--endpoint", endpoint])
+    if require_renewable_auth:
+        args.append("--require-renewable-auth")
+        # A long-running upgrade must not re-enter an arbitrary older cxcli
+        # found earlier on PATH when kubectl later invokes this exec plugin.
+        return sys.executable, ("-m", "nebius_cxcli", *args)
     cli_path = shutil.which("nebius-cxcli")
     if cli_path:
         return cli_path, tuple(args)
@@ -53461,10 +53893,18 @@ def _close_mk8s_exec_sdk(
 
 
 class _Mk8sExecAuthSdk:
-    def __init__(self, *, parent_id: str | None, endpoint: str | None, context: str) -> None:
+    def __init__(
+        self,
+        *,
+        parent_id: str | None,
+        endpoint: str | None,
+        context: str,
+        require_renewable_auth: bool = False,
+    ) -> None:
         self.parent_id = parent_id
         self.endpoint = endpoint
         self.context = context
+        self.require_renewable_auth = require_renewable_auth
 
     def get_token_sync(self, *, timeout: float) -> object:
         last_timeout: TimeoutError | None = None
@@ -53492,6 +53932,7 @@ class _Mk8sExecAuthSdk:
                         parent_id=self.parent_id,
                         endpoint=self.endpoint,
                         context=self.context,
+                        require_renewable_auth=self.require_renewable_auth,
                     )
                     attempt_result["sdk"] = local_sdk
                     attempt_result["credential"] = local_sdk.get_token_sync(
@@ -53577,9 +54018,18 @@ class _Mk8sExecAuthSdk:
 
 
 def _init_mk8s_exec_auth_sdk(
-    *, parent_id: str | None, endpoint: str | None, context: str
+    *,
+    parent_id: str | None,
+    endpoint: str | None,
+    context: str,
+    require_renewable_auth: bool = False,
 ) -> _Mk8sExecAuthSdk:
-    return _Mk8sExecAuthSdk(parent_id=parent_id, endpoint=endpoint, context=context)
+    return _Mk8sExecAuthSdk(
+        parent_id=parent_id,
+        endpoint=endpoint,
+        context=context,
+        require_renewable_auth=require_renewable_auth,
+    )
 
 
 _MK8S_EXEC_CREDENTIAL_CACHE_SCHEMA = "nebius-cxcli/mk8s-exec-credential-cache-v1"
@@ -53593,6 +54043,7 @@ def _mk8s_exec_credential_binding_sha256(
     project_id: str,
     client_name: str,
     endpoint: str | None,
+    require_renewable_auth: bool = False,
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -53600,6 +54051,7 @@ def _mk8s_exec_credential_binding_sha256(
                 "project_id": project_id,
                 "client_name": client_name,
                 "endpoint": endpoint or "",
+                "require_renewable_auth": require_renewable_auth,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -53729,13 +54181,20 @@ def _acquire_mk8s_exec_credential_status(
     project_id: str,
     client_name: str,
     endpoint: str | None,
+    require_renewable_auth: bool = False,
 ) -> dict[str, str]:
-    if not _runtime_auth_env_available() and project_id and client_name:
+    auth_env_available = (
+        _renewable_runtime_auth_env_available()
+        if require_renewable_auth
+        else _runtime_auth_env_available()
+    )
+    if not auth_env_available and project_id and client_name:
         _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
     sdk = _init_mk8s_exec_auth_sdk(
         parent_id=project_id or None,
         endpoint=endpoint,
         context="MK8s exec auth",
+        require_renewable_auth=require_renewable_auth,
     )
     try:
         token = sdk.get_token_sync(timeout=20.0)
@@ -53758,17 +54217,20 @@ def _mk8s_exec_credential_status(
     client_name: str,
     endpoint: str | None,
     cache_file: Path | None,
+    require_renewable_auth: bool = False,
 ) -> dict[str, str]:
     if cache_file is None:
         return _acquire_mk8s_exec_credential_status(
             project_id=project_id,
             client_name=client_name,
             endpoint=endpoint,
+            require_renewable_auth=require_renewable_auth,
         )
     binding_sha256 = _mk8s_exec_credential_binding_sha256(
         project_id=project_id,
         client_name=client_name,
         endpoint=endpoint,
+        require_renewable_auth=require_renewable_auth,
     )
     with _locked_mk8s_exec_credential_cache(cache_file):
         cached = _read_mk8s_exec_credential_cache(
@@ -53798,6 +54260,7 @@ def _mk8s_exec_credential_status(
                 project_id=project_id,
                 client_name=client_name,
                 endpoint=endpoint,
+                require_renewable_auth=require_renewable_auth,
             )
         except Exception:
             fallback_now = datetime.now(UTC)
@@ -53927,6 +54390,7 @@ def _mk8s_cluster_handoff_spec_for_identity(
     client_name: str,
     cluster_id: str,
     access: str,
+    require_renewable_auth: bool = False,
 ) -> _Mk8sKubeconfigSpec:
     try:
         from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, GetClusterRequest
@@ -53937,7 +54401,12 @@ def _mk8s_cluster_handoff_spec_for_identity(
 
     normalized_project_id = str(project_id or "").strip()
     normalized_client_name = str(client_name or "").strip()
-    if not _runtime_auth_env_available() and normalized_project_id and normalized_client_name:
+    auth_env_available = (
+        _renewable_runtime_auth_env_available()
+        if require_renewable_auth
+        else _runtime_auth_env_available()
+    )
+    if not auth_env_available and normalized_project_id and normalized_client_name:
         _runtime_auth_cache_load(
             project_id=normalized_project_id,
             client_name=normalized_client_name,
@@ -53947,16 +54416,23 @@ def _mk8s_cluster_handoff_spec_for_identity(
         parent_id=normalized_project_id or None,
         endpoint=endpoint_override,
         context="MK8s cluster handoff",
+        require_renewable_auth=require_renewable_auth,
     )
+    request_kwargs = bounded_nebius_request_kwargs() if require_renewable_auth else {}
     try:
-        cluster = ClusterServiceClient(sdk).get(GetClusterRequest(id=cluster_id)).wait()
+        cluster = (
+            ClusterServiceClient(sdk).get(GetClusterRequest(id=cluster_id), **request_kwargs).wait()
+        )
     except Exception as exc:
         raise RuntimeError(
             f"Failed to resolve MK8s cluster '{cluster_id}' for cluster handoff kubeconfig generation."
         ) from exc
     finally:
         with suppress(Exception):
-            sdk.sync_close()
+            if require_renewable_auth:
+                sdk.sync_close(timeout=_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS)
+            else:
+                sdk.sync_close()
 
     metadata = getattr(cluster, "metadata", None)
     status = getattr(cluster, "status", None)
@@ -53984,6 +54460,7 @@ def _mk8s_cluster_handoff_spec_for_identity(
         project_id=normalized_project_id,
         client_name=normalized_client_name,
         endpoint=endpoint_override,
+        require_renewable_auth=require_renewable_auth,
     )
     return _Mk8sKubeconfigSpec(
         cluster_entry_name=f"{entry_base}-cluster",
@@ -56441,7 +56918,6 @@ def _deploy_generated_artifacts(
     paths: ProjectPaths,
     manifest: Mapping[str, Any],
     *,
-    auto_auth_bootstrap: bool,
     skip_validations: bool,
     skip_validation_kinds: set[str],
     requested_target_ref: str | None = None,
@@ -56486,7 +56962,6 @@ def _deploy_generated_artifacts(
     mysterybox_payload_env = _run_deploy_preflight(
         config,
         paths,
-        auto_auth_bootstrap=auto_auth_bootstrap,
         manifest=manifest,
     )
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
@@ -56617,7 +57092,6 @@ def _deploy_generated_artifacts(
                         config,
                         extra_env=kube_env,
                         target_ref=target_ref,
-                        auto_auth_bootstrap=auto_auth_bootstrap,
                     )
                     _ensure_grafana_runtime_before_flux(
                         config,
@@ -56752,7 +57226,6 @@ def _deploy_generated_artifacts(
             _ensure_mysterybox_eso_runtime_before_flux(
                 config,
                 extra_env=None,
-                auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _ensure_soperator_notifier_runtime_before_flux(
@@ -57024,13 +57497,11 @@ def _run_deploy_preflight(
     config: Any,
     paths: ProjectPaths,
     *,
-    auto_auth_bootstrap: bool,
     manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     return _run_generated_bundle_validation(
         config,
         paths,
-        auto_auth_bootstrap=auto_auth_bootstrap,
         title="Deploy preflight",
         quota_phase="deploy",
         flux_command_name="deploy",
@@ -57043,7 +57514,6 @@ def _run_generated_bundle_validation(
     config: Any,
     paths: ProjectPaths,
     *,
-    auto_auth_bootstrap: bool,
     title: str,
     quota_phase: str,
     flux_command_name: str,
@@ -57128,10 +57598,7 @@ def _run_generated_bundle_validation(
         if terraform_required:
             progress.run(
                 "backend",
-                lambda: _ensure_terraform_backend_ready(
-                    config,
-                    auto_auth_bootstrap=auto_auth_bootstrap,
-                ),
+                lambda: _ensure_terraform_backend_ready(config),
             )
             runtime_env = _terraform_runtime_env(config)
             progress.run(
@@ -57365,12 +57832,11 @@ def _destroy_generated_artifacts(
     paths: ProjectPaths,
     manifest: Mapping[str, Any],
     *,
-    auto_auth_bootstrap: bool,
     yes: bool = False,
 ) -> None:
     terraform_required = _config_has_enabled_infra_components(config)
     if terraform_required:
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
     if _destroy_should_delete_rendered_flux_first(config, manifest):
         try:
             _destroy_rendered_flux_bundle(config, paths, manifest, all_targets=True)
@@ -57391,7 +57857,6 @@ def _destroy_generated_artifacts(
         _run_terraform_destroy_with_recovery(
             config,
             paths,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             yes=yes,
             initialize=True,
             status_watchers=status_watchers or None,
@@ -57493,7 +57958,6 @@ def _run_terraform_destroy_with_recovery(
     config: Any,
     paths: ProjectPaths,
     *,
-    auto_auth_bootstrap: bool,
     yes: bool,
     initialize: bool = True,
     status_watchers: list[dict[str, str]] | None = None,
@@ -57514,7 +57978,6 @@ def _run_terraform_destroy_with_recovery(
         lock_info = _unlock_terraform_state_lock(
             config,
             paths,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             force=False,
         )
         if lock_info is not None:
@@ -57649,7 +58112,6 @@ def _unlock_terraform_state_lock(
     config: Any,
     paths: ProjectPaths,
     *,
-    auto_auth_bootstrap: bool,
     force: bool,
 ) -> TerraformStateLockInfo | None:
     if not paths.infra_dir.exists():
@@ -57657,7 +58119,7 @@ def _unlock_terraform_state_lock(
             f"Rendered infra directory does not exist: {paths.infra_dir}. "
             "Rerun `nebius-cxcli render <config.yaml>` first."
         )
-    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+    _ensure_terraform_backend_ready(config)
     runtime_env = _terraform_runtime_env(config)
     settings = backend_settings_from_config(config)
     lock_info = read_state_lock_info(settings, extra_env=runtime_env)
@@ -57807,23 +58269,6 @@ def _github_environment_name_for_identity(*, client_name: str, project_id: str) 
         return build_github_environment_name(client_name=client_name, project_id=project_id)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
-
-
-def _ci_github_secrets_payload(
-    *,
-    service_account_id: str,
-    auth_public_key_id: str,
-    auth_private_key_pem: str,
-    s3_access_key_id: str,
-    s3_secret_access_key: str,
-) -> dict[str, str]:
-    return {
-        "NEBIUS_SA_ID": service_account_id,
-        "NEBIUS_AUTH_PUBLIC_KEY_ID": auth_public_key_id,
-        "NEBIUS_AUTH_PRIVATE_KEY_PEM": auth_private_key_pem,
-        "NEBIUS_S3_ACCESS_KEY_ID": s3_access_key_id,
-        "NEBIUS_S3_SECRET_ACCESS_KEY": s3_secret_access_key,
-    }
 
 
 def _resolve_github_repo_slug(
@@ -57982,6 +58427,7 @@ def _sync_runtime_auth_profile_to_ci_environment(
     )
 
     ci_secrets: dict[str, str] = {
+        _RUNTIME_AUTH_ACTIVE_PROJECT_ENV: material.project_id,
         "NEBIUS_SA_ID": material.service_account_id,
         "NEBIUS_AUTH_PUBLIC_KEY_ID": material.auth_public_key_id,
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": material.private_key_pem,
@@ -57998,95 +58444,6 @@ def _sync_runtime_auth_profile_to_ci_environment(
         ci_secrets=ci_secrets,
     )
     return repo_slug, github_environment, updated
-
-
-def _auto_bootstrap_ci_auth_and_secrets(
-    *,
-    project_id: str,
-    github_environment: str,
-    repo_root: Path,
-    service_account_name: str,
-    service_account_description: str,
-    role_ids: list[str],
-    auth_key_description: str,
-    access_key_description: str,
-    github_repo: str | None,
-    github_token_env: str,
-    profile: str | None,
-    endpoint: str | None,
-    sdk_config_file: Path | None,
-) -> None:
-    github_token = read_github_token(preferred_env=github_token_env)
-    if not github_token:
-        raise RuntimeError(
-            "Automatic CI auth bootstrap requires a GitHub token. "
-            f"No token found in ${github_token_env}, $GH_TOKEN, or $GITHUB_TOKEN."
-        )
-
-    repo_slug = _resolve_github_repo_slug(explicit_repo_slug=github_repo, repo_root=repo_root)
-    ensure_github_environment(
-        repo_slug=repo_slug,
-        token=github_token,
-        environment_name=github_environment,
-    )
-
-    presence = environment_secrets_presence(
-        repo_slug=repo_slug,
-        token=github_token,
-        environment_name=github_environment,
-        names=[*NEBIUS_CI_SECRET_KEYS, FLUX_SECRET_KEY],
-    )
-    nebius_ready = all(presence.get(name, False) for name in NEBIUS_CI_SECRET_KEYS)
-    flux_ready = presence.get(FLUX_SECRET_KEY, False)
-
-    if nebius_ready and flux_ready:
-        console.print(
-            "CI auth secrets already configured in "
-            f"{repo_slug} environment '{github_environment}'; skipping auth bootstrap."
-        )
-        return
-
-    if nebius_ready and not flux_ready:
-        updated = upsert_environment_secrets(
-            repo_slug=repo_slug,
-            token=github_token,
-            environment_name=github_environment,
-            secrets={FLUX_SECRET_KEY: github_token},
-        )
-        console.print(
-            "Configured missing GitHub environment secret(s) in "
-            f"{repo_slug} environment '{github_environment}' ({len(updated)} secret(s))"
-        )
-        return
-
-    result = bootstrap_ci_service_account(
-        project_id=project_id,
-        service_account_name=service_account_name,
-        service_account_description=service_account_description,
-        role_ids=role_ids,
-        auth_key_description=auth_key_description,
-        access_key_description=access_key_description,
-        profile=profile,
-        endpoint=endpoint,
-        config_file=sdk_config_file,
-    )
-    ci_secrets = _ci_github_secrets_payload(
-        service_account_id=result.service_account_id,
-        auth_public_key_id=result.auth_public_key_id,
-        auth_private_key_pem=result.auth_private_key_pem,
-        s3_access_key_id=result.s3_access_key_id,
-        s3_secret_access_key=result.s3_secret_access_key,
-    )
-    updated = _sync_github_ci_secrets(
-        repo_slug=repo_slug,
-        github_environment=github_environment,
-        github_token=github_token,
-        ci_secrets=ci_secrets,
-    )
-    console.print(
-        "Bootstrapped and synced CI auth secrets to "
-        f"{repo_slug} environment '{github_environment}' ({len(updated)} secret(s))"
-    )
 
 
 @dataclass(frozen=True)
@@ -61224,6 +61581,10 @@ def _resolve_soperator_onboard_config_target(
                 f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
                 "Pass the existing config.yaml directly or choose a different Nebius scope."
             )
+        _ensure_project_auth_identity(
+            project_id=existing_project_id,
+            client_name=_existing_client_name,
+        )
         if interactive:
             if not _confirm_soperator_onboard_existing_config(config_path=config_path):
                 console.print("No changes applied.")
@@ -61237,6 +61598,10 @@ def _resolve_soperator_onboard_config_target(
         )
 
     resolved_client_name = _client_name_or_prompt(client_name, interactive=interactive)
+    _ensure_project_auth_identity(
+        project_id=resolved_project_id,
+        client_name=resolved_client_name,
+    )
     resolved_region_id = _region_or_prompt(region_id, interactive=interactive)
     resolved_email = _optional_email_or_prompt(email, interactive=interactive)
     bootstrap_result = _scaffold_instance(
@@ -61574,6 +61939,10 @@ def create_command(
         resolved_client_name = _client_name_or_prompt(
             client_name,
             interactive=interactive_mode,
+        )
+        _ensure_project_auth_identity(
+            project_id=resolved_project_id,
+            client_name=resolved_client_name,
         )
         resolved_region_id = _region_or_prompt(
             region_id,
@@ -63571,6 +63940,11 @@ def ext_soperator_backup_command(
                 project_id=project_id,
                 client_name=client_name,
             )
+            if _non_empty_text(project_id):
+                _ensure_project_auth_identity(
+                    project_id=str(project_id),
+                    client_name=command_client_name,
+                )
             with _command_status(
                 "[cyan]Creating restore-capable external Soperator backup...[/cyan]",
                 enabled=not dry_run,
@@ -63900,6 +64274,11 @@ def ext_soperator_discover_command(
                 project_id=project_id,
                 client_name=client_name,
             )
+            if _non_empty_text(project_id):
+                _ensure_project_auth_identity(
+                    project_id=str(project_id),
+                    client_name=command_client_name,
+                )
             payload = _standalone_external_soperator_discovery_payload(
                 client_name=command_client_name,
                 tenant_id=tenant_id,
@@ -64793,10 +65172,21 @@ _SOPERATOR_MIGRATION_STATUS_READY_RE = re.compile(
 _SOPERATOR_MIGRATION_STATUS_ROLLOUT_GROUP_RE = re.compile(
     r"\b(?P<name>[A-Za-z0-9_.-]+):(?=(?:[A-Z][A-Za-z0-9_-]*|status unavailable))"
 )
+(
+    _SOPERATOR_MK8S_STATUS_CURRENT_LABEL,
+    _SOPERATOR_MK8S_STATUS_UPDATING_LABEL,
+    _SOPERATOR_MK8S_STATUS_NOT_STARTED_LABEL,
+) = _soperator_migration.SOPERATOR_MK8S_NODE_GROUP_STATUS_COLUMNS
+
 _SOPERATOR_MIGRATION_STATUS_PROVIDER_HEADER_RE = re.compile(
     r"^(?P<header>"
-    r"group[ \t]+state[ \t]+k8s[ \t]+total[ \t]+provider-current[ \t]+"
-    r"provider-updating[ \t]+provider-outdated[ \t]+ready/current[ \t]+event"
+    r"group[ \t]+state[ \t]+k8s[ \t]+total[ \t]+"
+    + re.escape(_SOPERATOR_MK8S_STATUS_CURRENT_LABEL)
+    + r"[ \t]+"
+    + re.escape(_SOPERATOR_MK8S_STATUS_UPDATING_LABEL)
+    + r"[ \t]+"
+    + re.escape(_SOPERATOR_MK8S_STATUS_NOT_STARTED_LABEL)
+    + r"[ \t]+ready/current[ \t]+event"
     r")[ \t]*$",
     re.MULTILINE,
 )
@@ -64870,13 +65260,22 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("Provider node groups", "[bold cyan]Provider node groups[/bold cyan]"),
         ("source=Nebius API", "[dim]source=Nebius API[/dim]"),
         ("total=", "[bold cyan]total[/bold cyan]="),
-        ("provider-current=", "[bold cyan]provider-current[/bold cyan]="),
-        ("provider-updating=", "[bold yellow]provider-updating[/bold yellow]="),
-        ("provider-outdated=", "[bold cyan]provider-outdated[/bold cyan]="),
+        ("ready/current=", "[bold cyan]ready/current[/bold cyan]="),
+        (
+            f"{_SOPERATOR_MK8S_STATUS_CURRENT_LABEL}=",
+            f"[bold cyan]{_SOPERATOR_MK8S_STATUS_CURRENT_LABEL}[/bold cyan]=",
+        ),
+        (
+            f"{_SOPERATOR_MK8S_STATUS_UPDATING_LABEL}=",
+            f"[bold yellow]{_SOPERATOR_MK8S_STATUS_UPDATING_LABEL}[/bold yellow]=",
+        ),
+        (
+            f"{_SOPERATOR_MK8S_STATUS_NOT_STARTED_LABEL}=",
+            f"[bold cyan]{_SOPERATOR_MK8S_STATUS_NOT_STARTED_LABEL}[/bold cyan]=",
+        ),
         ("upgraded=", "[bold cyan]upgraded[/bold cyan]="),
         ("upgrading=", "[bold yellow]upgrading[/bold yellow]="),
         ("remaining=", "[bold cyan]remaining[/bold cyan]="),
-        ("ready/current=", "[bold cyan]ready/current[/bold cyan]="),
         ("PROVISIONING", "[bold yellow]PROVISIONING[/bold yellow]"),
         ("RUNNING", "[green]RUNNING[/green]"),
         ("DELETING", "[bold red]DELETING[/bold red]"),
@@ -65885,20 +66284,23 @@ def _external_soperator_journal_node_group_transitions(
     for group in raw_groups:
         if not isinstance(group, Mapping) or group.get("created") is not True:
             continue
-        operation = group.get("operation")
-        verified = (
-            operation.get("verified_postcondition") if isinstance(operation, Mapping) else None
-        )
         group_id = _non_empty_text(group.get("id"))
         group_name = _non_empty_text(group.get("name"))
         if (
             not group_id
             or not group_name
-            or not isinstance(operation, Mapping)
-            or operation.get("attempt_state") != "provider-terminal"
-            or not isinstance(verified, Mapping)
-            or _non_empty_text(verified.get("node_group_id")) != group_id
-            or _non_empty_text(verified.get("name")) != group_name
+            or not (
+                _soperator_migration._controller_bridge_node_group_create_terminal_proof_is_exact(  # noqa: SLF001
+                    journal=bridge,
+                    record=group,
+                    checkpoint=checkpoint,
+                )
+                or _soperator_migration._controller_bridge_node_group_create_reconciliation_candidate(  # noqa: SLF001
+                    checkpoint=checkpoint,
+                    journal=bridge,
+                    record=group,
+                )
+            )
         ):
             raise RuntimeError(
                 "recovery-required: created controller bridge node-group identity lacks an "
@@ -66479,7 +66881,7 @@ def _locked_upgrade_path_plan_lines(
         f"Campaign ID: {_non_empty_text(upgrade_path.get('campaign_id')) or 'unknown'}",
         "Campaign locked: yes",
         f"Campaign fingerprint: {fingerprint}",
-        "Campaign final target - Kubernetes path: "
+        "Locked campaign Kubernetes path: "
         f"{_non_empty_text(upgrade_path.get('source_k8s_version')) or 'unknown'} -> "
         f"{_non_empty_text(upgrade_path.get('target_k8s_version')) or 'unknown'}",
     ]
@@ -66528,13 +66930,20 @@ def _locked_upgrade_path_plan_lines(
             segment_status = (
                 _non_empty_text(finding.get("status")) if isinstance(finding, Mapping) else ""
             )
+            segment_current_k8s = _non_empty_text(segment.get("current_k8s_version")) or "unknown"
+            segment_target_k8s = _non_empty_text(segment.get("target_k8s_version")) or "unknown"
+            segment_k8s_scope = (
+                f"Kubernetes remains {segment_current_k8s}"
+                if segment_current_k8s == segment_target_k8s
+                else f"Kubernetes {segment_current_k8s} -> {segment_target_k8s}"
+            )
             lines.append(
                 "- "
                 + (_non_empty_text(segment.get("id")) or "unknown-segment")
                 + ": "
-                + f"Kubernetes {_non_empty_text(segment.get('current_k8s_version')) or 'unknown'}"
-                + f" -> {_non_empty_text(segment.get('target_k8s_version')) or 'unknown'}; "
-                + f"rule={segment_rule or 'unmatched'}; status={segment_status or 'unknown'}"
+                + segment_k8s_scope
+                + f"; rule={segment_rule or 'unmatched'}; "
+                + f"status={segment_status or 'unknown'}"
             )
     recommended = upgrade_path.get("recommended_order")
     if isinstance(recommended, list) and recommended:
@@ -66577,10 +66986,12 @@ def _locked_upgrade_path_plan_lines(
                 or _non_empty_text(current_segment.get("id"))
             )
         )
+        current_k8s = _non_empty_text(current_segment.get("current_k8s_version")) or "unknown"
+        target_k8s = _non_empty_text(current_segment.get("target_k8s_version")) or "unknown"
         lines.append(
-            "Current segment scope: Kubernetes "
-            f"{_non_empty_text(current_segment.get('current_k8s_version')) or 'unknown'} -> "
-            f"{_non_empty_text(current_segment.get('target_k8s_version')) or 'unknown'}."
+            f"Current segment Kubernetes state: remains {current_k8s}."
+            if current_k8s == target_k8s
+            else f"Current segment Kubernetes hop: {current_k8s} -> {target_k8s}."
         )
     lines.append(
         "Remaining segments: " + (", ".join(remaining_titles) if remaining_titles else "none")
@@ -66947,27 +67358,34 @@ def _soperator_migration_execute_payload(
     payload: Mapping[str, Any],
     *,
     target_ref: str,
+    require_renewable_auth: bool = False,
 ) -> Iterator[Mapping[str, Any]]:
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     if not isinstance(target, Mapping):
         yield payload
         return
-    if _non_empty_text(target.get("kube_context")):
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
+    kube_context = _non_empty_text(target.get("kube_context"))
+    if kube_context and not require_renewable_auth:
         yield payload
         return
     cluster_id = _non_empty_text(target.get("cluster_id"))
+    if require_renewable_auth and kube_context and not cluster_id:
+        raise RuntimeError(
+            "External Soperator upgrade execution requires a cluster_id-backed renewable "
+            "MK8s handoff; a kube_context-only target cannot prove command-lifetime "
+            "Kubernetes credential renewal."
+        )
     if not cluster_id:
         yield payload
         return
 
-    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
-    if not _runtime_auth_env_available():
-        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
     spec = _mk8s_cluster_handoff_spec_for_identity(
         project_id=project_id,
         client_name=client_name,
         cluster_id=cluster_id,
         access=_non_empty_text(target.get("access")) or "external",
+        require_renewable_auth=require_renewable_auth,
     )
     with ExitStack() as stack:
         kube_root = Path(
@@ -67682,6 +68100,7 @@ def soperator_external_upgrade_command(
             _soperator_migration_execute_payload(
                 payload,
                 target_ref=target_ref,
+                require_renewable_auth=execute,
             )
         )
         lease_kube_context = _validate_external_soperator_kubernetes_uid_before_lease(
@@ -68422,7 +68841,9 @@ def soperator_external_upgrade_command(
             with (
                 _soperator_migration_status_emitter() as emit_status,
                 _soperator_migration_execute_payload(
-                    effective_payload, target_ref=target_ref
+                    effective_payload,
+                    target_ref=target_ref,
+                    require_renewable_auth=True,
                 ) as execution_payload,
             ):
 
@@ -68884,7 +69305,7 @@ def soperator_external_upgrade_command(
             if execution_result is None:
                 raise RuntimeError("External Soperator upgrade execution did not return a result.")
             for line in execution_result.lines:
-                console.print(line, soft_wrap=True)
+                console.print(_phase_validation_terminal_markup(line), soft_wrap=True)
             for line in post_migration_config_lines:
                 console.print(line, soft_wrap=True)
             if approve and execution_result.pending_phase != "none":
@@ -69300,9 +69721,7 @@ def component_remove_command(
     epilog=(
         "Examples: "
         "nebius-cxcli bootstrap-ci ./deployments/tenant/project/config.yaml "
-        "(reconciles .github/workflows + email config); "
-        "nebius-cxcli bootstrap-ci ./deployments/tenant/project/config.yaml --auth-bootstrap "
-        "(also provisions a CI service account, auth key, and OS access key); "
+        "(reconciles .github/workflows, email config, and canonical project auth secrets); "
         "nebius-cxcli bootstrap-ci ./config.yaml --github-repo acme/cluster-config --cli-ref main "
         "(customizes the CI workflow's repo and cxcli branch ref)."
     ),
@@ -69318,16 +69737,6 @@ def bootstrap_ci_command(
             ),
         ),
     ],
-    auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auth-bootstrap/--no-auth-bootstrap",
-            help=(
-                "Ensure Nebius CI service account + keys and sync GitHub environment auth secrets "
-                "(enabled by default). Email settings are reconciled from local `email --setup` on every run."
-            ),
-        ),
-    ] = True,
     github_repo: Annotated[
         str | None,
         typer.Option(
@@ -69384,22 +69793,23 @@ def bootstrap_ci_command(
             deployments_root=paths.deployments_dir,
         )
 
-        if auth_bootstrap:
-            _auto_bootstrap_ci_auth_and_secrets(
-                project_id=config.client_info.nebius.project_id,
-                github_environment=github_environment,
-                repo_root=workflow.repo_root,
-                service_account_name="nebius-cxcli-ci",
-                service_account_description="Service account used by nebius-cxcli CI automation",
-                role_ids=["editor"],
-                auth_key_description="nebius-cxcli CI authorized key",
-                access_key_description="nebius-cxcli CI Object Storage access key",
+        material = _runtime_auth_cache_material(
+            project_id=str(config.client_info.nebius.project_id),
+            client_name=str(config.client_info.client_name),
+        )
+        if material is None:
+            raise RuntimeError("Canonical runtime auth cache is missing after project preflight")
+        material = _ensure_runtime_auth_s3_material(material)
+        _export_runtime_auth_material(material)
+        _synced_repo, _synced_environment, synced_auth_secrets = (
+            _sync_runtime_auth_profile_to_ci_environment(
+                material=material,
+                client_name=str(config.client_info.client_name),
                 github_repo=github_repo,
                 github_token_env=github_token_env,
-                profile=None,
-                endpoint=None,
-                sdk_config_file=None,
+                repo_root_hint=workflow.repo_root,
             )
+        )
         email_sync = _sync_github_email_settings(
             repo_slug=resolved_github_repo,
             github_environment=github_environment,
@@ -69447,8 +69857,10 @@ def bootstrap_ci_command(
                 console.print(
                     "Local email settings are disabled and GitHub email settings are already absent."
                 )
-        if not auth_bootstrap:
-            console.print("Skipped Nebius CI auth bootstrap/secrets sync.")
+        console.print(
+            "Canonical Nebius auth secrets synced: "
+            f"{len(synced_auth_secrets)} secret(s)"
+        )
         console.print("CI bootstrap completed.")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -69743,13 +70155,6 @@ def ssh_jumphost_command(
             help="Optional SSH private key path. When omitted, ssh uses the agent/default keys.",
         ),
     ] = None,
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=("Automatically bootstrap runtime auth when Terraform output lookup needs it."),
-        ),
-    ] = True,
 ) -> None:
     """Manage day-2 SSH source CIDR access for a deployed ssh-jumphost.
 
@@ -69805,7 +70210,7 @@ def ssh_jumphost_command(
             select_component=select_ssh_jumphost_component,
             operation_label="SSH jump-host",
         )
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
         runtime_env = _terraform_runtime_env(config)
         terraform_outputs = terraform_output_json(paths.infra_dir, extra_env=runtime_env)
         public_ip = ssh_jumphost_public_ip_from_outputs(terraform_outputs, component_selection)
@@ -69979,16 +70384,6 @@ def wireguard_command(
             ),
         ),
     ] = False,
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=(
-                "All modes. Automatically bootstrap runtime auth when Terraform output "
-                "lookup needs it."
-            ),
-        ),
-    ] = True,
 ) -> None:
     """Manage WireGuard day-2 operations for a deployed wireguard-gw.
 
@@ -70061,7 +70456,7 @@ def wireguard_command(
             select_component=select_wireguard_component,
             operation_label="WireGuard",
         )
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
         runtime_env = _terraform_runtime_env(config)
         terraform_outputs = terraform_output_json(paths.infra_dir, extra_env=runtime_env)
         public_ip = wireguard_public_ip_from_outputs(terraform_outputs, component_selection)
@@ -70152,8 +70547,7 @@ def wireguard_command(
         "(checks state-derived readiness on already-rendered artifacts; runs Soperator schema + chart-render checks); "
         "nebius-cxcli validate-generated ./deployments/acme/generated --portable "
         "(extra portability checks for shipping the bundle to a different host); "
-        "nebius-cxcli validate-generated ./deployments/acme/generated --no-auto-auth-bootstrap "
-        "(skips silent service-account refresh, fails fast on missing auth)."
+        "Canonical project authentication is ensured before generated artifacts are readied."
     ),
 )
 def validate_generated_command(
@@ -70164,16 +70558,6 @@ def validate_generated_command(
             help=_GENERATED_PATH_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=(
-                "Automatically bootstrap runtime auth for generated-bundle "
-                "backend/Terraform validation when env vars are missing."
-            ),
-        ),
-    ] = True,
     portable: Annotated[
         bool,
         typer.Option(
@@ -70197,7 +70581,6 @@ def validate_generated_command(
         _run_generated_bundle_validation(
             config,
             paths,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             title="Generated artifact validation",
             quota_phase="validate-generated",
             flux_command_name="validate-generated",
@@ -71415,19 +71798,19 @@ def validate_sources_command(
 @app.command(
     "auth",
     short_help=(
-        "Manage runtime auth profile actions; use --project-config CONFIG_YAML or "
-        "--project-id, or omit both for global --validate-profile."
+        "Validate or rotate canonical project authentication; project-aware commands "
+        "create it automatically."
     ),
     epilog=(
         "Examples: "
         "nebius-cxcli auth --validate-profile "
-        "(checks the active Nebius SDK profile against $NEBIUS_SDK_PROFILE / nb config); "
-        "nebius-cxcli auth --project-config ./deployments/tenant/project/config.yaml --create "
-        "(provisions a per-project Terraform runtime service account, auth key, and OS access key, then writes back to config.yaml); "
+        "(validates every cached canonical project profile); "
+        "nebius-cxcli auth --project-config ./deployments/tenant/project/config.yaml "
+        "(idempotently ensures nebius-cxcli-sa and its renewable authorized key); "
         "nebius-cxcli auth --project-id project-xxxx --recreate "
-        "(rotates the per-project runtime credentials); "
+        "(rotates the canonical project authorized key); "
         "nebius-cxcli auth --project-config ./config.yaml --bootstrap-ci --github-repo acme/cluster-config --github-token-env GITHUB_TOKEN "
-        "(also pushes the credentials to the GitHub repo secrets used by bootstrap-ci)."
+        "(lazily issues the Object Storage key and syncs canonical credentials to CI)."
     ),
 )
 def auth_command(
@@ -71456,10 +71839,9 @@ def auth_command(
         typer.Option(
             "--client-name",
             help=(
-                "Client name used for runtime auth cache path and --bootstrap-ci environment naming "
-                "(`<client_name>-<project_id>`). Valid only with --project-id; required for "
-                "--create/--recreate unless --project-id maps to one cached profile, and required "
-                "when project_id maps to multiple cached profiles."
+                "Optional client label used only for --bootstrap-ci environment naming "
+                "(`<client_name>-<project_id>`). Valid only with --project-id; the canonical "
+                "runtime cache and service account are keyed only by project_id."
             ),
         ),
     ] = None,
@@ -71506,13 +71888,6 @@ def auth_command(
             ),
         ),
     ] = False,
-    create: Annotated[
-        bool,
-        typer.Option(
-            "--create",
-            help="Create runtime auth profile when local cache does not exist",
-        ),
-    ] = False,
     recreate: Annotated[
         bool,
         typer.Option(
@@ -71549,16 +71924,8 @@ def auth_command(
             raise RuntimeError(
                 "--github-repo and --github-token-env are valid only with --bootstrap-ci."
             )
-        if not any((validate_profile, create, recreate, bootstrap_ci)):
-            raise RuntimeError(
-                "Select at least one action: --validate-profile, --create, --recreate, --bootstrap-ci."
-            )
-        if create and recreate:
-            raise RuntimeError("--create and --recreate are mutually exclusive.")
-
         only_validate_without_target = (
             validate_profile
-            and not create
             and not recreate
             and not bootstrap_ci
             and project_id is None
@@ -71585,7 +71952,8 @@ def auth_command(
             )
             profile_targets = [(resolved_client_name, resolved_project_id)]
 
-            if create or recreate:
+            ensure_target_profile = recreate or bootstrap_ci or not validate_profile
+            if ensure_target_profile:
                 material, created = _create_or_recreate_runtime_auth_profile(
                     project_id=resolved_project_id,
                     client_name=resolved_client_name,
@@ -71594,6 +71962,8 @@ def auth_command(
                     endpoint=endpoint,
                     sdk_config_file=resolved_sdk_config,
                 )
+                _wait_for_runtime_auth_token_ready(material)
+                _export_runtime_auth_material(material)
                 profile_label = "runtime auth profile"
                 if recreate:
                     console.print(f"Recreated {profile_label} for project '{resolved_project_id}'.")
@@ -71611,15 +71981,18 @@ def auth_command(
 
             if bootstrap_ci:
                 if material is None:
-                    material = _runtime_auth_cache_material(
+                    material, _ = _create_or_recreate_runtime_auth_profile(
                         project_id=resolved_project_id,
                         client_name=resolved_client_name,
+                        recreate=False,
+                        profile=profile,
+                        endpoint=endpoint,
+                        sdk_config_file=resolved_sdk_config,
                     )
-                if material is None:
-                    raise RuntimeError(
-                        "Runtime auth profile not found in local cache. "
-                        "Run `nebius-cxcli auth --create --project-id <id> --client-name <name>` first."
-                    )
+                    _wait_for_runtime_auth_token_ready(material)
+                    _export_runtime_auth_material(material)
+                material = _ensure_runtime_auth_s3_material(material)
+                _export_runtime_auth_material(material)
                 repo_root_hint: Path | None = None
                 if project_config is not None:
                     repo_root_hint = _require_git_root(project_config.resolve().parent)
@@ -71843,6 +72216,14 @@ def mk8s_token_command(
             help="Owner-only command-lifetime ExecCredential cache.",
         ),
     ] = None,
+    require_renewable_auth: Annotated[
+        bool,
+        typer.Option(
+            "--require-renewable-auth",
+            hidden=True,
+            help="Reject one-shot IAM tokens for long-running exec authentication.",
+        ),
+    ] = False,
 ) -> None:
     """Emit ExecCredential JSON for MK8s kubeconfig exec auth."""
     try:
@@ -71851,6 +72232,7 @@ def mk8s_token_command(
             client_name=client_name or "",
             endpoint=endpoint,
             cache_file=cache_file,
+            require_renewable_auth=require_renewable_auth,
         )
         print(
             json.dumps(
@@ -72122,8 +72504,7 @@ def acceptance_test_benchmark_command(
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
         "(skips a single optional MK8s GPU deployment-testing check; repeatable; "
         "--skip-validations skips optional deployment-testing checks only); "
-        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
-        "(fails on missing service-account credentials instead of refreshing them). "
+        "Canonical project authentication is ensured before deployment preflight. "
         "For external Soperator onboarding targets with external-upgrade-owned actions, deploy "
         "fails before Terraform/Flux work and prints the required ext-soperator upgrade "
         "dry-run/execute commands, because upgrade owns Nebius SDK/API upgrade phases. "
@@ -72140,13 +72521,6 @@ def deploy_command(
             help=_DEPLOY_CONFIG_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=("Automatically bootstrap runtime auth material when required values are missing"),
-        ),
-    ] = True,
     skip_validations: Annotated[
         bool,
         typer.Option(
@@ -72295,7 +72669,6 @@ def deploy_command(
             config,
             paths,
             manifest,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             skip_validations=skip_validations,
             skip_validation_kinds=skip_validation_kinds,
             requested_target_ref=target_ref,
@@ -72338,13 +72711,6 @@ def destroy_command(
             help=_GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=("Automatically bootstrap runtime auth material when required values are missing"),
-        ),
-    ] = True,
     yes: Annotated[
         bool,
         typer.Option(
@@ -72381,7 +72747,6 @@ def destroy_command(
             config,
             paths,
             manifest,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             yes=yes,
         )
         console.print(f"Local destroy completed from {paths.generated_dir}")
@@ -72407,18 +72772,11 @@ def terraform_plan_command(
             help=_GENERATED_INFRA_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
 ) -> None:
     """Run Terraform plan against an existing generated/infra bundle."""
     try:
         config, paths, manifest = _load_generated_infra_context(generated_path)
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
         runtime_env = _terraform_runtime_env(config)
         runtime_env.update(
             _collect_mysterybox_runtime_payload_values(
@@ -72463,18 +72821,11 @@ def terraform_apply_command(
             help=_GENERATED_INFRA_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
 ) -> None:
     """Refresh the deploy report, then run Terraform apply against an existing generated/infra bundle."""
     try:
         config, paths, manifest = _load_generated_infra_context(generated_path)
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
         paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         runtime_env = _terraform_runtime_env(config)
@@ -72525,13 +72876,6 @@ def terraform_destroy_command(
             help=_GENERATED_INFRA_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
     yes: Annotated[
         bool,
         typer.Option(
@@ -72558,11 +72902,10 @@ def terraform_destroy_command(
         status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
             config
         )
-        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+        _ensure_terraform_backend_ready(config)
         _run_terraform_destroy_with_recovery(
             config,
             paths,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             yes=yes,
             initialize=True,
             status_watchers=status_watchers or None,
@@ -72591,13 +72934,6 @@ def terraform_unlock_command(
             help=_GENERATED_INFRA_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
     force: Annotated[
         bool,
         typer.Option(
@@ -72615,7 +72951,6 @@ def terraform_unlock_command(
         lock_info = _unlock_terraform_state_lock(
             config,
             paths,
-            auto_auth_bootstrap=auto_auth_bootstrap,
             force=force,
         )
         if lock_info is None:
@@ -72657,13 +72992,6 @@ def flux_destroy_command(
             help=_GENERATED_FLUX_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
     yes: Annotated[
         bool,
         typer.Option(
@@ -72707,7 +73035,7 @@ def flux_destroy_command(
             console.print("No changes applied.")
             return
         if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+            _ensure_terraform_backend_ready(config)
         _destroy_rendered_flux_bundle(
             config,
             paths,
@@ -72729,8 +73057,8 @@ def flux_destroy_command(
         "(installs Flux on each deploy target and stages runtime secrets such as Soperator notifier webhook and backup-config keys); "
         "nebius-cxcli flux bootstrap ./deployments/acme/generated --target mk8s-prod "
         "(single target); "
-        "nebius-cxcli flux bootstrap ./deployments/acme/generated --all-targets --no-auto-auth-bootstrap "
-        "(no silent service-account refresh)."
+        "nebius-cxcli flux bootstrap ./deployments/acme/generated --all-targets "
+        "(reconciles every target after canonical project authentication)."
     ),
 )
 def flux_bootstrap_command(
@@ -72741,13 +73069,6 @@ def flux_bootstrap_command(
             help=_GENERATED_FLUX_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = False,
     target_ref: Annotated[
         str | None,
         typer.Option(
@@ -72770,12 +73091,11 @@ def flux_bootstrap_command(
     try:
         config, paths, manifest = _load_generated_flux_context(generated_path)
         if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+            _ensure_terraform_backend_ready(config)
         else:
             _ensure_runtime_auth_material(
                 config,
                 need_terraform=False,
-                auto_bootstrap=auto_auth_bootstrap,
             )
         paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
@@ -72809,7 +73129,6 @@ def flux_bootstrap_command(
                         config,
                         extra_env=kube_env,
                         target_ref=target_ref_value,
-                        auto_auth_bootstrap=auto_auth_bootstrap,
                     )
                     _ensure_grafana_runtime_before_flux(
                         config,
@@ -72847,7 +73166,6 @@ def flux_bootstrap_command(
             _ensure_mysterybox_eso_runtime_before_flux(
                 config,
                 extra_env=None,
-                auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _ensure_soperator_notifier_runtime_before_flux(
@@ -72890,13 +73208,6 @@ def flux_apply_command(
             help=_GENERATED_FLUX_ARGUMENT_HELP,
         ),
     ],
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth when env vars are missing",
-        ),
-    ] = True,
     target_ref: Annotated[
         str | None,
         typer.Option(
@@ -72960,7 +73271,7 @@ def flux_apply_command(
         if _active_chart_count(config) == 0:
             raise RuntimeError("No enabled apps charts are configured for this project.")
         if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+            _ensure_terraform_backend_ready(config)
         paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         manifest_targets = _manifest_deploy_targets(manifest)
@@ -73005,7 +73316,6 @@ def flux_apply_command(
                         config,
                         extra_env=kube_env,
                         target_ref=target_ref_value,
-                        auto_auth_bootstrap=auto_auth_bootstrap,
                     )
                     _ensure_grafana_runtime_before_flux(
                         config,
@@ -73058,7 +73368,6 @@ def flux_apply_command(
             _ensure_mysterybox_eso_runtime_before_flux(
                 config,
                 extra_env=None,
-                auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
             _ensure_soperator_notifier_runtime_before_flux(

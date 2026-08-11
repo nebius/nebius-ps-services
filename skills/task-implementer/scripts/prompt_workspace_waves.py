@@ -1918,6 +1918,108 @@ def _session_fingerprint(session_id: str | None = None) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _ensure_commit_authorization_parent(root: Path, parent: Path) -> None:
+    try:
+        relative = parent.relative_to(root)
+    except ValueError as error:
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID",
+            "commit authorization path escapes the private Codex root",
+        ) from error
+    ensure_private_dir(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise PromptWorkspaceError(
+                "WORKSPACE_PATH_INVALID",
+                "commit authorization directory must not be a symlink",
+            )
+        if not current.exists():
+            current.mkdir(mode=0o700)
+        metadata = current.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or current.resolve(strict=True) != current
+            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        ):
+            raise PromptWorkspaceError(
+                "WORKSPACE_PATH_INVALID",
+                "commit authorization directory is unsafe",
+            )
+        current.chmod(0o700)
+
+
+def _task_commit_authorization(
+    worktree: Path,
+    assignment: dict[str, object],
+    plane_path: Path,
+    session_id: str,
+) -> tuple[Path, Path]:
+    common_value = Path(
+        _git_text(
+            worktree,
+            ["rev-parse", "--git-common-dir"],
+            "read the worker Git common directory",
+        )
+    )
+    if not common_value.is_absolute():
+        common_value = worktree / common_value
+    common = common_value.resolve(strict=True)
+    reference = _git_text(
+        worktree, ["symbolic-ref", "-q", "HEAD"], "read the worker source ref"
+    )
+    repo_key = hashlib.sha256(str(common).encode()).hexdigest()[:24]
+    session_key = hashlib.sha256(session_id.encode()).hexdigest()[:24]
+    codex_home = Path(
+        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+    ).expanduser()
+    if not codex_home.is_absolute():
+        raise PromptWorkspaceError(
+            "ENVIRONMENT_BLOCKER", "CODEX_HOME must be absolute"
+        )
+    private_root = codex_home.resolve(strict=False)
+    path = (
+        private_root
+        / "commit-transactions"
+        / repo_key
+        / "sessions"
+        / session_key
+        / "authorization.json"
+    )
+    claim_path = (
+        private_root
+        / "commit-transactions"
+        / repo_key
+        / "claims"
+        / f"{hashlib.sha256(reference.encode()).hexdigest()[:24]}.json"
+    )
+    assignment_sha256 = required_string(
+        assignment, "assignment_sha256", "worker assignment"
+    )
+    authorization: dict[str, object] = {
+        "schema": "commit-transaction.authorization.v1",
+        "state": "AUTHORIZED",
+        "repo_root": str(worktree.resolve()),
+        "worktree": str(worktree.resolve()),
+        "common_dir": str(common),
+        "ref": reference,
+        "base_head": required_string(
+            assignment, "base_commit", "worker assignment"
+        ),
+        "session_sha256": hashlib.sha256(session_id.encode()).hexdigest(),
+        "turn_sha256": assignment_sha256,
+        "prompt_sha256": assignment_sha256,
+        "owner": "task-implementer",
+        "owner_evidence_path": str(plane_path.resolve()),
+        "owner_evidence_sha256": assignment_sha256,
+        "allow_default_branch": False,
+    }
+    _ensure_commit_authorization_parent(private_root, path.parent)
+    write_atomic(path, stable_json(authorization))
+    return path, claim_path
+
+
 def _session_was_used(
     run_dir: Path, worker_session: str, *, except_path: Path | None = None
 ) -> bool:
@@ -2176,7 +2278,14 @@ def start_task(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "task is not assignable"
             )
-        worker_session = _session_fingerprint(session_id)
+        raw_session = (
+            session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
+        )
+        if not isinstance(raw_session, str) or not raw_session.strip():
+            raise PromptWorkspaceError(
+                "SESSION_ID_UNAVAILABLE", "worker session identifier is required"
+            )
+        worker_session = _session_fingerprint(raw_session)
         plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
         if plane["state"] != "assigned":
             raise PromptWorkspaceError(
@@ -2227,7 +2336,15 @@ def start_task(
         plane["heartbeat_phase"] = "preflight"
         plane["updated_at"] = started_at
         _save_task_plane(run_dir, plane)
-        return {"assignment": assignment, "worker_session_sha256": worker_session}
+        commit_authorization, commit_claim = _task_commit_authorization(
+            worktree, assignment, plane_path, raw_session
+        )
+        return {
+            "assignment": assignment,
+            "worker_session_sha256": worker_session,
+            "commit_authorization": str(commit_authorization),
+            "commit_claim": str(commit_claim),
+        }
 
 
 def _dirty_paths(repo: Path) -> list[str]:
@@ -2464,6 +2581,7 @@ def recover_task(
             str(wave["wave_id"]),
             task,
         )
+        plane_path = _task_plane_path(run_dir, str(wave["wave_id"]), task_id)
         plane = _load_task_plane(run_dir, str(wave["wave_id"]), task_id)
         if plane["state"] != "running" or wave["task_states"].get(task_id) != "running":
             raise PromptWorkspaceError(
@@ -2508,7 +2626,14 @@ def recover_task(
                 "REPLAN_REQUIRED",
                 "interrupted worker state exceeds the locked write claims",
             )
-        worker_session = _session_fingerprint(session_id)
+        raw_session = (
+            session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
+        )
+        if not isinstance(raw_session, str) or not raw_session.strip():
+            raise PromptWorkspaceError(
+                "SESSION_ID_UNAVAILABLE", "worker session identifier is required"
+            )
+        worker_session = _session_fingerprint(raw_session)
         if worker_session == plane["worker_session_sha256"]:
             raise PromptWorkspaceError(
                 "FRESH_SESSION_REQUIRED", "recovery requires a fresh worker session"
@@ -2530,11 +2655,26 @@ def recover_task(
         plane["heartbeat_phase"] = "preflight"
         plane["updated_at"] = recovered_at
         _save_task_plane(run_dir, plane)
+        commit_paths = (
+            _task_commit_authorization(
+                worktree, assignment, plane_path, raw_session
+            )
+            if observed == base
+            else None
+        )
         return {
             "assignment": assignment,
             "worker_session_sha256": worker_session,
             "observed_head": observed,
             "changed_paths": changed,
+            "commit_authorization": (
+                str(commit_paths[0])
+                if commit_paths is not None
+                else None
+            ),
+            "commit_claim": (
+                str(commit_paths[1]) if commit_paths is not None else None
+            ),
         }
 
 

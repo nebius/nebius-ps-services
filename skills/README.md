@@ -25,6 +25,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - [Skill Catalog](#skill-catalog)
 - [Using Skills in Codex Chat](#using-skills-in-codex-chat)
 - [Skill Details](#skill-details)
+- [Source Hook Catalog](#source-hook-catalog)
 - [Skills Installer](#skills-installer)
 
 ## Skill Catalog
@@ -56,7 +57,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
-| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
+| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
 | `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
@@ -64,7 +65,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `commit` | Explicit only | Create one fast local Git commit on the current branch after repo-root `git add -A` and lightweight staged validation; never pushes. |
+| `commit` | Explicit only | Create one claim-bound local commit for the complete repository diff across all changed project folders; stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests with branch-safe generic preparation or exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
@@ -88,11 +89,13 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
+| `maintain-project-specs` | Implicit allowed | Create, migrate, validate, and reconcile canonical project requirements/design, coordinate deferred project `AGENTS.md` sealing, and enforce the prompt-to-implementation lifecycle through hook guardrails. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
-| `project-agent-instructions` | Explicit only | Conditionally maintain a concise selected-project `AGENTS.md` from owner-validated specs and tracked evidence, with deterministic rendering, explicit ownership, guarded retirement, and fail-closed recovery. |
+| `project-agent-instructions` | Explicit only | Conditionally render and terminally seal a concise managed tail in selected-project `AGENTS.md` from shared-owner specs and tracked evidence, preserving human prefix bytes with explicit region ownership, guarded retirement, and fail-closed recovery. |
+| `prompt-session-intake` | Explicit only (hook-routed) | Internally capture safe direct prompts from an explicitly bound Task Implementer or Agentic SDLC session, preserve private provenance, and coordinate lossless refinement, CAS prompt updates, and exact-once workflow continuation. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
@@ -100,14 +103,14 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves, integrate pending generations, and explicitly remove idle lanes. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
-| `troubleshoot` | Implicit allowed | Causally investigate difficult code and infrastructure failures with a session-configurable bounded repair budget, use observability only when scoped runtime facts can change a hypothesis and non-Grafana evidence establishes matching-signal fit, and route system-contract changes through `design` only after proof. |
+| `troubleshoot` | Implicit allowed | Discover deployed stacks, verify components and layered logs, causally debug difficult code and infrastructure failures, and gate completion on a canonical evidence matrix. |
 
 ### Agentic SDLC Workflow
 
 All `sdlc-*` skills are explicit-only. The phase skills run through the
 Agentic SDLC workflow, starting with
 `$sdlc-start workspace init [project-folder]` and then
-`$sdlc-start run <prompt-path-or-unique-filename>`; the external
+`$sdlc-start run <prompt-ref-or-file>`; the external
 `sdlc-workflow-test` verifier is not a phase. `project-agent-instructions` is
 shared explicit-only runtime support and a golden-path step after design;
 `troubleshoot` is required runtime support for ambiguous failure diagnosis but
@@ -183,7 +186,7 @@ serve the skill.
 ### Prompt Examples
 
 ```text
-$commit Quickly commit all current local changes on this branch without pushing.
+$commit Commit the complete repository diff across every changed project folder on this branch without pushing.
 
 $commit-push Commit all current changes on this feature branch, generate a commit message, push it to origin, and tell me whether the worktree is clean.
 
@@ -215,7 +218,7 @@ $sdlc-workflow-test --destroy
 
 $sdlc-start workspace init services/example-app
 
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
@@ -247,7 +250,7 @@ $system-design-rules Review this ADR against the system design checklist, compar
 
 $task-implementer workspace init services/nebius-cxcli
 
-$task-implementer run <prompt-path-or-unique-filename>
+$task-implementer run <prompt-ref-or-file>
 
 $task-implementer integrate services/nebius-cxcli
 
@@ -577,12 +580,22 @@ reuse its last active window, and is safe to repeat without changing prompts or
 history. Dirty source-checkout state is allowed and excluded from the lane
 baseline. Loading the workspace restarts that
 window's extension host and may interrupt its terminal or Codex UI; editor
-failure remains non-fatal. One `run <prompt-path-or-unique-filename>` validates
+failure remains non-fatal. One `run <prompt-ref-or-file>` validates
 and snapshots exact prompt bytes, creates or reconciles the internal task queue,
 locks dependencies, exact/prefix write claims, conflict domains, validation,
 and done criteria, then coordinates every wave until completion or a blocker.
 Each completed run releases one immutable lane generation; back-to-back runs
 may accumulate pending generations while leaving the source checkout untouched.
+
+An explicit init or run binds the current Codex session. In that bound session,
+the separate capture-only `prompt-session-intake` hook may privately stage a
+later safe direct turn; the agent refines material intent losslessly, the Task
+Implementer adapter applies a stale-base-checked create or append exactly once
+per operation ID, and this same run path executes once. Explicit runs register
+the active prompt for unique
+fresh-session attachment and close it only after verified terminal completion.
+Conversation, status, and control remain nonmaterial, and file edits never
+auto-run.
 
 Users steer the workflow by editing the same prompt—preferably appending to its
 optional `## Steering` section—and running the same command. There is no public
@@ -674,7 +687,7 @@ rejects path and symlink escapes, journals Git mutations, and never prints
 prompt bodies. Every v1 execution record fails with
 `WORKFLOW_UPGRADE_REQUIRED`; no legacy execution schema is readable. The Skill
 is explicit-only. Use `global-context-management` for general context hygiene,
-`$sdlc-start run <prompt-path-or-unique-filename>` for Agentic SDLC, and
+`$sdlc-start run <prompt-ref-or-file>` for Agentic SDLC, and
 `align` for final alignment.
 
 ### `task-implementer-test`
@@ -891,10 +904,17 @@ Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 All `sdlc-*` skills set `allow_implicit_invocation: false`. Except for the
 external `sdlc-workflow-test` verifier, initialize and run the workflow through
 exactly `$sdlc-start workspace init [project-folder]` and
-`$sdlc-start run <prompt-path-or-unique-filename>`, then let the coordinator
+`$sdlc-start run <prompt-ref-or-file>`, then let the coordinator
 record the next recommended phase in local run state. Editing the same managed
 prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a
 resume interface.
+After an explicit init or run binds the session, `prompt-session-intake` may
+stage later safe direct material intent for agent-owned lossless refinement and
+an SDLC-owned compare-and-set create or append exactly once per operation ID
+before this same run path executes once. Explicit runs register and terminally
+close the active prompt so
+a fresh session attaches only when the objective is unique. Conversation,
+status, control, and prompt-file saves never auto-run.
 The committed project truth is `docs/requirements.md`, `docs/design.md`, and,
 only when the evidence gate requires it, a provenance-owned project-root
 `AGENTS.md`. The shared `project-agent-instructions` skill makes that
@@ -964,8 +984,10 @@ allowing only `statusMessage` metadata to differ, and preserves unrelated
 entries.
 Keep these SDLC hooks separate from the non-SDLC global-context hooks:
 `SessionStart` is for stable global context and task-state location, and
-`UserPromptSubmit` is only for lightweight prompt-time context, safety, or
-opt-in delegation requests.
+the global-context `UserPromptSubmit` remains limited to lightweight prompt-time
+context, safety, or opt-in delegation requests. The separate
+`prompt-session-intake` hook owns private capture for explicitly bound prompt
+workflows and does not refine, edit, or execute work from the hook process.
 See `docs/agentic-sdlc-design.md` for the architecture, template ownership,
 local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
@@ -973,7 +995,7 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   prompts, tickets, approved change requests, and optional safe live experiment
   environment details while preserving stable `REQ-*` IDs.
 - `sdlc-start`: initializes the private prompt workspace, accepts immutable
-  prompt-v2 revisions with Ask-only required input, compiles requirements with
+  prompt-v3 revisions with Ask-only required input, compiles requirements with
   selective stable clarifications, durably queues explicit cross-prompt run
   requests, coordinates the active SDLC run, reads steering and local
   checkpoints plus authoritative repair pointers, and chooses one next skill
@@ -1083,10 +1105,17 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 ### `commit`
 
 `commit` creates a fast local Git commit on the current branch without pushing.
-It stages the complete monorepo diff with repo-root `git add -A`, runs
-lightweight staged validation, uses a provided or generated commit message,
-preserves normal hooks, and stops instead of pushing, creating PRs, repairing
-branches, or writing Agentic SDLC evidence.
+One explicit invocation binds a private authorization, previews the complete
+monorepo tree through a temporary index, then lets one digest-pinned helper run
+repo-root `git add -A`, lightweight staged validation, normal hooks, and exact
+direct-child/tree verification under the shared repository lock. Direct mode
+requires the current selected-project lifecycle to be sealed or a bounded
+fresh commit-only waiver, but never requires sibling-project attestations.
+Repository-shaping Git environment is rejected before discovery or mutation;
+only the transaction-owned preview may select a private index.
+Task Implementer supplies exact worker ownership instead, while active Agentic
+SDLC keeps `sdlc-commit`. The skill stops instead of pushing, creating PRs,
+repairing branches, or writing Agentic SDLC evidence.
 
 ### `commit-push`
 
@@ -1188,6 +1217,12 @@ preferences and placeholders while excluding personal project lists, private
 or plugin-managed integrations, desktop/generated state, and secret-bearing
 values. Existing laptop `AGENTS.md` and `config.toml` files are merge targets,
 not template replacement targets.
+When a proven repo-owned guard falsely denies an authorized patch,
+`config-codex` repairs its canonical source, validates and installs it through
+the documented provenance path, reports restart/trust state, and retries the
+identical edit. Alternate writers, shell redirection, installed-only edits,
+guard disabling, and cwd escapes remain prohibited; manual action is reserved
+for external or unrepairable controls.
 Its compact global live-product policy freezes each trial declaration and
 permits authorized recovery without weakening production or high-impact action
 approval. Observation is classified by effect, and environment intervention
@@ -1227,10 +1262,11 @@ create only an empty private scaffold. Prompt hooks may suggest bounded same-wor
 prior task-state candidate paths for complex prompts without injecting their
 contents; an existing file is meant to be read at task start, resume, or after
 compaction when prior context may matter, then updated with concise decisions,
-validation status, and next action. This
-non-SDLC setup owns `SessionStart` and `UserPromptSubmit` only; Agentic SDLC
-skills and guardrails own SDLC phase selection, run state, `PreToolUse`, and
-`Stop`.
+validation status, and next action. This non-SDLC setup owns its global-context
+`SessionStart` and `UserPromptSubmit` registrations only. Agentic SDLC skills
+and guardrails own their SDLC-specific `PreToolUse` and `Stop` registrations;
+Nebius authentication and `troubleshoot` own separate peer registrations listed
+in the [Source Hook Catalog](#source-hook-catalog).
 
 ### `gitignore`
 
@@ -1407,6 +1443,36 @@ Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
 
+Before diagnostics, it discovers technologies and versions, deployment model,
+active configuration sources, components and dependencies, ports, protocols,
+authentication, and control and data flows, then compares the observed system
+with matching official vendor architecture. It maintains a component
+verification matrix and incident timeline, verifies clock synchronization, and
+correlates component, application, container or orchestrator, systemd, OS,
+kernel, network, storage, GPU, and hardware logs with bounded filters. Relevant
+sources that cannot be examined are recorded as unavailable rather than
+silently treated as healthy.
+
+Technology procedures are progressively disclosed through Slurm, Soperator,
+Kubernetes, Nebius, Linux, network, storage, GPU, and code-debugging playbooks.
+Soperator guidance distinguishes dedicated, resource-consuming ActiveChecks
+from passive prolog, epilog, and HealthCheckProgram checks around customer jobs.
+Every consequential command states its hypothesis, expected and falsifying
+evidence, timeout or output bound, and next branch; indefinite tails, arbitrary
+sleeps, passive waiting, and large unfiltered log dumps are prohibited.
+
+Every outcome uses one canonical report with architecture, component, timeline,
+log, hypothesis, code-debugging, root-cause, remediation, and validation
+evidence. Design, Infrastructure, Connectivity, Configuration, Runtime health,
+Logs, and Relevant code paths each receive `PASS`, `FAIL`, or `UNKNOWN` with
+evidence. `VERIFIED_FIXED` requires all seven to be `PASS`; passing tests alone
+do not prove code is bug-free.
+
+The report scopes its conclusions to explicit included and excluded system
+boundaries, exercised paths, and an incident-window start and end. Component
+proof names DNS and restart history, while the mechanically enforced log ledger
+contains each of the eight component-through-hardware layers exactly once.
+
 For live product validation, `troubleshoot` records causal ownership, target
 recovery state, and evidence lineage separately and freezes each trial's
 declared workflow. Authorized stabilization may restore a degraded target, but
@@ -1491,6 +1557,52 @@ and verification complete; planned or in-progress work remains in prose with
 an empty ledger. A malformed partial entry receives one atomic remove-or-
 complete repair instruction listing all missing canonical fields.
 
+## Source Hook Catalog
+
+The current source tree contains seven installer-discovered hook bundles. Their
+16 manifest entries converge to 13 distinct registrations backed by nine
+manifest-referenced Python entrypoints because four bundles carry the same
+single-Stop arbiter entry. This is a current-tree inventory, not a fixed allowlist:
+`--install-all-hooks` discovers each direct child skill that contains both
+`SKILL.md` and `assets/hooks/`.
+
+| Registration | Source entrypoint | Description |
+| --- | --- | --- |
+| `SessionStart` matching `startup\|resume\|clear\|compact` | `global-context-management` [`session_start_context.py.template`](global-context-management/assets/session_start_context.py.template), installed from its byte-identical `config-codex` mirror | Resolves the workspace root and advertises the session-scoped private `current.md` path. It secures existing task-state permissions and creates an empty `0700`/`0600` scaffold only after compaction. Missing session information or unsafe initialization degrades to unavailable context instead of blocking the session. |
+| `SessionStart` matching `startup\|resume\|clear\|compact` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Performs a bounded audit of owner-only lifecycle state across prior sessions for the selected project and injects recovery guidance for unfinished phases. It does not author requirements, design, or repository instructions. |
+| `UserPromptSubmit` for all prompts | `global-context-management` [`user_prompt_context.py.template`](global-context-management/assets/user_prompt_context.py.template), installed from its byte-identical `config-codex` mirror | Emits nothing for a simple prompt. For a complex prompt, it creates or secures the empty task-state scaffold, suggests a bounded set of related same-workspace state-file paths without injecting their contents, and adds context-management guidance. A local opt-in policy may also request bounded read-only subagents. |
+| `UserPromptSubmit` for all prompts | `commit` [`commit_intent.py`](commit/assets/hooks/commit_intent.py) | Recognizes optional `please`, then either a root-user `$commit` directly or a bounded leading directive from `run`, `apply`, `execute`, `invoke`, or `use`, while excluding casual mentions, questions, quotations, help, subagents, system turns, compaction, and Stop continuations. It stores only current repository/session/turn/prompt digests and owner metadata in an owner-private authorization, then injects the canonical authorization and claim paths; it never stages or commits. |
+| `UserPromptSubmit` for all prompts | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Parses only an exact leading `$troubleshoot`, authorizes default or explicitly bounded attempt/time limits, records the private authorization sidecar, and establishes a separate same-session terminal-report obligation without storing the prompt. It supplies bounded profile or repair context and blocks invalid authorization transitions. |
+| `UserPromptSubmit` for all prompts | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Binds the selected project and current turn, carries unfinished implementation or sealing state across follow-up prompts, and injects the requirement/design planning and bounded waiver contract. Only an exact committed project-policy blob may disable the lifecycle. |
+| `UserPromptSubmit` for all prompts | `prompt-session-intake` [`prompt_session_intake.py`](prompt-session-intake/assets/hooks/prompt_session_intake.py) | Binds only exact Task Implementer or Agentic SDLC init/run invocations. Later safe direct turns in that bound session are secret-scanned before private raw capture and staged with exact session/turn causality for coordinator-owned classification and refinement. Unbound, Stop-generated, compaction, system, and subagent prompts do not stage. The hook never edits a workflow prompt or starts a run. |
+| `PreToolUse` matching `^Bash$` | `agent-nebius-auth-setup` [`pre_tool_use_nebius_auth.py`](agent-nebius-auth-setup/assets/hooks/pre_tool_use_nebius_auth.py) | Activates only for Nebius-sensitive Bash commands. It resolves the explicit task project or sanitized default profile, validates the canonical owned mode-`0600` credential, rejects token or environment disclosure and conflicting auth state, and rewrites an allowed command with renewable project/profile/credential context. Unrelated Bash commands pass unchanged; relevant unsafe or internally failing cases are denied. |
+| `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `sdlc-start` [`pre_tool_use_sdlc_policy.py`](sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py) | Applies policy only when an active Agentic SDLC run covers the working directory. It blocks dangerous shell patterns, secret-bearing payloads, unauthorized Git, GitHub, merge, and MCP actions, can warn about spec-phase drift, and records private hook history. No active run passes immediately; corrupt active state or internal failure denies the tool call. |
+| `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for an exact `apply_patch` that updates only the advertised `current.md`; a pending report correction blocks new tools until the report is returned. |
+| `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Requires current planning and a verified project-rule render before selected-project implementation, protects canonical specs and lifecycle-owned `${CODEX_HOME}/project-specs` state, recognizes non-symlinked coordinators from canonical `~/.agents/skills`, binds project-instructions evidence to the exact current-session private bundle, and parses shell quoting before classifying effects. Proven fixed writes to config, hooks, task state, installed skills, credentials, and other external user files pass through epoch-neutral to their actual policy owners. Mixed, dynamic, ambiguous, selected-project, malformed coordinator-shaped, alternate-bundle, or lifecycle-private effects retain their gates. An exact digest-pinned commit transaction requires a sealed/waived direct lifecycle or Task Implementer owner evidence; raw Git stays denied. Exact current-session runtime/decision authoring, private-input mode tightening, and canonical spec intent-to-add break bounded bootstrap cycles without opening lifecycle state or Git-index mutation. Multiple implementation edits remain open after the first write. |
+| `PostToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Silently marks a successful material selected-project write as reconciliation-required and advances the compare-and-swap write epoch. Concurrent recorders converge; a late success after planning or sealing invalidates that later evidence and reopens reconciliation. Proven external effects, exact bootstrap transitions, admitted canonical spec reconciliation, and a completed digest-pinned commit prepare with its exact consumed authorization and claim remain epoch-neutral. Recording errors and invalid completed coordinator-shaped calls stay visible. After independently verifying the canonical current-session terminal project-instructions apply, it advances to `seal-armed`. It cannot undo a completed side effect. |
+| `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs the troubleshooting, project-contract, SDLC, and prompt-session Stop evaluators sequentially within one 25-second monotonic budget below the registered 30-second host timeout. A terminal result takes precedence; otherwise every initial continuation reason is combined. Each explicit troubleshoot turn must supply its structured terminal report; delivery is finalized transactionally only after no peer continuation remains, and an already validated report is finalized before a later terminal peer result returns, while one failed correction closes with an honest bounded UI fallback. Project reconciliation still requests one accumulated semantic review and a conditional project-instructions decision; verified `not-needed` leaves a missing file absent. Prompt-session intake blocks only the exact current unfinished event and releases its writer after successful consumption. Missing managed project state fails closed. Legacy independently registered Stop entries are migrated only when an exact singleton managed command is proven. |
+
+Matching registrations are independent. Codex starts matching command hooks for
+the same event concurrently, so they must not depend on ordering or
+short-circuiting. In this catalog, up to five `UserPromptSubmit` handlers, four
+Bash `PreToolUse` handlers, three `apply_patch` `PreToolUse` handlers, and one
+`PostToolUse` handler can match one event. `Edit` and `Write` are matcher aliases for
+canonical `apply_patch`, not additional entrypoints. Stop policy is different:
+one registered arbiter calls its available delegates in deterministic order.
+For `Stop`,
+`decision: "block"` requests another assistant turn, while `continue: false`
+terminates and takes precedence over peer continuation decisions. See the
+[official Codex Hooks documentation](https://learn.chatgpt.com/docs/hooks).
+
+The manifests live in each owner skill's `assets/hooks.json.template`; the
+global-context manifest and payloads are mirrored under
+`config-codex/assets/hooks/` for installation. Helper modules, policy JSON,
+tests, and [`install-skills.sh`](install-skills.sh) are supporting payloads or
+installation machinery, not additional event handlers. Source validation does
+not prove installed or in-memory activation: hook installation and registration
+are explicit, changed hooks require a Codex restart, and non-managed hooks must
+be reviewed and trusted in `/hooks`.
+
 ## Skills Installer
 
 `install-skills.sh` installs or updates skills into `~/.agents/skills` by
@@ -1535,9 +1647,10 @@ records local provenance hashes, and backs up differing existing hook files unde
 them from the selected source. Add `--register-hooks` to merge that bundle's
 `hooks.json` or `hooks.json.template` registration manifest into
 `${CODEX_HOME:-$HOME/.codex}/hooks.json`.
-The `--install-all-hooks` option is also explicit, but discovers every reviewed
-hook-only `*/assets/hooks` directory under this source skills folder and syncs
-those payload files in one pass. It does not scan mixed `assets/` directories.
+The `--install-all-hooks` option is also explicit, but discovers every direct
+child skill-owned `*/assets/hooks` directory under this source skills folder
+and syncs those payload files in one pass. It does not scan mixed `assets/`
+directories.
 With `--register-hooks`, it also merges each discovered bundle's registration
 manifest while preserving existing hook entries. Add
 `--refresh-hook-registrations` to replace only differing registrations with the
@@ -1604,10 +1717,10 @@ automatically.
 # Copy and register the remediation-budget guard hooks
 ./install-skills.sh --install-hooks troubleshoot/assets/hooks --register-hooks
 
-# Copy and refresh every reviewed hook-only bundle
+# Copy and refresh every discovered hook-only bundle
 ./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
 
-# Copy all reviewed hook bundles and replace hooks.json with only those entries
+# Copy all discovered hook bundles and replace hooks.json with only those entries
 ./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
 
 # Copy hooks into a non-default Codex home
@@ -1654,7 +1767,7 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   and backs up differing existing hook files before refreshing them from source.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
-  file names, and syncs all reviewed hook bundles into
+  file names, and syncs all discovered hook bundles into
   `${CODEX_HOME:-$HOME/.codex}/hooks` with the same provenance, backup, and
   refresh behavior.
 - `--register-hooks` can be combined with either hook-install mode. It looks
@@ -1675,7 +1788,7 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   selected source manifest or manifests. This removes hand-written and stale
   registrations that are not in the selected source. Use
   `--install-all-hooks --register-hooks --replace-hooks-json` for a clean file
-  containing every reviewed hook bundle under this source folder.
+  containing every discovered hook bundle under this source folder.
 - Hook install modes report extra files under
   `${CODEX_HOME:-$HOME/.codex}/hooks` and extra `hooks.json` registrations that
   are not present in the selected source manifests. These reports are advisory:

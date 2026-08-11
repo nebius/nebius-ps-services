@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "statusMessage": "Auditing project contracts",
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "statusMessage": "Binding project contracts",
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking project contract lifecycle",
+            "additionalContextLimit": 10000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py\"",
+            "timeout": 30,
+            "additionalContextLimit": 1200
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/stop_lifecycle_arbiter.py\"",
+            "timeout": 30,
+            "statusMessage": "Arbitrating workflow completion"
+          }
+        ]
+      }
+    ]
+  }
+}

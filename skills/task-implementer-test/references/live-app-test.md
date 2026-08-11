@@ -38,7 +38,7 @@ remain forbidden.
 
 After `workspace init`, render the app template into the generated managed
 prompt with `scripts/render_app_prompt.py`. Preserve its
-`task-implementer/prompt-v2` frontmatter and identity fields; replace only the
+`task-implementer/prompt-v3` frontmatter and identity fields; replace only the
 editable body.
 
 ## Seeded brownfield fixture

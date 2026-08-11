@@ -1,0 +1,6 @@
+interface:
+  display_name: "Prompt Session Intake"
+  short_description: "Safely stage and route prompts in bound workflow sessions"
+  default_prompt: "Use $prompt-session-intake only when a bound workflow capture hook routes the current direct prompt for acceptance and execution."
+policy:
+  allow_implicit_invocation: false

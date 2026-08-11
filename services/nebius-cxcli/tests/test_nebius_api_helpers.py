@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from nebius_cxcli.nebius_api_helpers import (
+    bounded_nebius_request_kwargs,
     nebius_operation_id,
     wait_nebius_operation,
 )
@@ -22,9 +23,9 @@ class _Operation:
         self.id = operation_id
         self._successful = successful
         self._timeout = timeout
-        self.waited_with: dict[str, float | int] | None = None
+        self.waited_with: dict[str, object] | None = None
 
-    def sync_wait(self, **kwargs: float | int) -> None:
+    def sync_wait(self, **kwargs: object) -> None:
         self.waited_with = kwargs
         if self._timeout:
             raise TimeoutError("provider timeout")
@@ -53,8 +54,25 @@ def test_wait_nebius_operation_requires_successful_terminal_operation() -> None:
         "poll_per_retry_timeout": 19,
         "poll_retries": 2,
         "auth_timeout": 19,
+        "auth_options": {
+            "token_renew_synchronous": "true",
+            "token_renew_request_timeout": "19.0",
+        },
     }
     assert nebius_operation_id(operation) == "operation-123"
+
+
+def test_bounded_nebius_request_waits_for_due_token_renewal() -> None:
+    assert bounded_nebius_request_kwargs(timeout_seconds=45) == {
+        "timeout": 45.0,
+        "per_retry_timeout": 20.0,
+        "auth_timeout": 45.0,
+        "auth_options": {
+            "token_renew_synchronous": "true",
+            "token_renew_request_timeout": "20.0",
+        },
+        "retries": 0,
+    }
 
 
 def test_wait_nebius_operation_rejects_failed_operation() -> None:

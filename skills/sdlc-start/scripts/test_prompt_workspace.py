@@ -205,14 +205,13 @@ class PromptWorkspaceTests(unittest.TestCase):
     def test_active_prompt_conflict_preserves_existing_run(self) -> None:
         first_prompt = self.prompt_path()
         first = self.intake(first_prompt)
-        second_prompt = first_prompt.with_name("second.md")
-        raw = first_prompt.read_text(encoding="utf-8").replace(
-            str(workspace.parse_prompt(first_prompt)["prompt_id"]),
-            "prompt-" + "1" * 32,
-            1,
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(
+            manifest,
+            "Implement a distinct queued objective",
+            id_factory=lambda: "1" * 32,
         )
-        second_prompt.write_text(raw, encoding="utf-8")
-        second_prompt.chmod(0o600)
+        second_prompt = Path(str(created["path"]))
         queued = self.intake(second_prompt)
         self.assertEqual(queued["action"], "queued")
         self.assertEqual(queued["status"], "queued")
@@ -821,7 +820,8 @@ class PromptWorkspaceTests(unittest.TestCase):
             id_factory=lambda: "2" * 32,
         )
         self.assertNotEqual(first["path"], second["path"])
-        self.assertTrue(str(second["path"]).endswith("--02.md"))
+        self.assertTrue(Path(str(first["path"])).name.startswith("11111--"))
+        self.assertTrue(Path(str(second["path"])).name.startswith("22222--"))
         self.assertFalse((self.project / "nope").exists())
         rows = workspace.prompt_rows(manifest, "reports", "2026-07-16")
         self.assertEqual(len(rows), 2)
@@ -865,7 +865,8 @@ class PromptWorkspaceTests(unittest.TestCase):
                 "prompt_filename": prompt.name,
             },
         )
-        renamed = prompt.with_name("renamed-product-prompt.md")
+        prompt_ref = str(workspace.parse_prompt(prompt)["prompt_ref"])
+        renamed = prompt.with_name(f"{prompt_ref}--renamed-product-prompt.md")
         prompt.rename(renamed)
         accepted = self.intake(renamed.name)
         self.assertTrue(accepted["renamed"])
@@ -879,7 +880,8 @@ class PromptWorkspaceTests(unittest.TestCase):
         prompt = self.prompt_path()
         result = self.intake(prompt)
         project_dir = Path(str(result["snapshot"])).parents[3]
-        renamed = prompt.with_name("renamed-and-edited.md")
+        prompt_ref = str(workspace.parse_prompt(prompt)["prompt_ref"])
+        renamed = prompt.with_name(f"{prompt_ref}--renamed-and-edited.md")
         prompt.rename(renamed)
         self.edit_prompt(renamed, "Change during rename.")
         before = (project_dir / "activity.json").read_bytes()
@@ -889,12 +891,284 @@ class PromptWorkspaceTests(unittest.TestCase):
         self.assertEqual((project_dir / "activity.json").read_bytes(), before)
         renamed.write_bytes(Path(str(result["snapshot"])).read_bytes())
         renamed.chmod(0o600)
-        stale = renamed.with_name("stale-copy.md")
+        stale = renamed.with_name(f"{prompt_ref}--stale-copy.md")
         stale.write_bytes(renamed.read_bytes())
         stale.chmod(0o600)
         with self.assertRaises(workspace.PromptWorkspaceError) as conflict:
             self.intake(renamed.name)
         self.assertEqual(conflict.exception.code, "PROMPT_CONFLICT")
+
+    def test_v2_workspace_migrates_once_and_repairs_run_mirrors(self) -> None:
+        prompt = self.prompt_path()
+        result = self.intake(prompt)
+        snapshot = Path(str(result["snapshot"]))
+        run_dir = snapshot.parents[2]
+        prompt_ref = str(workspace.parse_prompt(prompt)["prompt_ref"])
+        legacy_name = prompt.name.removeprefix(f"{prompt_ref}--")
+        legacy_path = prompt.with_name(legacy_name)
+        v2 = prompt.read_text(encoding="utf-8").replace(
+            "schema: agentic-sdlc/prompt-v3",
+            "schema: agentic-sdlc/prompt-v2",
+        ).replace(f"prompt_ref: {prompt_ref}\n", "") + (
+            "\n## Context\n\n"
+            "schema: body-schema-must-stay\n"
+            "prompt_id: body-identity-must-stay\n"
+        )
+        prompt.unlink()
+        legacy_path.write_text(v2, encoding="utf-8")
+        legacy_path.chmod(0o600)
+        binding = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
+        binding["prompt_filename"] = legacy_name
+        snapshot_bytes = snapshot.read_bytes().replace(
+            b"schema: agentic-sdlc/prompt-v3",
+            b"schema: agentic-sdlc/prompt-v2",
+        ).replace(f"prompt_ref: {prompt_ref}\n".encode(), b"")
+        snapshot.write_bytes(snapshot_bytes)
+        snapshot.chmod(0o600)
+        binding["revisions"][0]["sha256"] = hashlib.sha256(snapshot_bytes).hexdigest()
+        binding["revisions"][0]["bytes"] = len(snapshot_bytes)
+        write_private(run_dir / "prompt.json", binding)
+        write_private(
+            run_dir / "run.json",
+            {"prompt": {"filename": legacy_name}, "prompt_filename": legacy_name},
+        )
+
+        migrated = self.initialize()
+        target = Path(str(migrated["starter_prompt"]))
+        document = workspace.parse_prompt(target)
+        migrated_text = bytes(document["raw"]).decode("utf-8")
+        self.assertEqual(document["prompt_ref"], prompt_ref)
+        self.assertIn("schema: body-schema-must-stay", migrated_text)
+        self.assertIn("prompt_id: body-identity-must-stay", migrated_text)
+        self.assertEqual(migrated_text.count(f"prompt_ref: {prompt_ref}"), 1)
+        self.assertEqual(snapshot.read_bytes(), snapshot_bytes)
+        repaired = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
+        mirror = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(repaired["prompt_filename"], target.name)
+        self.assertEqual(mirror["prompt_filename"], target.name)
+        self.assertEqual(mirror["prompt"]["filename"], target.name)
+        self.assertEqual(self.initialize()["starter_prompt"], str(target))
+
+    def test_prompt_refs_resolve_exactly_and_extend_on_collision(self) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        first = workspace.create_prompt(
+            manifest,
+            "First collision objective",
+            id_factory=lambda: "abcde0" + "0" * 26,
+        )
+        second = workspace.create_prompt(
+            manifest,
+            "Second collision objective",
+            id_factory=lambda: "abcde1" + "1" * 26,
+        )
+        self.assertEqual(first["prompt_ref"], "abcde")
+        self.assertEqual(second["prompt_ref"], "abcde1")
+        second_result = self.intake(Path(str(second["prompt_ref"])))
+        self.assertEqual(second_result["prompt_ref"], "abcde1")
+
+    def test_v2_migration_recovers_from_journaled_old_source(self) -> None:
+        prompt = self.prompt_path()
+        document = workspace.parse_prompt(prompt)
+        prompt_ref = str(document["prompt_ref"])
+        v2 = prompt.read_bytes().replace(
+            b"schema: agentic-sdlc/prompt-v3",
+            b"schema: agentic-sdlc/prompt-v2",
+        ).replace(f"prompt_ref: {prompt_ref}\n".encode(), b"")
+        legacy = prompt.with_name(prompt.name.removeprefix(f"{prompt_ref}--"))
+        prompt.unlink()
+        legacy.write_bytes(v2)
+        legacy.chmod(0o600)
+        migrated = workspace._render_migrated_prompt(v2, prompt_ref)
+        item = {
+            "prompt_id": str(document["prompt_id"]),
+            "prompt_ref": prompt_ref,
+            "old_name": legacy.name,
+            "new_name": f"{prompt_ref}--{legacy.name}",
+            "old_sha256": hashlib.sha256(v2).hexdigest(),
+            "new_sha256": hashlib.sha256(migrated).hexdigest(),
+        }
+        marker = prompt.parent.parent / "prompt-v3-migration.json"
+        workspace.write_atomic(
+            marker,
+            workspace.stable_json(
+                {
+                    "schema": workspace.PROMPT_V3_MIGRATION_SCHEMA,
+                    "migrations": [item],
+                }
+            ),
+        )
+        self.assertEqual(workspace.migrate_prompt_files_v2(prompt.parent), [item])
+        self.assertFalse(legacy.exists())
+        self.assertEqual((prompt.parent / item["new_name"]).read_bytes(), migrated)
+
+    def test_v3_queue_pointer_rewrite_is_replay_safe(self) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        created = workspace.create_prompt(manifest, "Queued migration objective")
+        prompt = Path(str(created["path"]))
+        document = workspace.parse_prompt(prompt)
+        project_dir = manifest.parent
+        workspace.enqueue_prompt(
+            project_dir,
+            document,
+            datetime(2026, 8, 10, tzinfo=timezone.utc),
+        )
+        prompt_ref = str(document["prompt_ref"])
+        v2 = prompt.read_bytes().replace(
+            b"schema: agentic-sdlc/prompt-v3",
+            b"schema: agentic-sdlc/prompt-v2",
+        ).replace(f"prompt_ref: {prompt_ref}\n".encode(), b"")
+        legacy = prompt.with_name(prompt.name.removeprefix(f"{prompt_ref}--"))
+        prompt.unlink()
+        legacy.write_bytes(v2)
+        legacy.chmod(0o600)
+        queue = workspace.load_prompt_queue(project_dir)
+        queue["entries"][0]["source_path"] = legacy.name
+        workspace.save_prompt_queue(project_dir, queue)
+
+        migrations = workspace.migrate_prompt_files_v2(prompt.parent)
+        workspace.rewrite_prompt_v3_references(project_dir, prompt.parent, migrations)
+        workspace.rewrite_prompt_v3_references(project_dir, prompt.parent, migrations)
+        repaired = workspace.load_prompt_queue(project_dir)["entries"][0]
+        self.assertEqual(repaired["source_path"], migrations[0]["new_name"])
+        self.assertEqual(
+            (project_dir / str(repaired["snapshot"])).read_bytes(),
+            (prompt.parent / migrations[0]["new_name"]).read_bytes(),
+        )
+
+    def test_session_refinement_creates_lossless_prompt_and_rejects_stale_merge(self) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        refined = self.root / "refined.md"
+        refinement = (
+            "Implement automatic SDLC prompt intake.\n\n"
+            "- Preserve exact session provenance.\n"
+            "- Keep manual edits inert until explicit run.\n"
+        )
+        refined.write_text(refinement, encoding="utf-8")
+        refined.chmod(0o600)
+        created = workspace.merge_session_refinement(
+            manifest,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="1" * 64,
+            clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+        )
+        prompt = Path(str(created["path"]))
+        self.assertIn(refinement.strip(), prompt.read_text(encoding="utf-8"))
+        base = workspace.parse_prompt(prompt)
+
+        delta = self.root / "delta.md"
+        delta.write_text("Also retain collision-safe prompt references.", encoding="utf-8")
+        delta.chmod(0o600)
+        merged = workspace.merge_session_refinement(
+            manifest,
+            delta,
+            prompt_reference=str(base["prompt_ref"]),
+            expected_sha256=str(base["sha256"]),
+            new_objective=False,
+            operation_id="2" * 64,
+            clock=lambda: datetime(2026, 8, 10, 0, 0, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(merged["prompt_id"], base["prompt_id"])
+        self.assertIn("Also retain collision-safe", prompt.read_text(encoding="utf-8"))
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.merge_session_refinement(
+                manifest,
+                delta,
+                prompt_reference=str(base["prompt_ref"]),
+                expected_sha256=str(base["sha256"]),
+                new_objective=False,
+                operation_id="3" * 64,
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_DRIFT")
+
+        retried = workspace.merge_session_refinement(
+            manifest,
+            delta,
+            prompt_reference=str(base["prompt_ref"]),
+            expected_sha256=str(base["sha256"]),
+            new_objective=False,
+            operation_id="2" * 64,
+        )
+        self.assertEqual(retried["sha256"], merged["sha256"])
+        recreated = workspace.merge_session_refinement(
+            manifest,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="1" * 64,
+        )
+        self.assertEqual(recreated["prompt_id"], created["prompt_id"])
+
+    def test_session_refinement_new_objective_recovers_after_create_interruption(
+        self,
+    ) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        prompt_root = manifest.parent / "prompts"
+        refined = self.root / "interrupted-refinement.md"
+        refined.write_text("Create exactly one crash-safe objective.\n", encoding="utf-8")
+        refined.chmod(0o600)
+        before = set(prompt_root.glob("*.md"))
+        original_write = workspace.write_exclusive
+
+        def interrupt_after_write(path: Path, data: bytes) -> None:
+            original_write(path, data)
+            raise KeyboardInterrupt("simulated process termination")
+
+        with mock.patch.object(
+            workspace,
+            "write_exclusive",
+            side_effect=interrupt_after_write,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                workspace.merge_session_refinement(
+                    manifest,
+                    refined,
+                    prompt_reference=None,
+                    expected_sha256=None,
+                    new_objective=True,
+                    operation_id="4" * 64,
+                    clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+                )
+
+        recovered = workspace.merge_session_refinement(
+            manifest,
+            refined,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="4" * 64,
+            clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+        )
+        created_prompts = set(prompt_root.glob("*.md")) - before
+        self.assertEqual(len(created_prompts), 1)
+        self.assertEqual(
+            Path(str(recovered["path"])).read_text(encoding="utf-8").count(
+                f"<!-- prompt-session-operation:{'4' * 64} -->"
+            ),
+            1,
+        )
+
+    def test_session_refinement_rejects_reserved_operation_marker(self) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        refined = self.root / "reserved-marker.md"
+        refined.write_text(
+            f"Do not inject <!-- prompt-session-operation:{'5' * 64} -->.\n",
+            encoding="utf-8",
+        )
+        refined.chmod(0o600)
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.merge_session_refinement(
+                manifest,
+                refined,
+                prompt_reference=None,
+                expected_sha256=None,
+                new_objective=True,
+                operation_id="5" * 64,
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_INPUT_INVALID")
 
     def test_verify_detects_active_binding_drift(self) -> None:
         prompt = self.prompt_path()

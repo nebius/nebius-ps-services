@@ -1,5 +1,886 @@
 # nebius-cxcli Design
 
+<!-- markdownlint-disable MD001 MD024 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+## Project Design Contract
+
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=3 -->
+### FEAT-001: Exact manager-pause recovery and succession
+
+#### Requirements Covered
+
+- REQ-001: Resume external upgrades from exact interrupted manager-pause checkpoints
+
+#### Context Evidence
+
+`src/nebius_cxcli/soperator_migration.py` owns target-admission bootstrap,
+manager-pause sealing, live pause verification, and checkpoint recovery.
+`tests/test_soperator_migration_executor.py` exercises complete and interrupted
+manager-pause states. The first reported failure occurred after checkpointed
+backup reuse and before target admission could adopt an interrupted pause. The
+current failure occurs when a later post-switch bootstrap finds an exact
+completed pause predecessor whose manager was subsequently restored through
+the durable rolling journal and fenced again by the current prerequisite apply.
+The next reported failure occurs after that successor is sealed under the
+populate operation while the rolling service-replay phase still retains its
+generation-2 predecessor and the active bridge has not yet created a controller-
+gap binding. A later accepted rolling transition can instead leave the rolling
+phase with a generation-6 passive-slot sibling of that same populate-owned
+successor, requiring the handoff to distinguish the sibling from the receipt's
+generation-2 predecessor without treating arbitrary same-generation state as
+equivalent.
+
+#### Design Details
+
+Keep recovery inside the existing private checkpoint boundary. Classify the
+saved pause by the exact transition that could have persisted it, then compare
+its immutable identity and generation material with the newly constructed
+bootstrap authority and the live zero-replica Deployment. Canonicalize only an
+exact supported interrupted seal. For a completed predecessor that no longer
+matches the live generation, require the existing immutable-child and
+target-compatibility restore contract, the same target binding, and one exact
+generation from the final restored manager to the current annotated
+`post-switch-resume` zero-replica bootstrap manager. This succession is valid
+only from the `active-slot-switch` predecessor; other bootstrap boundaries and
+restore authorities require their own contracts. Retain fail-closed rejection
+for every shape whose provenance, lineage, or live equivalence cannot be
+proven.
+
+#### Selected Option
+
+Replace the idealized seven-field recognizer with the exact producer-sealed
+`accepted` or `terminating` state emitted by the manager-pause lifecycle, and
+record a bounded recovery proof before installing the canonical bootstrap
+authority. The recognized record has the exact canonical base key set plus, at
+most, the writer's strictly validated same-generation spec-reserialization
+chain, a valid contract fingerprint, and the same live UID, replica count, spec
+fingerprint, and expected generation. This restores the intended resumability
+invariant without adding a second workflow or weakening complete-contract
+validation. Add one canonical completed-predecessor successor path: validate
+the old sealed `active-slot-switch` bootstrap authority, prove the rolling
+`target-compatibility` restore contract and target identity, require
+`live_generation == prior_restore_generation + 1`, then atomically checkpoint
+a `post-switch-resume` successor receipt and the new bootstrap authority. A
+replay must reproduce the receipt exactly. A predecessor that merely still
+matches the live generation is reusable only when its complete sealed
+bootstrap authority equals the current derived authority; live equivalence
+cannot bypass lifecycle lineage. The rolling-compute phase is the canonical
+manager-pause owner after the post-switch successor is established. The
+post-switch admission operation writes its receipt under the populate operation
+but writes the successor pause to the rolling owner. For the exact already-
+checkpointed split, reconcile the populate-owned successor into rolling only
+after validating the complete successor and restore contracts, the rolling
+authority's exact role and render lineage, the live zero-manager, and the current
+bridge stage, owner, and epoch. The rolling authority may be the receipt-
+generation predecessor, or an exact same-generation passive/active sibling only
+when its chart, manager render, prerequisites, prerequisite UIDs, and manager UID
+match the post-switch successor. Persist the ownership move and a role-bound
+bridge adoption receipt in one checkpoint write, then remove the duplicate
+populate pause. Missing or drifted lineage remains the same hard failure; a controller-
+gap receipt is still required when neither the direct bridge, restored-manager,
+nor exact post-switch successor authority applies.
+The adoption receipt keeps the bridge authority that existed at adoption time;
+it is not rewritten when the controller bridge later upgrades. A target-HA
+service replay accepts a source-HA adoption binding only when the bridge's
+current owner and epoch equal the final durable history entry, the immediately
+preceding unique entry equals the recorded source owner and epoch, both entries
+carry the canonical source- and target-version writer-scale acceptance reasons,
+and their timestamps bracket the adoption. Same-stage replay remains exact;
+foreign, duplicate, reordered, skipped, or time-inconsistent authority lineage
+is rejected before service mutation.
+
+#### Alternatives Considered
+
+Retrying unchanged was rejected because checkpoint classification is
+deterministic. Deleting or manually editing the checkpoint was rejected because
+it discards campaign authority. Accepting arbitrary pause dictionaries was
+rejected because it could adopt a foreign or over-advanced manager pause.
+
+#### Implementation Boundaries
+
+The repair is limited to target-admission manager-pause reconciliation, its
+post-switch-to-service ownership handoff, checkpoint fixture coverage, operator
+documentation, and changelog entry.
+Backup creation, public CLI shape, checkpoint schema version, manager restore,
+and unrelated Soperator phases remain unchanged.
+
+#### Test-First Success Criteria
+
+- TDD-001: Fixtures matching the real producer-sealed `accepted` and `terminating` checkpoints, with and without the canonical same-generation reserialization chain, fail with the reported recovery-required signature before the repair and resume after the repair.
+- TDD-002: Unknown fields, malformed reserialization chains, identity drift, generation drift, malformed owners, and complete conflicting authorities remain rejected before mutation.
+- TDD-003: Existing completed-authority and backup-reuse regressions remain green.
+- TDD-004: An exact completed `active-slot-switch` pause at the pre-restore generation is replaced only when the target-compatibility restore contract and current post-switch bootstrap generation form the exact successor chain; missing lineage, foreign boundaries or restore authorities, a stale live predecessor, target drift, spec drift, skipped generations, and receipt drift perform no checkpoint write.
+- TDD-005: A source- or target-HA service replay with either the rolling generation-2 receipt predecessor or an exact generation-6 passive/active successor sibling, an exact populate-owned generation-6 successor, and its verified 2 -> 5 -> 6 receipt atomically moves the pause to rolling and records the rolling role and bridge epoch before any service mutation. Receipt, campaign, target, manager, generation, spec, sibling render lineage, live-zero, bridge-owner, or bridge-epoch drift fails without changing either owner; replay validates the sealed adoption without rewriting it.
+- TDD-006: A fresh post-switch admission lifecycle writes its successor pause directly to rolling while keeping the operation receipt under populate; the following service replay requires no recovery adoption.
+- TDD-007: An exact source-HA adoption replays after the bridge's canonical source-to-target writer transition without rewriting its receipt; source epoch, target reason, history order, or transition timestamp drift remains rejected.
+
+#### Validation Plan
+
+Run the new regression first, then the focused target-admission and manager-pause
+selection, the full migration executor module if practical, Ruff on changed
+Python, Markdown checks on changed docs, and `git diff --check`.
+
+#### Test Plan
+
+Model the checkpoint at the exact write boundary using the same fields written
+by the canonical manager-pause lifecycle, including its optional
+same-generation reserialization journal. Verify same- and split-phase owner
+placements, the recovery journal fingerprint, completed-predecessor succession,
+both exact historical rolling/populate split roles, one durable ownership checkpoint,
+replay stability, bridge-epoch drift rejection, and reuse by the normal live-
+pause verifier.
+
+#### Evaluation Plan
+
+Compare the fixed path with the original error oracle and inspect the final diff
+for accidental weakening of identity, generation, or live zero-writer gates.
+Treat a local pass as source proof only; require an authorized clean live replay
+for a product-fixed campaign claim.
+
+#### Rollout And Rollback
+
+Deploy the source repair through the normal cxcli release path and rerun the
+same external-upgrade command against its unchanged authoritative checkpoint.
+Rollback is the prior source revision; do not roll back or delete checkpoint
+state as part of source rollback.
+
+#### Done Definition
+
+The causal regression and adjacent gates pass, documentation and changelog are
+aligned, no unrelated dirty changes are modified, and the lifecycle receipt is
+reconciled and sealed. Live completion is reported only when independently
+verified.
+
+<!-- /FEATURE: FEAT-001 -->
+
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready priority=P0 version=10 -->
+### FEAT-002: Exact post-switch Helm dispatch precondition
+
+#### Requirements Covered
+
+- REQ-002: Fence post-switch Helm resume against release replacement
+
+#### Context Evidence
+
+`src/nebius_cxcli/soperator_migration.py` selects the exact deployed
+post-switch predecessor, prepares target admission and login-session gates, and
+dispatches Helm. `tests/test_soperator_migration_executor.py` covers the
+predecessor selector, bridge fencing, phase wiring, and final dispatch seam.
+
+#### Design Details
+
+Represent the selected Helm values and their release/target identity as one
+canonical internal selection. Its frozen precondition contains revision,
+status, chart, app version, values fingerprint, and target namespace/name/UID.
+Carry that precondition unchanged to Helm's pre-mutation and final-dispatch
+hooks, then reconstruct the same tuple from live state and compare it exactly
+at both boundaries. Immediately before Helm, durably journal the exact release
+head, desired fingerprint, target identity, and next revision. A later command
+proves the bounded history from that journal before clearing a pending revision,
+authorizing one retry from a transient-webhook failed head, or adopting the
+exact deployed successor. The admission lifecycle retains the original deployed
+root as its immutable release contract while the protected-dispatch journal owns
+the authenticated current head, so a failed or deployed successor can re-enter
+the outer lifecycle without redefining its predecessor. A directly successful
+protected command immediately proves and checkpoints its deployed successor;
+that proof preserves an already-complete admission lifecycle instead of
+rewinding it to `helm-applied`.
+
+The in-place login-surge reconciler has one downstream adoption edge for that
+same successor. It is used only when the live SlurmCluster and target login
+workload both already hold the temporary count, no boundary-local surge intent
+exists, and the completed `post-switch-resume` lifecycle desired values contain
+that count. cxcli replays the protected-dispatch history from the immutable
+release root, requires its exact expected deployed successor and target/chart
+identity, and proves the successor update occurred between the checkpointed
+dispatch and completed admission timestamps. A temporary in-memory intent
+material renders the exact historical applied values so the protected dispatch
+remains bound to the installed successor. The verifier separately evaluates the
+current desired values in live-recovery mode and requires their exact
+fingerprint plus a `compatible` or `compatible-target-spec-normalization`
+semantic result with unchanged OpenMetrics and no unclassified target-spec
+drift. The intent is never persisted as retroactive authority.
+The durable adoption receipt binds the normalized proof, dispatch lineage, and
+deterministic apply material. Its replay is exact and performs no Helm command;
+generic legacy wall-clock history recovery is not an alternative. If the same
+adopted surge later checkpoints `peer-ready` or `released`, resume rebinds the
+receipt, proof, semantic fingerprints, target identity, and surge observation
+before routing directly into restore; it cannot create a retroactive apply
+intent or start another surge.
+
+The restore pulse carries the same release-level protection. Its immutable
+root is the deployed surge release proven either by the intent-bound surge
+proof or by the complete protected post-switch adoption authority. An
+interrupted `admission-ready` restore that predates that root field may recover
+it only after two exact facts agree: the full surge proof still names the root,
+and live Helm history still exposes that same deployed head with no successor
+revision. cxcli checkpoints a dedicated recovery receipt before the next
+protected dispatch. A later failed successor can authorize a retry only when
+its contiguous protected history and desired-values fingerprint match and its
+description is either the existing webhook-startup failure or the exact
+Kubernetes ambiguous release-create timeout. Arbitrary failed revisions,
+changed deployed heads, and unbound generic timeouts remain blocking.
+
+Only the target Soperator Helm `upgrade --install` child process receives
+`GODEBUG=http2client=0`. This uses Go's supported transport control to retain
+authenticated TLS while negotiating HTTP/1.1 after repeated HTTP/2 connection
+losses on the release-Secret POST. The runner removes any prior
+`http2client` assignment, preserves every unrelated `GODEBUG` setting, and adds
+the exact disabled value; non-target Helm and Kubernetes commands keep
+their inherited environment. The exact chart, values, release precondition,
+protected dispatch, outer-invocation recovery, and fail-closed error classifier
+remain unchanged.
+
+A successful protected restore can synchronously apply the configured login
+size to the SlurmCluster before cxcli creates its separate owner-transition
+intent, leaving the login workload temporarily surged. That exact crash window
+is adopted without another SlurmCluster patch only after cxcli replays the
+protected root-to-head Helm history, re-reads both immutable revision
+manifests, binds them to the prior full surge proof and current restore proof,
+applies current CRD defaults, and proves their sole semantic delta is the login
+replica scalar. The current live target must equal the configured successor
+under the same manager pause, controller gate, bridge authority, and propagated
+client configuration. cxcli checkpoints a verified protected-successor owner
+adoption before scaling the workload. A missing or drifted proof, history,
+manifest, target, fence, or non-login spec field remains blocking.
+
+The durable bridge-client proof can still predate that restore and therefore
+contain the surged login set. When the later controller-gap bridge recovery
+re-establishes live RPC proof, it forwards the same exact verified workload
+restore receipt already used by normal bridge-client reconciliation. The
+successor classifier requires the unchanged target and workload UIDs, the
+configured and surge counts, terminal workload generation and observation,
+identical retained Pod, container, and config identities, and absence of only
+the surge ordinal. It appends the removal successor before replacing the
+durable client proof. Missing authority, a still-present removed Pod, or any
+other client drift remains recovery-required.
+
+One later observation can legitimately contain both that terminal surge
+removal and a session-free replacement of a retained login. Neither pure
+classifier is widened. cxcli computes the retained client intersection, runs
+the existing session-free replacement validator only over that retained set,
+and binds every returned predecessor/replacement Pod, container, node,
+workload, and target field to the observed evidence. It then substitutes only
+those proven retained identities with their durable predecessors and runs the
+existing full-set surge-removal validator against that normalized view. Both
+proofs must name the same workload and SlurmCluster. cxcli journals one
+combined replacement-and-removal successor and only then replaces the durable
+client proof. Extra additions or removals, active sessions, foreign proof
+material, or any retained worker, config, owner, workload, or target drift
+remain mutation-free recovery-required.
+
+OpenMetrics restoration uses the rolling migration phase as the canonical
+target-admission bridge and manager-pause owner, matching surge and restore.
+For a checkpoint already written by the earlier operation-local owner, active
+bridge replay first proves the completed OpenMetrics bootstrap and reconstructs
+the existing continuous-pause material from both sealed authorities. Campaign,
+target UID, manager UID/spec/generation, chart, prerequisites, restore values,
+and lifecycle timestamps must agree. cxcli then checkpoints the same bounded
+reuse receipt and removes only the redundant operation-local pause; it continues
+historical post-switch replay from the unchanged rolling pause. Missing or
+self-consistently rehashed foreign material remains mutation-free
+recovery-required.
+
+After that adopted surge reaches its terminal configured replica state, the
+later bridge-config refresh can legitimately observe the target SConfig writer
+restored to the prepared fence's original size. The advanced-fence classifier
+keeps the ordinary SlurmCluster-regression receipt as one exact route and adds
+a separate protected post-switch route; it never fabricates or backfills the
+missing ordinary receipt. The protected route reuses the full adoption-material
+validator with the checkpoint campaign, target binding, reconciliation desired-
+values fingerprint, adoption hash, proof, and semantic evidence. It additionally
+requires the terminal verified login-client removal, nonempty paused-manager
+UID and positive generation, 64-hex controller-gate and propagated-client
+fingerprints, restored accounting writer gate/command fence, and unchanged
+prepared writer fence. The ordinary route retains its exact nested accounting
+rebind. The protected route instead revalidates the complete protected restore-
+owner successor against the checkpointed restore bootstrap, release root/head,
+manifests, stable target spec, surge proof, and restore intent; this later proof
+was created only after the protected Helm live boundary freshly established
+source retirement and the restored accounting writer. It may therefore accept
+the exact older checkpoint that predates the nested rebind receipt without
+synthesizing one. Only then may the existing bridge-config refresh operate the
+fenced target writer; any drift remains pending before writer restart or
+replica mutation.
+
+Pending cleanup reads
+the exact Helm storage Secret,
+validates its Helm labels and pending status, deletes it with UID and
+resourceVersion preconditions, and re-reads the release head before recording
+retry authorization. The cleanup helper requires the intent- or journal-bound
+revision; generic timeout and `another operation` retry paths never select and
+delete an unbound latest pending revision.
+
+#### Selected Option
+
+Use `before_mutation` before CRD apply and `before_dispatch` after admission and
+login-session preparation but immediately before the first Helm command. A
+protected command error returns without any internal webhook,
+pending-operation, or ownership-adoption retry; the normal checkpoint resume
+reselects authoritative live state. Resume adopts only the exact journaled
+successor chain and advances a proven deployed result directly to
+`helm-applied`, avoiding duplicate dispatch.
+
+#### Alternatives Considered
+
+Rechecking only stored values was rejected because a superseded revision can
+remain readable. Rechecking only before admission/session preparation was
+rejected because a concurrent replacement could still occur afterward.
+Internally retrying a protected failed command was rejected because cxcli may
+not own the visible successor. A compatibility fallback to values-only
+selection was rejected because it discards release and target provenance.
+
+#### Implementation Boundaries
+
+The change is limited to post-switch predecessor/resume selection, the Jail
+Helm wrapper's final dispatch hook and admission-lifecycle recovery journal,
+focused regressions, and operator docs. Controller-bridge values gating,
+manager restore authority, public CLI shape, and live campaign state remain
+unchanged.
+
+#### Test-First Success Criteria
+
+- TDD-001: Revision N selected before dispatch and revision N+1 observed at dispatch fails before Helm mutation.
+- TDD-002: Stable revision, chart, app version, values fingerprint, and target identity permit the canonical operation.
+- TDD-003: Independent chart, app, values, or target-UID drift remains fail-closed while bridge-fencing regressions remain green.
+- TDD-004: Entry drift blocks before CRD mutation and a protected command error performs no internal retry.
+- TDD-005: A failed first invocation can authorize exactly one second invocation whose deployed successor is adopted without duplicate Helm dispatch.
+- TDD-006: Only an exact intent-bound pending revision is cleared; a newer pending head and a foreign failed revision remain blocking.
+- TDD-007: A pending Secret that becomes deployed or is replaced between observation and deletion fails its deletion precondition and produces no retry authorization.
+- TDD-008: An authenticated failed head and deployed successor re-enter the outer admission lifecycle while its immutable release contract remains the original deployed root.
+- TDD-009: A completed post-switch protected successor that already carries the temporary login count is adopted exactly once without a surge Helm replay; dispatch, history, target, chart, values, timestamp, proof, or receipt drift fails before checkpoint mutation.
+- TDD-010: Login restore recovers a missing precondition only from the unchanged protected surge release with no successor revision, checkpoints it before dispatch, accepts only an exact protected ambiguous create-timeout failure, and rejects release or arbitrary-failure drift without mutation.
+- TDD-011: Only the exact target Soperator Helm `upgrade --install` subprocess receives `GODEBUG=http2client=0`; unrelated settings remain present, other commands do not receive an override, and protected dispatch still performs no in-process retry after any command error.
+- TDD-012: A deployed protected restore successor with configured SlurmCluster and surged workload is adopted without a SlurmCluster patch only from exact root/head history, manifests, surge/current proofs, login-size-only semantics, target identity, and live fences; every independent drift fails before adoption or workload mutation.
+- TDD-013: Controller-gap bridge recovery forwards the exact verified login-surge removal receipt into client-proof reconciliation; the old three-login proof may advance to the configured set only when the same workload, target, and generation receipt is terminal, retained identities and config are unchanged, and only the surge ordinal is absent.
+- TDD-014: OpenMetrics restoration passes the canonical rolling bridge owner. An interrupted checkpoint with both the adopted rolling pause and a completed operation-local OpenMetrics pause normalizes exactly once into the bounded continuous-pause reuse receipt; campaign, target, manager, boundary, or lifecycle drift fails before checkpoint mutation.
+- TDD-015: A terminal restored login surge with no ordinary SlurmCluster-regression receipt advances the prepared SConfig writer fence only when the full protected post-switch adoption and restore-owner validators plus exact reconciliation, removal, manager, controller, client, accounting-writer, target, and campaign evidence agree. The ordinary route still requires its accounting rebind; the protected route accepts an exact older no-rebind checkpoint only through that complete restore successor. Independently drifted adoption, restore-owner, or downstream fence material remains mutation-free.
+- TDD-016: A config-only controller-gap observation that combines one exact session-free retained-login replacement with the exact terminal surge-ordinal removal composes the existing validators over the retained and normalized full sets, binds both results to one target/workload authority, appends one combined successor, and writes once. Foreign replacement, removal, or authority material leaves the prior proof and checkpoint unchanged.
+
+#### Validation Plan
+
+Run the dispatch-race regression, focused post-switch selector and phase tests,
+the admission/OpenMetrics/controller-bridge neighborhood, the full migration
+executor module, Ruff, Markdown checks, and `git diff --check`.
+
+#### Test Plan
+
+Use deterministic release and target fixtures. Invoke the real Jail wrapper
+with the same callback at pre-mutation and final dispatch, assert the session
+gate precedes the final check, and prove that revision drift prevents the fake
+Helm command from recording a mutation. Exercise the real Helm helper to prove
+entry drift precedes CRD apply and a protected command failure does not retry.
+Then exercise two command invocations across a failed head and exact deployed
+successor, plus pending cleanup and foreign-failure rejection. Finally exercise
+the live-shaped completed post-switch successor with no dedicated surge intent,
+prove exact causal adoption and stable replay, and reject independent dispatch,
+history, proof, and receipt drift without invoking Helm.
+
+#### Evaluation Plan
+
+Inspect the carried selection and caller wiring, verify every immutable field
+at the final seam, and retain the distinction between local source proof and an
+authorized live campaign replay.
+
+#### Rollout And Rollback
+
+Ship through the normal cxcli release path and resume the unchanged external
+upgrade checkpoint with the original command. Roll back source only; do not
+edit or delete checkpoint state.
+
+#### Done Definition
+
+The causal race and stable-state regressions pass, bridge fences remain exact,
+documentation is aligned, unrelated dirty changes are preserved, and the
+project lifecycle is reconciled and sealed.
+
+<!-- /FEATURE: FEAT-002 -->
+
+<!-- FEATURE: FEAT-003 reqs=REQ-003 status=ready priority=P0 version=2 -->
+### FEAT-003: Digest-first worker bridge-config convergence
+
+#### Requirements Covered
+
+- REQ-003: Recover an exact projected worker bridge-config successor
+
+#### Context Evidence
+
+`src/nebius_cxcli/soperator_migration.py` owns the checkpointed in-place worker
+bridge-config rollout. The live campaign reached a worker whose mounted config
+already matched the exact target digest while its old Pod was not Ready. The
+first repair classified that digest correctly but returned pending before the
+serial recreation state machine. Live kubelet evidence then proved the state
+cannot converge by waiting: both zero-restart predecessor containers retained a
+failed `scontrol show slurmd` readiness probe after the projected ConfigMap
+changed, and their worker journals remained empty.
+The unchanged live replay crossed that boundary, recreated both workers through
+the guarded state machine, and then failed at partition rebase. The target
+controller remained intentionally command-inert, but the reusable controller-
+gap selector rejected the canonical sealed bootstrap manager pause solely
+because it lacked a mutation-time Kubernetes `resourceVersion`; bootstrap pause
+authority is instead sealed by UID, generation, spec, replicas, and its
+immutable admission contract.
+
+#### Design Details
+
+Classify the observed digest before classifying readiness. The exact target
+digest establishes config identity but not runtime completion. If an
+unjournaled Pod is Ready, continue through the unchanged identity, owner, node,
+workload, runtime, and restart-count proofs and checkpoint it without
+replacement. If it is not Ready, bind that exact Pod as `source-bound` with
+`replacement_required=true` and its observed target digest, then continue
+through the existing partition-pause, MUNGE, zero-job, exact-identity,
+UID/resourceVersion-CAS delete, distinct-successor, and exact-target-digest
+verification path. Only the distinct Ready successor becomes verified. Every
+digest outside the exact predecessor/target pair is still recovery-required.
+Centralize checkpoint-only manager-pause validation for the canonical standard,
+bootstrap, and rearm schemas. Both live pause verification and the controller-
+gap partition selector consume that sealed authority. The gap selector retains
+its accepted/verified timestamps, target identity, canonical command gate,
+restored admission window, target-HA authority, and complete partition-record
+checks, but it no longer treats a bootstrap-inapplicable resource version as
+authority. Once exact workers are verified, the existing gap-binding path seals
+the semantic contract and reuses the checkpointed `DOWN` records without a
+Slurm RPC.
+
+#### Selected Option
+
+Route both exact predecessor and exact projected-successor sources into the one
+existing replacement journal, while retaining the direct no-replacement path
+only for an initially Ready exact successor. This keeps one canonical deletion
+mechanism and preserves the foreign-digest and post-intent identity fences.
+Represent manager-pause identity through one sealed checkpoint-authority
+validator rather than schema-specific mutable API metadata. This keeps the
+bootstrap path canonical and fail-closed while allowing the already-designed
+controller-gap no-RPC reuse to run after worker recreation.
+
+#### Alternatives Considered
+
+Retrying the pending branch was rejected because the live probe failure is
+deterministic. Treating every not-Ready Pod as replaceable was rejected because
+a foreign digest must still fail closed. Inferring readiness from the digest,
+deleting without the existing zero-job/CAS gates, or adding a legacy journal
+fallback was rejected because none proves safe runtime convergence.
+Issuing a live partition query was rejected because the target command gate is
+deliberately inert. Retaining the unconditional resource-version check was
+rejected because that field belongs to the standard pause mutation receipt and
+is not part of the sealed bootstrap pause contract. Simply dropping all pause
+validation was rejected because it would admit malformed or foreign authority.
+
+#### Implementation Boundaries
+
+The change is limited to worker bridge-config source classification, reuse of
+the existing serial replacement path, canonical manager-pause checkpoint
+authority validation, controller-gap pause selection, their checkpoint-shaped
+regressions, and operator documentation. The delete primitive, Secret handoff,
+Slurm mutation gates, workload identity, checkpoint schema, and public CLI
+behavior remain unchanged.
+
+#### Test-First Success Criteria
+
+- TDD-001: An unjournaled exact target digest with `Ready=false` reproduces the permanent pending loop before the repair and afterward records source binding before job-free proof and one UID/resourceVersion-CAS delete.
+- TDD-002: A distinct Ready replacement with the exact target digest completes the existing worker verification path, while an initially Ready exact successor retains the no-replacement behavior.
+- TDD-003: Any digest outside the checkpointed predecessor/successor pair remains recovery-required without a Pod delete or checkpoint write.
+- TDD-004: Identity drift after source binding and a replacement that is absent, same-UID, unready, or carries the wrong digest remain pending or recovery-required under the existing state-machine contract.
+- TDD-005: A live-shaped sealed `post-switch-resume` bootstrap pause with no resource version supplies exact controller-gap `DOWN` records after both workers are verified and never dispatches a Slurm partition snapshot.
+- TDD-006: An unsealed or contract-drifted bootstrap pause, gate/admission drift, or incomplete partition journal remains fail-closed before checkpoint-gap reuse.
+
+#### Validation Plan
+
+Run the fail-first regression, the worker bridge-config rollout neighborhood,
+the controller-gap semantic binding and no-RPC pause neighborhood,
+documentation alignment, Ruff and Markdown checks, and `git diff --check`.
+Then resume the unchanged live command and require it to advance past both
+boundaries before claiming the campaign defects fixed.
+
+#### Test Plan
+
+Use a checkpoint fixture with an unverified worker entry and exact predecessor
+and successor hashes. Observe the exact successor with `Ready=false`, then a
+distinct Ready exact replacement; assert source binding, job-free-before-delete
+ordering, UID/resourceVersion CAS arguments, and final verification. Retain the
+existing Ready-successor and foreign-digest cases.
+Use the same canonical bootstrap pause producer fields as the live checkpoint,
+omit `resource_version`, and prove the controller-gap selector returns the
+exact bridge records. Keep a Slurm snapshot stub that fails if invoked, then
+tamper the sealed pause material to prove rejection.
+
+#### Evaluation Plan
+
+Verify the production condition ordering matches the failure oracle, the
+negative digest fence is unchanged, and the authorized replay advances beyond
+the worker convergence and inert-controller partition-rebase boundaries.
+
+#### Rollout And Rollback
+
+Deploy the source repair through the normal cxcli path and rerun the unchanged
+external-upgrade command. Roll back source only; do not edit live checkpoint or
+cluster state outside the product workflow.
+
+#### Done Definition
+
+The causal and adjacent tests pass, documentation is aligned, unrelated dirty
+changes remain untouched, and live completion is reported only from the
+authoritative campaign replay.
+
+<!-- /FEATURE: FEAT-003 -->
+
+<!-- FEATURE: FEAT-004 reqs=REQ-004 status=ready priority=P0 version=1 -->
+### FEAT-004: Exact pre-propagation bridge-client successor replay
+
+#### Requirements Covered
+
+- REQ-004: Resume an exact accepted bridge-client successor before first propagation
+
+#### Context Evidence
+
+The live rolling-compute checkpoint had durably accepted the canonical
+legacy-rootfs compatibility transform from its predecessor digest to the target
+digest. The handoff and ConfigMap were on that target, all login consumers had
+verified it, and the first cluster-wide `propagation` receipt had not yet been
+written. `_reconcile_in_place_bridge_client_config_observation` rejected the
+partial lifecycle before checking the exact sealed successor, so execution
+could never reach the proof step that completes the lifecycle.
+
+#### Design Details
+
+Evaluate the sealed compatibility successor before requiring historical
+predecessor propagation. The narrow pre-propagation state requires `accepted`
+handoff status, no propagation mapping, identical recorded and observed target
+digests, the exact live ConfigMap name in both handoff and successor, the
+canonical target/ref/predecessor/target/transform/reason receipt, and no
+conflicting login-rollout digest or incomplete verified-login timestamp. Return
+without writing or promoting the handoff, then let the existing reconciliation
+continue through target-writer, login, worker, and cluster-wide live-RPC proof.
+
+#### Selected Option
+
+Add one exact accepted-successor crash window inside the existing observation
+reconciler. Keep the verified-predecessor recovery branch unchanged and reject
+any non-empty propagation mapping that does not already pass its full proof.
+
+#### Alternatives Considered
+
+Treating absence of propagation as proof was rejected because it would admit an
+arbitrary accepted digest. Reconstructing or writing a predecessor proof from
+the successor receipt was rejected because the receipt proves only the
+authorized transform, not cluster-wide consumption. A legacy checkpoint
+fallback was rejected because the current sealed successor is sufficient.
+
+#### Implementation Boundaries
+
+The change is limited to bridge-client observation classification, exact
+successor ConfigMap binding, checkpoint-shaped tests, and operator docs. It does
+not change checkpoint schemas, apply a ConfigMap, advance propagation state, or
+relax login, worker, Slurm, controller, manager, or live-RPC gates.
+
+#### Test-First Success Criteria
+
+- TDD-001: The live accepted-target/no-propagation checkpoint shape reproduces the recovery-required error before the repair and returns without a write afterward.
+- TDD-002: Successor ConfigMap drift, handoff ConfigMap drift, a conflicting login digest, and a partial propagation mapping all remain recovery-required without state mutation.
+- TDD-003: Verified predecessor recovery and exact compatibility-successor coverage remain green.
+
+#### Validation Plan
+
+Run the fail-first regression, the bridge-client observation and propagation
+neighborhood, documentation alignment, Ruff, Markdown lint, and `git diff
+--check`. Resume the unchanged command and require live progress beyond this
+boundary before calling the defect fixed.
+
+#### Test Plan
+
+Build the accepted pre-propagation fixture from the checkpoint fields rather
+than a legacy shape. Assert no receipt rewrite for the exact case and compare a
+deep copy before and after each rejected drift variant.
+
+#### Evaluation Plan
+
+Verify the accepted exception is gated by an absent propagation mapping and the
+full sealed successor identity, while every populated invalid predecessor proof
+still reaches the original fail-closed error.
+
+#### Rollout And Rollback
+
+Ship through the normal cxcli source path and rerun the unchanged external
+upgrade command. Roll back source only; do not edit checkpoint or cluster state.
+
+#### Done Definition
+
+The causal regression and drift matrix pass, docs and changed-scope checks are
+aligned, unrelated dirty changes are preserved, and the authorized live replay
+advances beyond the accepted-successor boundary.
+
+<!-- /FEATURE: FEAT-004 -->
+
+<!-- FEATURE: FEAT-005 reqs=REQ-005 status=ready priority=P0 version=1 -->
+### FEAT-005: Exact pre-replay GPU worker process rollover
+
+#### Requirements Covered
+
+- REQ-005: Restart an exact pre-replay GPU worker process
+
+#### Context Evidence
+
+The live target NodeSet and Helm values already carry the verified 128-CPU,
+two-socket, typed-H100 static topology, and jailed `slurmd -C` reports the same
+hardware/config contract. Both Ready worker Pods and their zero-restart
+`slurmd` containers started roughly sixteen hours before that topology replay,
+however, and `scontrol show node` still reports the internally consistent old
+32-CPU, one-socket registration with exact typed GRES, no reason, zero
+allocations, and `IDLE+DYNAMIC_NORM`. The existing recovery recognizes only a
+matching current topology or generic-GRES `INVALID_REG`, so it rejects this
+stale process generation before reaching its guarded rollover.
+
+#### Design Details
+
+Keep the current topology and generic-GRES classifiers unchanged and add one
+separate stale-static-process classifier. It accepts only the exact node and
+typed GRES, an internally consistent positive CPU product strictly smaller
+than the replay, the replay's board count, no `Parameters`, exactly
+`IDLE+DYNAMIC_NORM`, no reason, and zero CPU/memory allocations. Classification
+alone grants no mutation authority.
+
+Before using the existing parallel Pod rollover, bind each candidate to the
+release-gate Pod UID and prove its creation and zero-restart `slurmd` start
+precede the replay's prepared and verified timestamps. Re-read the Helm-owned
+NodeSet, bind its UID, generation, replicas, complete spec, target ownership,
+and canonical static topology, and prove the old Pod's jailed `slurmd -C`
+output matches. Persist that authority with the rollover intent, revalidate the
+NodeSet and process immediately before each UID/resourceVersion-CAS delete,
+then require distinct same-node/same-workload Ready successors. Each successor
+must be zero-restart, start after replay, retain the exact live NodeSet binding,
+and expose the canonical runtime config.
+
+After rollover, freshly re-observe each replacement registration. An unchanged
+idle stale record is a controller-config mismatch, not a drain, so it never
+authorizes `RESUME`. A replacement that is already exact skips the target-HA
+config rewrite. The existing topology-only bridge-config successor may run for
+either the already supported generic-GRES `INVALID_REG`/owned-drain shape or
+the exact smaller stale-static controller record, but the latter additionally
+requires the durable live replacement/runtime resume proof. Only the generic
+owned-drain route may clear a drain. The resume proof preserves its original
+full `slurmd -C` observation fingerprint, but replay freshly validates and
+compares only the canonical node, CPU/socket/core/thread, and typed-GRES
+contract. Volatile non-contract fields such as `UpTime`, `RealMemory`, and `TmpDisk`
+therefore cannot invalidate unchanged topology, while any semantic topology or
+successor-lineage drift remains pending. All other states remain pending.
+
+Before the topology path performs its first partition, queue, node, or
+reconfigure RPC, run the existing target cluster-ID marker repair against the
+rolling phase's exact accounting and bridge authority. This ordering matters:
+the topology-only successor can cause Slurm 25.11 to re-exec the active
+controller, and a preserved source-era numeric ID then fails closed against the
+target SlurmDBD before the later compute-tail repair is reached. The canonical
+repair already binds the accepted cluster-name transition, three collision-free
+registration IDs, exact marker preimage, checkpoint-paused zero-allocation
+state, two-role bridge workload, stopped-writer census, regenerated target ID,
+and restored active/standby roles. Because this earlier boundary precedes the
+GPU smoke gate and the serving controller may already reject RPCs, derive the
+queue authority from the complete rolling pause journal plus the accepted
+typed-GRES successor, effective worker probes, staging chain, and reconfigure
+intent. Revalidate the enabled target accounting Deployment, its exact
+authenticated zero-restart runtime successor, the MariaDB/StatefulSet/PVC
+identity, and live registration IDs before writing repair intent. After the
+bridge restart, require the new active/standby pair to authenticate
+bidirectionally with that writer. If both journaled bridge Pods have already
+entered the stale-marker fatal loop, admit only the exact two-Pod preimage: both
+are non-deleting, non-Ready `Running` Pods owned by the journaled StatefulSet,
+their `slurmctld` containers have positive restart counts, are waiting in
+`CrashLoopBackOff`, and last terminated in chronological order with `Error` and
+exit `1`. In that state only, derive the stager image from the exact immutable
+source image recorded identically by the bridge source binding and version
+transition; bind the current bridge image separately from the target roles.
+Validate the already-existing Ready inert stager's campaign name, source image,
+command, non-escalating root security context, UID/resourceVersion, `/shared`
+mount, and controller-state PVC. Use it only as the read-only pre-intent marker
+reader and adopt the same exact binding on resume without another apply. The
+later checkpoint-first stop, exact-preimage
+deletion, restart, authentication proof, and cleanup remain unchanged. Reuse
+the canonical repair; do not add a direct marker deletion or an RPC fallback.
+The accepted typed-GRES config successor remains an immutable record of the
+pre-repair controller generation. On resume after marker verification, accept
+the current Pod UIDs only through a child-lineage receipt that requires the
+repair's exact predecessor list, original pre-Slurm successor fingerprint,
+unchanged StatefulSet UID, current active/standby role fingerprint, strict
+restart/observation/verification chronology, and unchanged live ConfigMap and
+per-Pod Jail digests. Record that receipt once; do not rewrite the historical
+successor or admit an external replacement.
+
+#### Selected Option
+
+Extend the one canonical typed-GRES worker rollover with an explicitly bound
+pre-replay static-process subset and reuse its checkpoint, parallel delete,
+replacement, bridge/client rebind, and mutation guards. Do not treat the stale
+record as ready, synthesize a drain, or add a second Pod deletion mechanism.
+
+#### Alternatives Considered
+
+Accepting any typed-GRES topology mismatch was rejected because it could
+restart an intentionally drifted worker. Issuing `scontrol reconfigure` or
+`RESUME` was rejected because the live daemon process never loaded the current
+static topology and is not drained. A direct uncheckpointed Pod restart was
+rejected because it would bypass the existing identity, partition, queue, and
+CAS contracts.
+
+#### Implementation Boundaries
+
+The repair is limited to GPU topology drain classification, pre-replay process
+and live NodeSet proof, the existing typed-GRES rollover, focused regression
+coverage, operator documentation, and changelog. Public CLI shape, checkpoint
+campaign identity, topology replay, partition/queue gates, workload ownership,
+and unrelated migration phases remain unchanged.
+
+#### Test-First Success Criteria
+
+- TDD-001: The exact live 32-CPU/typed-GRES/idle/no-reason/zero-allocation record is stale-process eligible but never ready; allocation, reason, state, parameters, GRES, and inconsistent or already-current CPU topology remain rejected.
+- TDD-002: Only a zero-restart Pod and `slurmd` start before replay yields the exact chronology proof; UID or timestamp drift cannot reach deletion.
+- TDD-003: The live NodeSet binding requires the exact Helm owner, target, UID, generation, replicas, complete spec, and canonical static topology.
+- TDD-004: The caller passes the complete pre-replay subset to the existing parallel rollover, freshly re-observes target-HA successors, skips config recovery for an exact replacement, invokes it for the exact generic-GRES `INVALID_REG` successor or for the live-proof-bound stale-static controller successor, waits for exact post-recovery registration, and never emits `scontrol update State=RESUME` for the idle stale record.
+- TDD-005: Registration-resume replay accepts a changed raw `slurmd -C` line only when the canonical topology and successor lineage remain exact, rejects CPU/GRES semantic drift, and leaves the historical observation unchanged; the existing matching-topology, owned stale-drain, generic-GRES `INVALID_REG`, checkpoint replay, and bridge-successor tests remain green.
+- TDD-006: GPU topology replay invokes the canonical target cluster-ID marker repair before its first Slurm RPC. Production-shaped tests prove the full cross-phase pause/queue chain, current accounting writer/runtime/DB authority, no pre-repair `squeue` dependency, exact marker preimage, exact dual-controller fatal-loop admission through the existing inert stager without reapply, distinct immutable source-stager and target-bridge image bindings, stopped-writer restart, role rebind, successor Munge authentication, one immutable intent-generation-to-verified-restart child-lineage receipt, predecessor/StatefulSet/queue-authority/role/chronology/config/Jail drift rejection, and idempotent verified replay. A verified marker record is the historical pre-Slurm authority owner: replay validates its sealed queue/accounting payload and skips chronology reconstruction from later queue observations, while absent or unverified records still derive fresh authority. The child receipt also binds each Ready controller's container ID, image ID, restart count, and start time. The caller wraps a full read-only lineage fence with mutation guards before the pre-reconfigure pause reassert, immediately before `scontrol reconfigure`, and before the post-reconfigure pause reassert; each fence re-reads the StatefulSet, exact Pod/process generation, live active/standby mapping, ConfigMap material, and both jailed digests. After the successful verification ping, a fourth guarded fence must pass before the caller can checkpoint the reconfigure proof.
+
+#### Validation Plan
+
+Run the new classifier, chronology, NodeSet, pre-delete, and caller-level
+regressions first; broaden to the GPU topology, typed-GRES, release-gate,
+bridge-rebind, and documentation neighborhoods; then run Ruff, Markdown lint,
+`git diff --check`, and the full migration/docs suite when practical. Treat
+these as source proof until the unchanged command crosses the live boundary.
+
+#### Test Plan
+
+Use live-shaped Slurm and Kubernetes fixtures with both workers in the same
+pre-replay state. Independently mutate every admission field and assert no
+delete or Slurm update. For the exact case, assert one checkpointed parallel
+rollover, distinct post-replay successors, exact runtime config, zero direct
+Slurm resume, and stable replay through the existing successor lineage.
+
+#### Evaluation Plan
+
+Compare the repaired path with the original error oracle, inspect every new
+pre-mutation binding, and require the live command to replace only the two
+proven old processes and advance beyond topology drain recovery before calling
+this campaign defect fixed.
+
+#### Rollout And Rollback
+
+Ship through the normal cxcli source path and rerun the exact authorized
+external-upgrade command from the unchanged checkpoint. Roll back source only;
+do not edit the checkpoint or restart workers outside the product workflow.
+
+#### Done Definition
+
+The causal and negative regressions pass, docs and changed-scope checks align,
+unrelated dirty work is preserved, and live completion is reported only from
+the authoritative campaign replay.
+
+<!-- /FEATURE: FEAT-005 -->
+
+<!-- FEATURE: FEAT-006 reqs=REQ-006 status=ready priority=P0 version=1 -->
+### FEAT-006: Checkpointed accounting Munge runtime reload
+
+#### Requirements Covered
+
+- REQ-006: Reload an exact pre-CAS accounting Munge runtime
+
+#### Context Evidence
+
+The verified worker Munge handoff patched the target Secret after the active
+Slurm 25 accounting Pod had already started. Secret objects now contain equal
+material and component clocks are aligned, but ephemeral cross-decode proves
+the retained bridge controllers and replacement workers share one active Munge
+runtime while accounting still holds the pre-CAS key in memory. `slurmctld`
+retries every 19 seconds and accounting logs `Munge decode failed` plus
+`Protocol authentication error`. The active Pod is Ready because its readiness
+probe does not exercise controller authentication.
+
+#### Design Details
+
+Extend the canonical Munge handoff with one accounting-runtime child journal.
+Resolve the target accounting Deployment through the target SlurmCluster
+selector, require one active Deployment-owned Ready Pod and bind Deployment,
+ReplicaSet, Pod, Service, target Secret, target writer, and retained bridge
+identities. Prove the current container start precedes the accepted CAS and has
+zero restarts. Run local encode/decode in bridge and accounting, then pass an
+ephemeral credential through stdin in both directions. Store only the result
+classification; never persist credential bytes or their digest.
+
+Before deletion, revalidate the complete binding, checkpoint paused partitions
+and an empty `squeue`, then record the Pod UID/resourceVersion restart intent.
+Use the existing UID-preconditioned Pod deletion helper. Wait for a distinct
+same-Deployment successor whose target Secret projection is unchanged, whose
+container began after CAS, and whose local and two-controller cross-decode
+checks pass. Seal its immutable identity and make exact replay read-only.
+
+#### Selected Option
+
+Reload only the stale accounting Pod under the existing verified Munge CAS and
+accounting-writer authority. Keep worker and login runtime recovery at their
+current owners; share only narrow immutable-child and credential-probe helpers.
+
+#### Alternatives Considered
+
+Manually deleting the Pod was rejected because it bypasses the campaign
+journal. Treating equal Secret objects as runtime proof was rejected because
+Munge reads its key at daemon start. Restarting the full Deployment or all
+Slurm components was rejected because only accounting fails cross-auth and a
+broader rollout weakens identity and availability control.
+
+#### Implementation Boundaries
+
+The change is limited to the in-place Munge handoff, active target accounting
+runtime proof/restart, focused executor tests, operator docs, and changelog.
+It does not change CLI arguments, Secret contents, accounting data, writer
+selection, controller ownership, or unrelated Pod rollout behavior.
+
+#### Test-First Success Criteria
+
+- TDD-001: Equal Secret objects plus a pre-CAS Pod are insufficient without successful local Munge and exact failed cross-decode in both directions.
+- TDD-002: One exact target Deployment/ReplicaSet/Pod/Service/Secret/writer/bridge binding and empty paused queue reaches a durable UID/resourceVersion delete intent.
+- TDD-003: Only a distinct post-CAS zero-restart successor under the same Deployment and Secret that cross-authenticates both bridge Pods becomes verified.
+- TDD-004: Verified replay is mutation-free; every owner, timestamp, selector, Secret, queue, bridge, writer, restart, and probe drift blocks before deletion.
+- TDD-005: Existing worker/login Munge continuity, accounting handoff, controller bridge, and topology recovery tests remain green.
+
+#### Validation Plan
+
+Run fail-first accounting runtime and caller tests, adjacent Munge/accounting
+handoff selections, the topology registration regressions, Ruff, Markdownlint,
+`git diff --check`, docs alignment, and the full migration executor when
+practical. Live proof requires the unchanged authorized command plus fresh
+controller/accounting logs and independent cross-decode verification.
+
+#### Test Plan
+
+Use an in-memory command runner that never exposes probe stdin. Model local and
+cross decode, the exact live Deployment/ReplicaSet/Pod shape, one checkpointed
+delete, and a distinct authenticated successor. Parametrize every admission
+field and assert the delete helper and checkpoint successor are untouched for
+non-exact cases.
+
+#### Evaluation Plan
+
+Compare the pre-repair cross-decode and component logs with the successor
+runtime. Require both retained controllers and accounting to decode each
+other's ephemeral credentials, require the repeated protocol-authentication
+errors to stop, and confirm that only the checkpoint-bound accounting Pod was
+replaced.
+
+#### Rollout And Rollback
+
+Ship in the normal cxcli source path and resume from the existing checkpoint.
+Rollback is source-only before execution; never edit the checkpoint or restart
+accounting manually.
+
+#### Done Definition
+
+Source and docs checks pass, the product-owned restart yields bidirectional
+bridge/accounting Munge authentication, repeated controller auth errors cease,
+and the live campaign advances with no out-of-band cluster mutation.
+
+<!-- /FEATURE: FEAT-006 -->
+<!-- maintain-project-specs:design:end -->
+<!-- markdownlint-enable MD001 MD024 -->
+
 ## Table of Contents
 
 - [Goal](#goal)
@@ -1329,11 +2210,28 @@ Lease with the API's six-fractional-digit `MicroTime` representation; the
 120-second duration remains only a crash or release-failure fallback. Renewal
 retries bounded transient MK8s exec-credential, API timeout, TLS, connection,
 etcd leader-change, rate-limit, and exec-credential token-expiry Unauthorized
-failures within that duration. A temporary cxcli-owned kubeconfig binds every
+failures within that duration. Before any external-upgrade cluster handoff,
+Lease acquisition, or checkpoint mutation, execution admits only a renewable
+service-account credential file or complete service-account private-key
+environment. It loads the matching project runtime-auth cache even when a
+static IAM token is inherited and rejects static IAM, CLI, config-profile, and
+impersonation-token fallbacks. One command-lifetime provider SDK owns background
+token renewal; every bounded provider request waits synchronously when renewal
+is due, and provider SDK cleanup is wall-clock bounded so Lease release cannot
+wait indefinitely on a stalled close. Execute mode replaces any stored kube
+context with the cxcli-owned handoff when the target has a Nebius cluster ID;
+kube-context-only targets fail before mutation because arbitrary local
+authentication cannot prove command-lifetime renewal. Credential revocation or
+an outage beyond the bounded retry budgets
+still fails closed for exact-command checkpoint resume. A temporary cxcli-owned
+kubeconfig binds every
 kubectl subprocess to one owner-only command-lifetime ExecCredential cache;
 file locking single-flights concurrent refreshes, refresh begins before
 expiry, and a still-valid cached token remains the fallback during a transient
-refresh failure. A sanitized 60-second refresh-failure cooldown lets lock
+refresh failure. The hidden exec command re-enters the same Python module used
+by the parent process, requires the same renewable authority, and may exchange
+fresh tokens repeatedly across access-token lifetimes. A sanitized 60-second
+refresh-failure cooldown lets lock
 waiters reuse that valid token immediately instead of serially repeating the
 failed exchange. Acquisition retries a timed-out lease kubectl call inside its
 bounded loop; the acquisition re-read reconciles a
@@ -1482,7 +2380,9 @@ checks, required Soperator deployment snapshot, protected-state deltas, and the
 shared bounded fast safety verifier; every executed stage runs a fast
 stage-scoped verification before the next stage starts, prints
 `Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and records
-`phase_state[<stage>].fast_verification`. Fast stage verification is read-only,
+`phase_state[<stage>].fast_verification`. Rich terminal rendering colors only
+the exact `FAIL` token red; execution-result, checkpoint, and Markdown/JSON
+report contracts retain plain text. Fast stage verification is read-only,
 so a failed check re-reads live state inside the same execute invocation for a
 bounded convergence budget (default 300 seconds, 20-second poll) before it
 records the failure; snapshot-consuming stages (rolling compute, final cutover,
@@ -1644,14 +2544,57 @@ exact same command resumes from the first unmet checkpoint after the reported
 blocker is resolved. A fresh `ext-soperator onboard` decision is only for
 proposing a later campaign after live-verified completion.
 
-The config-owned v6 campaign is the desired-path authority, the operation
-journal is progress authority, and live discovery is observation authority for
-the current segment only. CLI and report output therefore label the discovered
-support rule and executor phase list as current-segment scoped, separately show
-the campaign final-target rule, and derive the committed support-policy rule for
-every locked segment. Deferred discovery must recompute the current segment's
-support finding instead of retaining a final-target rule ID beside
-current-segment version evidence.
+The config-owned v6 campaign is the only desired-path authority. The operation
+journal owns progress and recovery evidence but cannot select or reconstruct a
+target, and live discovery is observation authority for the current segment
+only. CLI and report output therefore label the discovered support rule and
+executor phase list as current-segment scoped, separately show the locked
+campaign Kubernetes path and final-target rule, and derive the committed
+support-policy rule for every locked segment. A same-minor staging segment is
+rendered as `Kubernetes remains X`, while an actual minor transition is labeled
+as a Kubernetes hop. Command-start analysis and external node-template
+execution always receive the active segment's pinned Kubernetes target even
+when the campaign-final node-template target differs from that staging segment;
+the v6 executor has no static Kubernetes target fallback. Deferred discovery
+must recompute the current segment's support
+finding instead of retaining a final-target rule ID beside current-segment
+version evidence.
+
+The initial target admission bootstrap may create
+`deployment/soperator-manager` already fenced at zero replicas before a Helm
+release exists. That creation is not modeled as a positive-to-zero Deployment
+generation transition. Its distinct pause authority binds the campaign,
+bootstrap boundary, chart and gated-values fingerprints, full prerequisite UID
+set, rendered non-replica manager spec, zero owned manager Pods, and the
+positive replica/spec restore contract rendered from ungated values. The
+historical incomplete scale-down-shaped journal is migrated only when its
+status, UID, original replicas, spec fingerprint, pause generation, and
+verification timestamp exactly match that live bootstrap proof; extra fields,
+identity drift, foreign annotations, Pods, or spec drift remain fail-closed.
+Every admission-backed Helm reconciliation carries two explicit value surfaces:
+the exact values to apply, which may already be controller-bridge-gated, and
+canonical ungated values that render the future positive manager restore
+contract. The shared wrapper never infers the second surface from the first;
+callers that replay stored or historical values must supply their independently
+reconstructed canonical authority or fail before bootstrap mutation.
+The rendered gated manager spec, excluding only replicas, must fingerprint to
+the ungated restore spec before a lifecycle intent is checkpointed or any
+prerequisite is applied. Recovery of an older `prerequisites-ready` lifecycle
+persists its missing restore contract only with successful live pause
+reconciliation.
+If the `post-switch-resume` bootstrap prerequisite follows an exact manager
+restore, a completed `active-slot-switch` bootstrap pause may be superseded
+only through the canonical target-compatibility restored-manager contract
+already derived from the immutable-child and target-compatibility journals.
+The predecessor pause generation must equal that contract's prior pause
+generation; its UID, original replicas, rendered non-replica spec, and target
+must remain identical; and the live annotated zero-manager generation must be
+exactly one greater than the final restored generation. The operation phase
+checkpoints a post-switch receipt over the predecessor, restore, and successor
+fingerprints atomically with the new bootstrap pause. Replays verify that
+receipt before reusing the pause; a foreign boundary or restore authority, a
+stale live predecessor, missing lineage, skipped generations, or receipt drift
+remains recovery-required.
 
 The execute attempt owns a narrow read-only observation cache to keep repeated
 pre-fence validation from dominating production upgrade time. A bridge route is
@@ -1685,6 +2628,19 @@ reconciliation returns directly to restore-proof verification and cannot start
 another surge. Webhook-bridge cleanup keeps 32 exact terminal lifecycles, the
 same bounded scale used by admission supersession history.
 
+Before that restore Helm pulse, cxcli derives an immutable release
+precondition from the exact surge intent/proof or the full protected
+post-switch adoption receipt. A checkpoint already at `admission-ready` but
+missing this field can advance only when the live deployed release still
+equals that protected surge predecessor and Helm history contains no successor
+revision; cxcli records the recovery before dispatch. Every following restore
+attempt checkpoints and revalidates the current protected head. If Helm creates
+an exact failed revision for the desired restore values, only the bounded
+webhook-startup descriptions or the two Kubernetes ambiguous create-timeout
+forms can authorize the next attempt. A no-revision timeout reuses only the
+unchanged predecessor, while a deployed successor is adopted without another
+Helm call.
+
 The OpenMetrics handoff is also an input to every temporary login Helm pulse:
 `planned`, `switch-intent-recorded`, and `compatibility-active` keep metrics
 disabled, while only the restore-intent and restored states permit the desired
@@ -1707,6 +2663,51 @@ That transition checkpoints the exact restore intent/admission proof, target
 UID/resourceVersion/generation, bridge authority, manager/controller fences,
 and temporary admission window before patching surge to configured. Only the
 separately fenced target-owned workload CAS may then remove the extra Pod.
+The first post-switch compatibility reconciliation is a separate lifecycle
+case: no historical `post-switch-resume` record exists yet. Before recording a
+new OpenMetrics switch intent, the executor reads the deployed Helm values and
+requires them to match either the completed `active-slot-switch` lifecycle or
+one exact later target-values intent/proof chain. It also revalidates the
+deployed release revision, chart/app identity, jail alias, maintenance value,
+and live target namespace/name/UID against the checkpoint. The fresh
+post-switch admission apply therefore preserves the proven current Helm
+predecessor, including any later login or worker values, and changes only the
+declared compatibility override. Its positive manager restore contract is
+rendered separately from the canonical switched values, never from that
+possibly bridge-gated deployed predecessor. The selected values travel with an
+immutable precondition containing the deployed release revision, chart, app
+version, values fingerprint, and target namespace/name/UID. The executor
+rereads that complete tuple before CRD mutation and again, after admission and
+login-session preparation, immediately before the first Helm command. Any
+replacement or drift fails before the protected mutation. A protected Helm
+command error performs no internal webhook, pending-operation, or ownership
+retry; the next command resumes through the authoritative checkpoint and
+reselects live state. Immediately before that one Helm command, the admission
+lifecycle durably records the selected release head, target binding, desired
+values fingerprint, and exact next revision. A later invocation accepts only
+the unchanged head, the exact next pending revision, a bounded contiguous chain
+of intent-bound transient-webhook failures, or the exact deployed successor.
+The outer admission lifecycle continues to compare its original deployed root;
+the dispatch journal separately carries the authenticated failed or deployed
+head used by the next guard and dispatch, avoiding both immutable-contract drift
+and predecessor rebinding.
+It clears only a proven pending Helm storage Secret whose name, namespace, UID,
+resourceVersion, owner, release name, revision, and pending status all match,
+using Kubernetes deletion preconditions. A conflict leaves the journal pending;
+after a successful delete, cxcli re-reads the release and requires the exact
+prior head before durably authorizing one retry. Generic Helm timeout and
+`another operation` handlers do not clear an unbound latest pending revision;
+only the checkpointed intent or protected journal may supply the required exact
+revision. The replay forces the same
+target-admission lifecycle even after the controller bridge reaches its later
+stage, so the dispatch journal and manager/controller fences cannot be skipped.
+An exact deployed successor is promoted to `helm-applied` without dispatching
+Helm again. Missing revisions, unrelated failure descriptions, value/chart/app
+drift, target replacement, and revisions outside that journal remain fail
+closed. Historical time-window recovery remains exclusive to an actually
+completed post-switch lifecycle and carries the current deployed successor
+precondition while replaying its historical compatibility values; a
+nonterminal lifecycle follows its exact deployed resume path.
 After both replica owners are durably configured, an OpenMetrics-restore Helm
 apply may supersede the historical login-restore values without reopening that
 restore. The terminal successor selector requires the original verified
@@ -2018,6 +3019,21 @@ the temporary surge and its restoration; every ordinary target values replay
 still requires accounting status `verified`. The corresponding post-Helm proof
 compares the deployed and live SlurmDBD state as a restored writer, while any
 unexpected inert command fence remains fail-closed drift.
+The rolling-phase source-presence observation is a pre-retirement scheduling
+snapshot, not post-retirement replay authority. It may remain `true` after the
+same phase durably retires the exact source. Temporary login replay therefore
+binds the immutable retirement and target-only command-fence proofs instead,
+then performs the fresh source-absence read immediately before Helm; an
+actually reappeared source still blocks before mutation.
+Later protected admission lifecycles can also encounter the manager still in
+the exact zero-replica pause established by `post-switch-resume`. Surge,
+surge-restore, and OpenMetrics-restore boundaries do not replace that canonical
+pause or fabricate a restore/re-pause generation. They checkpoint a
+boundary-local continuous-pause reuse receipt only when campaign, target UID,
+manager UID/spec/generation, chart, prerequisites, and both sealed pause
+authorities agree while the canonical rolling owner remains unchanged. A
+generation change, foreign owner, earlier boundary, or material drift remains
+recovery-required before webhook publication or Helm.
 Source-retirement gates must forward the execution checkpoint writer into this
 release path. Missing writer authority is rejected before the PUB, Pod hold
 metadata, or ownerless admission-policy resources are changed.
@@ -2257,19 +3273,19 @@ while compute and cutover phases emit MK8s status as a Nebius API-backed
 replacement node-group table sourced from one node-group snapshot per
 refresh. The table starts with aggregate totals, then lists one row per node
 group with provider state, API-reported Kubernetes version, total,
-provider-current, provider-updating, provider-outdated, ready/current, and
-latest event columns. These labels describe provider generation state rather
-than the locked campaign target. `provider-current` is
-`total - outdated_node_count`, `provider-outdated` is `outdated_node_count`, and
+current, updating, not-started, ready/current, and latest event columns. These
+compact labels describe provider generation state rather than the locked
+campaign target. `current` is `total - outdated_node_count`, `not-started` is
+`outdated_node_count`, and
 the latest event is selected by `last_occurrence.occurred_at` because provider
 event-array order is not chronological. When no event has a parseable
-timestamp, the final coded event is the deterministic fallback. `provider-updating` is
-provider-active rollout nodes: readiness deficit plus at least
-`provider-outdated` when state/event signals active provisioning such as `PROVISIONING`,
+timestamp, the final coded event is the deterministic fallback. `updating` is
+provider-active rollout nodes: readiness deficit plus at least `not-started`
+when state/event signals active provisioning such as `PROVISIONING`,
 `Draining`, or `NodeProvisioning`. This keeps large groups such as 1000-node
 worker pools scan-friendly without mixing in Kubernetes registered-node counts
 and still shows provider replacement when `ready/current` is already full. A
-provider-current group whose `k8s` column is below the locked segment target is
+`current` group whose `k8s` column is below the locked segment target is
 waiting for its provider rollout; it is not reported as campaign-upgraded.
 Active or degraded groups sort before
 unchanged ready groups, and missing provider fields render as `unknown`, except
@@ -2894,8 +3910,22 @@ Target-chart dependency preparation remains a pre-mutation boundary. Its exact
 locked `helm dependency build` receives two bounded backoff retries only when
 the failure is a transient repository download, gateway, timeout, connection,
 or equivalent transport error. Deterministic chart and lock failures stop
-immediately, and exhausting the transient retry chain checkpoints the last
-error without dispatching Helm or provider mutation.
+immediately. HTTP client-error classification requires a status-shaped `4xx`
+token, so an HTTPS endpoint's `:443` port cannot suppress a transport retry;
+`408`, `425`, and `429` remain retryable client statuses. Exhausting the
+transient retry chain checkpoints the last error without dispatching Helm or
+provider mutation. A declarative Soperator CRD server-side apply likewise uses
+the shared bounded kubectl retry only for Kubernetes' exact ambiguous server-
+timeout forms: the request may still be processing, or it did not complete
+within the requested timeout and its context deadline expired. Every retry
+reapplies the exact manifest. Multi-document CRD bundles are completely parsed
+and validated before mutation, then each named CRD is applied independently so
+one successful document is not resent with every later-document retry. After an
+ambiguous apply timeout exhausts its retries, a read-only GET may adopt only the
+same named, non-deleting, UID/resourceVersion-bound, `Established=True` CRD
+whose live structure contains every recursively declared manifest field; an
+unavailable or drifted postcondition re-raises the apply failure. Non-apply
+mutations, authorization failures, and unclassified errors remain fail-closed.
 Before a controller or system provider operation, the
 bridge member in the opposite placement domain must be the observed healthy
 primary; after the operation, only the journaled domain may present replacement
@@ -2950,6 +3980,20 @@ distinct target peer, preserved host key, stable Service identity, and exact
 EndpointSlice route, cxcli releases the UID/resourceVersion-bound source hold
 and continues serial replacement. Existing connections on the replaced Pod may
 drop and reconnect through the stable Service.
+
+In an in-place chart/Jail staging segment, the segment-local MK8s list remains
+empty because that segment dispatches no provider mutation. The payload-aware
+in-place dispatcher resolves the login group from the fingerprint-verified
+campaign-wide node-group inventory for both the ownership-only segment and each
+later normal compute segment, requires exactly one complete ID/name, combines
+it with the active segment operation intent's source/target versions, and
+checkpoints that tuple as the durable in-place login binding. This keeps every
+multi-hop provider rollover bound to its current hop rather than the
+campaign-final target. Deeper provider-peer and gateway-spread replay
+paths require that binding instead of treating the empty segment intent as
+identity authority. The operation intent is never expanded or rewritten;
+missing, ambiguous, incomplete, fingerprint-drifted, or changed campaign
+authority remains fail-closed.
 
 The jobs command continues to expose the following acknowledgement for
 inspection or repair of an older checkpoint that already contains a protected
@@ -3248,7 +4292,22 @@ registration reason emitted before replay; other drain reasons remain blocking.
 An exact generic-GRES process with `INVALID_REG` may be either
 `DOWN+INVALID_REG` or `IDLE+CLOUD+DRAIN+INVALID_REG`; both require the same
 typed target `slurmd -C` proof and immutable workload binding before the
-checkpointed replacement Pod rollover. Before immutable-child handoff rebinds
+checkpointed replacement Pod rollover.
+An older daemon can instead retain an internally consistent pre-replay CPU
+topology while already advertising the exact typed GRES and remaining
+`IDLE+DYNAMIC_NORM` with no reason or allocation. cxcli classifies only a
+strictly smaller topology with the replay board count, no `Parameters`, and an
+exact CPU product. Before the same checkpointed rollover, it proves the Pod and
+zero-restart `slurmd` process started before replay, revalidates the exact
+Helm-owned NodeSet UID/generation/spec/static topology, and checks the jailed
+`slurmd -C` contract. The successor must start after replay on the same node and
+workload lineage with that exact config. This idle propagation case waits for
+the current registration and never issues `State=RESUME`. A fresh target-HA
+observation skips the shared config successor when the replacement is already
+exact and invokes the existing topology-only bridge-config recovery only for
+the exact generic-GRES `INVALID_REG` successor; allocation, reason, flag,
+topology, NodeSet, process-time, or successor drift remains blocking.
+Before immutable-child handoff rebinds
 that Pod name, the verified old/new UID transition is copied from the Jail
 journal into the rolling journal and must match exactly on every resume. Any
 downstream driver-loader repair binding may advance only through that same
@@ -3336,6 +4395,12 @@ Helm mutation; membership or UID drift blocks the switch. After activation,
 release separately requires exact target NodeSet, AdvancedStatefulSet, and Pod
 UID lineage, the full worker health checker, a pinned H100 smoke job,
 post-epilog health, and `IDLE+DYNAMIC_NORM` with no reason.
+When a chart/Jail-only segment intentionally has no segment-local MK8s rows, the
+pre-activation reader uses the immutable campaign-wide node-group inventory,
+filtered by the exact checkpointed worker scope. Immediate activation
+revalidation consumes the checkpointed owned-group binding rather than
+re-projecting the empty segment intent; ID, name, fixed-size, NodeSet coverage,
+and Node UID checks remain fail-closed.
 
 The persisted target and campaign shapes are intentionally small and stable:
 
@@ -3618,9 +4683,13 @@ cannot fight over the global Deployment. While both writers remain fenced,
 cxcli first requires the controller, login workload, and all login Services to
 carry the exact target `SlurmCluster` API/name/UID controller owner. Controller
 and login workload replica intent must equal the corresponding target CR sizes,
-and ready login Pods must carry the exact OpenKruise login workload
-API/name/UID owner before Service endpoints can count. It also requires every
-target-parented Helm NodeSet plus the worker workload owned
+and the login rollout must be fully updated. The sole exception is an exact
+checkpointed active-session hold: every Ready Pod outside that set must carry
+the update revision, the status update shortfall must equal only that set, and
+the campaign PodUnavailableBudget must still be observed and deny server-side
+deletion for each held Pod. Ready login Pods must carry the exact OpenKruise
+login workload API/name/UID owner before Service endpoints can count. It also
+requires every target-parented Helm NodeSet plus the worker workload owned
 by that exact NodeSet UID to request the configured replica count and be ready.
 The NodeSet/workload UIDs and configured counts are checkpointed. `scontrol
 ping` and `squeue` execute through an exact target-owned login Pod. These
@@ -3793,6 +4862,14 @@ intent and acceptance, and a Ready same-node successor owned by the same target
 StatefulSet and NodeSet. Immutable-child rollover copies that provenance into
 its own journal before binding the current UID. It rejects incomplete ordering,
 foreign ownership, container restarts, or any source/successor identity drift.
+During that bridge-config rollout, digest classification precedes readiness
+classification. A worker that already mounts the exact checkpointed successor
+digest but is not Ready is a mutation-free pending convergence state: cxcli
+does not delete it or mark its worker journal verified. A later resume binds the
+same successor only after the existing Ready, identity, ownership, node,
+workload, runtime, and restart-count proofs pass. A digest outside the exact
+checkpointed predecessor/successor pair remains recovery-required before any
+Pod mutation; no legacy checkpoint or inferred-readiness path is accepted.
 That worker rollout may resourceVersion-CAS the target MUNGE Secret to the
 retained bridge credential. A verified target-authentication transition may
 later replace only the bridge Secret's source-UID provenance fingerprint. The
@@ -6372,6 +7449,10 @@ The command boundary is intentional:
   in-place segment
   resolves its active Jail slot from the latest immutable completed-segment
   operation evidence when its own phase list intentionally has no Jail refresh.
+  When the current segment has no later-segment topology restore, apply intent,
+  apply proof, or client-config successor, that specialized canonicalizer is a
+  strict no-op and the ordinary bridge-client handoff remains the sole owner.
+  Any partial topology lifecycle still requires its exact verified predecessor.
   Its topology restore does not assume that the paused operator will regenerate
   the serving controller's private configuration. After proving the exact Helm
   successor, cxcli derives a topology-only successor from the checkpointed
@@ -6468,6 +7549,16 @@ The command boundary is intentional:
   cxcli-applied temporary value before compare-and-set, so a concurrent customer
   strategy, Slurm, drain, or service-role change becomes `recovery-required`
   instead of being overwritten.
+  Temporary controller-bridge node groups use one canonical create boundary:
+  provider intent and acceptance are mirrored before waiting, terminal success
+  and the exact live node-group ID are sealed before `created`, and only then
+  may live-waypoint comparison ignore those campaign-owned groups. A bounded
+  recovery recognizer exists for the historical inverse ordering only when the
+  resource-local and operation-intent records are identical and carry a real
+  accepted operation ID. It lets the executor poll that operation and verify
+  the exact live ID, parent, version, size, and resource version without a
+  second create; every partial, unmirrored, failed, or drifted shape remains
+  `recovery-required`.
   Mutating phases
   show phase progress, watch failures, apply bounded safe remedies or stop at
   pending gates, and resume timeout-guarded phases from checkpoints. The
@@ -6858,28 +7949,33 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `config.yaml` remains in the customer repo as a manual render/replace contract and does not trigger customer CI deployment.
 - The target `config.yaml` must already live inside the customer git repository because the workflow is written at that repo root.
 - The command resolves the target GitHub repo from the checkout `origin` remote. `--github-repo` is only an explicit override for missing, non-GitHub, or remapped remotes.
-- `--github-token-env` controls the GitHub API token used for workflow/environment reconciliation, SMTP sync, and optional Nebius auth bootstrap.
+- `--github-token-env` controls the GitHub API token used for workflow/environment reconciliation, SMTP sync, and canonical Nebius auth sync.
 - Every run reconciles local SMTP settings from `nebius-cxcli email --setup` into the matching GitHub Environment, including removal of stale GitHub SMTP settings when local SMTP is disabled.
-- `--auth-bootstrap` controls only Nebius CI auth bootstrap/rotation. Disabling it does not disable workflow reconcile or SMTP reconcile.
-- Because SMTP reconciliation happens on every run, `bootstrap-ci` still requires GitHub API access even when `--no-auth-bootstrap` is used.
+- Every run syncs the canonical project identity and exact project-binding marker to CI;
+  there is no auth-bootstrap opt-out. Clean runners validate and import that identity
+  instead of treating their intentionally empty local cache as a first-use bootstrap.
+- GitHub API access is always required because workflow, SMTP, and canonical auth reconciliation run together.
 - When `--cli-ref` is omitted, the generated workflow defaults to `main` for development builds and `nebius-cxcli-v<version>` for stable tagged releases.
 - `--cli-ref` is the explicit escape hatch when generator-side automation must pin the generated customer workflow to a specific nebius-cxcli branch, tag, or commit for PR validation.
 - `--cli-ref` selects the `nebius-cxcli` source ref to install from `nebius-ps-services`; it does not select or mutate the branch of the customer target repo.
 - Example: `nebius-cxcli bootstrap-ci /path/to/config.yaml --cli-ref <branch|tag|sha>`.
 - Generated workflows also support a GitHub repo/org variable override `NEBIUS_CXCLI_REF`, which takes precedence over the generated default ref.
 - The intended ref controls are generator-time pinning via `--cli-ref` and optional runtime override via the GitHub variable; editing the generated workflow YAML is not required for normal use.
-- Optional CI auth/environment-secret bootstrap creates the GitHub Environment and syncs Environment Secrets, but does not manage GitHub repo/org variables.
+- CI auth/environment-secret reconciliation creates the GitHub Environment and syncs Environment Secrets, but does not manage GitHub repo/org variables.
 - Generated workflows always run the deploy-report email step after apply. `client_info.notifications.email_enabled` is the single send/no-send switch; when enabled but SMTP is not configured, the step warns and continues.
 
 ### `auth` (flag-driven)
 
-- `auth --create` creates runtime auth cache/profile only when missing.
+- A targeted `auth` invocation performs the same automatic, idempotent canonical
+  project identity ensure used by all project-aware commands.
 - `auth --recreate` always rotates runtime auth material and rewrites cache.
 - `auth --validate-profile` inspects cached runtime auth profile metadata/private key and verifies Nebius auth public key visibility.
-- The runtime auth cache is a local cleartext credential cache by design: it stores the Terraform private key and Object Storage access keys in a `0700` directory with `0600` files. Operators should keep `NEBIUS_CXCLI_RUNTIME_AUTH_DIR` on protected local storage, outside synced or backed-up folders, and rotate with `auth --recreate` if the cache location may be exposed.
-- Customer-side commands that run with `--auto-auth-bootstrap` also self-heal a stale cached
-  runtime auth profile when the cached Nebius auth public key has been deleted or the cached
-  private-key metadata is broken; healthy cached profiles are reused without rotation.
+- The project-only runtime auth cache stores the authorized-key private material and
+  lazily issued Object Storage access keys in a `0700` directory with `0600` files.
+  Operators should keep `NEBIUS_CXCLI_RUNTIME_AUTH_DIR` on protected local storage,
+  outside synced or backed-up folders, and rotate with `auth --recreate` if exposed.
+- Project-aware commands self-heal a deleted cached Nebius authorized key through
+  operator bootstrap authority; healthy cached profiles are reused without rotation.
 - `auth --bootstrap-ci` syncs local runtime auth cache material into GitHub environment secrets.
 - `auth --profile` and `auth --sdk-config-file` target Nebius SDK config resolution; they do not require the standalone `nebius` CLI binary.
 
@@ -6904,29 +8000,29 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `validate-generated <generated-path>`
   - Validates an already-rendered bundle without rerendering it.
   - CI and publish workflows should call `validate-generated --portable` before plan/apply. That command now reuses the same generated-bundle strict readiness, VPC networking preflight, and live quota/capacity gate as `deploy` preflight.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation for Terraform validation (default enabled).
+  - Canonical project authentication is ensured before generated tfvars or other runtime artifacts are materialized.
 - `deploy <config.yaml>`
   - Full local deployment from the generated bundle: Terraform first, interim deploy-report refresh for infra and apps artifacts, Flux direct apply, runtime-status capture, deploy-time validations, then final deploy-report refresh.
   - The command resolves sibling `generated/`, but the generated manifest remains the canonical deploy input.
 - Prints a final `Deployment summary` footer with colored `Validation`, `Copy/paste commands`, and `Important paths` sections. Validation lines are grouped whenever report results are target-scoped, including single-target runs; copy-paste command lines use the shared colored command style; important paths list the generated bundle, the `generated/reports/` validation-detail directory, and the customer-facing `deploy-report.md`.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic and has no per-command opt-out.
   - Does not run `flux bootstrap`; GitOps bootstrap/reconcile stays explicit through `flux bootstrap` or the generated CI apply workflow.
   - Does not run `bootstrap-ci` automatically, even when the generated bundle is inside a git repository; GitHub workflow/environment bootstrap stays an explicit generator-side action.
 - `destroy <config.yaml>`
   - Project-wide destructive teardown from the generated bundle: `destroy` resolves sibling `generated/`, then removes all rendered resources represented by the generated manifest. Rendered Flux and locally applied post-Flux app resources are deleted first for enabled app charts, including managed MK8s handoff bundles, so Kubernetes finalizers and CSI cleanup can remove app-owned resources such as PVC-backed disks before Terraform destroys the cluster.
   - For external MK8s targets, removes only cxcli-managed app/add-on resources
     and never destroys the external MK8s cluster or node groups.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic before teardown mutation.
   - Uses guarded destroy recovery: stale-lock auto-unlock/retry first, then targeted MK8s stuck node-group cleanup only when live API state still blocks destroy.
   - Requires explicit confirmation or `--yes`.
 - `terraform apply <generated-path>`
   - Infra-only apply from the generated Terraform bundle.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
 - `terraform destroy <generated-path>`
   - Infra-only destroy from the generated Terraform bundle.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
   - Uses the same guarded stale-lock and MK8s stuck-create recovery path as top-level `destroy`.
   - Requires explicit confirmation or `--yes`.
 - `flux apply <generated-path>`
@@ -6934,17 +8030,17 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
   - When the rendered manifest needs Terraform-backed handoff or app-input outputs, it initializes `generated/infra` first and reads the current outputs from state, but it does not run `terraform apply`.
   - Its pre-apply Flux API discovery is resource-type based, so it does not wait on app target namespaces that are expected to be created by the rendered manifests themselves.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
 - `flux destroy <generated-path>`
   - Apps-only direct delete from the generated Flux bundle.
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
   - If the target cluster is reachable but Flux CRDs are already absent, the CLI prints a skip note instead of surfacing raw `kubectl` resource-mapping errors.
   - Requires explicit confirmation or `--yes`.
 - `flux bootstrap <generated-path>`
   - GitOps bootstrap/reconcile path from the generated Flux bundle.
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default disabled).
+  - Canonical project authentication is automatic.
 
 ## Supporting Commands
 
@@ -7116,11 +8212,11 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `terraform plan <generated-path>`
   - Infra-only plan from the generated Terraform bundle.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
 - `terraform unlock <generated-path>`
   - Clears a stale remote Terraform state lock for a generated infra bundle.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
-  - `--auto-auth-bootstrap/--no-auto-auth-bootstrap` controls runtime auth creation (default enabled).
+  - Canonical project authentication is automatic.
   - `--force` overrides local safety checks and force-unlocks even when the lock owner is different or local processes are still active.
 - `flux apply <generated-path>`
   - Applies rendered app resources from the generated Flux bundle and supports `--target <target-id>` / `--all-targets` for multi-target MK8s bundles.
@@ -7179,7 +8275,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `email --setup`: local SMTP-config reconcile; repeating the same answers leaves the same config on disk.
 - `email`: intentionally not idempotent because each successful run sends another message.
 - `bootstrap-ci`: idempotent reconcile; reruns auto-update the CLI-managed customer workflow and re-check GitHub environment secret presence.
-- `auth --create`: idempotent create-if-missing.
+- Targeted `auth`: idempotent canonical project identity ensure.
 - `auth --recreate`: explicit rotation path.
 - `auth --validate-profile`: read-only profile validation; safe to re-run.
 - `auth --bootstrap-ci`: idempotent environment-secret upsert from local cache.
@@ -7326,7 +8422,7 @@ Flux render:
 - Requires the target config path to be inside the customer git repository so the workflow can be written at the repo root.
 - Auto-detects the target GitHub repo from the checkout `origin` remote unless `--github-repo` overrides it.
 - Fails before writing the workflow if GitHub reconciliation prerequisites are missing.
-- Derives GitHub environment name as `<client_name>-<project_id>`, ensures that environment exists, then reconciles SMTP settings on every run and optionally Nebius CI auth secrets when `--auth-bootstrap` is enabled.
+- Derives GitHub environment name as `<client_name>-<project_id>`, ensures that environment exists, then reconciles SMTP settings and canonical Nebius CI auth secrets on every run.
 - Generated customer workflows validate with `nebius-cxcli validate-generated --portable` before `nebius-cxcli terraform plan` and `nebius-cxcli terraform apply` so non-portable local module paths are rejected in PRs and main-branch deploy runs, and the same generated-bundle strict readiness/quota preflight is enforced before those Terraform steps.
 - Generated customer workflows also support manual `workflow_dispatch`; manual runs switch discovery to `nebius-cxcli discover --all <scope>` so every tracked project under the configured deployments scope is included even without a fresh git diff.
 - If that configured deployments scope is the repository root, the workflow keeps discovery rooted at `.` and watches `*/*/generated/**` so the canonical two-level tenant/project layout still works without `./` in path filters.
@@ -7339,44 +8435,70 @@ Flux render:
 
 `auth`:
 
-- Reads `~/.config/nebius-cxcli/<client_name>-<project-id>/runtime-auth.json`.
-- Uses one runtime target mode at a time: `--project-config <config.yaml>` resolves
-  both `project_id` and `client_name`, while the manual path uses `--project-id`
-  plus `--client-name` when the cache cannot infer a unique client. Omitting both
-  target options is allowed only for global `--validate-profile`.
-- `--create`: creates runtime auth profile if cache is missing; otherwise no rotation.
-- `--recreate`: always rotates keys and refreshes cached material.
-- `--validate-profile`: checks local private key presence and verifies auth public key visibility via Nebius IAM API.
-  When no project/config target is provided, it validates every cached runtime auth profile.
-- `--auto-auth-bootstrap` command paths also recreate a cached runtime auth profile automatically
-  when the cached Nebius auth public key has been deleted or the cached private-key metadata is
-  broken, but they do not rotate a healthy cached profile.
-- Runtime-auth metadata writes use same-directory temporary files plus atomic replace so
-  a failed write does not leave a partially written `runtime-auth.json`.
+- Reads the strict v2 project cache at
+  `~/.config/nebius-cxcli/projects/<project-id>-<digest>/runtime-auth.json`.
+- A targeted invocation idempotently ensures the same canonical identity as every
+  project-aware command. `--project-config` resolves the exact project and CI label;
+  `--project-id` is the manual project path. `--client-name` affects only the GitHub
+  Environment label, never cache or cloud identity ownership.
+- `--recreate` always rotates the canonical authorized key and refreshes cached material.
+- `--validate-profile` checks strict cache schema/ownership/permissions, local private
+  key presence, and cloud authorized-key visibility. With no target it validates all
+  canonical project caches.
+- A deleted key is rotated automatically through available operator bootstrap
+  authority, while transient IAM/token errors fail without rotation. The cached key is
+  token-validated before any IAM mutation, so a deleted key cannot be selected to repair
+  itself and a healthy cached command does not depend on operator auth. A newly created
+  key that remains unavailable past the propagation timeout fails without creating a
+  duplicate key.
+- Runtime-auth metadata and recoverable auth-key intent writes use same-directory
+  temporary files plus atomic replace under a project lock. Completed private keys use
+  immutable generation-specific filenames; the metadata replace is the only commit
+  point, so a failed rotation cannot pair an old key ID with new private material.
 - ESO MysteryBox does not use the local runtime-auth cache. The configured Kubernetes
   Subject Credentials Secret is the persisted ESO auth location. Deploy/Flux commands
   create or replace that Secret only when it is missing, invalid, references a different
   service account than `mysterybox-sa`, or references a Nebius authorized public key that
   is no longer readable.
-- Stale-profile IAM verification and runtime-auth bootstrap use short-lived Nebius SDK clients.
-  cxcli closes those clients after each check/create step. After creating new runtime auth
-  keys, it waits until Nebius token exchange accepts the new public key before handing control
-  to Terraform backend/apply work. During stale-profile recovery and that propagation wait,
-  cxcli suppresses only the expected first-attempt deleted-key token-refresh traceback and
-  retryable token-exchange deadline tracebacks while it converts SDK failures into the
-  canonical warning/retry path.
-- `--bootstrap-ci`: syncs local cached auth material into GitHub environment secrets (`<client_name>-<project_id>`); requires existing local cache material.
+- IAM reconciliation requires exactly one `nebius-cxcli-sa`, exactly the project
+  `editor` role, no permit on another resource scope, and no unexpected member in its
+  deterministic permit group. Conflicting same-name identities fail closed. First-time
+  creation and recovery use the existing operator identity and require Nebius IAM
+  `admin`; continuing product work uses only the canonical project `editor` service
+  account.
+- Operator token discovery first asks the active Nebius CLI profile for a cached token
+  with browser authentication disabled. When that attempt fails and stdin is interactive,
+  cxcli retries once through the CLI's normal browser flow and
+  uses the refreshed token only for bootstrap. It never creates or activates another CLI
+  profile. Non-interactive runs do not open a browser and surface a sanitized CLI failure
+  classification without provider output.
+- After authorized-key creation, cxcli waits for token exchange before any downstream
+  write. Fingerprinted intent recovery prevents duplicate key creation after a crash.
+- `--bootstrap-ci` ensures the identity, lazily issues Object Storage credentials, and
+  syncs cached material plus `NEBIUS_CXCLI_RUNTIME_AUTH_PROJECT_ID` into GitHub
+  environment secrets (`<client_name>-<project_id>`). A clean runner accepts that
+  environment only when the marker equals the resolved project and strict live identity
+  validation succeeds through read-only IAM calls, then imports it into the runner-local
+  v2 cache without issuing a replacement authorized key or attempting IAM repair under
+  the runtime editor identity.
 
 Terraform runtime auth:
 
 - Generated `providers.tf` uses direct Nebius provider service-account fields and `module_name`.
 - Runtime auth material is passed to Terraform via `TF_VAR_*` rather than provider `_env` fields.
-- Runtime auto-bootstrap uses dedicated service account name `nebius-cxcli-tf-sa`.
-- Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/<client_name>-<project-id>/`.
+- Runtime identity is the project-owned `nebius-cxcli-sa`; human profile/env auth is
+  bootstrap and recovery authority only, not the continuing runtime identity.
+- Legacy `nebius-cxcli-tf-sa` resources and client-keyed caches are neither adopted nor
+  deleted automatically.
 - ESO MysteryBox auth is deliberately separate from the Terraform runtime cache. Rendered
   Git bundles never carry the Subject Credentials Secret; deploy/Flux commands manage that
   runtime-only Kubernetes Secret directly for ESO.
-- Terraform backend path requires AWS-compatible Object Storage keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`); runtime auth cache provides them automatically when bootstrapped.
+- Terraform backend paths require AWS-compatible Object Storage keys
+  (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`); cxcli issues them lazily under the
+  canonical project identity and caches them with the same owner-only boundary. First
+  issuance is an IAM bootstrap operation and runs under the process-captured operator
+  identity before cxcli exports the canonical runtime environment; existing S3 keys are
+  reused without operator credentials.
 
 ## Vendor Scope
 

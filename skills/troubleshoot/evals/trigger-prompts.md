@@ -43,6 +43,20 @@ readiness only; fresh-session execution is required to observe activation.
 13. "$troubleshoot --attempt-limit=10 --time-limit-minutes=180 Diagnose this
     persistent cross-layer failure, preserve new evidence between repairs, and
     stop at the configured limit."
+14. "Slurm says every node is idle and the controller responds, but jobs fail
+    before launch. Discover the configured architecture and correlate controller,
+    worker, MUNGE, job, journal, kernel, and network logs before proposing a fix."
+15. "A Soperator GPU ActiveCheck is pending while customer training jobs run.
+    Determine whether it needs a dedicated full-GPU allocation, distinguish it
+    from passive prolog or health checks, and inspect its Kubernetes, Slurm, and
+    log-pipeline evidence."
+16. "This Managed Kubernetes workload on Nebius is Ready but one region cannot
+    reach storage. Verify the exact project and resource operation, VPC, node,
+    CSI, OS, network, and storage evidence; keep the target read-only."
+17. "All unit tests pass, but production throws on one request shape. Reproduce
+    or characterize the deployed code path, inspect its stack trace and inputs,
+    add bounded instrumentation if authorized, and do not call code bug-free
+    until the relevant-path evidence is complete."
 
 ## Should Not Trigger Implicitly
 

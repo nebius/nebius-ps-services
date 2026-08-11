@@ -1,0 +1,58 @@
+<!-- markdownlint-disable MD001 MD024 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+# Project Design
+
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=draft priority=P0 version=1 -->
+### FEAT-001: <Design slice>
+
+#### Requirements Covered
+
+- REQ-001: <Mapped outcome>
+
+#### Context Evidence
+
+<Relevant code, tests, and documentation.>
+
+#### Design Details
+
+<Selected architecture and behavior.>
+
+#### Selected Option
+
+<Chosen option and rationale.>
+
+#### Alternatives Considered
+
+<Alternatives and trade-offs.>
+
+#### Implementation Boundaries
+
+<Owned modules, interfaces, and exclusions.>
+
+#### Test-First Success Criteria
+
+- TDD-001: <Failing-first or already-green proof.>
+
+#### Validation Plan
+
+<Validation commands and evidence.>
+
+#### Test Plan
+
+<Focused and regression tests.>
+
+#### Evaluation Plan
+
+<Acceptance evaluation.>
+
+#### Rollout And Rollback
+
+<Safe rollout and recovery path.>
+
+#### Done Definition
+
+<Conditions for completion.>
+
+<!-- /FEATURE: FEAT-001 -->
+<!-- maintain-project-specs:design:end -->
+<!-- markdownlint-enable MD001 MD024 -->

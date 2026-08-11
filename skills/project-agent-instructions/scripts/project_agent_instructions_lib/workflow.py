@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import tempfile
 from typing import Optional
 
 from .contracts import DECISION_SCHEMA
@@ -15,6 +16,7 @@ from .contracts import _canonical_json
 from .contracts import _generation_decision_sha256
 from .contracts import _generation_manifest_sha256
 from .contracts import _lstat_optional
+from .contracts import _parse_generated
 from .contracts import _read_regular
 from .contracts import _render_body
 from .contracts import _sha256_bytes
@@ -48,6 +50,102 @@ def _validate_approval(value: object) -> Optional[dict[str, str]]:
         "action": str(value["action"]),
         "target_sha256": str(value["target_sha256"]),
     }
+
+
+def render_decision(
+    manifest_path: Path,
+    decision_path: Path,
+    output_path: Path,
+    state_path: Path,
+    private_root: Path,
+) -> dict[str, object]:
+    """Render exact current-turn rules without mutating project AGENTS.md."""
+
+    provisional_root = Path(os.path.abspath(private_root.expanduser()))
+    manifest_path = _private_member(provisional_root, manifest_path, "manifest")
+    decision_path = _private_member(provisional_root, decision_path, "decision")
+    recorded = _load_private_json_object(manifest_path, "manifest", provisional_root)
+    _validate_manifest_shape(recorded)
+    private_root = _ensure_private_root(
+        provisional_root, Path(str(recorded["git_root"]))
+    )
+    current = _fresh_manifest(recorded)
+    if current != recorded:
+        raise ProjectInstructionsError(
+            "CONCURRENT_MODIFICATION", "project inputs changed after inspection"
+        )
+    decision = _load_private_json_object(decision_path, "decision", private_root)
+    disposition, body, decision_sha256, _approval = _validate_decision(
+        decision, current
+    )
+    rendered = body or b""
+    output_path = _private_member(private_root, output_path, "rendered rules")
+    state_path = _private_member(private_root, state_path, "render state")
+    existing = _lstat_optional(output_path)
+    if existing is not None:
+        if (
+            not existing.st_mode & 0o100000
+            or existing.st_mode & 0o077
+            or _read_regular(output_path, "rendered rules") != rendered
+        ):
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "rendered rules target is not an exact owned file"
+            )
+    else:
+        try:
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{output_path.name}.", dir=str(private_root)
+            )
+            temporary_path = Path(temporary)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, output_path)
+        except OSError as error:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "rendered rules could not be written safely"
+            ) from error
+        finally:
+            if "temporary_path" in locals() and temporary_path.exists():
+                temporary_path.unlink()
+    result = {
+        "status": "ok",
+        "disposition": disposition,
+        "decision_sha256": decision_sha256,
+        "rules_path": str(output_path),
+        "rules_sha256": _sha256_bytes(rendered),
+        "repository_mutated": False,
+    }
+    render_state = {
+        "schema": "project-agent-instructions.render-state.v1",
+        "project_root": current["project_root"],
+        "git_root": current["git_root"],
+        "project_scope": current["project_scope"],
+        "spec_owner": current["spec_owner"],
+        "requirements": current["requirements"],
+        "design": current["design"],
+        "spec_receipt": current["spec_receipt"],
+        "manifest_path": _relative_private_path(private_root, manifest_path),
+        "manifest_file_sha256": _sha256_bytes(_read_regular(manifest_path, "manifest")),
+        "decision_path": _relative_private_path(private_root, decision_path),
+        "decision_file_sha256": _sha256_bytes(_read_regular(decision_path, "decision")),
+        "decision_sha256": decision_sha256,
+        "disposition": disposition,
+        "rules_path": _relative_private_path(private_root, output_path),
+        "rules_sha256": _sha256_bytes(rendered),
+        "repository_mutated": False,
+    }
+    _write_private_json(
+        state_path,
+        render_state,
+        Path(str(current["git_root"])),
+        private_root,
+    )
+    result["state_path"] = str(state_path)
+    result["state_sha256"] = _sha256_bytes(_read_regular(state_path, "render state"))
+    return result
 
 
 def _validate_decision(
@@ -150,7 +248,6 @@ def _load_ownership(
         "git_root",
         "project_scope",
         "target_path",
-        "target_sha256",
         "manifest_sha256",
         "decision_sha256",
         "body_sha256",
@@ -166,7 +263,6 @@ def _load_ownership(
         or any(
             not _valid_sha256(receipt.get(field))
             for field in (
-                "target_sha256",
                 "manifest_sha256",
                 "decision_sha256",
                 "body_sha256",
@@ -192,7 +288,6 @@ def _ownership_matches(
         and receipt.get("git_root") == manifest.get("git_root")
         and receipt.get("project_scope") == manifest.get("project_scope")
         and receipt.get("target_path") == target.get("path")
-        and receipt.get("target_sha256") == target.get("sha256")
         and receipt.get("manifest_sha256") == target.get("manifest_sha256")
         and receipt.get("decision_sha256") == target.get("decision_sha256")
         and receipt.get("body_sha256") == target.get("body_sha256")
@@ -211,7 +306,6 @@ def _ownership_record(
         "git_root": manifest["git_root"],
         "project_scope": manifest["project_scope"],
         "target_path": target["path"],
-        "target_sha256": target["sha256"],
         "manifest_sha256": target["manifest_sha256"],
         "decision_sha256": target["decision_sha256"],
         "body_sha256": target["body_sha256"],
@@ -296,10 +390,11 @@ def _select_outcome(
             "STALE_GENERATED_FILE", "edited generated instructions are human-owned"
         )
     if status == "human-owned":
-        raise ProjectInstructionsError(
-            "EXISTING_INSTRUCTIONS_GAP",
-            "human-owned AGENTS.md requires explicit resolution",
-        )
+        if approval is not None:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "ownership approval is not applicable"
+            )
+        return "attached"
     if status != "managed":
         raise ProjectInstructionsError(
             "UNSAFE_TARGET", "target ownership state is invalid"
@@ -372,43 +467,106 @@ def _validate_final_transition(
             )
         return
     final_target = dict(final["target"])
-    target_path = str(dict(initial["target"])["path"])
+    initial_target = dict(initial["target"])
+    target_path = str(initial_target["path"])
+    prefix_bytes = int(initial_target["managed_prefix_bytes"])
+    prefix_sha256 = initial_target.get("managed_prefix_sha256")
+    if prefix_sha256 is None:
+        prefix_sha256 = _sha256_bytes(b"")
     if outcome == "retired":
-        if (
-            final_target.get("file_status") != "missing"
-            or final_target.get("sha256") is not None
-        ):
+        if prefix_bytes == 0:
+            expected_target = {
+                "path": target_path,
+                "file_status": "missing",
+                "sha256": None,
+                "marker_version": None,
+                "manifest_sha256": None,
+                "decision_sha256": None,
+                "body_sha256": None,
+                "managed_prefix_bytes": 0,
+                "managed_prefix_sha256": None,
+                "active_path": None,
+                "active_kind": None,
+                "parent_device": initial_target["parent_device"],
+                "parent_inode": initial_target["parent_inode"],
+            }
+            active_valid = final.get("active_project_instruction") is None
+        else:
+            expected_target = {
+                "path": target_path,
+                "file_status": "human-owned",
+                "sha256": prefix_sha256,
+                "marker_version": None,
+                "manifest_sha256": None,
+                "decision_sha256": None,
+                "body_sha256": None,
+                "managed_prefix_bytes": prefix_bytes,
+                "managed_prefix_sha256": prefix_sha256,
+                "active_path": target_path,
+                "active_kind": "project-agents",
+                "parent_device": initial_target["parent_device"],
+                "parent_inode": initial_target["parent_inode"],
+            }
+            active = final.get("active_project_instruction")
+            active_valid = (
+                isinstance(active, dict)
+                and active.get("path") == target_path
+                and active.get("sha256") == prefix_sha256
+            )
+        if final_target != expected_target or not active_valid:
             raise ProjectInstructionsError(
                 "CONCURRENT_MODIFICATION", "retirement did not complete"
             )
         return
     assert body is not None
-    content = _generated_content(
-        body, marker_manifest_sha256, marker_decision_sha256
-    )
-    expected = {
-        "path": target_path,
-        "file_status": "managed",
-        "sha256": _sha256_bytes(content),
-        "marker_version": 2,
-        "manifest_sha256": marker_manifest_sha256,
-        "decision_sha256": marker_decision_sha256,
-        "body_sha256": _sha256_bytes(body),
-        "active_path": target_path,
-        "active_kind": "project-agents",
-        "parent_device": dict(initial["target"])["parent_device"],
-        "parent_inode": dict(initial["target"])["parent_inode"],
-    }
     active = final.get("active_project_instruction")
     if (
-        final_target != expected
+        final_target.get("path") != target_path
+        or final_target.get("file_status") != "managed"
+        or final_target.get("marker_version") != 3
+        or final_target.get("manifest_sha256") != marker_manifest_sha256
+        or final_target.get("decision_sha256") != marker_decision_sha256
+        or final_target.get("body_sha256") != _sha256_bytes(body)
+        or final_target.get("managed_prefix_bytes") != prefix_bytes
+        or final_target.get("managed_prefix_sha256") != prefix_sha256
+        or final_target.get("active_path") != target_path
+        or final_target.get("active_kind") != "project-agents"
+        or final_target.get("parent_device") != initial_target["parent_device"]
+        or final_target.get("parent_inode") != initial_target["parent_inode"]
         or not isinstance(active, dict)
         or active.get("path") != target_path
-        or active.get("sha256") != expected["sha256"]
+        or active.get("sha256") != final_target.get("sha256")
     ):
         raise ProjectInstructionsError(
             "CONCURRENT_MODIFICATION", "generated project AGENTS.md is not exact"
         )
+
+
+def _target_prefix(target: dict[str, object]) -> bytes:
+    status = str(target["file_status"])
+    if status == "missing":
+        return b""
+    content = _read_regular(Path(str(target["path"])), "project AGENTS.md")
+    if _sha256_bytes(content) != target.get("sha256"):
+        raise ProjectInstructionsError(
+            "CONCURRENT_MODIFICATION", "project AGENTS.md changed"
+        )
+    if status == "human-owned":
+        prefix = content
+    else:
+        parsed = _parse_generated(content)
+        if parsed is None:
+            raise ProjectInstructionsError(
+                "CONCURRENT_MODIFICATION", "project AGENTS.md ownership changed"
+            )
+        prefix = bytes(parsed["prefix"])
+    if len(prefix) != target.get("managed_prefix_bytes") or _sha256_bytes(
+        prefix
+    ) != target.get("managed_prefix_sha256"):
+        raise ProjectInstructionsError(
+            "CONCURRENT_MODIFICATION", "project AGENTS.md prefix changed"
+        )
+    return prefix
 
 
 def apply_decision(
@@ -457,6 +615,7 @@ def apply_decision(
     )
     target = dict(current["target"])
     target_path = Path(str(target["path"]))
+    prefix = _target_prefix(target)
     parent_identity = (
         int(target["parent_device"]),
         int(target["parent_inode"]),
@@ -466,28 +625,41 @@ def apply_decision(
         assert body is not None
         _exclusive_create(
             target_path,
-            _generated_content(body, marker_manifest_sha256, marker_decision_sha256),
+            _generated_content(
+                body, marker_manifest_sha256, marker_decision_sha256, prefix
+            ),
             parent_identity,
         )
-    elif outcome == "refreshed":
+    elif outcome in {"attached", "refreshed"}:
         assert body is not None and isinstance(target.get("sha256"), str)
         retained_backup_sha256 = str(target["sha256"])
         _guarded_replace(
             target_path,
             str(target["sha256"]),
-            _generated_content(body, marker_manifest_sha256, marker_decision_sha256),
+            _generated_content(
+                body, marker_manifest_sha256, marker_decision_sha256, prefix
+            ),
             parent_identity,
             retain_backup=True,
         )
     elif outcome == "retired":
         assert isinstance(target.get("sha256"), str)
         retained_backup_sha256 = str(target["sha256"])
-        _guarded_delete(
-            target_path,
-            str(target["sha256"]),
-            parent_identity,
-            retain_backup=True,
-        )
+        if prefix:
+            _guarded_replace(
+                target_path,
+                str(target["sha256"]),
+                prefix,
+                parent_identity,
+                retain_backup=True,
+            )
+        else:
+            _guarded_delete(
+                target_path,
+                str(target["sha256"]),
+                parent_identity,
+                retain_backup=True,
+            )
     final = _fresh_manifest(current, retained_backup_sha256)
     _validate_final_transition(
         current,
@@ -498,7 +670,10 @@ def apply_decision(
         outcome,
     )
     final_target = dict(final["target"])
-    if outcome in {"created", "refreshed", "adopted"}:
+    if outcome in {"created", "attached", "refreshed", "adopted"} or (
+        outcome == "existing-sufficient"
+        and final_target.get("file_status") == "managed"
+    ):
         _write_private_json(
             ownership_path,
             _ownership_record("active", final, final_target),
@@ -541,7 +716,7 @@ def apply_decision(
         "target_path": final_target["path"],
         "target_sha256": final_target["sha256"],
         "active_instruction_path": final_target["active_path"],
-        "reload_required": outcome in {"created", "refreshed", "retired"},
+        "reload_required": outcome in {"created", "attached", "refreshed", "retired"},
     }
     _write_private_json(state_path, state, Path(str(current["git_root"])), private_root)
     if retained_backup_sha256 is not None:
@@ -689,12 +864,14 @@ def verify_state(state_path: Path, private_root: Path) -> dict[str, object]:
         "target_path": final_target["path"],
         "target_sha256": final_target["sha256"],
         "active_instruction_path": final_target["active_path"],
-        "reload_required": expected_outcome in {"created", "refreshed", "retired"},
+        "reload_required": expected_outcome
+        in {"created", "attached", "refreshed", "retired"},
     }
     if any(state.get(key) != value for key, value in expected.items()):
         raise ProjectInstructionsError("CONCURRENT_MODIFICATION", "state is stale")
     if (
-        expected_outcome in {"created", "refreshed", "adopted", "existing-sufficient"}
+        expected_outcome
+        in {"created", "attached", "refreshed", "adopted", "existing-sufficient"}
         and final_target.get("file_status") == "managed"
     ):
         if ownership is None or not _ownership_matches(

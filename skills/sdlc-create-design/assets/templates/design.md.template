@@ -1,14 +1,15 @@
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
 ---
-schema: agentic-sdlc.design.v1
+schema: maintain-project-specs/design-v1
 project: "<project-name>"
 owner: "<owner-or-team>"
 status: "draft"
 created_at: "<YYYY-MM-DD>"
 updated_at: "<YYYY-MM-DD>"
-created_by_skill: "sdlc-create-design"
-updated_by_skill: "sdlc-create-design"
+created_by_skill: "maintain-project-specs"
+updated_by_skill: "maintain-project-specs"
 source_requirements: "docs/requirements.md"
-user_edit_policy: "Do not edit manually. Update through sdlc-create-design from requirements and gathered context."
+user_edit_policy: "Update through maintain-project-specs; SDLC design phases are authoring adapters."
 execution_plan_policy: "Execution plans are local runtime artifacts and must not be committed."
 id_policy: "Feature IDs are stable. Never renumber existing IDs."
 ---
@@ -181,3 +182,4 @@ UAT impact: included
 ## Decision Log
 
 ## Change Log
+<!-- maintain-project-specs:design:end -->

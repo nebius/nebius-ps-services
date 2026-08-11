@@ -2,6 +2,10 @@
 
 Select only the playbook that answers the current causal question. Repository
 tooling and official language/runtime documentation determine exact commands.
+When application code may own the failure, also follow `code-debugging.md`.
+Passing unit or integration tests is supporting evidence only; prove the
+executed failure path, inputs, state, and earliest divergence before marking
+Relevant code paths `PASS`.
 
 ## Regression
 

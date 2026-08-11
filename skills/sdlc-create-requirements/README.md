@@ -1,12 +1,13 @@
 # Create Requirements
 
-`sdlc-create-requirements` is an Agentic SDLC skill. It is authored in this repository and is
+`sdlc-create-requirements` is an Agentic SDLC authoring adapter to
+`maintain-project-specs`. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Convert user intent into durable, testable product requirements in
-`docs/requirements.md`, including an optional guarded Live Experiment
+Convert user intent into durable, testable product requirements in the
+canonical managed region of `docs/requirements.md`, including an optional guarded Live Experiment
 Environment section for later evaluation and UAT.
 
 ## Main Boundaries

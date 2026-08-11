@@ -12,30 +12,39 @@ from typing import Optional
 import unicodedata
 
 
-MANIFEST_SCHEMA = "project-agent-instructions.manifest.v2"
-DECISION_SCHEMA = "project-agent-instructions.decision.v2"
-STATE_SCHEMA = "project-agent-instructions.state.v2"
-SPEC_RECEIPT_SCHEMA = "project-agent-instructions.spec-validation.v2"
-OWNERSHIP_SCHEMA = "project-agent-instructions.ownership.v2"
+MANIFEST_SCHEMA = "project-agent-instructions.manifest.v3"
+DECISION_SCHEMA = "project-agent-instructions.decision.v3"
+STATE_SCHEMA = "project-agent-instructions.state.v3"
+SPEC_RECEIPT_SCHEMA = "project-agent-instructions.spec-validation.v3"
+OWNERSHIP_SCHEMA = "project-agent-instructions.ownership.v3"
 RUNTIME_CONFIG_SCHEMA = "project-agent-instructions.runtime-config.v1"
 PRIVATE_ROOT_SCHEMA = "project-agent-instructions.private-root.v1"
 PRIVATE_ROOT_MARKER = ".project-agent-instructions-root.json"
-RENDERER_VERSION = 2
+RENDERER_VERSION = 3
 PREFERRED_BODY_BYTES = 2 * 1024
 MAX_BODY_BYTES = 4 * 1024
 PREFERRED_RULES = 8
 MAX_RULES = 12
 MAX_RULE_BYTES = 256
-GENERATED_MARKER_PREFIX = b"<!-- project-agent-instructions:managed-v2 "
+GENERATED_MARKER_PREFIX = b"<!-- project-agent-instructions:managed-v3 "
 GENERATED_MARKER_SUFFIX = b" -->\n\n"
+GENERATED_MARKER_TOKEN = b"<!-- project-agent-instructions:managed-v3"
+LEGACY_GENERATED_MARKER_TOKEN = b"<!-- project-agent-instructions:generated-v1"
+LEGACY_MANAGED_MARKER_TOKEN = b"<!-- project-agent-instructions:managed-v2"
 GENERATED_MARKER_RE = re.compile(
-    rb"^<!-- project-agent-instructions:managed-v2 "
+    rb"<!-- project-agent-instructions:managed-v3 "
     rb"manifest-sha256=([0-9a-f]{64}) "
     rb"decision-sha256=([0-9a-f]{64}) "
     rb"body-sha256=([0-9a-f]{64}) -->\n\n"
 )
 LEGACY_GENERATED_MARKER_RE = re.compile(
     rb"^<!-- project-agent-instructions:generated-v1 "
+    rb"body-sha256=([0-9a-f]{64}) -->\n\n"
+)
+LEGACY_MANAGED_MARKER_RE = re.compile(
+    rb"^<!-- project-agent-instructions:managed-v2 "
+    rb"manifest-sha256=([0-9a-f]{64}) "
+    rb"decision-sha256=([0-9a-f]{64}) "
     rb"body-sha256=([0-9a-f]{64}) -->\n\n"
 )
 GENERATED_MARKER_BYTES = (
@@ -59,11 +68,14 @@ RULE_SECTIONS = (
     "Definition of done",
 )
 TASK_REQUIREMENTS_MARKER = (
-    "task-implementer:requirements:start schema=task-implementer/requirements-v1"
+    "maintain-project-specs:requirements:start "
+    "schema=maintain-project-specs/requirements-v1"
 )
-TASK_DESIGN_MARKER = "task-implementer:design:start schema=task-implementer/design-v1"
-AGENTIC_REQUIREMENTS_SCHEMA = "schema: agentic-sdlc.requirements.v1"
-AGENTIC_DESIGN_SCHEMA = "schema: agentic-sdlc.design.v1"
+TASK_DESIGN_MARKER = (
+    "maintain-project-specs:design:start schema=maintain-project-specs/design-v1"
+)
+AGENTIC_REQUIREMENTS_SCHEMA = "schema: maintain-project-specs/requirements-v1"
+AGENTIC_DESIGN_SCHEMA = "schema: maintain-project-specs/design-v1"
 URL_RE = re.compile(r"(?i)\bhttps?://")
 IPV4_RE = re.compile(
     r"(?<![0-9])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
@@ -207,26 +219,81 @@ def _valid_sha256(value: object) -> bool:
 
 
 def _parse_generated(content: bytes) -> Optional[dict[str, object]]:
-    match = GENERATED_MARKER_RE.match(content)
-    if match is not None:
+    matches = list(GENERATED_MARKER_RE.finditer(content))
+    reserved_tokens = sum(
+        content.count(token)
+        for token in (
+            GENERATED_MARKER_TOKEN,
+            LEGACY_GENERATED_MARKER_TOKEN,
+            LEGACY_MANAGED_MARKER_TOKEN,
+        )
+    )
+    if len(matches) > 1 or (matches and reserved_tokens != 1):
+        raise ProjectInstructionsError(
+            "UNSAFE_TARGET", "project AGENTS.md has multiple managed regions"
+        )
+    if matches:
+        match = matches[0]
+        if match.start() == 0:
+            prefix = b""
+        elif (
+            match.start() >= 2 and content[match.start() - 2 : match.start()] == b"\n\n"
+        ):
+            prefix = content[: match.start() - 2]
+        else:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET",
+                "project AGENTS.md managed region separator is invalid",
+            )
         body = content[match.end() :]
         return {
-            "version": 2,
+            "version": 3,
             "manifest_sha256": match.group(1).decode("ascii"),
             "decision_sha256": match.group(2).decode("ascii"),
             "body_sha256": match.group(3).decode("ascii"),
             "actual_body_sha256": _sha256_bytes(body),
+            "prefix_bytes": len(prefix),
+            "prefix_sha256": _sha256_bytes(prefix),
+            "prefix": prefix,
         }
     legacy = LEGACY_GENERATED_MARKER_RE.match(content)
-    if legacy is None:
+    if legacy is not None:
+        if reserved_tokens != 1:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "project AGENTS.md has multiple managed regions"
+            )
+        body = content[legacy.end() :]
+        return {
+            "version": 1,
+            "manifest_sha256": None,
+            "decision_sha256": None,
+            "body_sha256": legacy.group(1).decode("ascii"),
+            "actual_body_sha256": _sha256_bytes(body),
+            "prefix_bytes": 0,
+            "prefix_sha256": _sha256_bytes(b""),
+            "prefix": b"",
+        }
+    legacy_managed = LEGACY_MANAGED_MARKER_RE.match(content)
+    if legacy_managed is None:
+        if reserved_tokens:
+            raise ProjectInstructionsError(
+                "UNSAFE_TARGET", "project AGENTS.md managed marker is malformed"
+            )
         return None
-    body = content[legacy.end() :]
+    if reserved_tokens != 1:
+        raise ProjectInstructionsError(
+            "UNSAFE_TARGET", "project AGENTS.md has multiple managed regions"
+        )
+    body = content[legacy_managed.end() :]
     return {
-        "version": 1,
-        "manifest_sha256": None,
-        "decision_sha256": None,
-        "body_sha256": legacy.group(1).decode("ascii"),
+        "version": 2,
+        "manifest_sha256": legacy_managed.group(1).decode("ascii"),
+        "decision_sha256": legacy_managed.group(2).decode("ascii"),
+        "body_sha256": legacy_managed.group(3).decode("ascii"),
         "actual_body_sha256": _sha256_bytes(body),
+        "prefix_bytes": 0,
+        "prefix_sha256": _sha256_bytes(b""),
+        "prefix": b"",
     }
 
 
@@ -322,17 +389,13 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
         and bool(manifest.get("project_root"))
         and isinstance(manifest.get("git_root"), str)
         and bool(manifest.get("git_root"))
-        and _valid_project_relative_path(
-            manifest.get("project_scope"), allow_root=True
-        )
+        and _valid_project_relative_path(manifest.get("project_scope"), allow_root=True)
         and isinstance(manifest.get("project_name"), str)
         and bool(manifest.get("project_name"))
-        and manifest.get("spec_owner") in {"task-implementer", "agentic-sdlc"}
+        and manifest.get("spec_owner") == "maintain-project-specs"
         and _valid_path_digest(manifest.get("requirements"))
         and _valid_path_digest(manifest.get("design"))
-        and _valid_project_relative_path(
-            dict(manifest["requirements"]).get("path")
-        )
+        and _valid_project_relative_path(dict(manifest["requirements"]).get("path"))
         and _valid_project_relative_path(dict(manifest["design"]).get("path"))
         and _valid_path_digest(manifest.get("spec_receipt"))
         and isinstance(manifest.get("codex_home"), str)
@@ -381,6 +444,8 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
             "manifest_sha256",
             "decision_sha256",
             "body_sha256",
+            "managed_prefix_bytes",
+            "managed_prefix_sha256",
             "active_path",
             "active_kind",
             "parent_device",
@@ -391,7 +456,7 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
         and target.get("file_status")
         in {"missing", "managed", "legacy", "human-edited", "human-owned"}
         and (target.get("sha256") is None or _valid_sha256(target.get("sha256")))
-        and target.get("marker_version") in {None, 1, 2}
+        and target.get("marker_version") in {None, 1, 2, 3}
         and (
             target.get("manifest_sha256") is None
             or _valid_sha256(target.get("manifest_sha256"))
@@ -403,6 +468,12 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
         and (
             target.get("body_sha256") is None
             or _valid_sha256(target.get("body_sha256"))
+        )
+        and type(target.get("managed_prefix_bytes")) is int
+        and int(target["managed_prefix_bytes"]) >= 0
+        and (
+            target.get("managed_prefix_sha256") is None
+            or _valid_sha256(target.get("managed_prefix_sha256"))
         )
         and (
             target.get("active_path") is None
@@ -424,6 +495,8 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
         marker_manifest = target.get("manifest_sha256")
         marker_decision = target.get("decision_sha256")
         marker_body = target.get("body_sha256")
+        prefix_bytes = target.get("managed_prefix_bytes")
+        prefix_sha = target.get("managed_prefix_sha256")
         target_valid = target_valid and (
             (
                 status == "missing"
@@ -432,6 +505,8 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
                 and marker_manifest is None
                 and marker_decision is None
                 and marker_body is None
+                and prefix_bytes == 0
+                and prefix_sha is None
             )
             or (
                 status == "human-owned"
@@ -440,22 +515,40 @@ def _validate_manifest_shape(manifest: dict[str, object]) -> None:
                 and marker_manifest is None
                 and marker_decision is None
                 and marker_body is None
+                and type(prefix_bytes) is int
+                and int(prefix_bytes) >= 0
+                and _valid_sha256(prefix_sha)
             )
             or (
                 status == "legacy"
                 and _valid_sha256(target_sha)
-                and marker_version == 1
-                and marker_manifest is None
-                and marker_decision is None
+                and marker_version in {1, 2}
+                and (
+                    (
+                        marker_version == 1
+                        and marker_manifest is None
+                        and marker_decision is None
+                    )
+                    or (
+                        marker_version == 2
+                        and _valid_sha256(marker_manifest)
+                        and _valid_sha256(marker_decision)
+                    )
+                )
                 and _valid_sha256(marker_body)
+                and prefix_bytes == 0
+                and _valid_sha256(prefix_sha)
             )
             or (
                 status in {"managed", "human-edited"}
                 and _valid_sha256(target_sha)
-                and marker_version == 2
+                and marker_version == 3
                 and _valid_sha256(marker_manifest)
                 and _valid_sha256(marker_decision)
                 and _valid_sha256(marker_body)
+                and type(prefix_bytes) is int
+                and int(prefix_bytes) >= 0
+                and _valid_sha256(prefix_sha)
             )
         )
         target_valid = target_valid and (
@@ -554,13 +647,9 @@ def _render_body(
     evidence_paths: set[str],
 ) -> tuple[bytes, list[dict[str, object]]]:
     if (
-        not _valid_project_relative_path(
-            manifest.get("project_scope"), allow_root=True
-        )
+        not _valid_project_relative_path(manifest.get("project_scope"), allow_root=True)
         or not isinstance(manifest.get("requirements"), dict)
-        or not _valid_project_relative_path(
-            dict(manifest["requirements"]).get("path")
-        )
+        or not _valid_project_relative_path(dict(manifest["requirements"]).get("path"))
         or not isinstance(manifest.get("design"), dict)
         or not _valid_project_relative_path(dict(manifest["design"]).get("path"))
     ):

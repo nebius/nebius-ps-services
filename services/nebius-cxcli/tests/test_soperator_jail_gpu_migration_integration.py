@@ -321,9 +321,7 @@ def test_external_jail_gpu_post_population_gate_applies_and_binds_exact_evidence
     assert gate["pod"]["pod_uid"] == "pod-uid"
     assert gate["legacy_ready_marker"]["status"] == "verified"
     marker_jobs = [
-        item
-        for key, item in resources.items()
-        if key.startswith("job/cxcli-gpu-jail-ready-")
+        item for key, item in resources.items() if key.startswith("job/cxcli-gpu-jail-ready-")
     ]
     assert len(marker_jobs) == 1
     marker_container = marker_jobs[0]["spec"]["template"]["spec"]["containers"][0]
@@ -375,9 +373,7 @@ def test_external_jail_gpu_post_population_accepts_exact_historical_script_compl
         "nebius.ai/cxcli-source-populate-job-uid": "populate-job-uid",
         "nebius.ai/cxcli-source-populate-pvc-uid": "passive-pvc-uid",
         "nebius.ai/cxcli-passive-pvc": "jail-rootfs-slot-b-pvc",
-        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(
-            source_image.encode()
-        ).hexdigest(),
+        "nebius.ai/cxcli-populate-image-sha256": hashlib.sha256(source_image.encode()).hexdigest(),
         "nebius.ai/cxcli-runner-image-index-digest": resolution.index_digest,
         "nebius.ai/cxcli-runner-image-platform-digest": resolution.platform_digest,
         "nebius.ai/script-sha256": historical_script_sha256,
@@ -466,14 +462,14 @@ def test_external_jail_gpu_post_population_accepts_exact_historical_script_compl
     def runner(args: Sequence[str], **_kwargs: Any) -> migration.SoperatorMigrationCommandResult:
         if "get" in args and "pods" in args:
             return _result(args, stdout='{"items":[]}')
-        return _result(args, stdout=marker_logs if str(args[-1]).endswith(marker_name) else post_logs)
+        return _result(
+            args, stdout=marker_logs if str(args[-1]).endswith(marker_name) else post_logs
+        )
 
     historical_config_contract = migration._jail_gpu_post_population_resource_contract(
         historical_config
     )
-    historical_job_contract = migration._jail_gpu_post_population_resource_contract(
-        historical_job
-    )
+    historical_job_contract = migration._jail_gpu_post_population_resource_contract(historical_job)
     phase = {
         "consumer_switch_applied_at": "2026-07-16T00:00:00Z",
         "gpu_post_population": {
@@ -1149,6 +1145,136 @@ def test_gpu_pre_activation_in_place_maps_one_legacy_role_to_target_nodeset() ->
     assert fleet[0]["node_uid"] == "node-uid-0"
 
 
+def test_gpu_pre_activation_chart_only_segment_uses_campaign_wide_in_place_group() -> None:
+    current_segment_intent = {
+        "intended_postcondition": {
+            "mk8s": {
+                "control_plane": {
+                    "source_version": "1.33",
+                    "target_version": "1.33",
+                },
+                "node_groups": [],
+            }
+        }
+    }
+    checkpoint = {
+        "compute_migration": {"mode": migration.COMPUTE_MIGRATION_MODE_IN_PLACE},
+        "worker_node_groups": ["gpu-group-id-0"],
+        "operation_intent": copy.deepcopy(current_segment_intent),
+    }
+    accepted_campaign_groups = (
+        {
+            "id": "gpu-group-id-0",
+            "name": "worker-0-0",
+            "role": "worker-0",
+            "fixed_size": 2,
+            "gpu_software_mode": "provider-managed",
+        },
+    )
+
+    bindings = migration._target_gpu_node_group_bindings(
+        checkpoint=checkpoint,
+        gpu_nodesets=("worker",),
+        accepted_in_place_node_groups=accepted_campaign_groups,
+    )
+
+    assert bindings == (
+        {
+            "state_key": "in-place:worker-0-0",
+            "node_group_id": "gpu-group-id-0",
+            "node_group_name": "worker-0-0",
+            "nodeset": "worker",
+            "accepted_nodeset_label": "worker-0",
+            "fixed_node_count": 2,
+        },
+    )
+    assert checkpoint["operation_intent"] == current_segment_intent
+
+
+def test_gpu_pre_activation_campaign_wide_group_requires_accepted_worker_scope() -> None:
+    checkpoint = {
+        "compute_migration": {"mode": migration.COMPUTE_MIGRATION_MODE_IN_PLACE},
+        "worker_node_groups": ["different-gpu-group"],
+        "operation_intent": {"intended_postcondition": {"mk8s": {"node_groups": []}}},
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="every configured target GPU NodeSet",
+    ):
+        migration._target_gpu_node_group_bindings(
+            checkpoint=checkpoint,
+            gpu_nodesets=("worker",),
+            accepted_in_place_node_groups=(
+                {
+                    "id": "gpu-group-id-0",
+                    "name": "worker-0-0",
+                    "role": "worker-0",
+                    "fixed_size": 2,
+                    "gpu_software_mode": "provider-managed",
+                },
+            ),
+        )
+
+
+def test_gpu_pre_activation_gate_accepts_chart_only_segment_campaign_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_pre_activation_gpu_fleet_lineage(monkeypatch)
+    values = {
+        "nodesets": [
+            {"name": "worker-gpu-a", "replicas": 1, "gpu": {"enabled": True}},
+            {"name": "worker-gpu-b", "replicas": 1, "gpu": {"enabled": True}},
+        ]
+    }
+    phase: dict[str, Any] = {
+        "gpu_post_population": {
+            "status": "passed",
+            "driver_version": "550.90.07",
+            "image_lock": _pre_activation_image_lock(),
+            "source_library_sha256": {
+                "libcuda.so.1": "a" * 64,
+                "libnvidia-ml.so.1": "b" * 64,
+            },
+        }
+    }
+    checkpoint = {
+        "compute_migration": {"mode": migration.COMPUTE_MIGRATION_MODE_IN_PLACE},
+        "worker_node_groups": ["gpu-group-id-0", "gpu-group-id-1"],
+        "operation_intent": {"intended_postcondition": {"mk8s": {"node_groups": []}}},
+    }
+    accepted_campaign_groups = tuple(
+        {
+            "id": f"gpu-group-id-{index}",
+            "name": f"training-worker-{index}",
+            "role": f"worker-gpu-{'a' if index == 0 else 'b'}",
+            "fixed_size": 1,
+            "gpu_software_mode": "provider-managed",
+        }
+        for index in range(2)
+    )
+
+    lines = migration._ensure_gpu_worker_jail_release_gate(
+        phase=phase,
+        checkpoint=checkpoint,
+        command_runner=_pre_activation_gpu_fleet_runner(),
+        kube_context="ctx",
+        target_ref="training",
+        values=values,
+        checkpoint_writer=None,
+        gate_key=migration._GPU_PRE_ACTIVATION_FLEET_GATE_KEY,
+        accepted_in_place_node_groups=accepted_campaign_groups,
+    )
+
+    gate = phase[migration._GPU_PRE_ACTIVATION_FLEET_GATE_KEY]
+    assert gate["status"] == "passed"
+    assert {item["node_group_id"] for item in gate["owned_gpu_node_groups"]} == {
+        "gpu-group-id-0",
+        "gpu-group-id-1",
+    }
+    assert "including podless spare nodes" in lines[0]
+
+
 def test_gpu_pre_activation_fleet_gate_binds_every_ready_node_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1274,9 +1400,7 @@ def test_post_jail_gpu_contract_transition_requires_exact_completed_rollout(
         "expected_replicas": {"worker": 2},
         "observed_ready_replicas": {"worker": 2},
         "target_slurmcluster": {"uid": "target-uid"},
-        "nodeset_workload_bindings": {
-            "worker": {"workload_uid": "worker-statefulset-uid"}
-        },
+        "nodeset_workload_bindings": {"worker": {"workload_uid": "worker-statefulset-uid"}},
     }
     prior_gate = {
         **copy.deepcopy(gate),
@@ -1592,6 +1716,7 @@ def test_gpu_activation_boundary_reprobes_exact_fleet_without_source_workload_li
 
     def reprobe(**kwargs: Any) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
         stages.append(str(kwargs["stage"]))
+        assert tuple(kwargs["node_groups"]) == tuple(gate["owned_gpu_node_groups"])
         return (
             tuple(copy.deepcopy(gate["owned_gpu_node_groups"])),
             tuple(copy.deepcopy(gate["target_ready_gpu_nodes"])),
@@ -1781,9 +1906,9 @@ def test_gpu_post_activation_dcgm_runtime_aligns_to_driver_branch() -> None:
 
     assert 'if [ "${driver_major}" -ge 580 ]' in script
     assert 'package="datacenter-gpu-manager-4-cuda${cuda_major}"' in script
-    assert 'datacenter-gpu-manager-4-core)' in script
+    assert "datacenter-gpu-manager-4-core)" in script
     assert 'apt-get install -y --no-install-recommends --reinstall "$1=$2"' in script
-    assert 'flock /var/lock/cxcli-dcgm-runtime.lock' in script
+    assert "flock /var/lock/cxcli-dcgm-runtime.lock" in script
 
     worker = {"pod": "worker-0", "pod_uid": "pod-uid", "node": "gpu-node-0"}
 
@@ -2075,9 +2200,7 @@ def test_external_jail_gpu_smoke_retries_only_after_exact_terminal_failure(
         if selected[0] == "sacct":
             return _result(
                 selected,
-                stdout=(
-                    "42|cxcli-h100-0123456789ab|None assigned|CANCELLED by 0|0:0\n"
-                ),
+                stdout=("42|cxcli-h100-0123456789ab|None assigned|CANCELLED by 0|0:0\n"),
             )
         if selected[0] == "squeue":
             return _result(

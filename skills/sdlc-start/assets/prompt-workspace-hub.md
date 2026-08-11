@@ -10,11 +10,15 @@ the new file. Do not clone an existing prompt.
 Creating or saving a prompt never starts work. After editing `## Ask`, invoke:
 
 ```text
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
 HTML comments are ignored by intent comparison. Keep every instruction in
 `## Ask` or another visible heading.
+
+After this session is explicitly bound, safe direct prompts may be staged and
+losslessly merged automatically. Editing this file still never auto-runs; use
+the explicit command above for every manual file edit.
 
 ## Continue or change existing work
 

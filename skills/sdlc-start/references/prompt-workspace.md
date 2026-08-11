@@ -9,7 +9,7 @@ The only public actions are:
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
 All script commands are private mechanical transitions. They do not select a
@@ -25,7 +25,7 @@ ${CODEX_HOME:-$HOME/.codex}/sdlc-runs/<project-id>/
 ├── queued-prompts/<prompt-id>/<digest>.md
 ├── prompt.lock
 ├── prompts/00-START-HERE.md
-├── prompts/<created-at>--<slug>.md
+├── prompts/<prompt-ref>--<created-at>--<slug>.md
 ├── <project>-prompts.code-workspace
 ├── active-run.json
 └── <run-id>/
@@ -57,8 +57,11 @@ rejects obvious secret-bearing assignments before snapshotting.
 
 ## Prompt And Run Binding
 
-Prompts use schema `agentic-sdlc/prompt-v2`. The editable prompt keeps a stable
-filename, prompt ID, and creation timestamp. Each accepted changed digest is
+Prompts use schema `agentic-sdlc/prompt-v3`. The full prompt ID is authoritative.
+A collision-safe five-character reference is stored in metadata and prefixed
+to the filename; an exact collision extends the new reference. Public `run`
+resolves an exact ref, full prompt ID, filename, or managed path. The editable
+prompt keeps a stable identity and creation timestamp. Each accepted changed digest is
 copied once to immutable `inputs/rNNNN/prompt.md` and recorded in the run's
 `prompt.json` manifest with schema `agentic-sdlc/prompt-binding-v2`. Each
 revision records both exact raw SHA-256 and a normalized intent digest that
@@ -98,6 +101,21 @@ dequeue.
 The helper writes `active-run.json`, the immutable snapshot, and `prompt.json`.
 `sdlc-start` remains responsible for `run.json`, checkpoints, feature state,
 phase routing, and the active workflow lock.
+
+After an explicit init or run binds a Codex session, the separate
+`prompt-session-intake` hook may stage a later safe direct turn. The agent
+classifies and losslessly refines material intent, accepts it against the exact
+canonical digest, then private `session-merge` creates or updates the prompt
+with the accepted operation ID before this same run path executes exactly once.
+An interrupted retry with the same operation ID resolves the already-applied
+prompt rather than creating or appending twice. Conversation, status, and
+control turns do not mutate or run a prompt. New-objective publication is one
+exclusive marker-bearing file creation; refined content that uses the reserved
+operation-marker namespace is rejected. Editing or saving a prompt file
+never triggers execution; manual changes require explicit `run`.
+Explicit bound runs register the authoritative active prompt for unique
+fresh-session attachment and close it only after verified terminal completion;
+queued prompts remain inactive until activation.
 
 The editor workspace exposes private `new`, `list`, `queue-list`, and
 `queue-cancel` tasks. `new` is the default build task and creates a
@@ -146,6 +164,17 @@ prompt may start a new run.
 Prompt-v1 files and unfinished prompt-binding-v1 runs are read-only and return
 `WORKFLOW_UPGRADE_REQUIRED`. Preserve their bytes as history; there is no
 migration or execution compatibility path.
+
+Initialization performs the only prompt-v2 transition: editable prompt-v2
+files gain their deterministic prompt reference and v3 filename, then mutable
+queue and run pointers are repaired under the prompt lock. A private migration
+journal finishes each interrupted file transition from its validated old
+source or already-installed v3 target before retrying pointer repair. Immutable
+v2 revision bytes remain unchanged and readable; prompt-v2 is never a parallel
+write path.
+Pointer repair accepts either the validated old filename or the already-repaired
+v3 filename, recomputes queue digests and snapshots, and can resume after a
+partial queue or run-manifest commit.
 
 Validate every immutable snapshot and manifest digest before resuming. Partial
 new-run creation is safe to retry: the active pointer selects the same bound

@@ -47,6 +47,8 @@ class WorktreeManagerTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "workspace with spaces"
         self.root.mkdir()
+        self.previous_codex_home = os.environ.get("CODEX_HOME")
+        os.environ["CODEX_HOME"] = str(self.root / "codex")
         self.origin = self.root / "origin.git"
         git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "example-monorepo"
@@ -78,6 +80,10 @@ class WorktreeManagerTest(unittest.TestCase):
         self.source = git("rev-parse", "HEAD", cwd=self.repo)
 
     def tearDown(self) -> None:
+        if self.previous_codex_home is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = self.previous_codex_home
         self.temporary.cleanup()
 
     def add(

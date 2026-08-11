@@ -57,7 +57,8 @@ Exclude timestamps, request IDs, temporary paths, line numbers that drift, and
 other volatile text. A different message does not create a new blocker when the
 affected operation and causal boundary are unchanged. Start a fresh blocker
 only when evidence establishes a causally independent failure. Replace the
-marker for that transition with the new `blocker_key`, `tranche: 1`, a fresh
+marker for that transition with one complete canonical marker: the new
+`blocker_key`, a concise public-safe `blocker_summary`, `tranche: 1`, a fresh
 `started_at`, `active_seconds: 0`, `attempts: []`, `status: active`,
 `stop_trigger: null`, the saved session profile and its authorization binding,
 and `override_summary: null`.
@@ -232,17 +233,19 @@ the existing Troubleshooting Report with these additional requirements:
 
 - include `REMEDIATION_BUDGET_EXHAUSTED`;
 - identify whether `attempt_limit` or `time_limit` stopped the tranche;
-- use the exact sections `## Outcome`, `## Blocking Error`, `## Source`,
-  `## Attempts`, `## Evidence`, `## Current State`, and `## Next Action`;
-- under `## Blocking Error`, use one substantive `Blocker: ...` line with the
+- use the single canonical heading order and completion table in
+  `verification-and-reporting.md` rather than a separate exhaustion format;
+- under `## Root Cause`, use one substantive `- Blocker: ...` line with the
   exact current error class, code, and message excerpt when available, redacted
   as needed, plus the failing operation;
-- under `## Source`, use one substantive `Blocker key: ...` line identifying a
+- under `## Root Cause`, use one substantive `- Blocker key: ...` line identifying a
   component, command, test, service, or bounded log location without copying
   raw sensitive material;
-- list each counted attempt as
+- under `## Remediation`, list each counted attempt as
   `- attempt-N | Remediation: ... | Verification: ... | Result: ...`;
-- list its evidence as `- attempt-N | Evidence: ...`;
+- under `## Post-Fix Validation`, list its evidence as
+  `- attempt-N | Evidence: ...`;
+- mark each completion criterion `FAIL` or `UNKNOWN` as the evidence supports;
 - use the hook's bounded, redacted marker-derived blocker, source, remediation,
   verification, result, and evidence summaries when the optional guard is
   active; generic prose or sensitive values do not satisfy delivery;
@@ -252,7 +255,7 @@ the existing Troubleshooting Report with these additional requirements:
 When the Stop hook provides its bounded marker-derived report, return it
 verbatim as the whole assistant response. Do not add an introduction, rewrite
 its fields, or substitute a richer narrative; even a semantically equivalent
-`Blocker:` value does not satisfy the exact marker binding.
+`- Blocker:` value does not satisfy the exact marker binding.
 
 If the evidence or hypothesis gate blocks a retry before either numeric limit,
 transition to `REPORTED` without `REMEDIATION_BUDGET_EXHAUSTED`. Use the same
@@ -282,20 +285,42 @@ marker did not record retry-admission evidence. New v4 state defaults to 5/120
 and permits authorized values only through 10/180. Free-text
 `override_summary` cannot authorize numbers; it records same-blocker
 continuation only.
+
+Separately, every explicit `$troubleshoot` invocation creates
+`troubleshoot-report-obligation.json` without changing the budget authorization
+schema. The duty applies with or without a remediation marker and requires
+`Current workflow state: REPORTED` for every terminal classification. It
+survives interruption into a resumed turn in the same session. The general
+report path requests one correction and then emits an honest bounded UI
+fallback. A valid report is finalized only when the shared Stop arbiter has no
+peer lifecycle continuation; otherwise the obligation remains active for the
+later terminal Stop. If a later peer returns a terminal result, that result
+keeps precedence after the arbiter finalizes the already validated report,
+preventing stale report state in a later turn. Process termination before Stop
+remains reportable only after a same-session resume.
 For an active resize, the hook records a pending authorization and admits only
 the exact `current.md` patch until the marker matches it while preserving the
 blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. It then
-promotes the pending profile atomically. At exhaustion it records a private
-terminal lock, so clearing or relabeling the ledger cannot reopen the tranche;
-deleting the marker also remains fail-closed, with only an exact marker restore
-admitted before another tool. The next user turn must authorize fresh
-same-blocker or causally independent state.
+promotes the pending profile atomically. If that marker is invalid, feedback
+requires atomic restoration of every non-profile field plus the authorized
+profile fields. If it is missing, the hook states that bounded authorization
+metadata cannot reconstruct it and requires the exact pre-resize marker or a
+fresh user-authorized troubleshoot session; it never suggests a reset. At
+exhaustion it records a private terminal lock, so clearing or relabeling the
+ledger cannot reopen the tranche; deleting the marker also remains fail-closed,
+with only an exact marker restore admitted before another tool. The next user
+turn must authorize fresh same-blocker or causally independent state.
 For invalid state, it permits only exact marker repair, reports the validation
 reason, and re-evaluates the repaired marker; invalidity alone does not require
-an exhaustion report. For an incomplete attempt, it reports all missing
-canonical fields together and directs the parent to remove unverified progress
-or complete the verified record atomically instead of repairing one field at a
-time. It verifies that every canonical attempt is textually
+an exhaustion report. A pending authorization never masks a missing or invalid
+marker or an invalid pending transition: UserPromptSubmit, PreToolUse, and Stop
+all report the precise bounded reason followed by complete pending-repair
+guidance. Fresh-state guidance refers to the prior terminal marker because the
+handoff may follow either resolved or exhausted state. For an incomplete
+attempt, it reports all missing canonical fields together and directs the parent
+to remove unverified progress or complete the verified record atomically instead
+of repairing one field at a time. It verifies that every canonical attempt is
+textually
 bound to the marker's one `blocker_key`, but cannot infer whether two failures
 are causally independent or detect a deliberately false relabeling. It also
 cannot infer whether evidence is semantically new or acquired before the retry,

@@ -93,6 +93,12 @@ $worktree remove <generated-worktree-name>
   coordinator lease acquisition, removal, and source publication until the
   exact candidate reservation consumes it or an explicit reviewed restart
   drops only the claim while retaining every commit.
+- Worktree ownership transitions also take the same Codex-private
+  common-repository lock used by direct `$commit` transactions. A direct
+  transaction that acquires it first is revalidated before Worktree proceeds;
+  an existing preparation or reservation for the source ref blocks the direct
+  transaction. This serializes ownership without sharing or replacing either
+  workflow's claim schema.
 - Removal non-forcibly removes the child worktree, deletes its unchanged local
   ref with an expected-old SHA, deletes any exact released nested-lease
   receipt, and deletes its private manifest.

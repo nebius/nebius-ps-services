@@ -191,9 +191,11 @@ def _validate_spec_receipt(
     required = {
         "schema",
         "owner",
+        "status",
         "project_root",
         "git_root",
         "project_scope",
+        "git_head",
         "validator",
         "validator_version",
         "requirements",
@@ -213,9 +215,12 @@ def _validate_spec_receipt(
         or set(receipt) != required
         or receipt.get("schema") != SPEC_RECEIPT_SCHEMA
         or receipt.get("owner") != owner
+        or receipt.get("status") != "current"
         or receipt.get("project_root") != str(project_root)
         or receipt.get("git_root") != str(git_root)
         or receipt.get("project_scope") != project_scope
+        or receipt.get("git_head")
+        != _git_text(git_root, ["rev-parse", "HEAD"], "resolve spec receipt HEAD")
         or not isinstance(receipt.get("validator"), str)
         or not receipt.get("validator")
         or type(receipt.get("validator_version")) is not int
@@ -229,16 +234,9 @@ def _validate_spec_receipt(
             "spec validation receipt does not prove the selected specs",
         )
     skills_root = Path(__file__).resolve().parents[3]
-    validator = {
-        "task-implementer": skills_root
-        / "task-implementer"
-        / "scripts"
-        / "validate_project_specs.py",
-        "agentic-sdlc": skills_root
-        / "sdlc-start"
-        / "scripts"
-        / "validate_project_specs.py",
-    }[owner]
+    validator = (
+        skills_root / "maintain-project-specs" / "scripts" / "validate_project_specs.py"
+    )
     try:
         completed = subprocess.run(
             [sys.executable, str(validator), "--project-root", str(project_root)],
@@ -372,10 +370,7 @@ def _validated_settings(
         )
     markers: list[str] = []
     for item in raw_markers:
-        if (
-            not _valid_config_filename(item)
-            or item in markers
-        ):
+        if not _valid_config_filename(item) or item in markers:
             raise ProjectInstructionsError(
                 "DISCOVERY_CONTEXT_UNVERIFIED", "project root markers are invalid"
             )
@@ -461,8 +456,10 @@ def _codex_settings(
     _apply_settings(settings, dict(runtime["overrides"]))
     sources.append(runtime_source)
     fallbacks, limit, markers = _validated_settings(settings)
-    if project_root != git_root and markers and not any(
-        (project_root / marker).exists() for marker in markers
+    if (
+        project_root != git_root
+        and markers
+        and not any((project_root / marker).exists() for marker in markers)
     ):
         raise ProjectInstructionsError(
             "DISCOVERY_CONTEXT_UNVERIFIED",
@@ -552,6 +549,8 @@ def _target_record(
     manifest_digest: Optional[str] = None
     decision_digest: Optional[str] = None
     body_digest: Optional[str] = None
+    managed_prefix_bytes = 0
+    managed_prefix_digest: Optional[str] = None
     if metadata is None:
         file_status = "missing"
         digest = None
@@ -561,12 +560,16 @@ def _target_record(
         parsed = _parse_generated(content)
         if parsed is None:
             file_status = "human-owned"
+            managed_prefix_bytes = len(content)
+            managed_prefix_digest = digest
         else:
             marker_version = int(parsed["version"])
             manifest_digest = parsed["manifest_sha256"]  # type: ignore[assignment]
             decision_digest = parsed["decision_sha256"]  # type: ignore[assignment]
             body_digest = str(parsed["body_sha256"])
-            if marker_version == 1:
+            managed_prefix_bytes = int(parsed["prefix_bytes"])
+            managed_prefix_digest = str(parsed["prefix_sha256"])
+            if marker_version in {1, 2}:
                 file_status = "legacy"
             elif parsed["body_sha256"] == parsed["actual_body_sha256"]:
                 file_status = "managed"
@@ -585,6 +588,8 @@ def _target_record(
         "manifest_sha256": manifest_digest,
         "decision_sha256": decision_digest,
         "body_sha256": body_digest,
+        "managed_prefix_bytes": managed_prefix_bytes,
+        "managed_prefix_sha256": managed_prefix_digest,
         "active_path": active_path,
         "active_kind": (
             active_project_instruction["kind"]
@@ -652,12 +657,23 @@ def _require_tracked_project_instructions(
 
 
 def _generated_body_capacity(
-    configured_limit: int, ancestors: list[dict[str, object]]
+    configured_limit: int,
+    ancestors: list[dict[str, object]],
+    target: dict[str, object],
 ) -> int:
     inherited_bytes = sum(int(entry["bytes"]) for entry in ancestors)
+    prefix_bytes = int(target["managed_prefix_bytes"])
+    separator_bytes = 2 if prefix_bytes else 0
     return min(
         MAX_BODY_BYTES,
-        max(0, configured_limit - inherited_bytes - GENERATED_MARKER_BYTES),
+        max(
+            0,
+            configured_limit
+            - inherited_bytes
+            - prefix_bytes
+            - separator_bytes
+            - GENERATED_MARKER_BYTES,
+        ),
     )
 
 
@@ -731,7 +747,7 @@ def _manifest(
         "codex_home": str(codex_home),
         "config_context": config,
         "generated_body_max_bytes": _generated_body_capacity(
-            int(config["project_doc_max_bytes"]), ancestors
+            int(config["project_doc_max_bytes"]), ancestors, target
         ),
         "global_instructions": global_entries,
         "ancestor_project_instructions": ancestors,

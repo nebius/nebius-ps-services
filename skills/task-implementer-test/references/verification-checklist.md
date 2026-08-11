@@ -6,7 +6,7 @@
   `task-implementer`.
 - `agents/openai.yaml` keeps `allow_implicit_invocation: false`.
 - The public interface contains only `workspace init [project-folder]`,
-  `run <prompt-path-or-unique-filename>`, `integrate [project-folder]`, and
+  `run <prompt-ref-or-file>`, `integrate [project-folder]`, and
   `workspace remove [project-folder]`.
 - Source and installed copies match when an installed copy is present.
 - The current contract, prompt workspace, managed specs, scheduler, real

@@ -1,6 +1,6 @@
 # Task Implementer
 
-`task-implementer` is an explicit-only brownfield implementation coordinator.
+`task-implementer` is an explicit-entry brownfield implementation coordinator.
 It keeps prompts, revisions, steering, orchestration state, assignments,
 results, and Git worktrees outside the repository while product changes remain
 normal reviewed commits.
@@ -9,7 +9,7 @@ normal reviewed commits.
 
 ```text
 $task-implementer workspace init [project-folder]
-$task-implementer run <prompt-path-or-unique-filename>
+$task-implementer run <prompt-ref-or-file>
 $task-implementer integrate [project-folder]
 $task-implementer workspace remove [project-folder]
 ```
@@ -35,7 +35,16 @@ heading is optional, removable, and may be added when it helps. Use the default
 `New Prompt` editor task for a new objective; it allocates a fresh prompt ID,
 so manual cloning is unsupported.
 
-Steer active work by editing the same prompt and repeating `run`. Steering
+After an explicit initialization or run binds the current Codex session, a safe
+direct prompt is staged by `prompt-session-intake`, refined losslessly by the
+agent, merged with compare-and-set and one operation ID, and routed through the
+same run path once. An exact interrupted retry resolves the applied operation
+instead of creating or appending again. A new objective publishes its complete
+marker-bearing Ask in one exclusive create, and refined user content cannot use
+the reserved operation-marker namespace.
+Explicit bound runs register the authoritative active prompt for unambiguous
+fresh-session attachment and close it only after verified terminal completion.
+Steer active work manually by editing the same prompt and repeating `run`. Steering
 received after a wave starts remains queued until the next safe boundary. An
 unchanged completed prompt returns `ALREADY_COMPLETE`; an edited completed
 prompt starts a linked fresh-objective run against current project truth.
@@ -77,7 +86,7 @@ PRIMARY CHECKOUT / SOURCE BRANCH
         v
 PERSISTENT LANE / LANE BRANCH                         long-lived
         |
-        | run <prompt>
+        | run <prompt-ref-or-file>
         v
 WAVE INTEGRATION WORKTREE                            temporary
         |\
@@ -122,7 +131,7 @@ current directory, VS Code window, or checked-out worktree.
    the persistent lane and private prompt workspace; it does not implement or
    queue work.
 2. Edit the generated prompt, then invoke
-   `$task-implementer run <prompt-path-or-unique-filename>`. You do not create,
+   `$task-implementer run <prompt-ref-or-file>`. You do not create,
    switch, merge, commit, clean, or remove Task Implementer's branches and
    worktrees yourself. The generated `CODE` folder may show the persistent
    lane; treat that checkout as managed even when it is visible in the editor.
@@ -184,8 +193,9 @@ integration branch**, or **worker task branch** instead of the broad terms
 `run`, before worker dispatch, the coordinator renders and validates two
 tracked files under the selected project scope:
 
-- `docs/requirements.md`, with Task Implementer-owned `TI-REQ-*` records.
-- `docs/design.md`, with Task Implementer-owned `TI-DES-*` records that map to
+- `docs/requirements.md`, with shared-owner `TI-REQ-*` records authored by the
+  Task Implementer adapter.
+- `docs/design.md`, with shared-owner `TI-DES-*` records that map to
   the managed requirements.
 
 The coordinator compiles these records from the full Ask, optional prompt
@@ -199,19 +209,19 @@ region.
 
 If either file is missing, Task Implementer creates it. If a generic document
 already exists, Task Implementer preserves the human-owned content and appends
-its own clearly marked managed region. Later runs replace only that validated
-managed region. The coordinator owns these files and may include their changes
-in the contract or integration commit; workers never edit them. They are
+the canonical `maintain-project-specs` managed region. Later runs replace only
+that validated region. The shared owner controls these files, and the
+coordinator may include their changes in the contract or integration commit;
+workers never edit them. They are
 project-tracked implementation records, not private prompt or orchestration
 state.
 
-These records are separate from Agentic SDLC product specifications. Task
-Implementer refuses to adopt or edit a document owned by the Agentic SDLC
-`agentic-sdlc.requirements.v1` or `agentic-sdlc.design.v1` schema and stops with
-`SPEC_OWNER_CONFLICT`. Use `sdlc-create-requirements` and
-`sdlc-create-design` through the Agentic SDLC workflow when those full product
-specifications are required; do not mix the two ownership formats in the same
-files.
+These records and Agentic SDLC rich records now share one canonical owner.
+Former `task-implementer/*-v1` and `agentic-sdlc.*.v1` pairs require the
+journaled `maintain-project-specs` migration before managed work continues.
+Use `sdlc-create-requirements` and `sdlc-create-design` as shared-owner
+adapters when the richer Agentic SDLC record shape is required. Do not mix rich
+and compact record shapes inside one managed region.
 
 ## Persistent Project Lanes
 
@@ -227,6 +237,10 @@ committed `HEAD` becomes the lane baseline; dirty and untracked source files are
 never copied or mutated. The lane must remain clean at run boundaries. Separate
 project scopes get separate lanes and may run concurrently when their
 repository-wide exact/prefix claims and conflict domains do not overlap.
+When `integrate` finds a dirty primary source, it does not auto-commit or stage
+a project subset. It tells the user to run one fresh explicit `$commit` in the
+primary checkout, which reviews and commits the complete repository diff, and
+then to repeat `integrate`.
 
 Before resources exist, replanning replaces the resource-free planned tail.
 The coordinator index keeps completed waves plus the replacement schedule;
@@ -245,6 +259,12 @@ lane. `workspace remove` is explicit and proof-gated; it preserves private
 prompts and run history, and a later initialization creates the next lane
 incarnation and rebinds that history.
 
+Each worker's successful `task-start` also mints its private one-direct-child commit
+authorization. `$commit` revalidates the immutable assignment, running task
+plane, worker session, branch, and base commit before it may prepare or execute
+the worker's one direct-child commit. Root-user prompt intent is neither needed
+nor accepted as a substitute for this delegated evidence.
+
 ## Dependency Waves
 
 Before implementation, the coordinator inspects source and locks stable tasks
@@ -254,20 +274,21 @@ waves in stable task order.
 
 After the coordinator renders, stages, and validates Task Implementer-managed
 requirements and design records in the integration checkout, it routes to the
-explicit-only `project-agent-instructions` skill with a private v2 receipt that
+explicit-only `project-agent-instructions` skill with a private v3 receipt that
 binds both complete tracked files and total status-aware cross-document
 coverage. That shared owner
 conditionally renders a selected-project `AGENTS.md` from structured,
 tracked-evidence-backed rules. Personal global instructions are never copied
-into repository content. Human-owned or edited files are preserved; v2-managed
-files require a private ownership receipt or exact-digest adoption approval.
-Retirement likewise requires exact-digest approval and a guarded transition.
+into repository content. Existing human bytes remain an exact prefix outside
+the v3 managed tail; managed-region edits fail closed. Unreceipted v3 regions
+require exact-digest adoption approval. Retirement likewise requires
+exact-digest approval and a guarded transition that restores the human prefix.
 
-Manifest, decision, ownership, and final state remain private. A created,
-refreshed, or retired project file reports that a new Codex session is required
-before contract lock and worker dispatch; the fresh coordinator reruns and
-verifies the unchanged state, then reads the active project instruction file.
-Tracked project-file changes join the coordinator contract commit.
+Manifest, decision, ownership, and final state remain private. Exact rendered
+rules are injected before worker dispatch, while repository `AGENTS.md`
+creation, attachment, refresh, or retirement is deferred until final spec
+reconciliation as the terminal seal mutation. A changed file still requires a
+fresh Codex session before later managed work treats it as loaded authority.
 Dispatch revalidates the receipt against the exact clean integration commit,
 proves its active and ancestor project instructions belong to that commit, and
 rejects private state bound only to the persistent lane or another worktree.
@@ -457,7 +478,9 @@ Every execution-plane-v1 or coordinator-v1/v2/v3/v4/v5/v6 run returns
 read path, compatibility execution path, or migration command.
 
 Prompt-v1 files and unfinished prompt-v1 runs are read-only and return
-`WORKFLOW_UPGRADE_REQUIRED`; create a prompt-v2 file instead. Completed history
+`WORKFLOW_UPGRADE_REQUIRED`; initialize once to migrate editable prompt-v2
+files to prompt-v3 through its retryable private migration journal, then create
+only prompt-v3 files. Completed history
 bytes are preserved and there is no migration command. Prompt filenames stay stable. Submission order comes from private
 `last_invoked_at`, not filenames or mtimes. Output never prints prompt bodies,
 secrets, or internal IDs.
@@ -497,5 +520,5 @@ secrets, or internal IDs.
   `workspace remove`.
 - External database, Kubernetes, Terraform, migration, and publication actions
   remain singleton and need separate explicit authority.
-- Use `$align` after the final promoted wave; use `$sdlc-start run <prompt>` for Agentic
+- Use `$align` after the final promoted wave; use `$sdlc-start run <prompt-ref-or-file>` for Agentic
   SDLC.

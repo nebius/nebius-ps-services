@@ -62,7 +62,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `~/.codex/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when committed
-  requirements, design, and an ownership-receipted v2 selected-project
+  requirements, design, and an ownership-receipted v3 selected-project
   `AGENTS.md` are the complete repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 

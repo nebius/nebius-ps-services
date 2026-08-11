@@ -50,10 +50,10 @@
 
 ## Project Agent Instructions
 
-- Spec receipt schema: project-agent-instructions.spec-validation.v2
-- Decision schema: project-agent-instructions.decision.v2
-- State schema: project-agent-instructions.state.v2
-- Outcome: pending | created | refreshed | adopted | retired | existing-sufficient | not-needed | blocked
+- Spec receipt schema: project-agent-instructions.spec-validation.v3
+- Decision schema: project-agent-instructions.decision.v3
+- State schema: project-agent-instructions.state.v3
+- Outcome: pending | created | attached | refreshed | adopted | retired | existing-sufficient | not-needed | blocked
 - Active instruction path: none
 - Decision SHA-256: none
 - Project instruction SHA-256: none
@@ -259,7 +259,7 @@ Tasks become done only after verified fast-forward promotion.
 ## Next Run Prompt
 
 ```text
-Use $task-implementer run <same-prompt-path-or-unique-filename>.
+Use $task-implementer run <same-prompt-ref-or-file>.
 
 Read the run manifest, exact bound snapshot, complete coordinator-owned handoff,
 v2 coordinator/wave state, immutable assignments/results, and wave journal.

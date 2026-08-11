@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
 import stat
+import subprocess
 import tempfile
 from typing import Any, Iterator
 
@@ -207,26 +209,119 @@ def preparation_path(primary: Path, name: str) -> Path:
     return directory / f"{name}.json"
 
 
+def _commit_transaction_root(primary: Path) -> Path:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(primary), "rev-parse", "--git-common-dir"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise InteropError("shared Git repository identity is unavailable") from error
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise InteropError("shared Git repository identity is unavailable")
+    common = Path(completed.stdout.strip())
+    if not common.is_absolute():
+        common = primary / common
+    try:
+        common = common.resolve(strict=True)
+    except OSError as error:
+        raise InteropError("shared Git repository identity is unavailable") from error
+    codex_home = Path(
+        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+    ).expanduser()
+    if not codex_home.is_absolute():
+        raise InteropError("CODEX_HOME must be absolute")
+    repo_key = hashlib.sha256(str(common).encode()).hexdigest()[:24]
+    return (
+        Path(os.path.abspath(codex_home)).resolve(strict=False)
+        / "commit-transactions"
+        / repo_key
+    )
+
+
+def _commit_private_dir(path: Path) -> None:
+    if path.is_symlink():
+        raise InteropError(f"commit transaction directory must not be a symlink: {path}")
+    if not path.exists():
+        if not path.parent.exists():
+            _commit_private_dir(path.parent)
+        try:
+            path.mkdir(mode=0o700)
+            fsync_directory(path.parent)
+        except OSError as error:
+            raise InteropError(
+                f"could not create commit transaction directory: {path}"
+            ) from error
+    if not path.is_dir() or path.resolve(strict=True) != path:
+        raise InteropError(f"commit transaction directory is invalid: {path}")
+    try:
+        path.chmod(0o700)
+    except OSError as error:
+        raise InteropError(
+            f"could not secure commit transaction directory: {path}"
+        ) from error
+
+
 @contextmanager
-def interop_lock(primary: Path) -> Iterator[None]:
-    root = _root(primary, create=True)
-    path = root / ".interop.lock"
+def commit_repository_lock(primary: Path) -> Iterator[None]:
+    """Serialize direct commits with managed Worktree ownership transitions."""
+
+    root = _commit_transaction_root(primary)
+    _commit_private_dir(root)
+    path = root / ".lock"
     flags = os.O_CREAT | os.O_RDWR
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
         descriptor = os.open(path, flags, 0o600)
     except OSError as error:
-        raise InteropError(f"could not open interop lock: {path}") from error
+        raise InteropError(f"could not open shared commit lock: {path}") from error
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise InteropError(f"interop lock must be a regular file: {path}")
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        ):
+            raise InteropError(f"shared commit lock must be a regular file: {path}")
         os.fchmod(descriptor, 0o600)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+@contextmanager
+def interop_lock(primary: Path) -> Iterator[None]:
+    with commit_repository_lock(primary):
+        root = _root(primary, create=True)
+        path = root / ".interop.lock"
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path, flags, 0o600)
+        except OSError as error:
+            raise InteropError(f"could not open interop lock: {path}") from error
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+            ):
+                raise InteropError(f"interop lock must be a regular file: {path}")
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 @contextmanager

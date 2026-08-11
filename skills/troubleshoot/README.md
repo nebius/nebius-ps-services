@@ -7,13 +7,44 @@ does not expand the authority of the surrounding task.
 ## Core Model
 
 ```text
-INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
+INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
 The workflow preserves evidence before functional edits, maintains competing
 hypotheses, chooses discriminating experiments, localizes the earliest
 divergence, and requires a causal mechanism before claiming root cause.
+Discovery inventories technologies, versions, deployment model, active
+configuration, components, dependencies, ports, protocols, authentication, and
+control and data flows, then compares the observed system with matching
+official vendor architecture before diagnostics begin.
+
+Every consequential command tests a stated hypothesis with expected supporting
+and falsifying evidence, a timeout or output bound, and a defined next branch.
+The workflow prohibits indefinite tails, arbitrary sleeps, passive terminal
+waiting, and broad unfiltered log dumps.
+
+## Evidence-Gated Completion
+
+Troubleshooting records a component verification matrix, normalized incident
+timeline, and layered log-coverage ledger. Component, application, container or
+orchestrator, systemd, OS, kernel, network, storage, GPU, and hardware evidence
+is examined when relevant or explicitly recorded as unavailable, unsafe, or not
+applicable.
+
+Each report freezes its included and excluded components and dependencies,
+exercised control and data paths, and incident-window start and end. The
+component matrix explicitly records DNS or service-name resolution and restart
+history. The log ledger contains exactly one ordered row for component,
+application or job, container or orchestrator, service manager, OS and kernel,
+network and firewall, storage, and GPU or hardware. Primary local log reading is
+baseline evidence gathering; only remote Grafana queries use observability
+admission gates.
+
+The canonical report marks Design, Infrastructure, Connectivity,
+Configuration, Runtime health, Logs, and Relevant code paths as `PASS`, `FAIL`,
+or `UNKNOWN` with evidence. `VERIFIED_FIXED` is accepted only when all seven are
+`PASS`; passing tests alone do not prove code is free of bugs.
 
 ## Design Handoff
 
@@ -72,6 +103,25 @@ elapsed active time, exhaustion state, and stop trigger do not carry over.
 Every counted attempt records the exact marker blocker key. A missing, mixed,
 or carried binding makes the marker invalid and enters repair instead of
 exhausting the new blocker. Marker validation and repair consume no attempt.
+Pending authorization feedback retains the precise marker or transition error
+and gives complete canonical repair guidance. Fresh-state guidance calls its
+source the prior terminal marker because it can follow either resolved or
+exhausted state. Invalid active-resize markers
+must restore their exact pre-resize non-profile state; deleted resize markers
+fail closed and require the exact prior marker or a fresh user-authorized
+session rather than a budget reset.
+
+Every explicit `$troubleshoot` invocation also creates a terminal report duty
+in session-private `troubleshoot-report-obligation.json`, even when no
+remediation marker exists. Success, blocking, tool or coordination error,
+ordinary stop, unresolved work, and exhaustion all require a user-visible
+report with `Current workflow state: REPORTED`. An undelivered duty survives a
+resumed turn in the same session. The Stop evaluator requests one correction,
+then emits an honest bounded UI fallback rather than looping; a host process
+that dies before Stop can only be reported after same-session resume.
+Normal and budget-exhausted outcomes use the same canonical report envelope.
+The optional Stop hook validates the exact completion matrix and preserves
+marker-derived blocker and attempt evidence inside that envelope.
 
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but
@@ -141,6 +191,11 @@ runtime evidence produces `BLOCKED_MISSING_EVIDENCE` with the exact data gap.
 - `references/software-failure-playbooks.md` owns code and shell failure classes.
 - `references/infrastructure-failure-playbooks.md` owns installed and distributed
   stack failure classes.
+- Technology-specific procedures live in `references/slurm.md`,
+  `references/soperator.md`, `references/kubernetes.md`,
+  `references/nebius.md`, `references/linux.md`, `references/network.md`,
+  `references/storage.md`, `references/gpu.md`, and
+  `references/code-debugging.md` and are loaded only after stack discovery.
 - `references/live-product-validation.md` owns product-versus-intervention
   boundaries, evidence lineage, owner-correct repair, clean replay, and
   claim-scope rules for live product testing.

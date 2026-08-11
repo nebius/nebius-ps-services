@@ -84,7 +84,7 @@ def contract(source: Path) -> tuple[str, str]:
     metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
     required_commands = (
         "$task-implementer workspace init [project-folder]",
-        "$task-implementer run <prompt-path-or-unique-filename>",
+        "$task-implementer run <prompt-ref-or-file>",
         "$task-implementer integrate [project-folder]",
         "$task-implementer workspace remove [project-folder]",
     )

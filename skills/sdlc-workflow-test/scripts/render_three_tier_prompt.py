@@ -11,8 +11,8 @@ import sys
 import tempfile
 
 
-PROMPT_SCHEMA = "agentic-sdlc/prompt-v2"
-FRONTMATTER_KEYS = ("schema", "prompt_id", "title", "created_at")
+PROMPT_SCHEMA = "agentic-sdlc/prompt-v3"
+FRONTMATTER_KEYS = ("schema", "prompt_id", "prompt_ref", "title", "created_at")
 PLACEHOLDERS = (
     "PROJECT_ROOT",
     "PRIVATE_ROOT",
@@ -63,7 +63,12 @@ def frontmatter(text: str) -> str:
         values[key] = value.strip()
     if tuple(values) != FRONTMATTER_KEYS or values["schema"] != PROMPT_SCHEMA:
         raise PromptRenderError("Managed starter identity fields are invalid.")
-    if not values["prompt_id"] or not values["title"] or not values["created_at"]:
+    if (
+        not values["prompt_id"]
+        or not values["prompt_ref"]
+        or not values["title"]
+        or not values["created_at"]
+    ):
         raise PromptRenderError("Managed starter identity values are incomplete.")
     return "".join(lines[: end + 1]).rstrip("\r\n")
 

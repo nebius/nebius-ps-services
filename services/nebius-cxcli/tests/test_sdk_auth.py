@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -351,6 +352,138 @@ def test_cli_token_fallback_does_not_mask_unexpected_errors(
         sdk_auth._ensure_iam_token_from_cli()
 
 
+def test_cli_token_fallback_refreshes_the_active_profile_interactively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(sdk_auth, "_interactive_cli_auth_available", lambda: True)
+    calls: list[tuple[list[str], int]] = []
+
+    def _token(args: list[str], **kwargs: object) -> object:
+        calls.append((list(args), int(kwargs["timeout"])))
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, args, stderr="sensitive provider detail")
+        return type("CP", (), {"stdout": "refreshed-cli-token\n"})()
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _token)
+
+    token = sdk_auth._ensure_iam_token_from_cli(
+        timeout_seconds=7,
+        interactive_timeout_seconds=91,
+    )
+
+    assert token == "refreshed-cli-token"
+    assert calls == [
+        (["nebius", "iam", "get-access-token", "--format", "text", "--no-browser"], 7),
+        (["nebius", "iam", "get-access-token", "--format", "text"], 91),
+    ]
+
+
+def test_init_nebius_sdk_reports_sanitized_noninteractive_cli_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+
+    class FailingConfig:
+        def __init__(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("config boom")
+
+    cli_config_module = sys.modules["nebius.aio.cli_config"]
+    monkeypatch.setattr(cli_config_module, "Config", FailingConfig)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(sdk_auth, "_interactive_cli_auth_available", lambda: False)
+
+    def _token(args: list[str], **_kwargs: object) -> object:
+        raise subprocess.CalledProcessError(
+            17,
+            args,
+            stderr="secret-bearing provider failure",
+        )
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _token)
+
+    with pytest.raises(RuntimeError, match="exit code 17") as exc_info:
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="auth bootstrap",
+            prefer_operator_auth=True,
+        )
+
+    message = str(exc_info.value)
+    assert "stdin is not interactive" in message
+    assert "secret-bearing provider failure" not in message
+    assert isinstance(exc_info.value.__cause__, sdk_auth._CliTokenUnavailable)
+
+
+@pytest.mark.parametrize(
+    ("interactive_failure", "expected_detail"),
+    [
+        ("exit", "exit code 23"),
+        ("timeout", "timed out after 91 seconds"),
+    ],
+)
+def test_cli_token_browser_failure_is_sanitized_and_preserves_identity_args(
+    monkeypatch: pytest.MonkeyPatch,
+    interactive_failure: str,
+    expected_detail: str,
+) -> None:
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setenv("NEBIUS_PROFILE", "operator-profile")
+    monkeypatch.setenv("CXCLI_NEBIUS_DELEGATE_ID", "serviceaccount-delegate")
+    monkeypatch.setattr(sdk_auth, "_interactive_cli_auth_available", lambda: True)
+    calls: list[tuple[list[str], int]] = []
+
+    def _token(args: list[str], **kwargs: object) -> object:
+        timeout = int(kwargs["timeout"])
+        calls.append((list(args), timeout))
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, args)
+        if interactive_failure == "timeout":
+            raise subprocess.TimeoutExpired(
+                args,
+                timeout,
+                output="sensitive browser output",
+                stderr="sensitive browser error",
+            )
+        raise subprocess.CalledProcessError(
+            23,
+            args,
+            output="sensitive browser output",
+            stderr="sensitive browser error",
+        )
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _token)
+
+    token, failure = sdk_auth._iam_token_from_cli_attempt(
+        timeout_seconds=7,
+        interactive_timeout_seconds=91,
+    )
+
+    assert token is None
+    assert failure is not None
+    assert expected_detail in str(failure)
+    assert "sensitive browser" not in str(failure)
+    common_args = [
+        "nebius",
+        "iam",
+        "get-access-token",
+        "--profile",
+        "operator-profile",
+        "--impersonate-service-account-id",
+        "serviceaccount-delegate",
+        "--format",
+        "text",
+    ]
+    assert calls == [
+        ([*common_args, "--no-browser"], 7),
+        (common_args, 91),
+    ]
+
+
 def test_init_nebius_sdk_can_disable_cli_token_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -658,6 +791,44 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_runtime_auth
     assert "service_account_id" not in sdk.kwargs
 
 
+def test_init_nebius_sdk_prefer_operator_auth_refreshes_active_cli_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+
+    class FailingConfig:
+        def __init__(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("federation profile is not SDK-readable")
+
+    cli_config_module = sys.modules["nebius.aio.cli_config"]
+    monkeypatch.setattr(cli_config_module, "Config", FailingConfig)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.setattr(sdk_auth, "_interactive_cli_auth_available", lambda: True)
+    calls: list[list[str]] = []
+
+    def _token(args: list[str], **_kwargs: object) -> object:
+        calls.append(list(args))
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, args)
+        return type("CP", (), {"stdout": "refreshed-operator-token\n"})()
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _token)
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="auth bootstrap",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "refreshed-operator-token"
+    assert calls[0][-1] == "--no-browser"
+    assert "--no-browser" not in calls[1]
+
+
 def test_init_nebius_sdk_chains_failed_config_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -684,3 +855,115 @@ def test_init_nebius_sdk_chains_failed_config_attempt(
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert str(exc_info.value.__cause__) == "config boom"
+
+
+def test_init_nebius_sdk_renewable_auth_ignores_static_token_and_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "static-token")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token must not satisfy renewable auth"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="long migration",
+        require_renewable_auth=True,
+    )
+
+    assert sdk.kwargs["service_account_id"] == "sa-1"
+    assert sdk.kwargs["service_account_public_key_id"] == "pub-1"
+    assert sdk.kwargs["service_account_private_key_file_name"] == private_key_file.resolve()
+    assert "credentials" not in sdk.kwargs
+    assert "config_reader" not in sdk.kwargs
+
+
+def test_init_nebius_sdk_renewable_auth_prefers_credentials_file_over_static_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "auth.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "static-token")
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="long migration",
+        require_renewable_auth=True,
+    )
+
+    assert sdk.kwargs["credentials_file_name"] == credentials_file.resolve()
+    assert "credentials" not in sdk.kwargs
+
+
+def test_init_nebius_sdk_renewable_auth_falls_back_from_stale_file_to_service_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="long migration",
+        require_renewable_auth=True,
+    )
+
+    assert sdk.kwargs["service_account_id"] == "sa-1"
+    assert sdk.kwargs["service_account_private_key_file_name"] == private_key_file.resolve()
+
+
+def test_init_nebius_sdk_renewable_auth_rejects_static_only_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "static-token")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token must not satisfy renewable auth"),
+    )
+
+    with pytest.raises(RuntimeError, match="canonical nebius-cxcli-sa profile automatically"):
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="long migration",
+            require_renewable_auth=True,
+        )
+
+
+def test_init_nebius_sdk_renewable_auth_rejects_cli_impersonation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    monkeypatch.setenv("CXCLI_NEBIUS_DELEGATE_ID", "serviceaccount-operator")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("impersonation token must not be snapshotted"),
+    )
+
+    with pytest.raises(RuntimeError, match="renewable Nebius SDK credentials"):
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="long migration",
+            require_renewable_auth=True,
+        )

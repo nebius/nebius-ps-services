@@ -74,18 +74,19 @@ then lock it. Never include prompt text or secrets in branch names.
 
 The coordinator preallocates and validates managed requirement/design IDs and
 records in the integration checkout, then stages both complete spec files. The
-private validator emits a `project-agent-instructions.spec-validation.v2`
+private validator emits a `project-agent-instructions.spec-validation.v3`
 receipt only after both tracked managed regions validate and every
 non-superseded requirement is covered by a current design record. Persist that
-exact object as mode `0600`, then route to `$project-agent-instructions` with spec owner
-`task-implementer` and that integration selected-project root. Keep its
+exact object as mode `0600`, then route to `$project-agent-instructions` with
+spec owner `maintain-project-specs` and that integration selected-project root. Keep its
 manifest, decision, ownership receipt, and state under
 `orchestration/project-agent-instructions/`; keep the prerequisite receipt
 beside that directory so its private-root marker can initialize from an empty
 directory.
 
-The shared helper alone may create, refresh, adopt, or retire its v2-managed
-selected project root `AGENTS.md`. A human-owned or edited file remains preserved.
+The shared helper alone may create, attach, refresh, adopt, or retire its
+v3-managed selected-project root `AGENTS.md` tail. Human prefix bytes remain
+preserved.
 If state reports `reload_required: true`, stop this execution boundary, start a
 fresh coordinator session, rerun and verify the unchanged result, and read the
 active project instruction file before locking the contract. Missing distinct

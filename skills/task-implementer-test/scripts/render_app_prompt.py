@@ -40,8 +40,9 @@ def preserve_managed_frontmatter(managed_prompt: str, rendered_body: str) -> str
         raise ValueError("managed prompt frontmatter is not closed")
     frontmatter = managed_prompt[: end + 5]
     for required in (
-        "schema: task-implementer/prompt-v2",
+        "schema: task-implementer/prompt-v3",
         "prompt_id:",
+        "prompt_ref:",
         "title:",
         "created_at:",
     ):

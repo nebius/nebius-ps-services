@@ -1,6 +1,6 @@
 ---
 name: sdlc-start
-description: "Use only as part of the Agentic SDLC workflow; use when the user explicitly invokes `workspace init` or `run` with a managed prompt path or unique filename to initialize, start, resume, continue, or steer a prompt-bound Agentic SDLC run. This is the main SDLC coordinator and state-machine skill."
+description: "Use only as part of the Agentic SDLC workflow; act as its coordinator when the user explicitly invokes `workspace init` or `run`, or when prompt-session-intake routes an accepted direct turn from that explicitly bound session. Initialize, start, resume, continue, or steer one prompt-bound run by exact prompt ref or managed file."
 ---
 
 # Start SDLC
@@ -31,19 +31,24 @@ Expose exactly these two actions:
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
 - `workspace init` defaults to the exact current folder and may run before Git
   is initialized.
-- `run` accepts one managed absolute prompt path or unique managed filename.
+- `run` accepts one exact unique prompt ref, full prompt ID, managed absolute
+  path, or managed filename.
 - Steering means editing the same prompt and repeating `run`.
+- After explicit binding, a current prompt-session-intake receipt may route one
+  accepted direct turn internally through the same canonical run path.
 - Do not expose bare resume, prompt IDs, run IDs, phase actions, aliases, or a
   separate steering command.
 
 ## When To Use
 
 - The user explicitly invokes one of the two public actions.
+- The prompt-session-intake hook routes the exact current accepted turn for a
+  session already bound by one of those public actions.
 - A Stop-hook continuation prompt repeats `run` with the bound prompt filename.
 - An active run needs the next phase selected after a skill completes.
 
@@ -106,8 +111,8 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `sdlc-prepare-execution`, `sdlc-implement-plan`, and `sdlc-commit`.
 - Private project-instruction validation, decision, ownership, and state
   pointers returned by the Agentic spec validator and
-  `project-agent-instructions`. That skill exclusively owns any v2-managed
-  selected-project `AGENTS.md`.
+  `project-agent-instructions`. That skill exclusively owns the v3 managed
+  tail in any selected-project `AGENTS.md`.
 
 ## Process
 
@@ -191,15 +196,15 @@ $sdlc-start run <prompt-path-or-unique-filename>
   `sdlc-create-design`.
 - Once both requirements and design are current, run private
   `scripts/validate_project_specs.py` for the exact selected project. Persist
-  its complete `project-agent-instructions.spec-validation.v2` output as a
+  its complete `project-agent-instructions.spec-validation.v3` output as a
   mode-`0600` receipt in the caller-owned private state directory. The validator
   requires both files to be tracked, every non-superseded requirement to be
   covered by a non-stale feature, and each feature's Requirements Covered body
   to equal its marker mapping. A marker-only check is invalid. Pass
-  `agentic-sdlc` ownership and the receipt. Route to
+  `maintain-project-specs` ownership and the receipt. Route to
   `project-agent-instructions` before auto-steering, feature planning, or
-  execution. Continue only after verified `created`, `refreshed`, `adopted`,
-  `retired`, `existing-sufficient`, or `not-needed` state.
+  execution. Continue only after verified `created`, `attached`, `refreshed`,
+  `adopted`, `retired`, `existing-sufficient`, or `not-needed` state.
 - If project-agent state reports `reload_required: true`, checkpoint and stop
   this execution boundary. Start a fresh coordinator session, rerun receipt,
   inspection, decision, and verification, and explicitly read the active
@@ -300,6 +305,13 @@ $sdlc-start run <prompt-path-or-unique-filename>
   required. On terminal completion, invoke private `queue-next`; activate the
   unchanged FIFO head only after execution resources are released. Queue-head
   drift requires an explicit rerun of that prompt before activation.
+- When the current explicit invocation carried a prompt-session binding
+  receipt and owns an active objective transition, register the authoritative
+  prompt identity/digest through the internal prompt-session objective
+  transition. Mark it terminal only after `ALREADY_COMPLETE` or verified
+  workflow completion. Do not register a queued prompt as active before its
+  authoritative activation. A hook-routed material turn passes the same
+  terminal fact when consuming its exact event.
 
 ## Idempotency
 
@@ -387,11 +399,11 @@ $sdlc-start run <prompt-path-or-unique-filename>
 
 - Treat `docs/requirements.md`, `docs/design.md`, and any
   provenance-owned project-root `AGENTS.md` as committed project truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only
-  `sdlc-create-design` writes `docs/design.md`; only
-  `project-agent-instructions` may create, refresh, adopt, or retire its
-  v2-managed selected-project `AGENTS.md`. Other skills route changes to those
-  owners.
+- `maintain-project-specs` owns both canonical specs. The requirement and
+  design phase skills write only as its Agentic SDLC adapters; only
+  `project-agent-instructions` may create, attach, refresh, adopt, or retire
+  its v3-managed selected-project `AGENTS.md` tail. Other skills route changes
+  to those owners.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - Keep editable prompts and project-level prompt workspace metadata under the
   matching private `~/.codex/sdlc-runs/<project-id>/` directory.

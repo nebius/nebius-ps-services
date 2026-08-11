@@ -45,8 +45,8 @@ REFINEMENT_CATEGORIES = (
     "live_experiment_environment",
 )
 QUESTION_ID_RE = re.compile(r"Q-((?!0+\Z)[0-9]{3,})\Z")
-REQUIREMENTS_SCHEMA = "task-implementer/requirements-v1"
-DESIGN_SCHEMA = "task-implementer/design-v1"
+REQUIREMENTS_SCHEMA = "maintain-project-specs/requirements-v1"
+DESIGN_SCHEMA = "maintain-project-specs/design-v1"
 MAX_SPEC_BYTES = 1024 * 1024
 REQUIREMENT_ID_RE = re.compile(r"TI-REQ-((?!0+\Z)[0-9]{3,})\Z")
 DESIGN_ID_RE = re.compile(r"TI-DES-((?!0+\Z)[0-9]{3,})\Z")
@@ -462,8 +462,8 @@ def _spec_contract(kind: str) -> tuple[str, str, str, re.Pattern[str], str]:
 def spec_markers(kind: str) -> tuple[str, str]:
     schema, _, _, _, _ = _spec_contract(kind)
     return (
-        f"<!-- task-implementer:{kind}:start schema={schema} -->",
-        f"<!-- task-implementer:{kind}:end -->",
+        f"<!-- maintain-project-specs:{kind}:start schema={schema} -->",
+        f"<!-- maintain-project-specs:{kind}:end -->",
     )
 
 
@@ -636,6 +636,12 @@ def inspect_spec_document(
             f"{relative} is owned by Agentic SDLC",
         )
     start_marker, end_marker = spec_markers(kind)
+    legacy_start = f"<!-- task-implementer:{kind}:start"
+    legacy_end = f"<!-- task-implementer:{kind}:end -->"
+    if legacy_start in text or legacy_end in text:
+        raise PromptWorkspaceError(
+            "SPEC_CONFLICT", f"{relative} requires canonical owner migration"
+        )
     start_count = text.count(start_marker)
     end_count = text.count(end_marker)
     if start_count == end_count == 0:
@@ -887,48 +893,44 @@ def inspect_spec_documents(
         + 1
     )
     receipt = None
-    if complete_managed_specs and (
-        commit is not None or _spec_documents_are_tracked(workspace)
+    if (
+        complete_managed_specs
+        and commit is None
+        and _spec_documents_are_tracked(workspace)
     ):
-        repo_root = Path(required_string(workspace, "repo_root", "workspace manifest"))
         source_root = Path(
             required_string(workspace, "source_root", "workspace manifest")
         )
-        scope_path = source_root.relative_to(repo_root)
-        project_scope = "." if scope_path == Path(".") else scope_path.as_posix()
-        traceability = {
-            "requirement_ids": requirements["ids"],
-            "requirement_statuses": requirements["statuses"],
-            "requirement_records": requirements["record_sha256"],
-            "design_ids": design["ids"],
-            "design_statuses": design["statuses"],
-            "design_records": design["record_sha256"],
-            "design_requirements": design["requirements"],
-        }
-        receipt = {
-            "schema": "project-agent-instructions.spec-validation.v2",
-            "owner": "task-implementer",
-            "project_root": str(source_root),
-            "git_root": str(repo_root),
-            "project_scope": project_scope,
-            "validator": "task-implementer/spec-inspect",
-            "validator_version": 3,
-            "requirements": {
-                "path": "docs/requirements.md",
-                "sha256": requirements["file_sha256"],
-            },
-            "design": {
-                "path": "docs/design.md",
-                "sha256": design["file_sha256"],
-            },
-            "traceability_sha256": _digest(
-                json.dumps(
-                    traceability,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ),
-        }
+        validator = (
+            Path(__file__).resolve().parents[2]
+            / "maintain-project-specs"
+            / "scripts"
+            / "validate_project_specs.py"
+        )
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(validator),
+                    "--project-root",
+                    str(source_root),
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+            authoritative = json.loads(completed.stdout)
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+            raise PromptWorkspaceError(
+                "SPEC_CONFLICT", "shared specification validation could not run"
+            ) from error
+        if completed.returncode != 0 or not isinstance(authoritative, dict):
+            raise PromptWorkspaceError(
+                "SPEC_CONFLICT", "shared specification validation failed"
+            )
+        receipt = authoritative
     return {
         "requirements": requirements,
         "design": design,
@@ -996,7 +998,9 @@ def _require_exact_contract_checkout(git_root: Path, contract_commit: str) -> No
             "EXECUTION_STATE_INVALID", "project-agent contract commit is invalid"
         )
     head = str(
-        _contract_git(git_root, ["rev-parse", "HEAD"], "inspect contract HEAD", text=True)
+        _contract_git(
+            git_root, ["rev-parse", "HEAD"], "inspect contract HEAD", text=True
+        )
     ).strip()
     status = _contract_git(
         git_root,
@@ -1062,10 +1066,22 @@ def verify_project_agent_contract(
             "SPEC_CONFLICT",
             "current managed specs have no project-agent validation receipt",
         )
-    committed_receipt = inspect_spec_documents(
-        contract_workspace, commit=contract_commit
-    )["project_agent_spec_receipt"]
-    if committed_receipt != receipt:
+    committed_requirements = _contract_blob(
+        git_root,
+        contract_commit,
+        selected / "docs" / "requirements.md",
+        "requirements",
+    )
+    committed_design = _contract_blob(
+        git_root,
+        contract_commit,
+        selected / "docs" / "design.md",
+        "design",
+    )
+    if (
+        _digest(committed_requirements) != dict(receipt["requirements"])["sha256"]
+        or _digest(committed_design) != dict(receipt["design"])["sha256"]
+    ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID",
             "project-agent spec receipt is not bound to the contract commit",
@@ -1103,25 +1119,22 @@ def verify_project_agent_contract(
         )
     receipt_record = state.get("spec_receipt")
     if (
-        state.get("schema") != "project-agent-instructions.state.v2"
-        or state.get("spec_owner") != "task-implementer"
+        state.get("schema") != "project-agent-instructions.render-state.v1"
+        or state.get("spec_owner") != "maintain-project-specs"
         or state.get("project_root") != str(selected)
-        or state.get("outcome")
+        or state.get("disposition")
         not in {
-            "created",
-            "refreshed",
-            "adopted",
-            "retired",
+            "needed",
             "existing-sufficient",
             "not-needed",
         }
-        or state.get("reload_required") is not False
+        or state.get("repository_mutated") is not False
         or not isinstance(receipt_record, dict)
         or receipt_record.get("path") != str(receipt_path.resolve())
         or receipt_record.get("sha256") != _digest(receipt_path.read_bytes())
     ):
         raise PromptWorkspaceError(
-            "EXECUTION_STATE_INVALID", "project-agent state is stale or reload-pending"
+            "EXECUTION_STATE_INVALID", "project-agent rendered state is stale"
         )
     helper = (
         Path(__file__).resolve().parents[2]
@@ -1134,9 +1147,15 @@ def verify_project_agent_contract(
             [
                 sys.executable,
                 str(helper),
-                "verify",
+                "render",
                 "--private-root",
                 str(private_root),
+                "--manifest",
+                str(state.get("manifest_path", "")),
+                "--decision",
+                str(state.get("decision_path", "")),
+                "--output",
+                str(state.get("rules_path", "")),
                 "--state",
                 str(state_path),
             ],
@@ -1155,8 +1174,8 @@ def verify_project_agent_contract(
         completed.returncode != 0
         or not isinstance(verified, dict)
         or verified.get("status") != "ok"
-        or verified.get("outcome") != state.get("outcome")
-        or verified.get("reload_required") is not False
+        or verified.get("disposition") != state.get("disposition")
+        or verified.get("repository_mutated") is not False
     ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "project-agent verification failed"
@@ -1193,7 +1212,8 @@ def verify_project_agent_contract(
                 "EXECUTION_STATE_INVALID",
                 "ancestor project instruction is not bound to the contract commit",
             )
-    active_path = verified.get("active_instruction_path")
+    active = manifest.get("active_project_instruction")
+    active_path = active.get("path") if isinstance(active, dict) else None
     if active_path is not None:
         if not isinstance(active_path, str):
             raise PromptWorkspaceError(
@@ -1206,17 +1226,27 @@ def verify_project_agent_contract(
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID", "active project instruction is unreadable"
             ) from error
-        if _digest(
-            _contract_blob(
-                git_root, contract_commit, active, "active project instruction"
+        if (
+            _digest(
+                _contract_blob(
+                    git_root, contract_commit, active, "active project instruction"
+                )
             )
-        ) != active_digest:
+            != active_digest
+        ):
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID",
                 "active project instruction is not bound to the contract commit",
             )
     _require_exact_contract_checkout(git_root, contract_commit)
-    return verified
+    return {
+        "status": "ok",
+        "disposition": state["disposition"],
+        "rules_path": str(private_root / str(state["rules_path"])),
+        "rules_sha256": state["rules_sha256"],
+        "active_instruction_path": active_path,
+        "repository_mutated": False,
+    }
 
 
 def new_spec_document(kind: str, managed_body: str) -> bytes:

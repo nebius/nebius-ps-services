@@ -1,4 +1,4 @@
-<!-- task-implementer:design:start schema=task-implementer/design-v1 -->
+<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
 # Task Implementer Designs
 
 ## Design Records
@@ -23,4 +23,4 @@
 ## Task Implementer Design Change Log
 
 - YYYY-MM-DD: Added or updated TI-DES-001 for an authorized task.
-<!-- task-implementer:design:end -->
+<!-- maintain-project-specs:design:end -->

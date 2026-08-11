@@ -100,6 +100,10 @@ Use these boundaries:
   nested lease acquisition, removal, and publication while ordered commits are
   created. A successful commit is retained if a later step fails; retry uses
   the same preparation evidence instead of resetting or duplicating it.
+- Worktree ownership transitions and the direct `$commit` transaction share
+  one Codex-private lock derived from the Git common directory. An active
+  Worktree preparation or reservation for the source ref blocks direct commit;
+  neither workflow adopts or rewrites the other's claim.
 - The final preflight freezes exact clean source and child SHAs. Candidate
   creation compares those SHAs and the private preparation token again while
   atomically consuming the claim into its durable reservation.

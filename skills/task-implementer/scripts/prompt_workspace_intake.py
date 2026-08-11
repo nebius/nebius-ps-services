@@ -200,7 +200,7 @@ def route_project_prompt(
             if "intent_sha256" not in active_latest or "kind" not in active_latest:
                 raise PromptWorkspaceError(
                     "WORKFLOW_UPGRADE_REQUIRED",
-                    "unfinished prompt-v1 run is read-only; finish or retire its private state before running prompt-v2",
+                    "unfinished prompt-v1 run is read-only; finish or retire its private state before running prompt-v3",
                 )
             source_name = str(active_manifest.get("source_path", "prompt.md"))
             if active_manifest.get("prompt_id") != document.prompt_id:
@@ -500,6 +500,7 @@ def route_project_prompt(
         result: dict[str, object] = {
             "action": action,
             "prompt": str(document.path),
+            "prompt_ref": document.prompt_ref,
             "last_invoked_at": invoked_at_text,
             "status": status,
             "prompts": rows,

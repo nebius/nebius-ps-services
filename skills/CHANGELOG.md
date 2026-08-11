@@ -6,6 +6,102 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added a one-command, whole-repository `$commit` transaction for monorepos.
+  A leading `$commit` or bounded leading directive such as `run`, `apply`, or
+  `execute $commit` now mints a one-shot private authorization, while casual
+  mentions, questions, quotations, and help remain inert;
+  the digest-pinned helper previews repo-root `git add -A` in a temporary index,
+  binds the reviewed tree to a durable claim, revalidates drift under a shared
+  repository lock, runs normal commit hooks, and proves the exact direct-child
+  tree and clean result. Raw Git mutation remains denied, active Agentic SDLC
+  keeps `sdlc-commit` ownership, Worktree preparations share the repository
+  lock, Task workers receive assignment/session-bound commit authorization,
+  and dirty Task Implementer sources receive an explicit `$commit` handoff
+  instead of auto-commit or project-scoped staging. Hook-modified direct-child
+  commits now stay review-required until an exact private review transition
+  acknowledges the inspected commit and tree; failed hooks that create no
+  commit become stale for a fresh explicit retry. Fresh invocations reconcile
+  exact post-commit crash windows without duplicating history; merge commits
+  and malformed Worktree ownership or coordination records fail closed. A
+  successful prepare remains bound after its one-shot authorization is
+  consumed, so PostToolUse does not incorrectly reopen lifecycle evidence.
+  Exact-child crash recovery now revalidates live Task Implementer worker
+  ownership before completing a delegated claim. Caller-provided Git
+  environment that can reshape repository discovery, worktree/common-dir,
+  object storage, command configuration, or the real index now fails before
+  authorization or mutation; contradictory explicit origin markers are inert.
+- Made `troubleshoot` evidence-intensive and completion-gated. It now discovers
+  the deployed stack and compares it with official vendor architecture, verifies
+  every component and dependency, correlates bounded logs across component,
+  application, orchestrator, systemd, OS, kernel, network, storage, GPU, and
+  hardware layers, performs real code-path debugging, and uses one canonical
+  report with seven enforced `PASS`/`FAIL`/`UNKNOWN` criteria. Added Slurm,
+  Soperator, Kubernetes, Nebius, Linux, network, storage, GPU, and code-debugging
+  playbooks plus healthy-status/log-revealed-cause evaluation scenarios.
+  Structured `PASS` rows now require affirmative verified evidence and an exact
+  no-gap sentinel, and a valid report is finalized before any later terminal
+  Stop peer returns so report obligations cannot leak into subsequent turns.
+  Reports now bind conclusions to explicit included/excluded boundaries,
+  exercised paths, and incident-window endpoints; component proof names DNS and
+  restart history; and the Stop validator requires each canonical log layer
+  exactly once, in order, with a canonical coverage status. Evidence-bearing
+  table cells and `PASS:` detail are validated independently so neighboring
+  prose cannot make a placeholder satisfy the gate.
+- Added the internal explicit-only `prompt-session-intake` owner and its
+  capture-only `UserPromptSubmit` hook for sessions explicitly bound to Task
+  Implementer or Agentic SDLC. It secret-scans before private raw capture,
+  records exact session/turn provenance, enforces staged/accepted/consumed
+  causality and one cross-workflow writer, and routes agent-owned lossless
+  refinement through workflow CAS adapters. Conversation, status, and control
+  turns remain nonmaterial; manual prompt edits remain inert until explicit
+  `run`. The shared Stop arbiter now blocks the exact unfinished current event
+  and releases a consumed writer without adding a second registered Stop hook.
+  Its one-shot reason digest excludes the exact generated Stop continuation
+  without relying on an undocumented prompt-origin field.
+- Added the implicit `maintain-project-specs` skill as the single canonical
+  requirements/design owner for ordinary projects, Task Implementer, and
+  Agentic SDLC. It provides stable-ID managed regions, shared v3 receipts,
+  committed project opt-out, exact-scope lifecycle state, journaled paired
+  migration and recovery for both former formats, pre-implementation rule
+  rendering, deferred project `AGENTS.md` sealing, multi-edit-safe
+  reconciliation, and focused owner/hook tests. Its new hook bundle adds
+  SessionStart, UserPromptSubmit, PreToolUse, and PostToolUse guardrails plus a
+  shared single-Stop arbiter; installer registration migrates only the two
+  superseded Stop owners while preserving unrelated entries.
+- Hardened the new project-contract path so only an exact committed policy can
+  disable it, private lifecycle transitions use owner-only compare-and-swap state,
+  rendered rules and final project instructions are reverified by their
+  authoritative owner, and direct or misleading coordinator bypasses fail
+  closed. Paired migration atomically publishes a complete recovery transaction
+  outside Git and validates exact evidence without consuming backups during
+  rollback. Stop arbitration stays within its outer timeout and combines every
+  initial continuation unless a terminal result takes precedence. Task
+  Implementer no longer fabricates an owner receipt for historical commit
+  inspection. Valid non-Git directories now remain outside the managed project
+  lifecycle instead of being globally denied, while a broken Git marker still
+  fails closed. Planned and implementation lifecycle states now require a
+  verified project-instructions render receipt, interrupted transaction cleanup
+  retires atomically and is recoverable on the next locked invocation, and
+  environment-sensitive Git/ripgrep reads require explicit helper-disabling
+  arguments before the hook classifies them as non-material.
+- Repaired project-contract bootstrap and command classification. Installed
+  hooks now trust non-symlinked coordinators from canonical
+  `~/.agents/skills`, ordinary reads and read-only shell composition no longer
+  depend on a fixed system-owned executable allowlist, and quoted writer names
+  or shell-control text remain search data. Proven fixed effects wholly outside
+  the selected project now pass through epoch-neutral, while mixed, dynamic,
+  ambiguous, and authoritative control-plane effects stay fail-closed. Exact
+  canonical-spec intent-to-add, current-session task/runtime/decision inputs,
+  and numeric mode-`0600` normalization break bounded bootstrap cycles without
+  allowing general staging, permission, hard-link alias, or private-state
+  mutation. Multi-destination directory creation, explicit target-directory
+  options, hard-link sources, and tree moves retain every relevant effect
+  target. Owner
+  validation can atomically write its mode-`0600` receipt only at the exact
+  hook-bound session path without shell redirection, and opaque turn tokens let
+  agents run verified lifecycle transitions without access to raw hook turn
+  identifiers. Explicit selected-project writers, cross-session paths, and
+  unsafe helper options remain phase-gated.
 - Added the implicit `ai-stack` skill for effective, efficient AI technology
   selection with explicit evidence classification across model providers,
   PyTorch training, inference, agent frameworks and durability, MCP/A2A
@@ -89,6 +185,87 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Upgraded Task Implementer and Agentic SDLC editable prompts to prompt-v3.
+  Every full prompt ID now has an exact collision-safe short reference stored
+  in metadata and prefixed to its filename, and public `run` accepts the ref,
+  full ID, exact filename, or managed path. Initialization performs a one-time
+  journaled and retryable v2-to-v3 metadata/name migration, repairs mutable
+  queue/run pointers, and leaves immutable historical revision bytes unchanged;
+  there is no v2 write path. Bound direct material turns can create a lossless
+  multiline objective or append a timestamped refinement with stale-base
+  rejection, and their operation marker makes interrupted merge retries
+  exactly-once.
+- Narrowed the project-contract hook to the authority it actually owns:
+  selected-project lifecycle sequencing and canonical
+  `${CODEX_HOME}/project-specs` state. Fixed writes to config, hooks, task
+  state, installed skills, credentials, and other external user files now pass
+  through epoch-neutral to Codex, OS, destructive-action, and domain-policy
+  owners. `config-codex` now distinguishes a proven repo-owned false denial
+  from an external or unrepairable policy, repairs canonical source and installs
+  it through the provenance path, then retries the identical authorized edit
+  without alternate writers, redirection, installed-only edits, or guard
+  disabling.
+- Added a session-private terminal-report obligation for every explicit
+  `$troubleshoot` invocation, including no-marker success, ordinary blocking,
+  tool or coordination errors, early stop, unresolved work, and exhaustion.
+  The shared Stop arbiter validates the structured report, keeps delivery
+  pending while peer lifecycle continuations remain, carries interruption
+  within the same session, and uses one bounded correction followed by an
+  honest UI fallback instead of an unbounded loop. Remediation authorization
+  remains on its existing independent schema.
+- Corrected `troubleshoot` fresh-state pending guidance to refer to the prior
+  terminal marker instead of assuming it was exhausted. A resolved-marker to
+  independent-blocker regression now verifies the exact patch-only handoff and
+  authorization promotion.
+- Fixed project-contract `PreToolUse` classification for read-only
+  `find -exec stat` compositions and exact `git branch --show-current`
+  inspection while keeping arbitrary `find -exec` helpers and other branch
+  actions material. Canonical project-instructions guidance now includes the
+  explicit Codex home and absolute current-session private paths required by
+  the hook, and malformed coordinator feedback names those inspect bindings.
+- Bound lifecycle-owned project-instructions inspect, render, plan, apply,
+  verify, and seal evidence to the canonical current-session private bundle.
+  Alternate same-project bundles and malformed coordinator-shaped
+  commands now fail closed. PostToolUse also treats admitted canonical spec
+  reconciliation as epoch-neutral and invalidates a concurrently completed
+  plan, armed seal, or seal when an earlier successful material write reports
+  late, preventing stale lifecycle completion.
+- Clarified that lifecycle reconciliation applies and verifies an explicit
+  project-instructions decision rather than promising `AGENTS.md` creation.
+  Missing plus `not-needed` now has direct render/apply/verify coverage and is
+  reported as a successful no-file outcome; the installed-hook refresh removes
+  the stale per-edit sentence that caused the ambiguity.
+- Changed project-contract reconciliation to keep successful PostToolUse
+  accounting silent while preserving per-write epochs, concurrent recorder
+  convergence, failure discrimination, and stale-plan sealing protection. Stop
+  now requests one accumulated semantic review; requirements change only for
+  accepted intent, design changes only for implemented boundaries or evidence,
+  and implementation-only or reverted deltas can revalidate and seal with
+  byte-identical specs. The PostToolUse registration no longer carries a static
+  status message.
+- Changed `project-agent-instructions` to a single v3 managed-tail contract.
+  Needed rules can attach to a tracked human `AGENTS.md` without changing any
+  existing byte; later human-prefix edits remain outside automation ownership,
+  while marker or managed-body edits fail closed. Refresh preserves the exact
+  prefix, retirement restores it or deletes a generated-only file, v1/v2
+  markers require manual resolution, and Task Implementer plus Agentic SDLC
+  consume the shared v3 schemas and `attached` outcome.
+- Documented the current source-hook catalog in the root README: five
+  installer-discovered bundles, 13 source entries converging to 11 distinct
+  registrations, seven manifest-referenced entrypoints, event-specific
+  behavior, concurrent peer boundaries, matcher aliases, single-Stop
+  arbitration, and the source-versus-installed trust boundary. The surrounding
+  ownership and `--install-all-hooks` guidance distinguishes peer policies and
+  dynamic bundle discovery.
+- Made pending `troubleshoot` remediation-budget repairs actionable across
+  UserPromptSubmit, PreToolUse, and Stop. Missing or invalid markers and invalid
+  same-blocker versus independent-blocker transitions now retain their precise
+  bounded validation reason instead of falling back to a generic pending
+  message. Fresh-tranche guidance requires the complete canonical v4 marker,
+  including `blocker_summary`; invalid active-resize markers get atomic restore
+  guidance, while deleted resize markers fail closed without suggesting a
+  budget reset. Authorization binding, patch-only repair, terminal locks, and
+  the one-continuation Stop bound remain unchanged.
 - Refactored Task Implementer around persistent Worktree-owned per-project
   lanes. `workspace init` is idempotent by canonical repository, named source
   ref, and scope; it permits dirty source state while basing the lane only on
@@ -516,6 +693,14 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed prompt-session exactly-once and lifecycle arbitration gaps: new
+  objectives now publish their final marker-bearing bytes in one exclusive
+  create, reserved operation-marker input is rejected, prompt results are bound
+  to the exact event project workspace (including Task primary-to-lane scope
+  identity), interrupted prompt-v3 pointer migration
+  accepts already-repaired queue state, and the shared Stop arbiter stays within
+  one 25-second monotonic budget. Prompt-v2 migration now changes frontmatter
+  only, preserving body lines that resemble metadata.
 - Guarded active-run `gh pr create` and GitHub PR-creation MCP calls with
   branch-, phase-, exact-HEAD-, UAT-, and expiry-bound authorization while
   allowing read-only PR inspection without publication authorization. Guarded
@@ -589,9 +774,10 @@ All notable changes to the reusable Codex skills are tracked here.
   Fallback attempt fields escape report delimiters so the generated report
   validates itself, and a user-lowered attempt limit now also bounds the ledger
   length.
-  Fallback redaction covers secrets, URLs, private IPv4/IPv6 addresses,
-  internal hostnames and localhost, cloud access-key shapes, and Unix or
-  Windows personal paths.
+  Fallback redaction covers secrets, private or credential-bearing URLs,
+  private IPv4/IPv6 addresses, internal hostnames and localhost, cloud
+  access-key shapes, and Unix or Windows personal paths while retaining public
+  vendor links and artifact identities as admissible evidence.
 - Made remediation-marker result failures actionable by naming the two
   canonical values and distinguishing counted same-blocker failures from
   unverified progress and causally independent blocker transitions, preventing
@@ -1111,7 +1297,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored Agentic SDLC entry and steering around two explicit public
   `sdlc-start` actions: idempotent `workspace init [project-folder]` and
-  prompt-bound `run <prompt-path-or-unique-filename>`. Private managed prompts,
+  prompt-bound `run <prompt-ref-or-file>`. Private managed prompts,
   immutable revisions, exact-once steering linkage, prompt-bound Stop
   continuation, terminal rerun semantics, non-Git greenfield identity, and
   fail-closed unfinished legacy handling now preserve user prompt history
@@ -1154,7 +1340,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored the explicit-only `task-implementer` from sequential
   execution-plane v1 into a resumable coordinator/worker v3. One unchanged
-  `run <prompt-path-or-unique-filename>` now builds deterministic dependency
+  `run <prompt-ref-or-file>` now builds deterministic dependency
   waves from locked write claims and conflict domains, dispatches isolated
   full-repository worktrees in capacity-sized batches, verifies one reviewed
   direct-child commit per worker, integrates task branches in stable order,
@@ -1166,7 +1352,7 @@ All notable changes to the reusable Codex skills are tracked here.
 
 - Refactored the explicit-only `task-implementer` to two public actions:
   idempotent `workspace init [project-folder]` and retry-safe
-  `run <prompt-path-or-unique-filename>`. Initialization creates a starter only
+  `run <prompt-ref-or-file>`. Initialization creates a starter only
   when needed and preserves all prompt/run history; running privately creates,
   continues, or reconciles immutable revisions while implementing one task per
   fresh session. Stable prompt filenames are ordered in command output by

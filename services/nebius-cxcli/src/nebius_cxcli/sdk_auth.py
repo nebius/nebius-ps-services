@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +27,10 @@ _RETRYABLE_REQUEST_LOG_MARKERS = (
     "but will be retried",
 )
 _LOGGER = logging.getLogger(__name__)
+
+
+class _CliTokenUnavailable(RuntimeError):
+    """Sanitized Nebius CLI token acquisition failure."""
 
 
 class _ManagedSdkEventLoop:
@@ -209,23 +214,20 @@ def suppress_expected_sdk_retry_logs():
         request_logger.removeFilter(request_filter)
 
 
-def _ensure_iam_token_from_cli(
+def _interactive_cli_auth_available() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
+def _run_iam_token_cli(
+    args: list[str],
     *,
-    profile: str | None = None,
-    timeout_seconds: int = 30,
-) -> str | None:
-    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
-    if not impersonate_service_account_id:
-        token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
-        if token:
-            return token
-    args = ["nebius", "iam", "get-access-token"]
-    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
-    if profile_value:
-        args.extend(("--profile", profile_value))
-    if impersonate_service_account_id:
-        args.extend(("--impersonate-service-account-id", impersonate_service_account_id))
-    args.extend(("--format", "text", "--no-browser"))
+    timeout_seconds: int,
+    interactive: bool,
+) -> tuple[str | None, _CliTokenUnavailable | None]:
+    mode = "interactive" if interactive else "non-interactive"
     try:
         cp = subprocess.run(
             args,
@@ -234,12 +236,80 @@ def _ensure_iam_token_from_cli(
             text=True,
             timeout=timeout_seconds,
         )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
+    except FileNotFoundError:
+        return None, _CliTokenUnavailable("Nebius CLI executable was not found")
+    except subprocess.CalledProcessError as exc:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request failed with exit code {exc.returncode}"
+        )
+    except subprocess.TimeoutExpired:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request timed out after {timeout_seconds} seconds"
+        )
+    except OSError as exc:
+        return None, _CliTokenUnavailable(
+            f"Nebius CLI {mode} access-token request could not start ({type(exc).__name__})"
+        )
     token = cp.stdout.strip()
     if token:
-        return token
-    return None
+        return token, None
+    return None, _CliTokenUnavailable(
+        f"Nebius CLI {mode} access-token request returned an empty token"
+    )
+
+
+def _iam_token_from_cli_attempt(
+    *,
+    profile: str | None = None,
+    timeout_seconds: int = 30,
+    interactive_timeout_seconds: int = 300,
+) -> tuple[str | None, _CliTokenUnavailable | None]:
+    impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
+    if not impersonate_service_account_id:
+        token = _as_text(os.environ.get("NEBIUS_IAM_TOKEN"))
+        if token:
+            return token, None
+    args = ["nebius", "iam", "get-access-token"]
+    profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
+    if profile_value:
+        args.extend(("--profile", profile_value))
+    if impersonate_service_account_id:
+        args.extend(("--impersonate-service-account-id", impersonate_service_account_id))
+    args.extend(("--format", "text", "--no-browser"))
+    token, failure = _run_iam_token_cli(
+        args,
+        timeout_seconds=timeout_seconds,
+        interactive=False,
+    )
+    if token:
+        return token, None
+    if not _interactive_cli_auth_available():
+        assert failure is not None
+        return None, _CliTokenUnavailable(
+            f"{failure}; browser reauthentication was not attempted because stdin is not "
+            "interactive"
+        )
+
+    interactive_args = [arg for arg in args if arg != "--no-browser"]
+    return _run_iam_token_cli(
+        interactive_args,
+        timeout_seconds=interactive_timeout_seconds,
+        interactive=True,
+    )
+
+
+def _ensure_iam_token_from_cli(
+    *,
+    profile: str | None = None,
+    timeout_seconds: int = 30,
+    interactive_timeout_seconds: int = 300,
+) -> str | None:
+    token, _failure = _iam_token_from_cli_attempt(
+        profile=profile,
+        timeout_seconds=timeout_seconds,
+        interactive_timeout_seconds=interactive_timeout_seconds,
+    )
+    return token
 
 
 def init_nebius_sdk(
@@ -251,8 +321,15 @@ def init_nebius_sdk(
     context: str = "Nebius API",
     prefer_operator_auth: bool = False,
     allow_cli_token: bool = True,
+    require_renewable_auth: bool = False,
 ):
-    """Initialize Nebius SDK with robust auth fallback order."""
+    """Initialize Nebius SDK with robust auth fallback order.
+
+    Long-running callers can require a credentials file or service-account
+    private key so the SDK owns token exchange and renewal. One-shot IAM,
+    CLI, config-profile, and impersonation tokens are deliberately excluded
+    from that path.
+    """
     try:
         from nebius.sdk import SDK
     except Exception as exc:  # pragma: no cover - import guard
@@ -282,6 +359,7 @@ def init_nebius_sdk(
         return _attach_managed_sdk_event_loop(sdk, manager)
 
     last_auth_error: Exception | None = None
+    cli_auth_error: _CliTokenUnavailable | None = None
     impersonate_service_account_id = _as_text(os.environ.get("CXCLI_NEBIUS_DELEGATE_ID"))
 
     def _sdk_from_credentials_file() -> object | None:
@@ -315,7 +393,8 @@ def init_nebius_sdk(
         return _create_sdk(credentials=iam_token)
 
     def _sdk_from_cli_token() -> object | None:
-        iam_token = _ensure_iam_token_from_cli(profile=profile_value)
+        nonlocal cli_auth_error
+        iam_token, cli_auth_error = _iam_token_from_cli_attempt(profile=profile_value)
         if not iam_token:
             return None
         return _create_sdk(credentials=iam_token)
@@ -367,7 +446,12 @@ def init_nebius_sdk(
             and path.is_file()
         )
 
-    if impersonate_service_account_id:
+    if require_renewable_auth:
+        auth_attempts = [
+            _sdk_from_credentials_file,
+            _sdk_from_service_account_env,
+        ]
+    elif impersonate_service_account_id:
         # Impersonation is an explicit identity boundary. Never fall back to the
         # base credentials or profile if token exchange is unavailable.
         auth_attempts = [_sdk_from_cli_token] if allow_cli_token else []
@@ -391,21 +475,48 @@ def init_nebius_sdk(
         if allow_cli_token:
             auth_attempts.append(_sdk_from_cli_token)
     for auth_attempt in auth_attempts:
-        sdk = auth_attempt()
+        try:
+            sdk = auth_attempt()
+        except Exception as exc:
+            if not require_renewable_auth:
+                raise
+            last_auth_error = exc
+            continue
         if sdk is not None:
             return sdk
+
+    if require_renewable_auth:
+        error = RuntimeError(
+            f"Failed to initialize renewable Nebius SDK credentials for {context}. "
+            "Long-running operations require NEBIUS_AUTH_CREDENTIALS_FILE or the complete "
+            "NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE set. "
+            "Static NEBIUS_IAM_TOKEN, CLI access-token, config-profile token, and "
+            "impersonation fallbacks are not accepted because they can expire while the "
+            "operation is still running. Project-aware cxcli commands create/load the "
+            "canonical nebius-cxcli-sa profile automatically; log in with the Nebius CLI "
+            "or provide operator credentials if first-time bootstrap is required."
+        )
+        if last_auth_error is not None:
+            raise error from last_auth_error
+        raise error
 
     cli_hint = (
         "log in with the Nebius CLI so `nebius iam get-access-token` works, or "
         if allow_cli_token
         else ""
     )
+    cli_failure_detail = (
+        f" Nebius CLI fallback detail: {cli_auth_error}." if cli_auth_error is not None else ""
+    )
     error = RuntimeError(
         f"Failed to initialize Nebius SDK credentials for {context}. "
         "Provide NEBIUS_AUTH_CREDENTIALS_FILE, runtime auth env vars "
         "(NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE), "
         f"set NEBIUS_IAM_TOKEN, {cli_hint}provide a Nebius SDK config/profile."
+        f"{cli_failure_detail}"
     )
+    if cli_auth_error is not None:
+        raise error from cli_auth_error
     if last_auth_error is not None:
         raise error from last_auth_error
     raise error

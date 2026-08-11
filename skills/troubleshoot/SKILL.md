@@ -79,6 +79,14 @@ target repository's toolchain and current official language or runtime guidance.
   [infrastructure-failure-playbooks.md](references/infrastructure-failure-playbooks.md)
   for installed stacks, services, containers, networks, storage, databases,
   orchestrators, and distributed systems.
+- After stack discovery, read only the matching technology playbooks:
+  [slurm.md](references/slurm.md), [soperator.md](references/soperator.md),
+  [kubernetes.md](references/kubernetes.md), [nebius.md](references/nebius.md),
+  [linux.md](references/linux.md), [network.md](references/network.md),
+  [storage.md](references/storage.md), [gpu.md](references/gpu.md), and
+  [code-debugging.md](references/code-debugging.md). Treat their official
+  documentation links as version-sensitive starting points; pin the observed
+  version and verify the matching vendor documentation before acting.
 - Read [live-product-validation.md](references/live-product-validation.md)
   whenever a live target is used to verify product behavior or a product test
   failure may require target stabilization or recovery.
@@ -148,7 +156,7 @@ Follow this state progression and return to an earlier state when new evidence
 invalidates the model:
 
 ```text
-INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
+INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
@@ -157,15 +165,29 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      permissions, data sensitivity, and operational constraints.
    - Build the failure contract. Separate an active incident's stabilization
      loop from its diagnosis loop.
-2. **BASELINE**
+2. **DISCOVERY**
+   - Identify technologies, exact versions, deployment model, configuration
+     sources, components, dependencies, ports, protocols, authentication, and
+     control and data flows before selecting diagnostic commands.
+   - Compare the observed topology and active configuration with matching
+     official vendor architecture and configuration documentation. Record
+     drift, inaccessible evidence, and version ambiguity instead of assuming
+     that the design is correct.
+   - Create the component verification matrix, incident timeline, and layered
+     log-coverage ledger defined in `references/investigation-protocol.md`.
+     Verify clock synchronization before correlating timestamps across hosts.
+   - Freeze the included and excluded system boundary, exercised control and
+     data paths, and incident-window start and end. Limit every later health
+     claim to that declared scope and observation period.
+3. **BASELINE**
    - Run the narrowest existing reproducer or characterize the failure from
      affected and unaffected evidence when reproduction is unsafe or impossible.
    - Record the command, working directory, exit code, duration, input, seed,
      environment identity, frequency, and stable signature.
-3. **MODEL**
+4. **MODEL**
    - Trace only the relevant entry point, control/data flow, state, ownership,
      lifecycle, retries, caches, configuration, and process/service boundaries.
-4. **HYPOTHESES**
+5. **HYPOTHESES**
    - Keep facts, derived inferences, hypotheses, and unknowns separate.
    - Maintain three to seven plausible hypotheses when the evidence supports
      them. Give each a prediction and falsifying observation.
@@ -181,11 +203,24 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      absolute bounded window before any Grafana call. Skip observability when
      local/static evidence is conclusive, signal fit is unproven, or the query
      cannot change the next decision.
-5. **EXPERIMENTS**
-   - Run commands or instrumentation only when the result can change the next
-     decision. Change one causally relevant variable at a time.
+6. **EXPERIMENTS**
+   - Run a command, query, or instrumentation only when its result can change
+     the next decision. Before execution, state the hypothesis, expected
+     supporting and falsifying evidence, timeout or output bound, and next
+     branch for each possible result. Change one causally relevant variable at
+     a time.
    - Record the question, hypotheses addressed, prediction, falsifying result,
-     risk, observation, and ledger update. Retain negative evidence.
+     risk, observation, timeout, and ledger update. Retain negative evidence.
+   - Investigate the eight canonical log layers: component, application or job,
+     container or orchestrator, service manager, OS and kernel, network and
+     firewall, storage, and GPU or hardware. Filter by the incident window and
+     correlation identifiers. Record every layer exactly once as `examined`,
+     `unavailable`, `unsafe`, or `not applicable`; an unfiltered error search is
+     not proof of health.
+   - Treat configured component and application logs, container logs, service
+     journals, OS/kernel logs, and other primary local sources as baseline
+     evidence. Their bounded inspection is not subject to Grafana admission;
+     only remote observability-provider queries use the gates below.
    - Only after the decision-value, signal-fit, authority, selector, and window
      gates pass, invoke `$nebius-grafana-query` in evidence-provider mode. Its
      first bounded datasource discovery is the one connectivity/readiness check
@@ -208,10 +243,10 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      traces, code inspection, runtime state, or an equivalent observation,
      update the model, and state a genuinely new falsifiable hypothesis. If
      either is unavailable, do not retry; transition to `REPORTED`.
-6. **LOCALIZED**
+7. **LOCALIZED**
    - Find the earliest divergence across temporal, spatial, input, environment,
      or state-sequence dimensions.
-7. **PROVEN**
+8. **PROVEN**
    - Establish the trigger-to-invariant-to-symptom causal chain, evidence fit,
      counterfactual, safe reintroduction when practical, alternative elimination,
      and confidence: `proven`, `high confidence`, `probable`, or `unknown`.
@@ -240,18 +275,18 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    - In Agentic SDLC diagnostic mode, stop at the causal handoff. Emit
      `diagnosis-v1`, remove temporary instrumentation, and return to
      classification without entering `REMEDIATED`.
-8. **REMEDIATED**
+9. **REMEDIATED**
    - Restore the violated invariant at the narrowest correct boundary,
      following the completed design and `/plan` handoff when the remedy was
      design-scale. Add a regression oracle before or with the fix when feasible.
-9. **VERIFIED**
-   - Re-run the original reproducer, counterfactual, targeted tests, affected
-     integration boundaries, relevant dynamic diagnostics, and enough repeated
-     trials for intermittent failures. Confirm repository hygiene.
-   - For live product verification, require a clean replay under
-     `references/live-product-validation.md`; recovery or a healthy final state
-     alone cannot prove the product fixed.
-10. **REPORTED**
+10. **VERIFIED**
+    - Re-run the original reproducer, counterfactual, targeted tests, affected
+      integration boundaries, relevant dynamic diagnostics, and enough repeated
+      trials for intermittent failures. Confirm repository hygiene.
+    - For live product verification, require a clean replay under
+      `references/live-product-validation.md`; recovery or a healthy final state
+      alone cannot prove the product fixed.
+11. **REPORTED**
     - Classify the outcome as `VERIFIED_FIXED`, `MITIGATED_NOT_PROVEN`,
       `DIAGNOSED_NOT_FIXED`, `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
     - If an attempt or time budget is exhausted, record the stop in the exact
@@ -285,6 +320,10 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - Treat restarts, retries, rollbacks, failovers, cache clearing, timeouts, sleeps,
   concurrency reduction, and downgrades as mitigations or experimental evidence,
   not proof of root cause.
+- A temporary verbosity or subsystem-debug increase must have a narrow scope,
+  bounded duration, stated performance and availability impact, secret-redaction
+  plan, original-value capture, and verified rollback. Production and
+  unconfirmed targets still require exact authorization for the live change.
 
 ## Idempotency
 
@@ -317,11 +356,13 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   verification. Rewording the same hypothesis or reusing the same evidence
   does not qualify.
 - When evidence establishes a causally independent blocker, replace the marker
-  with a fresh blocker budget: tranche 1, zero active time, an empty attempt
-  ledger, and no inherited stop trigger. Keep the next remediation plan in
-  prose; only after that remediation executes and verification completes does
-  it become attempt 1. This is not a continuation of the earlier blocker and
-  does not require a new user instruction.
+  with one complete canonical fresh blocker budget, including its new
+  `blocker_key` and a public-safe `blocker_summary`: tranche 1, zero active
+  time, an empty attempt ledger, active status, no stop trigger, and a null
+  `override_summary`. Keep the next remediation plan in prose; only after that
+  remediation executes and verification completes does it become attempt 1.
+  This is not a continuation of the earlier blocker and does not require a new
+  user instruction.
 - Bind every completed attempt to the exact top-level marker `blocker_key`.
   Missing, mixed, or carried attempt bindings are invalid coordination state,
   not evidence that the new blocker exhausted its budget.
@@ -336,7 +377,14 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - Never extend or reset a tranche for the same blocker without a new current-task
   user instruction. Optional flags update the saved session profile. An active
   resize is valid only when both resulting limits remain strictly above the
-  completed-attempt and consumed-active-time counters. An exhausted tranche is
+  completed-attempt and consumed-active-time counters. If a pending resize
+  marker becomes invalid, restore every non-profile field to its exact
+  pre-resize value and apply the authorized profile fields atomically. A
+  deleted marker cannot be reconstructed from bounded authorization metadata;
+  restore the exact prior marker or end the session and request a fresh
+  user-authorized troubleshoot session without inventing or resetting blocker
+  state. Fresh-state feedback calls its source the prior terminal marker because
+  it can follow either resolved or exhausted state. An exhausted tranche is
   never reopened; the next user instruction starts fresh state using the saved
   profile.
 - Helper scripts must be safe to rerun and must replace only the exact output
@@ -381,6 +429,9 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   incident mitigation.
 - Do not use broad logging, repository-wide searches, or full rebuilds without a
   localization question they can answer.
+- Do not use indefinite `tail -f`, arbitrary sleeps, passive terminal waiting,
+  or large unfiltered log dumps. Bound commands by time and output and make the
+  next branch explicit before execution.
 - Do not mask symptoms with sleeps, unbounded retries, exception suppression,
   disabled tests, arbitrary timeout increases, or global serialization.
 - Do not claim root cause from correlation, a hot stack frame, one passing run,
@@ -414,6 +465,25 @@ INTAKE -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   cost when the path was considered.
 - No unrelated changes, diagnostic artifacts, credentials, or private data
   remain in the repository.
+- The final report contains exactly one verdict and supporting evidence for
+  each required criterion: Design, Infrastructure, Connectivity,
+  Configuration, Runtime health, Logs, and Relevant code paths. Use only
+  `PASS`, `FAIL`, or `UNKNOWN`; an unavailable source is `UNKNOWN`, not a pass.
+- The component matrix explicitly covers dependency reachability,
+  authentication, DNS or service-name resolution, resource and clock state,
+  restart history, and recent changes. The log ledger contains all eight
+  canonical rows exactly once and in order.
+- Every `PASS` row uses the exact canonical reference for its criterion and
+  `None after scoped verification.` as its gap value. The referenced
+  architecture verdict, component-matrix cells, log coverage, or code-debugging
+  and post-fix fields must carry the matching structured `PASS:` or examined
+  state. Referenced detail that explicitly reports missing, unavailable,
+  unexamined, unverified, or otherwise insufficient evidence invalidates the
+  pass; a status token cannot override contradictory evidence.
+- `VERIFIED_FIXED` is permitted only when all seven criteria are `PASS` and
+  post-fix validation includes the original failure contract. Passing tests do
+  not prove that relevant code paths are bug-free; code responsibility requires
+  the debugging evidence in `references/code-debugging.md`.
 
 ## Learning Loop
 
@@ -426,18 +496,47 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
+Every explicit `$troubleshoot` invocation must end with a user-visible
+Troubleshooting Report for success, blocking, a tool or coordination error,
+ordinary early stop, unresolved work, or budget exhaustion. The optional hook
+records that duty in session-private `troubleshoot-report-obligation.json`,
+requires `Current workflow state: REPORTED`, and carries an undelivered duty to
+a resumed turn in the same session. It requests one correction for incomplete
+assistant text, then emits an honest bounded UI fallback instead of looping.
+A host or model process that terminates before any Stop event cannot emit an
+assistant response; report the interruption on the next resumed same-session
+turn and never claim that a different new session was mechanically covered.
+
+Use the exact title `# Troubleshooting Report` and the single canonical heading
+order and completion table in `references/verification-and-reporting.md` for
+every outcome, including budget exhaustion. Include one supported
+`- Classification:` value and `- Current workflow state: REPORTED` under
+`## Outcome`. Budget exhaustion adds marker-derived fields to the same envelope;
+it does not use a second report shape.
+
 Return:
 
-- Current workflow state using the exact state-machine name.
-- Failure contract and scope.
-- Stabilization status, if applicable.
-- Observed facts, derived inferences, remaining hypotheses, and negative evidence.
-- Earliest divergence, causal chain, confidence, and alternatives eliminated.
-- Remediation-design classification, including the `design` handoff used for a
-  design-scale change, the Agentic SDLC failure classification and coordinator
-  route when applicable, or why the repair remained local.
-- Remediation or mitigation performed, with authority and safety basis.
-- Regression oracle and verification evidence.
+- Architecture verdict and observed-to-vendor comparison, including versions,
+  configuration authorities, dependencies, ports, protocols, and control/data
+  flows.
+- Component verification matrix and timestamp-correlated incident timeline.
+- Included and excluded system boundaries, exercised control and data paths,
+  and incident-window start and end. Every conclusion is limited to that scope.
+- The eight canonical layered-log rows, findings, incident-window coverage,
+  and every unavailable, unsafe, or not-applicable log source.
+- Hypotheses tested and rejected, with expected evidence, bounds, observations,
+  and decision branches.
+- Code-debugging evidence when relevant: reproduction, execution and data path,
+  stack or core evidence, inputs, recent changes, focused tests and analysis,
+  temporary instrumentation, and cleanup.
+- Earliest divergence, root cause and confidence, alternatives eliminated,
+  remediation, and post-fix validation.
+- A completion-gate row for Design, Infrastructure, Connectivity,
+  Configuration, Runtime health, Logs, and Relevant code paths, each marked
+  `PASS`, `FAIL`, or `UNKNOWN` with evidence and the gap or next action.
+- Remaining unknowns, coverage gaps, residual risks, and exact next action. A
+  result of "no issue found" must name coverage gaps and cannot be
+  `VERIFIED_FIXED` unless every required criterion is `PASS`.
 - For live product verification, the declared trial boundary, candidate and
   checkpoint identities, intervention and contamination record, clean replay
   range, product-owned transition evidence, independent postconditions, and

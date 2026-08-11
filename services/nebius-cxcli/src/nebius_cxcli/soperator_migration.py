@@ -239,7 +239,6 @@ from .soperator_onboarding import (
     ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
-    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
     analyze_soperator_onboarding_snapshot,
     normalize_soperator_release_version,
@@ -685,6 +684,21 @@ _TARGET_HELM_PENDING_RECOVERY_SCHEMA = "nebius-cxcli-target-helm-pending-recover
 _TARGET_HELM_FAILED_REPLAY_SCHEMA = "nebius-cxcli-target-helm-failed-replay/v1"
 _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT = 6
 _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA = "nebius-cxcli/target-helm-admission-bootstrap/v1"
+_TARGET_HELM_ADMISSION_PROTECTED_DISPATCH_SCHEMA = (
+    "nebius-cxcli/target-helm-admission-protected-dispatch/v1"
+)
+_TARGET_HELM_ADMISSION_BOOTSTRAP_PRE_HELM_STATUSES = frozenset(
+    {
+        "intent",
+        "prerequisites-apply-intent",
+        "prerequisites-ready",
+        "webhooks-apply-intent",
+        "admission-ready",
+    }
+)
+_TARGET_HELM_ADMISSION_MANAGER_RESTORE_SCHEMA = (
+    "nebius-cxcli/target-helm-admission-manager-restore/v1"
+)
 _TARGET_HELM_ADMISSION_BOOTSTRAP_ANNOTATION = "nebius-cxcli.io/target-admission-bootstrap-campaign"
 _TARGET_HELM_ADMISSION_BOOTSTRAP_PREREQUISITES = frozenset(
     {
@@ -774,6 +788,18 @@ _IN_PLACE_LOGIN_HELM_WEBHOOK_BRIDGE_WATCH_NAMESPACE = "kube-system"
 _IN_PLACE_LOGIN_SURGE_FAILED_HELM_RECOVERY_SCHEMA = (
     "nebius-cxcli/in-place-login-surge-failed-helm-recovery/v1"
 )
+_IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_AUTHORITY_SCHEMA = (
+    "nebius-cxcli/in-place-login-surge-post-switch-apply-authority/v1"
+)
+_IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_ADOPTION_SCHEMA = (
+    "nebius-cxcli/in-place-login-surge-post-switch-apply-adoption/v1"
+)
+_IN_PLACE_LOGIN_RESTORE_RELEASE_PRECONDITION_RECOVERY_SCHEMA = (
+    "nebius-cxcli/in-place-login-restore-release-precondition-recovery/v1"
+)
+_IN_PLACE_LOGIN_RESTORE_PROTECTED_SUCCESSOR_PREDECESSOR_SCHEMA = (
+    "nebius-cxcli/in-place-login-restore-protected-successor-predecessor/v1"
+)
 _IN_PLACE_CONTROLLER_GAP_BINDING_SCHEMA = "nebius-cxcli/in-place-controller-gap-binding/v2"
 _IN_PLACE_CONTROLLER_GAP_PARTITION_REBASE_SCHEMA = (
     "nebius-cxcli/in-place-controller-gap-partition-rebase/v1"
@@ -845,6 +871,10 @@ _IN_PLACE_WORKER_BRIDGE_MUNGE_MATERIAL_REBIND_SCHEMA = (
 _IN_PLACE_WORKER_BRIDGE_MUNGE_SUCCESSOR_RESTART_SCHEMA = (
     "nebius-cxcli/in-place-worker-bridge-munge-successor-restart/v1"
 )
+_IN_PLACE_ACCOUNTING_MUNGE_RUNTIME_RELOAD_SCHEMA = (
+    "nebius-cxcli/in-place-accounting-munge-runtime-reload/v1"
+)
+_IN_PLACE_ACCOUNTING_MUNGE_PROBE_SCHEMA = "nebius-cxcli/in-place-accounting-munge-probe/v1"
 _IN_PLACE_LOGIN_MUNGE_RUNTIME_RELOAD_SCHEMA = "nebius-cxcli/in-place-login-munge-runtime-reload/v1"
 _IN_PLACE_LOGIN_MUNGE_BRIDGE_RUNTIME_REBIND_SCHEMA = (
     "nebius-cxcli/in-place-login-munge-bridge-runtime-rebind/v1"
@@ -1136,6 +1166,38 @@ _IMMUTABLE_CHILD_WORKER_ROLLOVER_RECOVERY_REBIND_SCHEMA = (
 )
 _PAUSED_MANAGER_WORKER_READINESS_SCHEMA = "nebius-cxcli/paused-manager-worker-readiness/v1"
 _IN_PLACE_TARGET_MANAGER_PAUSE_SCHEMA = "nebius-cxcli/in-place-target-manager-pause/v1"
+_IN_PLACE_TARGET_MANAGER_PAUSE_RESERIALIZATION_REASON = (
+    "same-generation serialization drift; the pause generation is unchanged so no spec "
+    "mutation occurred"
+)
+_IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA = (
+    "nebius-cxcli/in-place-target-manager-bootstrap-pause/v1"
+)
+_IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_RECOVERY_SCHEMA = (
+    "nebius-cxcli/in-place-target-manager-bootstrap-pause-recovery/v1"
+)
+_TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_SCHEMA = (
+    "nebius-cxcli/target-helm-admission-manager-pause-successor/v1"
+)
+_TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_SCHEMA = (
+    "nebius-cxcli/target-helm-admission-manager-pause-reuse/v1"
+)
+_TARGET_HELM_ADMISSION_CONTINUOUS_MANAGER_PAUSE_BOUNDARIES = frozenset(
+    {
+        "in-place-login-surge",
+        "in-place-login-surge-restore",
+        "open-metrics-restore",
+    }
+)
+_ACTIVE_BRIDGE_TARGET_ADMISSION_MANAGER_PAUSE_ADOPTION_SCHEMA = (
+    "nebius-cxcli/active-bridge-target-admission-manager-pause-adoption/v2"
+)
+_IN_PLACE_TARGET_MANAGER_BOOTSTRAP_STATE_SCHEMAS = frozenset(
+    {
+        _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA,
+        _ACCOUNTING_HANDOFF_ADMISSION_BOOTSTRAP_SCHEMA,
+    }
+)
 _PAUSED_MANAGER_WORKER_READINESS_AUTHORITY_MIGRATION_SCHEMA = (
     "nebius-cxcli/paused-manager-worker-readiness-authority-migration/v1"
 )
@@ -1242,6 +1304,9 @@ _GPU_TYPED_GRES_WORKER_INIT_SOURCE_SCHEMA = (
 )
 _GPU_TYPED_GRES_WORKER_LINEAGE_REBIND_SCHEMA = (
     "nebius-cxcli/gpu-typed-gres-worker-lineage-rebind/v1"
+)
+_GPU_TYPED_GRES_CONTROLLER_LINEAGE_REBIND_SCHEMA = (
+    "nebius-cxcli/gpu-typed-gres-controller-lineage-rebind/v1"
 )
 _GPU_TYPED_GRES_HANDOFF_PRESERVATION_SUCCESSOR_REBIND_SCHEMA = (
     "nebius-cxcli/gpu-typed-gres-handoff-preservation-successor-rebind/v1"
@@ -1787,12 +1852,36 @@ def _wait_checkpointed_nebius_operation(
         ) from exc
 
 
+def _close_soperator_migration_sdk(sdk: object) -> bool:
+    """Bound provider SDK cleanup so Lease release cannot wait indefinitely."""
+
+    completed = threading.Event()
+
+    def _close() -> None:
+        try:
+            sync_close = getattr(sdk, "sync_close", None)
+            if callable(sync_close):
+                sync_close(timeout=_PROVIDER_SDK_CLOSE_TIMEOUT_SECONDS)
+        except Exception:
+            pass
+        finally:
+            completed.set()
+
+    thread = threading.Thread(
+        target=_close,
+        name="nebius-cxcli-soperator-provider-close",
+        daemon=True,
+    )
+    thread.start()
+    return completed.wait(timeout=_PROVIDER_SDK_CLOSE_TIMEOUT_SECONDS)
+
+
 class _SdkSoperatorMigrationNebiusApi:
-    def __init__(self, *, project_id: str) -> None:
+    def __init__(self, *, project_id: str, require_renewable_auth: bool = False) -> None:
         sdk = init_nebius_sdk(
             parent_id=project_id,
             context="external Soperator migration Nebius API",
-            prefer_operator_auth=True,
+            require_renewable_auth=require_renewable_auth,
         )
         from nebius.api.nebius.common.v1 import OperationServiceClient
         from nebius.api.nebius.compute.v1 import FilesystemServiceClient, GpuClusterServiceClient
@@ -2331,8 +2420,7 @@ class _SdkSoperatorMigrationNebiusApi:
         }
 
     def close(self) -> None:
-        with suppress(Exception):
-            self._sdk.sync_close()
+        _close_soperator_migration_sdk(self._sdk)
 
 
 @dataclass(frozen=True)
@@ -2467,6 +2555,7 @@ _PROVIDER_OPERATION_POLL_MAX_SECONDS = 30.0
 _PROVIDER_OPERATION_ATTACHED_WAIT_SLICE_SECONDS = 60
 _PROVIDER_OPERATION_RECONCILIATION_MAX_WAIT_SECONDS = 60 * 60
 _PROVIDER_POSTCONDITION_RECONCILIATION_MAX_WAIT_SECONDS = 15 * 60
+_PROVIDER_SDK_CLOSE_TIMEOUT_SECONDS = 5.0
 
 
 class _ExecutionCheckpointWriter:
@@ -3932,6 +4021,35 @@ def _command_text(args: Sequence[str]) -> str:
     return " ".join(str(item) for item in args)
 
 
+def _is_target_soperator_helm_upgrade_command(args: Sequence[str]) -> bool:
+    command = tuple(str(item) for item in args)
+    if not command or Path(command[0]).name != "helm":
+        return False
+    try:
+        upgrade_index = command.index("upgrade")
+    except ValueError:
+        return False
+    return command[upgrade_index + 1 : upgrade_index + 3] == (
+        "--install",
+        _SOPERATOR_TARGET_RELEASE_NAME,
+    ) and any(
+        command[index : index + 2] == (flag, _SOPERATOR_NAMESPACE)
+        for index in range(len(command) - 1)
+        for flag in ("-n", "--namespace")
+    )
+
+
+def _target_soperator_helm_transport_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    godebug_entries = [
+        item
+        for raw_item in environment.get("GODEBUG", "").split(",")
+        if (item := raw_item.strip()) and item.split("=", 1)[0] != "http2client"
+    ]
+    environment["GODEBUG"] = ",".join((*godebug_entries, "http2client=0"))
+    return environment
+
+
 _SLURM_FAST_PROBE_TIMEOUT_SECONDS = 20
 _TRANSIENT_KUBECTL_CONNECTION_FAILURE_MARKERS = (
     "unable to connect to the server: getting credentials",
@@ -3948,8 +4066,10 @@ _TRANSIENT_KUBECTL_READ_ONLY_TIMEOUT_MARKERS = (
 # subcommands so a genuine authorization loss still fails mutations closed.
 _TRANSIENT_KUBECTL_READ_ONLY_AUTH_MARKERS = ("you must be logged in to the server",)
 _TRANSIENT_KUBECTL_IDEMPOTENT_APPLY_MARKERS = (
+    "but may still be processing the request",
     "etcdserver: leader changed",
     "etcdserver: request timed out",
+    "request did not complete within requested timeout",
     "rpc error: code = unavailable",
     "temporarily unavailable",
     "too many requests",
@@ -4041,6 +4161,11 @@ def _default_command_runner(
     check: bool = True,
 ) -> SoperatorMigrationCommandResult:
     command = list(args)
+    environment_kwargs = (
+        {"env": _target_soperator_helm_transport_environment()}
+        if _is_target_soperator_helm_upgrade_command(command)
+        else {}
+    )
     result: SoperatorMigrationCommandResult | None = None
     for attempt in range(1, _TRANSIENT_KUBECTL_MAX_ATTEMPTS + 1):
         completed = subprocess.run(
@@ -4050,6 +4175,7 @@ def _default_command_runner(
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
+            **environment_kwargs,
         )
         result = SoperatorMigrationCommandResult(
             args=tuple(str(item) for item in args),
@@ -4222,19 +4348,14 @@ def _external_node_template_target(
     onboarding: Mapping[str, Any],
 ) -> SoperatorExternalNodeTemplateTarget:
     configured = _mapping(onboarding.get("node_template_upgrade"))
-    target_version = str(
-        configured.get(
-            "target_k8s_version",
-            configured.get(
-                "k8s_version",
-                configured.get(
-                    "version",
-                    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
-                ),
-            ),
+    segment = _external_node_template_campaign_segment(onboarding=onboarding)
+    segment_target_version = str(segment.get("target_k8s_version") or "").strip()
+    if not segment_target_version:
+        raise RuntimeError(
+            "External node-template execution requires the active v6 campaign segment "
+            "to pin target_k8s_version."
         )
-        or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
-    ).strip()
+    target_version = segment_target_version
     target_os = str(
         configured.get(
             "target_os", configured.get("os", ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS)
@@ -6170,6 +6291,8 @@ def _record_reconciled_provider_operation_terminal(
     provider_payload: Mapping[str, Any],
     operation_kind: str,
     resource_id: str,
+    provider_resource_id: str | None = None,
+    terminal_resource_uid: str | None = None,
     checkpoint_writer: Callable[[], None] | None,
     verified_postcondition: Mapping[str, Any] | None = None,
 ) -> None:
@@ -6207,7 +6330,7 @@ def _record_reconciled_provider_operation_terminal(
         provider_operation_id=provider_operation_id,
         provider_operation_kind=provider_operation_kind,
         operation_kind=operation_kind,
-        resource_id=resource_id,
+        resource_id=provider_resource_id or resource_id,
     )
     with _checkpoint_mutation(checkpoint_writer):
         operation = resource_state.get("operation")
@@ -6226,6 +6349,8 @@ def _record_reconciled_provider_operation_terminal(
             )
         operation_entry["provider_operation_id"] = provider_operation_id
         operation_entry["attempt_state"] = "provider-terminal"
+        if terminal_resource_uid is not None:
+            operation_entry["resource_uid"] = terminal_resource_uid
         if verified_postcondition is not None:
             operation_entry["verified_postcondition"] = to_plain_data(dict(verified_postcondition))
         operation_entry["reconciled_at"] = _utc_now()
@@ -12603,12 +12728,15 @@ def _completed_controller_bridge_record_binding(
         return "", ""
     node_group_id = str(record.get("id", "") or "").strip()
     version = _minor_version_text_or_empty(record.get("kubernetes_version"))
-    verified = _mapping(_mapping(record.get("operation")).get("verified_postcondition"))
+    operation = _mapping(record.get("operation"))
+    verified = _mapping(operation.get("verified_postcondition"))
     if not verified:
         return "", ""
     if (
         not node_group_id
         or not version
+        or operation.get("attempt_state") != "provider-terminal"
+        or not _provider_operation_id_is_real(operation.get("provider_operation_id"))
         or str(verified.get("node_group_id", "") or "") != node_group_id
         or str(verified.get("name", "") or "") != name
         or _minor_version_text_or_empty(verified.get("version")) != version
@@ -12617,6 +12745,126 @@ def _completed_controller_bridge_record_binding(
             f"Controller bridge checkpoint binding for {name} is incomplete or inconsistent."
         )
     return node_group_id, version
+
+
+def _controller_bridge_node_group_create_postcondition(
+    *,
+    journal: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "cluster_id": str(journal.get("cluster_id", "") or "").strip(),
+        "name": str(record.get("name", "") or "").strip(),
+        "fixed_node_count": record.get("ready_capacity"),
+        "version": _minor_version_text_or_empty(record.get("kubernetes_version")),
+        "bridge_slot": record.get("slot"),
+        "excluded_from_provider_upgrade": True,
+    }
+
+
+def _controller_bridge_node_group_create_operation_mirror_is_exact(
+    *,
+    checkpoint: Mapping[str, Any],
+    operation: Mapping[str, Any],
+    allow_verified_terminal_projection: bool = False,
+) -> bool:
+    idempotency_key = str(operation.get("idempotency_key", "") or "").strip()
+    if not idempotency_key:
+        return False
+    provider_operations = _sequence_of_mappings(
+        _mapping(checkpoint.get("operation_intent")).get("provider_operations")
+    )
+    matching = tuple(
+        item
+        for item in provider_operations
+        if str(item.get("idempotency_key", "") or "").strip() == idempotency_key
+    )
+    if len(matching) != 1:
+        return False
+    mirrored = to_plain_data(dict(matching[0]))
+    local = to_plain_data(dict(operation))
+    if mirrored == local:
+        return True
+    if (
+        allow_verified_terminal_projection
+        and local.get("attempt_state") == "provider-terminal"
+        and mirrored.get("attempt_state") == "verified"
+    ):
+        mirrored["attempt_state"] = "provider-terminal"
+        return mirrored == local
+    return False
+
+
+def _controller_bridge_node_group_create_reconciliation_candidate(
+    *,
+    checkpoint: Mapping[str, Any],
+    journal: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> bool:
+    """Recognize only the accepted-create crash window that can be reconciled."""
+
+    operation = record.get("operation")
+    if not isinstance(operation, Mapping):
+        return False
+    name = str(record.get("name", "") or "").strip()
+    cluster_id = str(journal.get("cluster_id", "") or "").strip()
+    expected = _controller_bridge_node_group_create_postcondition(
+        journal=journal,
+        record=record,
+    )
+    return bool(
+        record.get("ownership") == "external-temporary"
+        and name
+        and cluster_id
+        and operation.get("operation_kind") == "mk8s-node-group-create"
+        and str(operation.get("resource_id", "") or "").strip()
+        == f"{cluster_id}/node-groups/{name}"
+        and str(operation.get("resource_uid", "") or "").strip() == name
+        and operation.get("resource_version") == 0
+        and to_plain_data(operation.get("intended_postcondition")) == expected
+        and operation.get("attempt_state") == "provider-pending"
+        and _provider_operation_id_is_real(operation.get("provider_operation_id"))
+        and _controller_bridge_node_group_create_operation_mirror_is_exact(
+            checkpoint=checkpoint,
+            operation=operation,
+        )
+    )
+
+
+def _controller_bridge_node_group_create_terminal_proof_is_exact(
+    *,
+    journal: Mapping[str, Any],
+    record: Mapping[str, Any],
+    node_group_id: str | None = None,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> bool:
+    operation = record.get("operation")
+    if not isinstance(operation, Mapping):
+        return False
+    exact_node_group_id = str(node_group_id or record.get("id", "") or "").strip()
+    verified = operation.get("verified_postcondition")
+    if not exact_node_group_id or not isinstance(verified, Mapping):
+        return False
+    expected = {
+        **_controller_bridge_node_group_create_postcondition(
+            journal=journal,
+            record=record,
+        ),
+        "node_group_id": exact_node_group_id,
+    }
+    return bool(
+        operation.get("attempt_state") == "provider-terminal"
+        and _provider_operation_id_is_real(operation.get("provider_operation_id"))
+        and to_plain_data(dict(verified)) == expected
+        and (
+            checkpoint is None
+            or _controller_bridge_node_group_create_operation_mirror_is_exact(
+                checkpoint=checkpoint,
+                operation=operation,
+                allow_verified_terminal_projection=True,
+            )
+        )
+    )
 
 
 def _new_controller_bridge_node_group_quota_requirements(
@@ -16902,15 +17150,14 @@ def _protect_upgrade_login_sessions(
     ]
 
 
-def _locked_in_place_login_node_group(checkpoint: Mapping[str, Any]) -> dict[str, str]:
-    """Return the one locked in-place login group for the active campaign segment."""
+def _locked_in_place_login_node_group(
+    accepted_in_place_node_groups: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Return the one login identity from the locked full-campaign inventory."""
 
-    operation_intent = _mapping(checkpoint.get("operation_intent"))
-    intended = _mapping(operation_intent.get("intended_postcondition"))
-    mk8s = _mapping(intended.get("mk8s"))
     matches = [
         item
-        for item in _sequence_of_mappings(mk8s.get("node_groups"))
+        for item in _sequence_of_mappings(accepted_in_place_node_groups)
         if str(item.get("role") or "").strip() == "login"
     ]
     if len(matches) != 1:
@@ -16918,36 +17165,70 @@ def _locked_in_place_login_node_group(checkpoint: Mapping[str, Any]) -> dict[str
             "in-place login handoff requires exactly one locked login provider node group."
         )
     group = matches[0]
-    source_version = str(_mapping(group.get("source")).get("kubernetes_version") or "").strip()
-    target_version = str(_mapping(group.get("target")).get("kubernetes_version") or "").strip()
     binding = {
         "node_group_id": str(group.get("id") or "").strip(),
         "node_group_name": str(group.get("name") or "").strip(),
-        "workload_kubernetes_version": (
-            parse_k8s_version(source_version).minor_text if source_version else ""
-        ),
-        "provider_target_kubernetes_version": (
-            parse_k8s_version(target_version).minor_text if target_version else ""
-        ),
     }
     if not all(binding.values()):
         raise SoperatorMigrationPhasePending(
-            "in-place login handoff has an incomplete locked provider group identity/version."
+            "in-place login handoff has an incomplete locked provider group identity."
         )
     return binding
+
+
+def _locked_in_place_segment_kubernetes_versions(
+    checkpoint: Mapping[str, Any],
+) -> dict[str, str]:
+    """Return source and target versions from the active segment operation intent."""
+
+    operation_intent = _mapping(checkpoint.get("operation_intent"))
+    intended = _mapping(operation_intent.get("intended_postcondition"))
+    control_plane = _mapping(_mapping(intended.get("mk8s")).get("control_plane"))
+    source_version = str(control_plane.get("source_version") or "").strip()
+    target_version = str(control_plane.get("target_version") or "").strip()
+    if not source_version or not target_version:
+        raise SoperatorMigrationPhasePending(
+            "in-place login handoff has incomplete locked segment Kubernetes version authority."
+        )
+    try:
+        return {
+            "workload_kubernetes_version": parse_k8s_version(source_version).minor_text,
+            "provider_target_kubernetes_version": parse_k8s_version(target_version).minor_text,
+        }
+    except ValueError as exc:
+        raise SoperatorMigrationPhasePending(
+            "in-place login handoff has invalid locked segment Kubernetes version authority."
+        ) from exc
 
 
 def _checkpoint_in_place_login_handoff_binding(
     *,
     checkpoint: dict[str, Any],
     checkpoint_writer: Callable[[], None] | None,
+    accepted_in_place_node_groups: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     rolling = _phase_state(checkpoint, "rolling-compute-migration")
+    existing = _mapping(rolling.get("in_place_login_handoff_binding"))
+    if accepted_in_place_node_groups is None:
+        required = (
+            "node_group_id",
+            "node_group_name",
+            "workload_kubernetes_version",
+            "provider_target_kubernetes_version",
+        )
+        if str(existing.get("mode") or "").strip() != COMPUTE_MIGRATION_MODE_IN_PLACE or any(
+            not str(existing.get(key) or "").strip() for key in required
+        ):
+            raise SoperatorMigrationPhasePending(
+                "in-place login handoff requires a complete checkpointed campaign-wide "
+                "login provider binding."
+            )
+        return dict(existing)
     expected = {
         "mode": COMPUTE_MIGRATION_MODE_IN_PLACE,
-        **_locked_in_place_login_node_group(checkpoint),
+        **_locked_in_place_login_node_group(accepted_in_place_node_groups),
+        **_locked_in_place_segment_kubernetes_versions(checkpoint),
     }
-    existing = _mapping(rolling.get("in_place_login_handoff_binding"))
     if existing:
         if any(existing.get(key) != value for key, value in expected.items()):
             raise SoperatorMigrationPhasePending(
@@ -27210,6 +27491,13 @@ class _Mk8sNodeGroupStatusRow:
     unknown: bool
 
 
+SOPERATOR_MK8S_NODE_GROUP_STATUS_COLUMNS: tuple[str, str, str] = (
+    "current",
+    "updating",
+    "not-started",
+)
+
+
 def _node_group_latest_event_code(status: Mapping[str, Any]) -> str:
     timestamped: list[tuple[datetime, int, str]] = []
     fallback = "-"
@@ -27418,13 +27706,14 @@ def _mk8s_status_ready_current_text(
 
 
 def _mk8s_status_totals_line(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> str:
+    current_label, updating_label, not_started_label = SOPERATOR_MK8S_NODE_GROUP_STATUS_COLUMNS
     return (
         f"total={_mk8s_status_total_text(tuple(row.total for row in rows))} "
-        "provider-current="
+        f"{current_label}="
         f"{_mk8s_status_total_text(tuple(row.upgraded for row in rows))} "
-        "provider-updating="
+        f"{updating_label}="
         f"{_mk8s_status_total_text(tuple(row.upgrading for row in rows))} "
-        "provider-outdated="
+        f"{not_started_label}="
         f"{_mk8s_status_total_text(tuple(row.remaining for row in rows))} "
         f"ready/current="
         f"{_mk8s_status_total_text(tuple(row.ready for row in rows))}/"
@@ -27433,15 +27722,16 @@ def _mk8s_status_totals_line(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> str:
 
 
 def _format_mk8s_status_table(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> tuple[str, ...]:
+    current_label, updating_label, not_started_label = SOPERATOR_MK8S_NODE_GROUP_STATUS_COLUMNS
     table_rows: list[tuple[str, ...]] = [
         (
             "group",
             "state",
             "k8s",
             "total",
-            "provider-current",
-            "provider-updating",
-            "provider-outdated",
+            current_label,
+            updating_label,
+            not_started_label,
             "ready/current",
             "event",
         )
@@ -29252,9 +29542,22 @@ def _ensure_soperator_chart_dependencies(
         except subprocess.TimeoutExpired as exc:
             detail = f"timed out after {exc.timeout} seconds"
         normalized_detail = detail.lower()
-        client_error = re.search(r"\b4\d\d\b", normalized_detail)
-        retryable_client_error = re.search(r"\b(?:408|425|429)\b", normalized_detail)
-        transient_failure = (client_error is None or retryable_client_error is not None) and any(
+        client_error_match = re.search(
+            (
+                r"\b(?:http(?:/[0-9.]+)?|status(?:\s+code)?|"
+                r"response(?:\s+(?:status|code))?)\s*[:=]?\s*(4\d\d)\b|"
+                r"(?<![:./\d])\b(4\d\d)\b(?=\s+[a-z])"
+            ),
+            normalized_detail,
+        )
+        client_error_code = None
+        if client_error_match is not None:
+            client_error_code = int(
+                next(group for group in client_error_match.groups() if group is not None)
+            )
+        transient_failure = (
+            client_error_code is None or client_error_code in {408, 425, 429}
+        ) and any(
             marker in normalized_detail
             for marker in (
                 "bad gateway",
@@ -29280,6 +29583,79 @@ def _ensure_soperator_chart_dependencies(
         time.sleep(retry_delays_seconds[attempt - 1])
 
 
+def _declared_manifest_value_matches_live(actual: Any, declared: Any) -> bool:
+    if isinstance(declared, Mapping):
+        return isinstance(actual, Mapping) and all(
+            key in actual and _declared_manifest_value_matches_live(actual[key], value)
+            for key, value in declared.items()
+        )
+    if isinstance(declared, Sequence) and not isinstance(declared, (str, bytes, bytearray)):
+        return (
+            isinstance(actual, Sequence)
+            and not isinstance(actual, (str, bytes, bytearray))
+            and len(actual) == len(declared)
+            and all(
+                _declared_manifest_value_matches_live(actual_item, declared_item)
+                for actual_item, declared_item in zip(actual, declared, strict=True)
+            )
+        )
+    return actual == declared
+
+
+def _soperator_crd_timeout_postcondition_is_exact(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    declared: Mapping[str, Any],
+) -> bool:
+    metadata = _mapping(declared.get("metadata"))
+    name = str(metadata.get("name") or "").strip()
+    if (
+        str(declared.get("apiVersion") or "") != "apiextensions.k8s.io/v1"
+        or str(declared.get("kind") or "") != "CustomResourceDefinition"
+        or not name
+    ):
+        return False
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "get",
+            "customresourcedefinition",
+            name,
+            "-o",
+            "json",
+        ],
+        timeout_seconds=300,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        live = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(live, Mapping):
+        return False
+    live_metadata = _mapping(live.get("metadata"))
+    if (
+        str(live.get("apiVersion") or "") != "apiextensions.k8s.io/v1"
+        or str(live.get("kind") or "") != "CustomResourceDefinition"
+        or str(live_metadata.get("name") or "") != name
+        or not str(live_metadata.get("uid") or "").strip()
+        or not str(live_metadata.get("resourceVersion") or "").strip()
+        or live_metadata.get("deletionTimestamp") is not None
+    ):
+        return False
+    established = any(
+        str(condition.get("type") or "") == "Established"
+        and str(condition.get("status") or "").lower() == "true"
+        for condition in _sequence_of_mappings(_mapping(live.get("status")).get("conditions"))
+    )
+    return established and _declared_manifest_value_matches_live(live, declared)
+
+
 def _apply_soperator_crds(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -29289,19 +29665,68 @@ def _apply_soperator_crds(
     crd_dir = chart_path / "crds"
     if not crd_dir.exists():
         return
+    documents: list[tuple[Path, int, Mapping[str, Any], str]] = []
     for crd_file in sorted(crd_dir.glob("*.yaml")):
-        command_runner(
-            [
-                "kubectl",
-                "--context",
-                kube_context,
-                "apply",
-                "--server-side",
-                "--force-conflicts",
-                "-f",
-                str(crd_file),
-            ],
+        try:
+            loaded_documents = tuple(
+                document
+                for document in yaml.safe_load_all(crd_file.read_text(encoding="utf-8"))
+                if document is not None
+            )
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise RuntimeError(f"target Soperator CRD file is invalid: {crd_file}") from exc
+        for index, document in enumerate(loaded_documents, start=1):
+            if not isinstance(document, Mapping):
+                raise RuntimeError(f"target Soperator CRD document {index} is invalid: {crd_file}")
+            plain_document = to_plain_data(document)
+            metadata = _mapping(plain_document.get("metadata"))
+            name = str(metadata.get("name") or "").strip()
+            if (
+                str(plain_document.get("apiVersion") or "") != "apiextensions.k8s.io/v1"
+                or str(plain_document.get("kind") or "") != "CustomResourceDefinition"
+                or not name
+            ):
+                raise RuntimeError(f"target Soperator CRD document {index} is invalid: {crd_file}")
+            documents.append(
+                (
+                    crd_file,
+                    index,
+                    plain_document,
+                    yaml.safe_dump(plain_document, sort_keys=False),
+                )
+            )
+    for crd_file, index, document, manifest_text in documents:
+        command = [
+            "kubectl",
+            "--context",
+            kube_context,
+            "apply",
+            "--server-side",
+            "--force-conflicts",
+            "-f",
+            "-",
+        ]
+        result = command_runner(
+            command,
+            input_text=manifest_text,
             timeout_seconds=1200,
+            check=False,
+        )
+        if result.returncode == 0:
+            continue
+        if _is_transient_kubectl_failure(
+            command, result
+        ) and _soperator_crd_timeout_postcondition_is_exact(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            declared=document,
+        ):
+            continue
+        detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        name = str(_mapping(document.get("metadata")).get("name") or "").strip()
+        raise RuntimeError(
+            f"target Soperator CRD apply failed for {name} "
+            f"(document {index} in {crd_file}): {_command_text(command)} failed: {detail}"
         )
 
 
@@ -33004,6 +33429,19 @@ def _canonical_later_segment_gpu_topology_bridge_client_config(
             "recovery-required: later-segment topology client-config successor must be a mapping."
         )
     successor = raw_successor if isinstance(raw_successor, dict) else {}
+    topology_lifecycle_present = bool(
+        raw_successor is not None
+        or any(
+            key in phase
+            for key in (
+                "later_segment_gpu_topology_restore",
+                "later_segment_gpu_topology_restore_apply_intent",
+                "later_segment_gpu_topology_restore_apply_proof",
+            )
+        )
+    )
+    if not topology_lifecycle_present:
+        return slurm_conf, ""
     if observed["config_sha256"] == predecessor_sha256 and not successor:
         return slurm_conf, ""
     if not predecessor_exact:
@@ -33191,6 +33629,9 @@ def _in_place_bridge_client_config_successor_is_exact(
         successor.get("schema") == _IN_PLACE_BRIDGE_CLIENT_CONFIG_SUCCESSOR_SCHEMA
         and successor.get("status") in {"accepted", "verified"}
         and str(successor.get("target_ref") or "") == target_ref
+        and bool(str(successor.get("config_map_name") or "").strip())
+        and str(successor.get("config_map_name") or "").strip()
+        == str(handoff.get("config_map") or "").strip()
         and str(successor.get("predecessor_config_sha256") or "") == predecessor_sha256
         and str(successor.get("target_config_sha256") or "") == target_sha256
         and successor.get("reason") == "target-client-plugin-dir-compatibility"
@@ -33221,8 +33662,10 @@ def _reconcile_in_place_bridge_client_config_observation(
             "a canonical digest."
         )
 
-    propagation = _mapping(handoff.get("propagation"))
-    login_rollout = _mapping(handoff.get("login_config_rollout"))
+    raw_propagation = handoff.get("propagation")
+    raw_login_rollout = handoff.get("login_config_rollout")
+    propagation = _mapping(raw_propagation)
+    login_rollout = _mapping(raw_login_rollout)
     predecessor_sha256 = str(propagation.get("config_sha256") or "").strip()
     predecessor_semantics = {
         "cluster_name": str(propagation.get("cluster_name") or "").strip(),
@@ -33262,23 +33705,52 @@ def _reconcile_in_place_bridge_client_config_observation(
         and bool(login_proof["verified_at"])
         and str(handoff.get("config_map") or "").strip() == config_map_name
     )
-    if status == "accepted" and (propagation or login_rollout) and not verified_predecessor:
-        raise RuntimeError(
-            "recovery-required: accepted in-place bridge client configuration has "
-            "incomplete or drifted predecessor proof."
-        )
+    successor_predecessor_sha256 = str(
+        _mapping(handoff.get("compatibility_config_successor")).get("predecessor_config_sha256")
+        or ""
+    ).strip()
     exact_successor = _in_place_bridge_client_config_successor_is_exact(
         handoff=handoff,
         target_ref=target_ref,
-        predecessor_sha256=(
-            predecessor_sha256 if status == "accepted" and verified_predecessor else recorded_sha256
-        ),
+        predecessor_sha256=successor_predecessor_sha256,
         target_sha256=observed_sha256,
     )
     exact_successor = exact_successor or bool(
         re.fullmatch(r"[0-9a-f]{64}", accepted_typed_successor_config_sha256)
         and accepted_typed_successor_config_sha256 == observed_sha256
     )
+    login_rollout_sha256 = str(login_rollout.get("config_sha256") or "").strip()
+    exact_successor_login_rollout = bool(
+        raw_login_rollout is None or isinstance(raw_login_rollout, Mapping)
+    ) and bool(
+        (
+            login_rollout.get("status") != "verified"
+            and (not login_rollout_sha256 or login_rollout_sha256 == observed_sha256)
+        )
+        or (
+            login_rollout.get("status") == "verified"
+            and login_rollout_sha256 == observed_sha256
+            and str(login_rollout.get("verified_at") or "").strip()
+        )
+    )
+    exact_accepted_successor_before_propagation = bool(
+        status == "accepted"
+        and raw_propagation is None
+        and recorded_sha256 == observed_sha256
+        and str(handoff.get("config_map") or "").strip() == config_map_name
+        and exact_successor
+        and exact_successor_login_rollout
+    )
+    if (
+        status == "accepted"
+        and (raw_propagation is not None or raw_login_rollout is not None)
+        and not verified_predecessor
+        and not exact_accepted_successor_before_propagation
+    ):
+        raise RuntimeError(
+            "recovery-required: accepted in-place bridge client configuration has "
+            "incomplete or drifted predecessor proof."
+        )
     if observed_sha256 != predecessor_sha256 and exact_successor:
         return []
 
@@ -38722,7 +39194,6 @@ def _helm_upgrade_target_app_chart(
     if version:
         command.extend(["--version", version])
     values_text = json.dumps(to_plain_data(_mapping(row.get("values"))), sort_keys=True)
-    pending_operation_cleared = False
     timeout_recovered = False
     timeout_value = ""
     while True:
@@ -38750,34 +39221,13 @@ def _helm_upgrade_target_app_chart(
                 break
             except (RuntimeError, subprocess.TimeoutExpired) as readiness_exc:
                 timeout_value = str(exc.timeout or "").strip()
-                if not pending_operation_cleared and _clear_pending_helm_release_operation(
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    release_name=release_name,
-                    namespace=namespace,
-                ):
-                    pending_operation_cleared = True
-                    continue
                 raise RuntimeError(
                     f"Helm upgrade for target GPU stack chart {namespace}/{release_name} "
                     f"timed out after {exc.timeout} seconds and the live release is not ready yet. "
                     "Rerun the same `nebius-cxcli ext-soperator upgrade ... --execute --approve` "
                     "command; cxcli will retry from live state."
                 ) from readiness_exc
-        except RuntimeError as exc:
-            error_text = str(exc)
-            if (
-                not pending_operation_cleared
-                and "another operation" in error_text.lower()
-                and _clear_pending_helm_release_operation(
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    release_name=release_name,
-                    namespace=namespace,
-                )
-            ):
-                pending_operation_cleared = True
-                continue
+        except RuntimeError:
             raise
     return {
         "id": component_id,
@@ -39587,6 +40037,43 @@ def _target_soperator_helm_stored_values(
     return dict(copy.deepcopy(to_plain_data(stored_values)))
 
 
+def _target_soperator_helm_revision_manifest(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    revision: int,
+) -> str:
+    if revision <= 0:
+        raise SoperatorMigrationPhasePending(
+            "target Soperator Helm manifest proof requires a positive revision."
+        )
+    result = command_runner(
+        [
+            "helm",
+            "--kube-context",
+            kube_context,
+            "get",
+            "manifest",
+            _SOPERATOR_TARGET_RELEASE_NAME,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "--revision",
+            str(revision),
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "target Soperator Helm manifest proof could not read its exact revision."
+        )
+    _target_soperator_helm_documents(
+        result.stdout,
+        label=f"target Soperator Helm revision {revision} manifest proof",
+    )
+    return result.stdout
+
+
 def _completed_target_helm_admission_historical_values(
     *,
     phase: Mapping[str, Any],
@@ -39707,6 +40194,77 @@ def _target_soperator_latest_release_is_deployed(
 class _TargetHelmReplayPreparation:
     lines: tuple[str, ...] = ()
     replay_required: bool = False
+
+
+@dataclass(frozen=True)
+class _TargetHelmAdmissionReleasePrecondition:
+    revision: int
+    chart: str
+    app_version: str
+    values_fingerprint: str
+    target_namespace: str
+    target_name: str
+    target_uid: str
+    status: str = "deployed"
+
+
+@dataclass(frozen=True)
+class _TargetHelmAdmissionValuesSelection:
+    values: Mapping[str, Any]
+    release_precondition: _TargetHelmAdmissionReleasePrecondition
+
+
+def _target_helm_admission_release_precondition_payload(
+    precondition: _TargetHelmAdmissionReleasePrecondition,
+) -> dict[str, Any]:
+    return {
+        "revision": precondition.revision,
+        "status": precondition.status,
+        "chart": precondition.chart,
+        "app_version": precondition.app_version,
+        "values_fingerprint": precondition.values_fingerprint,
+        "target_namespace": precondition.target_namespace,
+        "target_name": precondition.target_name,
+        "target_uid": precondition.target_uid,
+    }
+
+
+def _target_helm_admission_release_precondition_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    require_deployed: bool = False,
+) -> _TargetHelmAdmissionReleasePrecondition:
+    revision = _positive_int(payload.get("revision"), fallback=0)
+    status = str(payload.get("status") or "").strip().lower()
+    chart = str(payload.get("chart") or "").strip()
+    app_version = str(payload.get("app_version") or "").strip()
+    values_fingerprint = str(payload.get("values_fingerprint") or "").strip()
+    target_namespace = str(payload.get("target_namespace") or "").strip()
+    target_name = str(payload.get("target_name") or "").strip()
+    target_uid = str(payload.get("target_uid") or "").strip()
+    if (
+        revision <= 0
+        or (status != "deployed" if require_deployed else status not in {"deployed", "failed"})
+        or not chart
+        or not app_version
+        or re.fullmatch(r"[0-9a-f]{64}", values_fingerprint) is None
+        or target_namespace != _SOPERATOR_NAMESPACE
+        or not target_name
+        or not target_uid
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch target Helm release precondition is incomplete or malformed."
+        )
+    return _TargetHelmAdmissionReleasePrecondition(
+        revision=revision,
+        status=status,
+        chart=chart,
+        app_version=app_version,
+        values_fingerprint=values_fingerprint,
+        target_namespace=target_namespace,
+        target_name=target_name,
+        target_uid=target_uid,
+    )
 
 
 def _prepare_interrupted_target_soperator_helm_replay(
@@ -39977,9 +40535,15 @@ def _prepare_interrupted_target_soperator_helm_replay(
         )
         checkpoint_writer()
 
+    pending_revision = _positive_int(recovery.get("pending_revision"), fallback=0)
+    if pending_revision <= 0:
+        raise SoperatorMigrationPhasePending(
+            "target Soperator pending Helm recovery lost its exact checkpointed revision."
+        )
     if not _clear_pending_helm_release_operation(
         command_runner=command_runner,
         kube_context=kube_context,
+        expected_revision=pending_revision,
     ):
         raise SoperatorMigrationPhasePending(
             "target Soperator could not clear the exact checkpointed pending Helm revision."
@@ -41030,9 +41594,11 @@ def _helm_upgrade_target_soperator(
     expected_version: str = "",
     wait: bool = True,
     disable_open_metrics_for_legacy_clients: bool | None = None,
+    before_mutation: Callable[[], None] | None = None,
     before_reconcile: Callable[[], None] | None = None,
     before_dispatch: Callable[[], None] | None = None,
     after_reconcile: Callable[[], None] | None = None,
+    retry_after_dispatch_error: bool = True,
     webhook_startup_retry_limit: int = _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT,
 ) -> None:
     if not 0 <= webhook_startup_retry_limit <= _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT:
@@ -41040,6 +41606,8 @@ def _helm_upgrade_target_soperator(
     _validate_target_values_volume_sources(values)
     chart_path = _target_soperator_chart_path()
     _ensure_soperator_chart_dependencies(command_runner=command_runner, chart_path=chart_path)
+    if before_mutation is not None:
+        before_mutation()
     _apply_soperator_crds(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -41087,7 +41655,6 @@ def _helm_upgrade_target_soperator(
         )
         values_text = json.dumps(effective_values, sort_keys=True)
         adoption_attempts: dict[tuple[str, str, str], int] = {}
-        pending_operation_cleared = False
         webhook_startup_retries = 0
         dispatch_started = False
         while True:
@@ -41111,6 +41678,8 @@ def _helm_upgrade_target_soperator(
                     after_reconcile()
                 return
             except RuntimeError as exc:
+                if not retry_after_dispatch_error:
+                    raise
                 error_text = str(exc)
                 if (
                     webhook_startup_retries < webhook_startup_retry_limit
@@ -41122,16 +41691,6 @@ def _helm_upgrade_target_soperator(
                 ):
                     webhook_startup_retries += 1
                     time.sleep(10)
-                    continue
-                if (
-                    not pending_operation_cleared
-                    and "another operation" in error_text.lower()
-                    and _clear_pending_helm_release_operation(
-                        command_runner=command_runner,
-                        kube_context=kube_context,
-                    )
-                ):
-                    pending_operation_cleared = True
                     continue
                 adopted_key = _adopt_helm_ownership_conflict(
                     command_runner=command_runner,
@@ -41148,9 +41707,12 @@ def _clear_pending_helm_release_operation(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    expected_revision: int,
     release_name: str = _SOPERATOR_TARGET_RELEASE_NAME,
     namespace: str = _SOPERATOR_NAMESPACE,
 ) -> bool:
+    if expected_revision <= 0:
+        return False
     result = command_runner(
         [
             "helm",
@@ -41186,23 +41748,70 @@ def _clear_pending_helm_release_operation(
             continue
         latest_revision = revision
         latest_status = str(item.get("status", "") or "").strip().lower()
-    if latest_revision <= 0 or not latest_status.startswith("pending-"):
+    if (
+        latest_revision <= 0
+        or not latest_status.startswith("pending-")
+        or latest_revision != expected_revision
+    ):
         return False
-    command_runner(
+    secret_name = f"sh.helm.release.v1.{release_name}.v{latest_revision}"
+    secret = _json_from_command(
+        command_runner,
         [
             "kubectl",
             "--context",
             kube_context,
             "-n",
             namespace,
-            "delete",
+            "get",
             "secret",
-            f"sh.helm.release.v1.{release_name}.v{latest_revision}",
-            "--ignore-not-found",
+            secret_name,
+            "-o",
+            "json",
         ],
-        timeout_seconds=300,
+        timeout_seconds=120,
+        check=False,
     )
-    return True
+    metadata = _mapping(secret.get("metadata"))
+    labels = _mapping(metadata.get("labels"))
+    secret_uid = str(metadata.get("uid") or "").strip()
+    secret_resource_version = str(metadata.get("resourceVersion") or "").strip()
+    if (
+        str(metadata.get("name") or "").strip() != secret_name
+        or str(metadata.get("namespace") or "").strip() != namespace
+        or not secret_uid
+        or not secret_resource_version
+        or str(labels.get("owner") or "").strip() != "helm"
+        or str(labels.get("name") or "").strip() != release_name
+        or str(labels.get("version") or "").strip() != str(latest_revision)
+        or not str(labels.get("status") or "").strip().lower().startswith("pending-")
+    ):
+        return False
+    delete_options = {
+        "apiVersion": "v1",
+        "kind": "DeleteOptions",
+        "preconditions": {
+            "uid": secret_uid,
+            "resourceVersion": secret_resource_version,
+        },
+        "propagationPolicy": "Foreground",
+    }
+    delete_result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "delete",
+            "--raw",
+            f"/api/v1/namespaces/{namespace}/secrets/{secret_name}",
+            "-f",
+            "-",
+        ],
+        input_text=json.dumps(delete_options, separators=(",", ":")),
+        timeout_seconds=300,
+        check=False,
+    )
+    return delete_result.returncode == 0
 
 
 _JAIL_SLURM_OPEN_METRICS_HANDOFF_STATUSES = frozenset(
@@ -41275,11 +41884,10 @@ def _target_helm_admission_exact_deployed_resume_values(
     *,
     boundary: str,
     target_ref: str,
-    command_runner: SoperatorMigrationCommandRunner,
-    kube_context: str,
     expected_jail_alias_pvc: str,
     expected_maintenance: str,
     disable_open_metrics_for_legacy_clients: bool | None,
+    observed_deployed_values: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Select only deployed values bound to an interrupted admission lifecycle."""
 
@@ -41290,49 +41898,31 @@ def _target_helm_admission_exact_deployed_resume_values(
         state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
         or str(state.get("boundary") or "").strip() != boundary
         or str(state.get("target_ref") or "").strip() != target_ref
-        or status
-        not in {
-            "intent",
-            "prerequisites-apply-intent",
-            "prerequisites-ready",
-            "webhooks-apply-intent",
-            "admission-ready",
-            "helm-applied",
-        }
+        or status not in _TARGET_HELM_ADMISSION_BOOTSTRAP_PRE_HELM_STATUSES | {"helm-applied"}
         or re.fullmatch(r"[0-9a-f]{64}", values_fingerprint) is None
     ):
         raise SoperatorMigrationPhasePending(
             f"target admission bootstrap {boundary} has no exact resumable lifecycle."
         )
-    deployed_values = _target_soperator_helm_stored_values(
-        command_runner=command_runner,
-        kube_context=kube_context,
-    )
+    deployed_values = dict(copy.deepcopy(to_plain_data(observed_deployed_values)))
     effective_deployed_values = _effective_target_soperator_helm_values(
         deployed_values,
         disable_open_metrics_for_legacy_clients=disable_open_metrics_for_legacy_clients,
     )
     if (
-        disable_open_metrics_for_legacy_clients is True
+        status == "helm-applied"
+        and disable_open_metrics_for_legacy_clients is True
         and _target_slurm_open_metrics_desired_enabled(deployed_values) is not False
     ):
         raise SoperatorMigrationPhasePending(
             f"target admission bootstrap {boundary} deployed values lost the "
             "OpenMetrics compatibility override."
         )
-    if (
-        _fingerprint(deployed_values) != values_fingerprint
-        or _fingerprint(effective_deployed_values) != values_fingerprint
+    if _fingerprint(effective_deployed_values) != values_fingerprint or (
+        status == "helm-applied" and _fingerprint(deployed_values) != values_fingerprint
     ):
         raise SoperatorMigrationPhasePending(
             f"target admission bootstrap {boundary} cannot prove its exact deployed values."
-        )
-    if not _target_soperator_latest_release_is_deployed(
-        command_runner=command_runner,
-        kube_context=kube_context,
-    ):
-        raise SoperatorMigrationPhasePending(
-            f"target admission bootstrap {boundary} requires a deployed Helm release."
         )
     if (
         not expected_jail_alias_pvc
@@ -41347,6 +41937,840 @@ def _target_helm_admission_exact_deployed_resume_values(
             f"target admission bootstrap {boundary} deployed values changed maintenance."
         )
     return deployed_values
+
+
+def _target_helm_admission_exact_deployed_selection(
+    *,
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> _TargetHelmAdmissionValuesSelection:
+    """Capture one exact deployed release, values revision, and target identity."""
+
+    live_release = _exact_deployed_target_soperator_release(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    live_revision = _positive_int(live_release.revision, fallback=0)
+    live_chart = str(live_release.chart or "").strip()
+    live_app_version = str(live_release.app_version or "").strip()
+    if (
+        not live_chart
+        or not live_app_version
+        or live_release.chart_version != str(expected_version or "").strip()
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission lifecycle found target Helm release version drift."
+        )
+    deployed_values = _target_soperator_helm_stored_values(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        revision=live_revision,
+    )
+    checkpoint_target = _target_handoff_binding_for_helm_apply_proof(
+        rolling_phase,
+        target_ref=target_ref,
+    )
+    try:
+        live_target = _live_target_slurmcluster_binding(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            target_ref=target_ref,
+        )
+    except RuntimeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission lifecycle cannot prove the live target identity."
+        ) from exc
+    if live_target != checkpoint_target:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission lifecycle found target SlurmCluster identity drift."
+        )
+    return _TargetHelmAdmissionValuesSelection(
+        values=dict(copy.deepcopy(deployed_values)),
+        release_precondition=_TargetHelmAdmissionReleasePrecondition(
+            revision=live_revision,
+            chart=live_chart,
+            app_version=live_app_version,
+            values_fingerprint=_fingerprint(deployed_values),
+            target_namespace=checkpoint_target["namespace"],
+            target_name=checkpoint_target["name"],
+            target_uid=checkpoint_target["uid"],
+        ),
+    )
+
+
+def _target_helm_admission_exact_visible_selection(
+    *,
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> _TargetHelmAdmissionValuesSelection:
+    """Capture one exact visible deployed or failed release head and target identity."""
+
+    releases = tuple(
+        release
+        for release in list_helm_releases(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=_SOPERATOR_NAMESPACE,
+            filter_regex=f"^{re.escape(_SOPERATOR_TARGET_RELEASE_NAME)}$",
+        )
+        if release.name == _SOPERATOR_TARGET_RELEASE_NAME
+    )
+    if len(releases) != 1 or releases[0].namespace != _SOPERATOR_NAMESPACE:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery requires one exact visible target Helm release."
+        )
+    release = releases[0]
+    revision = _positive_int(release.revision, fallback=0)
+    status = release.status.strip().lower()
+    if (
+        revision <= 0
+        or status not in {"deployed", "failed"}
+        and not status.startswith("pending-")
+        or release.chart_version != str(expected_version or "").strip()
+        or not release.chart
+        or not release.app_version
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery found target Helm release drift."
+        )
+    values = _target_soperator_helm_stored_values(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        revision=revision,
+    )
+    checkpoint_target = _target_handoff_binding_for_helm_apply_proof(
+        rolling_phase,
+        target_ref=target_ref,
+    )
+    try:
+        live_target = _live_target_slurmcluster_binding(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            target_ref=target_ref,
+        )
+    except RuntimeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery cannot prove the live target identity."
+        ) from exc
+    if live_target != checkpoint_target:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery found target SlurmCluster identity drift."
+        )
+    return _TargetHelmAdmissionValuesSelection(
+        values=values,
+        release_precondition=_TargetHelmAdmissionReleasePrecondition(
+            revision=revision,
+            status=status,
+            chart=release.chart,
+            app_version=release.app_version,
+            values_fingerprint=_fingerprint(values),
+            target_namespace=checkpoint_target["namespace"],
+            target_name=checkpoint_target["name"],
+            target_uid=checkpoint_target["uid"],
+        ),
+    )
+
+
+def _target_helm_admission_failed_revision_is_retryable(description: str) -> bool:
+    normalized = description.strip().lower()
+    transient_webhook_failure = "failed calling webhook" in normalized and (
+        "connection refused" in normalized or "no endpoints available" in normalized
+    )
+    ambiguous_release_create_timeout = "create: failed to create:" in normalized and any(
+        marker in normalized
+        for marker in (
+            "request did not complete within requested timeout",
+            "but may still be processing the request",
+        )
+    )
+    return transient_webhook_failure or ambiguous_release_create_timeout
+
+
+def _target_helm_admission_protected_dispatch_history(
+    *,
+    root: _TargetHelmAdmissionReleasePrecondition,
+    head: _TargetHelmAdmissionValuesSelection,
+    desired_values_fingerprint: str,
+    first_dispatched_at: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, Any]:
+    """Prove the bounded release chain created after one checkpointed dispatch intent."""
+
+    head_precondition = head.release_precondition
+    attempt_revisions = list(range(root.revision + 1, head_precondition.revision + 1))
+    if (
+        root.status != "deployed"
+        or not attempt_revisions
+        or len(attempt_revisions) > _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT + 1
+        or re.fullmatch(r"[0-9a-f]{64}", desired_values_fingerprint) is None
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery found an invalid protected Helm revision span."
+        )
+    dispatched_at = _target_soperator_helm_history_time(first_dispatched_at)
+    result = command_runner(
+        [
+            "helm",
+            "--kube-context",
+            kube_context,
+            "history",
+            _SOPERATOR_TARGET_RELEASE_NAME,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "--max",
+            str(head_precondition.revision),
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery could not read target Helm history."
+        )
+    try:
+        raw_history = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery found invalid target Helm history."
+        ) from exc
+    if not isinstance(raw_history, list) or any(
+        not isinstance(entry, Mapping) for entry in raw_history
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery found malformed target Helm history."
+        )
+    history: dict[int, Mapping[str, Any]] = {}
+    for entry in raw_history:
+        revision = _positive_int(entry.get("revision"), fallback=0)
+        if revision <= 0 or revision in history:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission recovery found ambiguous target Helm history."
+            )
+        history[revision] = entry
+    predecessor = history.get(root.revision)
+    expected_predecessor_status = (
+        "superseded" if head_precondition.status == "deployed" else "deployed"
+    )
+    if (
+        predecessor is None
+        or str(predecessor.get("status") or "").strip().lower() != expected_predecessor_status
+        or str(predecessor.get("chart") or "").strip() != root.chart
+        or str(predecessor.get("app_version") or "").strip() != root.app_version
+        or _fingerprint(
+            _target_soperator_helm_stored_values(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                revision=root.revision,
+            )
+        )
+        != root.values_fingerprint
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission recovery lost its exact deployed predecessor."
+        )
+    entries: list[dict[str, Any]] = []
+    previous_updated = dispatched_at
+    for revision in attempt_revisions:
+        entry = history.get(revision)
+        if entry is None:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission recovery found a non-contiguous Helm revision chain."
+            )
+        status = str(entry.get("status") or "").strip().lower()
+        is_head = revision == head_precondition.revision
+        expected_status = head_precondition.status if is_head else "failed"
+        description = str(entry.get("description") or "").strip()
+        retryable_failed_revision = _target_helm_admission_failed_revision_is_retryable(description)
+        updated = _target_soperator_helm_history_time(entry.get("updated"))
+        values_fingerprint = _fingerprint(
+            _target_soperator_helm_stored_values(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                revision=revision,
+            )
+        )
+        if (
+            status != expected_status
+            or str(entry.get("chart") or "").strip() != root.chart
+            or str(entry.get("app_version") or "").strip() != root.app_version
+            or updated < previous_updated
+            or values_fingerprint != desired_values_fingerprint
+            or status == "failed"
+            and not retryable_failed_revision
+        ):
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission recovery found a revision outside its exact "
+                "protected Helm dispatch contract."
+            )
+        entries.append(
+            {
+                "revision": revision,
+                "status": status,
+                "updated_at": updated.isoformat().replace("+00:00", "Z"),
+                "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+                "values_fingerprint": values_fingerprint,
+            }
+        )
+        previous_updated = updated
+    return {
+        "root_revision": root.revision,
+        "head_revision": head_precondition.revision,
+        "head_status": head_precondition.status,
+        "values_fingerprint": desired_values_fingerprint,
+        "entries": entries,
+    }
+
+
+def _require_target_helm_admission_release_precondition(
+    *,
+    precondition: _TargetHelmAdmissionReleasePrecondition,
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> None:
+    """Fail closed if the selected post-switch release changed before dispatch."""
+
+    live_selection = (
+        _target_helm_admission_exact_deployed_selection(
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if precondition.status == "deployed"
+        else _target_helm_admission_exact_visible_selection(
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+    )
+    if live_selection.release_precondition != precondition:
+        raise SoperatorMigrationPhasePending(
+            "post-switch target Helm release changed after the exact post-switch release "
+            "proof and before Helm dispatch."
+        )
+
+
+def _target_helm_admission_protected_dispatch_state(
+    state: Mapping[str, Any],
+    *,
+    root: _TargetHelmAdmissionReleasePrecondition,
+) -> dict[str, Any]:
+    raw = state.get("protected_helm_dispatch")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm dispatch checkpoint is malformed."
+        )
+    dispatch = dict(copy.deepcopy(to_plain_data(raw)))
+    head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release"))
+    )
+    if (
+        dispatch.get("schema") != _TARGET_HELM_ADMISSION_PROTECTED_DISPATCH_SCHEMA
+        or str(dispatch.get("status") or "").strip()
+        not in {"authorized", "dispatched", "succeeded"}
+        or _mapping(dispatch.get("root_release"))
+        != _target_helm_admission_release_precondition_payload(root)
+        or _mapping(dispatch.get("target"))
+        != {
+            "namespace": root.target_namespace,
+            "name": root.target_name,
+            "uid": root.target_uid,
+        }
+        or str(dispatch.get("values_fingerprint") or "")
+        != str(state.get("values_fingerprint") or "")
+        or not str(dispatch.get("first_dispatched_at") or "").strip()
+        or _positive_int(dispatch.get("dispatch_count"), fallback=0) <= 0
+        or _positive_int(dispatch.get("dispatch_count"), fallback=0)
+        > _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT + 1
+        or _mapping(dispatch.get("head_release"))
+        != _target_helm_admission_release_precondition_payload(head)
+        or _positive_int(dispatch.get("expected_revision"), fallback=0) != head.revision + 1
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm dispatch checkpoint drifted."
+        )
+    return dispatch
+
+
+def _target_helm_admission_lifecycle_release_precondition(
+    *,
+    state: Mapping[str, Any],
+    selected_release: _TargetHelmAdmissionReleasePrecondition,
+) -> _TargetHelmAdmissionReleasePrecondition:
+    """Keep the immutable lifecycle root separate from its authorized dispatch head."""
+
+    raw_root = _mapping(state.get("release_precondition"))
+    if not raw_root:
+        return selected_release
+    root = _target_helm_admission_release_precondition_from_payload(
+        raw_root,
+        require_deployed=True,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(state, root=root)
+    if not dispatch:
+        if selected_release != root:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission lifecycle release changed without a protected "
+                "dispatch successor proof."
+            )
+        return root
+    head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release"))
+    )
+    if selected_release != head:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm dispatch head changed before lifecycle resume."
+        )
+    return root
+
+
+def _checkpoint_target_helm_admission_protected_dispatch(
+    *,
+    phase: dict[str, Any],
+    boundary: str,
+    selected_release: _TargetHelmAdmissionReleasePrecondition,
+    checkpoint_writer: Callable[[], None] | None,
+) -> None:
+    """Record the exact release head immediately before one protected Helm command."""
+
+    state = _mapping(_mapping(phase.get("target_helm_admission_bootstraps")).get(boundary))
+    root = _target_helm_admission_release_precondition_from_payload(
+        _mapping(state.get("release_precondition")),
+        require_deployed=True,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(state, root=root)
+    selected_payload = _target_helm_admission_release_precondition_payload(selected_release)
+    if dispatch:
+        if (
+            str(dispatch.get("status") or "") != "authorized"
+            or _mapping(dispatch.get("head_release")) != selected_payload
+        ):
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm dispatch is not authorized from "
+                "the exact current release head."
+            )
+        dispatch_count = _positive_int(dispatch.get("dispatch_count"), fallback=0) + 1
+        first_dispatched_at = str(dispatch.get("first_dispatched_at") or "")
+    else:
+        if selected_release != root:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission first protected Helm dispatch lost its exact "
+                "deployed predecessor."
+            )
+        dispatch_count = 1
+        first_dispatched_at = _utc_now()
+    if checkpoint_writer is None or dispatch_count > _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT + 1:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm dispatch requires a bounded durable intent."
+        )
+    next_state = {
+        "schema": _TARGET_HELM_ADMISSION_PROTECTED_DISPATCH_SCHEMA,
+        "status": "dispatched",
+        "root_release": _target_helm_admission_release_precondition_payload(root),
+        "head_release": selected_payload,
+        "expected_revision": selected_release.revision + 1,
+        "target": {
+            "namespace": root.target_namespace,
+            "name": root.target_name,
+            "uid": root.target_uid,
+        },
+        "values_fingerprint": str(state.get("values_fingerprint") or ""),
+        "first_dispatched_at": first_dispatched_at,
+        "dispatch_count": dispatch_count,
+        "dispatched_at": _utc_now(),
+    }
+    mutable_state = _mapping(_mapping(phase.get("target_helm_admission_bootstraps")).get(boundary))
+    if not isinstance(mutable_state, dict):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm lifecycle is not mutable."
+        )
+    mutable_state["protected_helm_dispatch"] = next_state
+    checkpoint_writer()
+
+
+def _recover_target_helm_admission_protected_dispatch(
+    *,
+    phase: dict[str, Any],
+    rolling_phase: Mapping[str, Any],
+    boundary: str,
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+) -> _TargetHelmAdmissionValuesSelection | None:
+    """Recover only the exact release revision created by a durable dispatch intent."""
+
+    state = _mapping(_mapping(phase.get("target_helm_admission_bootstraps")).get(boundary))
+    raw_root = _mapping(state.get("release_precondition"))
+    if not raw_root:
+        return None
+    root = _target_helm_admission_release_precondition_from_payload(
+        raw_root,
+        require_deployed=True,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(state, root=root)
+    if not dispatch:
+        return None
+    visible = _target_helm_admission_exact_visible_selection(
+        rolling_phase=rolling_phase,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    visible_precondition = visible.release_precondition
+    head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release"))
+    )
+    status = str(dispatch.get("status") or "")
+    desired_values_fingerprint = str(state.get("values_fingerprint") or "")
+    if status == "succeeded":
+        if visible_precondition != head or visible_precondition.status != "deployed":
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm successor changed after recovery."
+            )
+        return visible
+    if visible_precondition == head:
+        if status != "dispatched":
+            return visible
+        if checkpoint_writer is None:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm no-revision recovery requires a "
+                "durable checkpoint writer."
+            )
+        dispatch.update({"status": "authorized", "authorized_at": _utc_now()})
+        mutable_state = _mapping(
+            _mapping(phase.get("target_helm_admission_bootstraps")).get(boundary)
+        )
+        if not isinstance(mutable_state, dict):
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm lifecycle is not mutable."
+            )
+        mutable_state["protected_helm_dispatch"] = dispatch
+        checkpoint_writer()
+        return visible
+    if status != "dispatched" or visible_precondition.revision != _positive_int(
+        dispatch.get("expected_revision"), fallback=0
+    ):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm release changed outside its exact "
+            "checkpointed dispatch."
+        )
+    history = _target_helm_admission_protected_dispatch_history(
+        root=root,
+        head=visible,
+        desired_values_fingerprint=desired_values_fingerprint,
+        first_dispatched_at=str(dispatch.get("first_dispatched_at") or ""),
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if visible_precondition.status.startswith("pending-"):
+        if checkpoint_writer is None:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission pending Helm recovery requires a durable checkpoint."
+            )
+        if not _clear_pending_helm_release_operation(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            expected_revision=visible_precondition.revision,
+        ):
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission could not clear its exact pending Helm revision."
+            )
+        confirmed_head = _target_helm_admission_exact_visible_selection(
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if confirmed_head.release_precondition != head:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission pending Helm recovery did not restore its exact "
+                "pre-dispatch release head."
+            )
+        dispatch.update(
+            {
+                "status": "authorized",
+                "expected_revision": head.revision + 1,
+                "pending_recovery": history,
+                "pending_revision_cleared_at": _utc_now(),
+            }
+        )
+        mutable_state = _mapping(
+            _mapping(phase.get("target_helm_admission_bootstraps")).get(boundary)
+        )
+        if not isinstance(mutable_state, dict):
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm lifecycle is not mutable."
+            )
+        mutable_state["protected_helm_dispatch"] = dispatch
+        checkpoint_writer()
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission cleared its exact interrupted pending Helm revision; "
+            "rerun the same command to continue."
+        )
+    if checkpoint_writer is None:
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission Helm recovery requires a durable checkpoint writer."
+        )
+    mutable_state = _mapping(_mapping(phase.get("target_helm_admission_bootstraps")).get(boundary))
+    if not isinstance(mutable_state, dict):
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm lifecycle is not mutable."
+        )
+    if visible_precondition.status == "deployed":
+        confirmed_visible = _target_helm_admission_exact_visible_selection(
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if confirmed_visible.release_precondition != visible_precondition:
+            raise SoperatorMigrationPhasePending(
+                "post-switch admission protected Helm successor changed before its "
+                "successful lifecycle checkpoint."
+            )
+        dispatch.update(
+            {
+                "status": "succeeded",
+                "head_release": _target_helm_admission_release_precondition_payload(
+                    visible_precondition
+                ),
+                "expected_revision": visible_precondition.revision + 1,
+                "successor_history": history,
+                "succeeded_at": _utc_now(),
+            }
+        )
+        mutable_state["protected_helm_dispatch"] = dispatch
+        if str(mutable_state.get("status") or "") not in {"helm-applied", "complete"}:
+            mutable_state.update({"status": "helm-applied", "helm_applied_at": _utc_now()})
+        checkpoint_writer()
+        return visible
+    if visible_precondition.status != "failed":
+        raise SoperatorMigrationPhasePending(
+            "post-switch admission protected Helm recovery found an unsupported release state."
+        )
+    dispatch.update(
+        {
+            "status": "authorized",
+            "head_release": _target_helm_admission_release_precondition_payload(
+                visible_precondition
+            ),
+            "expected_revision": visible_precondition.revision + 1,
+            "failed_history": history,
+            "authorized_at": _utc_now(),
+        }
+    )
+    mutable_state["protected_helm_dispatch"] = dispatch
+    checkpoint_writer()
+    return visible
+
+
+def _require_target_helm_admission_fresh_post_switch_predecessor(
+    *,
+    selection: _TargetHelmAdmissionValuesSelection,
+    phase: Mapping[str, Any],
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    expected_jail_alias_pvc: str,
+    expected_maintenance: str,
+) -> None:
+    """Bind one selected release to an exact checkpointed predecessor proof."""
+
+    precondition = selection.release_precondition
+    live_revision = precondition.revision
+    deployed_values = selection.values
+    deployed_values_fingerprint = _fingerprint(deployed_values)
+    checkpoint_target = _target_handoff_binding_for_helm_apply_proof(
+        rolling_phase,
+        target_ref=target_ref,
+    )
+
+    active_slot_bootstrap = _mapping(
+        _mapping(phase.get("target_helm_admission_bootstraps")).get("active-slot-switch")
+    )
+    active_slot_predecessor = False
+    if active_slot_bootstrap:
+        if str(active_slot_bootstrap.get("target_ref") or "").strip() != target_ref:
+            raise SoperatorMigrationPhasePending(
+                "first post-switch admission lifecycle found a foreign active-slot predecessor."
+            )
+        active_slot_values, active_slot_proof = _completed_target_helm_admission_historical_values(
+            phase=phase,
+            boundary="active-slot-switch",
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        active_slot_predecessor = bool(
+            _fingerprint(active_slot_values) == deployed_values_fingerprint
+            and _positive_int(active_slot_proof.get("revision"), fallback=0) == live_revision
+            and str(active_slot_proof.get("chart") or "").strip() == precondition.chart
+            and str(active_slot_proof.get("app_version") or "").strip() == precondition.app_version
+        )
+
+    historical_provenance = (
+        {}
+        if active_slot_predecessor
+        else _exact_historical_target_soperator_helm_provenance(
+            rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            values_fingerprint=deployed_values_fingerprint,
+        )
+    )
+    historical_predecessor = False
+    if historical_provenance:
+        intent = _mapping(rolling_phase.get(str(historical_provenance.get("intent_key") or "")))
+        release_contract = _mapping(intent.get("release"))
+        historical_predecessor = bool(
+            _positive_int(historical_provenance.get("release_revision"), fallback=0)
+            == live_revision
+            and _mapping(historical_provenance.get("target")) == checkpoint_target
+            and str(release_contract.get("chart") or "").strip() == precondition.chart
+            and str(release_contract.get("app_version") or "").strip() == precondition.app_version
+        )
+    if not active_slot_predecessor and not historical_predecessor:
+        raise SoperatorMigrationPhasePending(
+            "first post-switch admission lifecycle cannot prove the exact deployed Helm "
+            "release and target predecessor."
+        )
+    if (
+        not expected_jail_alias_pvc
+        or _pvc_volume_source_claim_name(deployed_values, source_name="jail")
+        != expected_jail_alias_pvc
+    ):
+        raise SoperatorMigrationPhasePending(
+            "first post-switch admission lifecycle deployed values changed the jail alias."
+        )
+    if str(deployed_values.get("maintenance") or "none").strip() != expected_maintenance:
+        raise SoperatorMigrationPhasePending(
+            "first post-switch admission lifecycle deployed values changed maintenance."
+        )
+
+
+def _target_helm_admission_fresh_post_switch_selection(
+    *,
+    phase: Mapping[str, Any],
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    expected_jail_alias_pvc: str,
+    expected_maintenance: str,
+) -> _TargetHelmAdmissionValuesSelection:
+    """Select and bind the first post-switch release to its exact predecessor."""
+
+    selection = _target_helm_admission_exact_deployed_selection(
+        rolling_phase=rolling_phase,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    _require_target_helm_admission_fresh_post_switch_predecessor(
+        selection=selection,
+        phase=phase,
+        rolling_phase=rolling_phase,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        expected_jail_alias_pvc=expected_jail_alias_pvc,
+        expected_maintenance=expected_maintenance,
+    )
+    return selection
+
+
+def _target_helm_admission_post_switch_resume_selection(
+    *,
+    phase: dict[str, Any],
+    rolling_phase: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    expected_jail_alias_pvc: str,
+    expected_maintenance: str,
+    disable_open_metrics_for_legacy_clients: bool | None,
+    checkpoint_writer: Callable[[], None] | None = None,
+) -> _TargetHelmAdmissionValuesSelection:
+    """Resume a post-switch lifecycle from its exact deployed state boundary."""
+
+    boundary = "post-switch-resume"
+    state = _mapping(_mapping(phase.get("target_helm_admission_bootstraps")).get(boundary))
+    status = str(state.get("status") or "").strip()
+    values_fingerprint = str(state.get("values_fingerprint") or "").strip()
+    selection = _recover_target_helm_admission_protected_dispatch(
+        phase=phase,
+        rolling_phase=rolling_phase,
+        boundary=boundary,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        checkpoint_writer=checkpoint_writer,
+    )
+    if selection is None:
+        selection = _target_helm_admission_exact_deployed_selection(
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+    observed_values = selection.values
+    if (
+        status in _TARGET_HELM_ADMISSION_BOOTSTRAP_PRE_HELM_STATUSES
+        and _fingerprint(observed_values) != values_fingerprint
+    ):
+        _require_target_helm_admission_fresh_post_switch_predecessor(
+            selection=selection,
+            phase=phase,
+            rolling_phase=rolling_phase,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+            expected_jail_alias_pvc=expected_jail_alias_pvc,
+            expected_maintenance=expected_maintenance,
+        )
+    validated_values = _target_helm_admission_exact_deployed_resume_values(
+        phase,
+        boundary=boundary,
+        target_ref=target_ref,
+        expected_jail_alias_pvc=expected_jail_alias_pvc,
+        expected_maintenance=expected_maintenance,
+        disable_open_metrics_for_legacy_clients=disable_open_metrics_for_legacy_clients,
+        observed_deployed_values=observed_values,
+    )
+    return _TargetHelmAdmissionValuesSelection(
+        values=validated_values,
+        release_precondition=selection.release_precondition,
+    )
 
 
 def _bind_jail_slurm_open_metrics_handoff(
@@ -41650,6 +43074,7 @@ def _restore_jail_open_metrics_before_release_checks(
         command_runner=command_runner,
         kube_context=kube_context,
         values=switched_values,
+        manager_restore_values=switched_values,
         expected_version=target_version,
         boundary="open-metrics-restore",
         login_session_policy=login_session_policy,
@@ -41657,6 +43082,10 @@ def _restore_jail_open_metrics_before_release_checks(
         wait=False,
         disable_open_metrics_for_legacy_clients=False,
         checkpoint_writer=checkpoint_writer,
+        target_admission_bridge_phase=_phase_state(
+            checkpoint,
+            "rolling-compute-migration",
+        ),
     )
     _wait_for_target_slurmcluster_available(
         command_runner=command_runner,
@@ -44687,6 +46116,113 @@ def _target_helm_admission_bootstrap_render(
     )
 
 
+def _target_helm_admission_manager_restore_contract(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    values: Mapping[str, Any],
+    disable_open_metrics_for_legacy_clients: bool | None,
+) -> dict[str, Any]:
+    """Render the ungated manager replica/spec authority used after bridge release."""
+
+    chart_path = _target_soperator_chart_path()
+    _ensure_soperator_chart_dependencies(command_runner=command_runner, chart_path=chart_path)
+    effective_values = _effective_target_soperator_helm_values(
+        values,
+        disable_open_metrics_for_legacy_clients=disable_open_metrics_for_legacy_clients,
+    )
+    rendered = _render_target_soperator_manifest(
+        command_runner=command_runner,
+        chart_path=chart_path,
+        effective_values=effective_values,
+    )
+    declared_manager = _immutable_child_manager_manifest_deployment(rendered)
+    replicas = _positive_int(
+        _mapping(declared_manager.get("spec")).get("replicas"),
+        fallback=0,
+    )
+    declared_spec = declared_manager.get("spec")
+    if replicas <= 0 or not isinstance(declared_spec, Mapping):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap requires ungated values that render a positive "
+            "Soperator manager restore replica contract."
+        )
+    normalized_spec = dict(copy.deepcopy(to_plain_data(declared_spec)))
+    normalized_spec.pop("replicas", None)
+    if not _mapping(normalized_spec.get("selector")) or not _mapping(
+        normalized_spec.get("template")
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap ungated manager restore contract lacks its exact "
+            "selector/template spec."
+        )
+    return {
+        "schema": _TARGET_HELM_ADMISSION_MANAGER_RESTORE_SCHEMA,
+        "original_replicas": replicas,
+        "manager_helm_spec_fingerprint": _fingerprint(normalized_spec),
+        "values_fingerprint": _fingerprint(effective_values),
+        "chart_content_fingerprint": _target_soperator_chart_content_fingerprint(chart_path),
+    }
+
+
+def _validated_target_helm_admission_manager_restore_contract(
+    value: Any,
+    *,
+    chart_content_fingerprint: str,
+) -> dict[str, Any]:
+    contract = _mapping(value)
+    required_fingerprints = (
+        "manager_helm_spec_fingerprint",
+        "values_fingerprint",
+        "chart_content_fingerprint",
+    )
+    if (
+        contract.get("schema") != _TARGET_HELM_ADMISSION_MANAGER_RESTORE_SCHEMA
+        or _positive_int(contract.get("original_replicas"), fallback=0) <= 0
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(contract.get(key) or "")) is None
+            for key in required_fingerprints
+        )
+        or str(contract.get("chart_content_fingerprint") or "") != chart_content_fingerprint
+    ):
+        return {}
+    return copy.deepcopy(dict(contract))
+
+
+def _require_target_helm_admission_manager_restore_matches_prerequisites(
+    *,
+    prerequisites: Sequence[Mapping[str, Any]],
+    restore_contract: Mapping[str, Any],
+) -> None:
+    managers = [
+        item
+        for item in prerequisites
+        if _target_helm_admission_bootstrap_resource_identity(item)
+        == ("Deployment", "soperator-manager")
+    ]
+    if len(managers) != 1:
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap requires exactly one rendered manager "
+            "prerequisite before mutation."
+        )
+    declared_spec = managers[0].get("spec")
+    if not isinstance(declared_spec, Mapping):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap rendered manager prerequisite lacks its exact spec."
+        )
+    normalized_spec = dict(copy.deepcopy(to_plain_data(declared_spec)))
+    normalized_spec.pop("replicas", None)
+    if (
+        not _mapping(normalized_spec.get("selector"))
+        or not _mapping(normalized_spec.get("template"))
+        or _fingerprint(normalized_spec)
+        != str(restore_contract.get("manager_helm_spec_fingerprint") or "")
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap fenced manager spec differs from its exact "
+            "ungated restore contract."
+        )
+
+
 def _target_helm_admission_bootstrap_resource_identity(
     document: Mapping[str, Any],
 ) -> tuple[str, str]:
@@ -45218,8 +46754,60 @@ def _run_target_operation_with_admission_bootstrap(
         **fingerprints,
         **dict(additional_immutable or {}),
     }
+    restore_contract = _validated_target_helm_admission_manager_restore_contract(
+        immutable.get("manager_restore_contract"),
+        chart_content_fingerprint=str(fingerprints.get("chart_content_fingerprint") or ""),
+    )
+    if not restore_contract:
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap requires an exact positive manager restore "
+            "contract before prerequisite mutation."
+        )
+    _require_target_helm_admission_manager_restore_matches_prerequisites(
+        prerequisites=prerequisites,
+        restore_contract=restore_contract,
+    )
+    deferred_restore_contract_recovery: dict[str, Any] | None = None
     if state:
-        if any(state.get(key) != value for key, value in immutable.items()):
+        drifted_keys = {key for key, value in immutable.items() if state.get(key) != value}
+        recoverable_immutable_keys = {
+            key
+            for key in ("manager_restore_contract", "release_precondition")
+            if key in drifted_keys and key not in state
+        }
+        recoverable_pre_helm_immutable = bool(
+            drifted_keys
+            and drifted_keys == recoverable_immutable_keys
+            and str(state.get("status") or "").strip()
+            in {"intent", "prerequisites-apply-intent", "prerequisites-ready"}
+        )
+        if recoverable_pre_helm_immutable:
+            immutable_recovery = {
+                "schema": _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_RECOVERY_SCHEMA,
+                "status": "verified",
+                "reason": (
+                    "recovered exact pre-Helm immutable authority before admission webhook "
+                    "publication or Helm apply"
+                ),
+                "recovered_fields": sorted(recoverable_immutable_keys),
+                "recovered_at": _utc_now(),
+            }
+            recovery_update = {
+                key: copy.deepcopy(to_plain_data(immutable[key]))
+                for key in recoverable_immutable_keys
+            }
+            if "manager_restore_contract" in recoverable_immutable_keys:
+                recovery_update["manager_restore_contract_recovery"] = copy.deepcopy(
+                    immutable_recovery
+                )
+            if "release_precondition" in recoverable_immutable_keys:
+                recovery_update["release_precondition_recovery"] = copy.deepcopy(immutable_recovery)
+            if str(state.get("status") or "").strip() == "prerequisites-ready":
+                deferred_restore_contract_recovery = recovery_update
+            else:
+                state.update(recovery_update)
+                checkpoint_writer()
+        elif drifted_keys:
             raise SoperatorMigrationPhasePending(
                 "target admission bootstrap immutable chart or values contract drifted."
             )
@@ -45307,6 +46895,28 @@ def _run_target_operation_with_admission_bootstrap(
         checkpoint_writer=checkpoint_writer,
         mutation_guard=mutation_guard,
     )
+    manager_pause_state: Mapping[str, Any] = state
+    manager_pause_checkpoint_writer = checkpoint_writer
+    if deferred_restore_contract_recovery is not None:
+
+        def _defer_manager_pause_checkpoint() -> None:
+            pass
+
+        manager_pause_state = {**state, **deferred_restore_contract_recovery}
+        manager_pause_checkpoint_writer = _defer_manager_pause_checkpoint
+    _reconcile_target_helm_admission_bootstrap_manager_pause(
+        checkpoint=checkpoint,
+        operation_phase=phase,
+        pause_phase=bridge_owner,
+        state=manager_pause_state,
+        prerequisites=prerequisites,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        checkpoint_writer=manager_pause_checkpoint_writer,
+    )
+    if deferred_restore_contract_recovery is not None:
+        state.update(deferred_restore_contract_recovery)
+        checkpoint_writer()
 
     def _publish_admission_boundary() -> None:
         _target_helm_admission_bootstrap_publish_webhooks(
@@ -45361,6 +46971,8 @@ def _run_target_helm_with_admission_bootstrap(
     checkpoint_writer: Callable[[], None] | None,
     mutation_guard: Callable[[], None] | None,
     helm_operation: Callable[[], list[str]],
+    manager_restore_contract: Mapping[str, Any],
+    release_precondition: _TargetHelmAdmissionReleasePrecondition | None = None,
     bridge_phase: dict[str, Any] | None = None,
     force_completed_reapply: bool = False,
     completed_recovery_predecessor_values_fingerprint: str | None = None,
@@ -45512,6 +47124,14 @@ def _run_target_helm_with_admission_bootstrap(
                 )
                 state.clear()
                 checkpoint_writer()
+    lifecycle_release_precondition = (
+        _target_helm_admission_lifecycle_release_precondition(
+            state=state,
+            selected_release=release_precondition,
+        )
+        if release_precondition is not None
+        else None
+    )
     return _run_target_operation_with_admission_bootstrap(
         checkpoint=checkpoint,
         phase=phase,
@@ -45528,7 +47148,20 @@ def _run_target_helm_with_admission_bootstrap(
         operation_status="helm-applied",
         operation_at_field="helm_applied_at",
         operation=helm_operation,
-        additional_immutable=None,
+        additional_immutable={
+            "manager_restore_contract": copy.deepcopy(dict(_mapping(manager_restore_contract))),
+            **(
+                {
+                    "release_precondition": (
+                        _target_helm_admission_release_precondition_payload(
+                            lifecycle_release_precondition
+                        )
+                    )
+                }
+                if lifecycle_release_precondition is not None
+                else {}
+            ),
+        },
         allow_unbound_target=True,
         recovered_line=(
             "Target Soperator admission bootstrap recovered the exact successful Helm "
@@ -46023,13 +47656,1235 @@ def _seal_in_place_target_manager_pause_contract(authority: dict[str, Any]) -> N
     authority["contract_fingerprint"] = _fingerprint(material)
 
 
-def _verified_live_in_place_target_manager_pause(
+def _in_place_target_manager_interrupted_pause_contract(
     authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    required_keys = {
+        "schema",
+        "status",
+        "deployment_uid",
+        "original_replicas",
+        "resource_version",
+        "spec_fingerprint",
+        "pause_from_generation",
+        "pause_expected_generation",
+        "accepted_at",
+        "contract_fingerprint",
+    }
+    actual_keys = set(authority)
+    allowed_keys = required_keys | {"spec_fingerprint_reserializations"}
+    material = _in_place_target_manager_pause_contract(authority)
+    if (
+        not material
+        or frozenset(actual_keys) not in {frozenset(required_keys), frozenset(allowed_keys)}
+        or authority.get("status") not in {"accepted", "terminating"}
+        or not isinstance(authority.get("resource_version"), str)
+        or not str(authority.get("resource_version") or "").strip()
+        or not isinstance(authority.get("accepted_at"), str)
+        or not str(authority.get("accepted_at") or "").strip()
+        or not _in_place_target_manager_pause_reserializations_are_exact(authority)
+    ):
+        return {}
+    return material
+
+
+def _in_place_target_manager_pause_reserializations_are_exact(
+    authority: Mapping[str, Any],
+) -> bool:
+    if "spec_fingerprint_reserializations" not in authority:
+        return True
+    records = authority.get("spec_fingerprint_reserializations")
+    if not isinstance(records, list) or not records:
+        return False
+    expected_generation = _positive_int(
+        authority.get("pause_expected_generation"),
+        fallback=0,
+    )
+    expected_keys = {
+        "from_fingerprint",
+        "to_fingerprint",
+        "generation",
+        "reserialized_at",
+        "reason",
+    }
+    previous_to = ""
+    for record in records:
+        if not isinstance(record, Mapping) or set(record) != expected_keys:
+            return False
+        from_fingerprint = str(record.get("from_fingerprint") or "").strip()
+        to_fingerprint = str(record.get("to_fingerprint") or "").strip()
+        generation = record.get("generation")
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", from_fingerprint) is None
+            or re.fullmatch(r"[0-9a-f]{64}", to_fingerprint) is None
+            or from_fingerprint == to_fingerprint
+            or (previous_to and from_fingerprint != previous_to)
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation != expected_generation
+            or not isinstance(record.get("reserialized_at"), str)
+            or not str(record.get("reserialized_at") or "").strip()
+            or record.get("reason") != _IN_PLACE_TARGET_MANAGER_PAUSE_RESERIALIZATION_REASON
+        ):
+            return False
+        previous_to = to_fingerprint
+    return previous_to == str(authority.get("spec_fingerprint") or "").strip()
+
+
+def _in_place_target_manager_bootstrap_pause_contract(
+    authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    bootstrap = _mapping(authority.get("bootstrap"))
+    material = {
+        "schema": authority.get("schema"),
+        "deployment_uid": str(authority.get("deployment_uid") or "").strip(),
+        "original_replicas": _positive_int(authority.get("original_replicas"), fallback=0),
+        "spec_fingerprint": str(authority.get("spec_fingerprint") or "").strip(),
+        "pause_generation": _positive_int(authority.get("pause_generation"), fallback=0),
+        "bootstrap": copy.deepcopy(dict(bootstrap)),
+    }
+    required_fingerprints = (
+        "campaign_fingerprint",
+        "chart_content_fingerprint",
+        "values_fingerprint",
+        "prerequisites_fingerprint",
+        "prerequisite_uids_fingerprint",
+        "manager_helm_spec_fingerprint",
+        "restore_values_fingerprint",
+    )
+    if (
+        material["schema"] != _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA
+        or not material["deployment_uid"]
+        or material["original_replicas"] <= 0
+        or re.fullmatch(r"[0-9a-f]{64}", str(material["spec_fingerprint"])) is None
+        or material["pause_generation"] <= 0
+        or bootstrap.get("schema") not in _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_STATE_SCHEMAS
+        or not str(bootstrap.get("boundary") or "").strip()
+        or not str(bootstrap.get("target_ref") or "").strip()
+        or str(bootstrap.get("manager_deployment_uid") or "").strip() != material["deployment_uid"]
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(bootstrap.get(key) or "")) is None
+            for key in required_fingerprints
+        )
+        or str(authority.get("contract_fingerprint") or "") != _fingerprint(material)
+    ):
+        return {}
+    return material
+
+
+def _seal_in_place_target_manager_bootstrap_pause_contract(
+    authority: dict[str, Any],
+) -> None:
+    authority["schema"] = _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA
+    material = {
+        "schema": authority.get("schema"),
+        "deployment_uid": str(authority.get("deployment_uid") or "").strip(),
+        "original_replicas": _positive_int(authority.get("original_replicas"), fallback=0),
+        "spec_fingerprint": str(authority.get("spec_fingerprint") or "").strip(),
+        "pause_generation": _positive_int(authority.get("pause_generation"), fallback=0),
+        "bootstrap": copy.deepcopy(dict(_mapping(authority.get("bootstrap")))),
+    }
+    authority["contract_fingerprint"] = _fingerprint(material)
+    if not _in_place_target_manager_bootstrap_pause_contract(authority):
+        authority.pop("contract_fingerprint", None)
+        raise RuntimeError("In-place target manager bootstrap pause contract is incomplete.")
+
+
+def _seal_in_place_target_manager_pause_authority(authority: dict[str, Any]) -> None:
+    if authority.get("schema") == _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA:
+        _seal_in_place_target_manager_bootstrap_pause_contract(authority)
+        return
+    _seal_in_place_target_manager_pause_contract(authority)
+
+
+def _target_helm_admission_manager_pause_restore_authority(
     *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    rolling_phase = _mapping(
+        _mapping(checkpoint.get("phase_state")).get("rolling-compute-migration")
+    )
+    raw_restore = _immutable_child_manager_restore_pause_rearm_contract(rolling_phase)
+    restore = _validated_manager_pause_rearm_contract(raw_restore)
+    bootstrap = _in_place_target_manager_bootstrap_pause_contract(authority)
+    boundary = str(state.get("boundary") or "").strip()
+    target_ref = str(state.get("target_ref") or "").strip()
+    successor_generation = _positive_int(
+        bootstrap.get("pause_generation"),
+        fallback=0,
+    )
+    prior_restore_generation = _positive_int(
+        restore.get("prior_restore_generation"),
+        fallback=0,
+    )
+    if (
+        not rolling_phase
+        or not restore
+        or not bootstrap
+        or state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or boundary != "post-switch-resume"
+        or str(checkpoint.get("target_ref") or "").strip() != target_ref
+        or str(restore.get("restore_authority") or "").strip() != "target-compatibility"
+        or str(restore.get("deployment_uid") or "").strip()
+        != str(bootstrap.get("deployment_uid") or "").strip()
+        or _positive_int(restore.get("original_replicas"), fallback=0)
+        != _positive_int(bootstrap.get("original_replicas"), fallback=0)
+        or str(restore.get("expected_spec_fingerprint") or "").strip()
+        != str(bootstrap.get("spec_fingerprint") or "").strip()
+        or prior_restore_generation <= 0
+        or successor_generation != prior_restore_generation + 1
+        or str(restore.get("target_slurmcluster_namespace") or "").strip() != _SOPERATOR_NAMESPACE
+        or str(restore.get("target_slurmcluster_name") or "").strip()
+        != normalize_component_token(target_ref)
+        or not str(restore.get("target_slurmcluster_uid") or "").strip()
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(raw_restore.get("contract_fingerprint") or ""),
+        )
+        is None
+    ):
+        return {}
+    return {
+        **restore,
+        "contract_fingerprint": str(raw_restore["contract_fingerprint"]),
+    }
+
+
+_TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_MATERIAL_KEYS = (
+    "schema",
+    "boundary",
+    "target_ref",
+    "campaign_fingerprint",
+    "manager_deployment_uid",
+    "original_replicas",
+    "spec_fingerprint",
+    "predecessor_authority_fingerprint",
+    "predecessor_boundary",
+    "predecessor_pause_generation",
+    "restore_authority_fingerprint",
+    "restore_authority",
+    "restored_manager_generation",
+    "successor_authority_fingerprint",
+    "successor_pause_generation",
+    "target_slurmcluster_uid",
+)
+
+
+def _target_helm_admission_manager_pause_successor_receipt(
+    *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    predecessor: Mapping[str, Any],
+    authority: Mapping[str, Any],
+    restore_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    predecessor_contract = _in_place_target_manager_bootstrap_pause_contract(predecessor)
+    successor_contract = _in_place_target_manager_bootstrap_pause_contract(authority)
+    predecessor_bootstrap = _mapping(predecessor_contract.get("bootstrap"))
+    successor_bootstrap = _mapping(successor_contract.get("bootstrap"))
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    boundary = str(state.get("boundary") or "").strip()
+    target_ref = str(state.get("target_ref") or "").strip()
+    predecessor_generation = _positive_int(
+        predecessor_contract.get("pause_generation"),
+        fallback=0,
+    )
+    restored_generation = _positive_int(
+        restore_authority.get("prior_restore_generation"),
+        fallback=0,
+    )
+    successor_generation = _positive_int(
+        successor_contract.get("pause_generation"),
+        fallback=0,
+    )
+    if (
+        not predecessor_contract
+        or not successor_contract
+        or predecessor.get("status") != "verified"
+        or not str(predecessor.get("verified_at") or "").strip()
+        or str(predecessor_bootstrap.get("campaign_fingerprint") or "").strip()
+        != campaign_fingerprint
+        or str(successor_bootstrap.get("campaign_fingerprint") or "").strip()
+        != campaign_fingerprint
+        or str(predecessor_bootstrap.get("target_ref") or "").strip() != target_ref
+        or str(successor_bootstrap.get("target_ref") or "").strip() != target_ref
+        or str(predecessor_bootstrap.get("boundary") or "").strip() != "active-slot-switch"
+        or str(successor_bootstrap.get("boundary") or "").strip() != boundary
+        or str(predecessor_bootstrap.get("chart_content_fingerprint") or "").strip()
+        != str(successor_bootstrap.get("chart_content_fingerprint") or "").strip()
+        or str(predecessor_contract.get("deployment_uid") or "").strip()
+        != str(successor_contract.get("deployment_uid") or "").strip()
+        or _positive_int(predecessor_contract.get("original_replicas"), fallback=0)
+        != _positive_int(successor_contract.get("original_replicas"), fallback=0)
+        or str(predecessor_contract.get("spec_fingerprint") or "").strip()
+        != str(successor_contract.get("spec_fingerprint") or "").strip()
+        or str(predecessor_bootstrap.get("manager_helm_spec_fingerprint") or "").strip()
+        != str(successor_bootstrap.get("manager_helm_spec_fingerprint") or "").strip()
+        or predecessor_generation <= 0
+        or _positive_int(restore_authority.get("prior_pause_generation"), fallback=0)
+        != predecessor_generation
+        or restored_generation <= predecessor_generation
+        or successor_generation != restored_generation + 1
+    ):
+        return {}
+    material = {
+        "schema": _TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_SCHEMA,
+        "boundary": boundary,
+        "target_ref": target_ref,
+        "campaign_fingerprint": campaign_fingerprint,
+        "manager_deployment_uid": str(successor_contract["deployment_uid"]),
+        "original_replicas": _positive_int(
+            successor_contract.get("original_replicas"),
+            fallback=0,
+        ),
+        "spec_fingerprint": str(successor_contract["spec_fingerprint"]),
+        "predecessor_authority_fingerprint": str(predecessor.get("contract_fingerprint") or ""),
+        "predecessor_boundary": str(predecessor_bootstrap["boundary"]),
+        "predecessor_pause_generation": predecessor_generation,
+        "restore_authority_fingerprint": str(restore_authority.get("contract_fingerprint") or ""),
+        "restore_authority": str(restore_authority.get("restore_authority") or ""),
+        "restored_manager_generation": restored_generation,
+        "successor_authority_fingerprint": str(authority.get("contract_fingerprint") or ""),
+        "successor_pause_generation": successor_generation,
+        "target_slurmcluster_uid": str(restore_authority.get("target_slurmcluster_uid") or ""),
+    }
+    return {
+        **material,
+        "status": "verified",
+        "recovered_at": _utc_now(),
+        "contract_fingerprint": _fingerprint(material),
+    }
+
+
+def _validated_target_helm_admission_manager_pause_successor(
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    expected_keys = {
+        *_TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_MATERIAL_KEYS,
+        "status",
+        "recovered_at",
+        "contract_fingerprint",
+    }
+    material = {
+        key: copy.deepcopy(to_plain_data(receipt.get(key)))
+        for key in _TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_MATERIAL_KEYS
+    }
+    fingerprint_fields = (
+        "campaign_fingerprint",
+        "spec_fingerprint",
+        "predecessor_authority_fingerprint",
+        "restore_authority_fingerprint",
+        "successor_authority_fingerprint",
+        "contract_fingerprint",
+    )
+    if (
+        set(receipt) != expected_keys
+        or material["schema"] != _TARGET_HELM_ADMISSION_MANAGER_PAUSE_SUCCESSOR_SCHEMA
+        or receipt.get("status") != "verified"
+        or not str(receipt.get("recovered_at") or "").strip()
+        or material["boundary"] != "post-switch-resume"
+        or material["predecessor_boundary"] != "active-slot-switch"
+        or material["restore_authority"] != "target-compatibility"
+        or not str(material["manager_deployment_uid"] or "").strip()
+        or not str(material["target_slurmcluster_uid"] or "").strip()
+        or any(not str(material[key] or "").strip() for key in ("boundary", "target_ref"))
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(key) or "")) is None
+            for key in fingerprint_fields
+        )
+        or _positive_int(material["original_replicas"], fallback=0) <= 0
+        or _positive_int(material["predecessor_pause_generation"], fallback=0) <= 0
+        or _positive_int(material["restored_manager_generation"], fallback=0)
+        <= _positive_int(material["predecessor_pause_generation"], fallback=0)
+        or _positive_int(material["successor_pause_generation"], fallback=0)
+        != _positive_int(material["restored_manager_generation"], fallback=0) + 1
+        or str(receipt.get("contract_fingerprint") or "") != _fingerprint(material)
+    ):
+        return {}
+    return material
+
+
+def _target_helm_admission_manager_pause_successor_replay_is_exact(
+    *,
+    receipt: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    authority: Mapping[str, Any],
+    restore_authority: Mapping[str, Any],
+) -> bool:
+    material = _validated_target_helm_admission_manager_pause_successor(receipt)
+    authority_contract = _in_place_target_manager_bootstrap_pause_contract(authority)
+    if not material or not authority_contract:
+        return False
+    expected = {
+        "boundary": str(state.get("boundary") or "").strip(),
+        "target_ref": str(state.get("target_ref") or "").strip(),
+        "campaign_fingerprint": str(checkpoint.get("campaign_fingerprint") or "").strip(),
+        "manager_deployment_uid": str(authority_contract.get("deployment_uid") or "").strip(),
+        "original_replicas": _positive_int(
+            authority_contract.get("original_replicas"),
+            fallback=0,
+        ),
+        "spec_fingerprint": str(authority_contract.get("spec_fingerprint") or "").strip(),
+        "restore_authority_fingerprint": str(restore_authority.get("contract_fingerprint") or ""),
+        "restore_authority": str(restore_authority.get("restore_authority") or ""),
+        "restored_manager_generation": _positive_int(
+            restore_authority.get("prior_restore_generation"),
+            fallback=0,
+        ),
+        "successor_authority_fingerprint": str(authority.get("contract_fingerprint") or ""),
+        "successor_pause_generation": _positive_int(
+            authority_contract.get("pause_generation"),
+            fallback=0,
+        ),
+        "target_slurmcluster_uid": str(restore_authority.get("target_slurmcluster_uid") or ""),
+    }
+    return all(material.get(key) == value for key, value in expected.items()) and _positive_int(
+        material.get("predecessor_pause_generation"),
+        fallback=0,
+    ) == _positive_int(restore_authority.get("prior_pause_generation"), fallback=0)
+
+
+_TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_MATERIAL_KEYS = (
+    "schema",
+    "boundary",
+    "target_ref",
+    "campaign_fingerprint",
+    "target_slurmcluster_uid",
+    "predecessor_boundary",
+    "manager_deployment_uid",
+    "original_replicas",
+    "spec_fingerprint",
+    "pause_generation",
+    "chart_content_fingerprint",
+    "prerequisites_fingerprint",
+    "prerequisite_uids_fingerprint",
+    "manager_helm_spec_fingerprint",
+    "predecessor_values_fingerprint",
+    "operation_values_fingerprint",
+    "predecessor_restore_values_fingerprint",
+    "operation_restore_values_fingerprint",
+    "predecessor_authority_fingerprint",
+    "operation_authority_fingerprint",
+)
+
+
+def _target_helm_admission_continuous_manager_pause_reuse_material(
+    *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    predecessor: Mapping[str, Any],
+    authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    predecessor_contract = _in_place_target_manager_bootstrap_pause_contract(predecessor)
+    operation_contract = _in_place_target_manager_bootstrap_pause_contract(authority)
+    predecessor_bootstrap = _mapping(predecessor_contract.get("bootstrap"))
+    operation_bootstrap = _mapping(operation_contract.get("bootstrap"))
+    rolling = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    target = _mapping(_mapping(rolling.get("slurmcluster_handoff_binding")).get("target"))
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    target_ref = str(checkpoint.get("target_ref") or "").strip()
+    boundary = str(state.get("boundary") or "").strip()
+    shared_contract_fields = (
+        "deployment_uid",
+        "original_replicas",
+        "spec_fingerprint",
+        "pause_generation",
+    )
+    shared_bootstrap_fields = (
+        "campaign_fingerprint",
+        "target_ref",
+        "chart_content_fingerprint",
+        "prerequisites_fingerprint",
+        "prerequisite_uids_fingerprint",
+        "manager_deployment_uid",
+        "manager_helm_spec_fingerprint",
+    )
+    if (
+        not predecessor_contract
+        or not operation_contract
+        or predecessor.get("status") != "verified"
+        or authority.get("status") != "verified"
+        or not str(predecessor.get("verified_at") or "").strip()
+        or not str(authority.get("verified_at") or "").strip()
+        or state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or boundary not in _TARGET_HELM_ADMISSION_CONTINUOUS_MANAGER_PAUSE_BOUNDARIES
+        or str(predecessor_bootstrap.get("boundary") or "").strip() != "post-switch-resume"
+        or str(operation_bootstrap.get("boundary") or "").strip() != boundary
+        or re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is None
+        or str(predecessor_bootstrap.get("campaign_fingerprint") or "").strip()
+        != campaign_fingerprint
+        or str(operation_bootstrap.get("campaign_fingerprint") or "").strip()
+        != campaign_fingerprint
+        or not target_ref
+        or str(predecessor_bootstrap.get("target_ref") or "").strip() != target_ref
+        or str(operation_bootstrap.get("target_ref") or "").strip() != target_ref
+        or any(
+            predecessor_contract.get(key) != operation_contract.get(key)
+            for key in shared_contract_fields
+        )
+        or any(
+            predecessor_bootstrap.get(key) != operation_bootstrap.get(key)
+            for key in shared_bootstrap_fields
+        )
+        or str(target.get("namespace") or "").strip() != _SOPERATOR_NAMESPACE
+        or str(target.get("name") or "").strip() != normalize_component_token(target_ref)
+        or not str(target.get("uid") or "").strip()
+    ):
+        return {}
+    return {
+        "schema": _TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_SCHEMA,
+        "boundary": boundary,
+        "target_ref": target_ref,
+        "campaign_fingerprint": campaign_fingerprint,
+        "target_slurmcluster_uid": str(target.get("uid") or "").strip(),
+        "predecessor_boundary": "post-switch-resume",
+        "manager_deployment_uid": str(operation_contract.get("deployment_uid") or ""),
+        "original_replicas": _positive_int(
+            operation_contract.get("original_replicas"),
+            fallback=0,
+        ),
+        "spec_fingerprint": str(operation_contract.get("spec_fingerprint") or ""),
+        "pause_generation": _positive_int(
+            operation_contract.get("pause_generation"),
+            fallback=0,
+        ),
+        "chart_content_fingerprint": str(
+            operation_bootstrap.get("chart_content_fingerprint") or ""
+        ),
+        "prerequisites_fingerprint": str(
+            operation_bootstrap.get("prerequisites_fingerprint") or ""
+        ),
+        "prerequisite_uids_fingerprint": str(
+            operation_bootstrap.get("prerequisite_uids_fingerprint") or ""
+        ),
+        "manager_helm_spec_fingerprint": str(
+            operation_bootstrap.get("manager_helm_spec_fingerprint") or ""
+        ),
+        "predecessor_values_fingerprint": str(
+            predecessor_bootstrap.get("values_fingerprint") or ""
+        ),
+        "operation_values_fingerprint": str(operation_bootstrap.get("values_fingerprint") or ""),
+        "predecessor_restore_values_fingerprint": str(
+            predecessor_bootstrap.get("restore_values_fingerprint") or ""
+        ),
+        "operation_restore_values_fingerprint": str(
+            operation_bootstrap.get("restore_values_fingerprint") or ""
+        ),
+        "predecessor_authority_fingerprint": str(predecessor.get("contract_fingerprint") or ""),
+        "operation_authority_fingerprint": str(authority.get("contract_fingerprint") or ""),
+    }
+
+
+def _completed_target_helm_admission_continuous_manager_pause_reuse_material(
+    *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    predecessor: Mapping[str, Any],
+    authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reconstruct only an exact completed operation-local continuous pause."""
+
+    material = _target_helm_admission_continuous_manager_pause_reuse_material(
+        checkpoint=checkpoint,
+        state=state,
+        predecessor=predecessor,
+        authority=authority,
+    )
+    authority_contract = _in_place_target_manager_bootstrap_pause_contract(authority)
+    bootstrap = _mapping(authority_contract.get("bootstrap"))
+    prerequisite_uids = _mapping(state.get("prerequisite_uids"))
+    manager_uid = str(prerequisite_uids.get("Deployment/soperator-manager") or "").strip()
+    chart_content_fingerprint = str(state.get("chart_content_fingerprint") or "").strip()
+    restore_contract = _validated_target_helm_admission_manager_restore_contract(
+        state.get("manager_restore_contract"),
+        chart_content_fingerprint=chart_content_fingerprint,
+    )
+    required_lifecycle_fields = (
+        "intent_at",
+        "apply_intent_at",
+        "prerequisites_ready_at",
+        "webhooks_apply_intent_at",
+        "admission_ready_at",
+        "helm_applied_at",
+        "completed_at",
+    )
+    required_state_fingerprints = (
+        "chart_content_fingerprint",
+        "values_fingerprint",
+        "prerequisites_fingerprint",
+        "webhooks_fingerprint",
+    )
+    lifecycle_timestamps = tuple(state.get(field) for field in required_lifecycle_fields)
+    if (
+        not material
+        or not authority_contract
+        or state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or state.get("status") != "complete"
+        or str(state.get("boundary") or "").strip() != material["boundary"]
+        or str(state.get("target_ref") or "").strip() != material["target_ref"]
+        or any(not str(state.get(field) or "").strip() for field in required_lifecycle_fields)
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(state.get(field) or "")) is None
+            for field in required_state_fingerprints
+        )
+        or any(
+            not _timestamp_at_or_after(later, earlier)
+            for earlier, later in zip(
+                lifecycle_timestamps,
+                lifecycle_timestamps[1:],
+                strict=False,
+            )
+        )
+        or not prerequisite_uids
+        or not _mapping(state.get("webhook_uids"))
+        or not restore_contract
+        or manager_uid != str(authority_contract.get("deployment_uid") or "").strip()
+        or _positive_int(restore_contract.get("original_replicas"), fallback=0)
+        != _positive_int(authority_contract.get("original_replicas"), fallback=0)
+        or bootstrap.get("chart_content_fingerprint") != chart_content_fingerprint
+        or bootstrap.get("values_fingerprint") != state.get("values_fingerprint")
+        or bootstrap.get("prerequisites_fingerprint") != state.get("prerequisites_fingerprint")
+        or bootstrap.get("prerequisite_uids_fingerprint")
+        != _fingerprint(
+            dict(sorted((str(key), str(value)) for key, value in prerequisite_uids.items()))
+        )
+        or bootstrap.get("manager_deployment_uid") != manager_uid
+        or bootstrap.get("manager_helm_spec_fingerprint")
+        != restore_contract.get("manager_helm_spec_fingerprint")
+        or bootstrap.get("restore_values_fingerprint") != restore_contract.get("values_fingerprint")
+    ):
+        return {}
+    return material
+
+
+def _validated_target_helm_admission_manager_pause_reuse(
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    material = {
+        key: copy.deepcopy(to_plain_data(receipt.get(key)))
+        for key in _TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_MATERIAL_KEYS
+    }
+    expected_keys = {
+        *_TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_MATERIAL_KEYS,
+        "status",
+        "verified_at",
+        "contract_fingerprint",
+    }
+    fingerprint_fields = (
+        "campaign_fingerprint",
+        "spec_fingerprint",
+        "chart_content_fingerprint",
+        "prerequisites_fingerprint",
+        "prerequisite_uids_fingerprint",
+        "manager_helm_spec_fingerprint",
+        "predecessor_values_fingerprint",
+        "operation_values_fingerprint",
+        "predecessor_restore_values_fingerprint",
+        "operation_restore_values_fingerprint",
+        "predecessor_authority_fingerprint",
+        "operation_authority_fingerprint",
+        "contract_fingerprint",
+    )
+    if (
+        set(receipt) != expected_keys
+        or material["schema"] != _TARGET_HELM_ADMISSION_MANAGER_PAUSE_REUSE_SCHEMA
+        or receipt.get("status") != "verified"
+        or not str(receipt.get("verified_at") or "").strip()
+        or material["boundary"] not in _TARGET_HELM_ADMISSION_CONTINUOUS_MANAGER_PAUSE_BOUNDARIES
+        or material["predecessor_boundary"] != "post-switch-resume"
+        or any(
+            not str(material.get(key) or "").strip()
+            for key in (
+                "target_ref",
+                "target_slurmcluster_uid",
+                "manager_deployment_uid",
+            )
+        )
+        or _positive_int(material["original_replicas"], fallback=0) <= 0
+        or _positive_int(material["pause_generation"], fallback=0) <= 0
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(key) or "")) is None
+            for key in fingerprint_fields
+        )
+        or str(receipt.get("contract_fingerprint") or "") != _fingerprint(material)
+    ):
+        return {}
+    return material
+
+
+def _target_helm_admission_manager_pause_reuse_is_exact(
+    *,
+    receipt: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    predecessor: Mapping[str, Any],
+    authority: Mapping[str, Any],
+) -> bool:
+    expected = _target_helm_admission_continuous_manager_pause_reuse_material(
+        checkpoint=checkpoint,
+        state=state,
+        predecessor=predecessor,
+        authority=authority,
+    )
+    return (
+        bool(expected) and _validated_target_helm_admission_manager_pause_reuse(receipt) == expected
+    )
+
+
+def _target_helm_admission_parallel_pause_predecessors_are_exact(
+    *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    pause_predecessor: Mapping[str, Any],
+    operation_predecessor: Mapping[str, Any],
+) -> bool:
+    """Prove the exact passive/active generation shared before post-switch restore."""
+
+    pause_contract = _in_place_target_manager_bootstrap_pause_contract(pause_predecessor)
+    operation_contract = _in_place_target_manager_bootstrap_pause_contract(operation_predecessor)
+    pause_bootstrap = _mapping(pause_contract.get("bootstrap"))
+    operation_bootstrap = _mapping(operation_contract.get("bootstrap"))
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    target_ref = str(checkpoint.get("target_ref") or "").strip()
+    shared_fields = (
+        "deployment_uid",
+        "original_replicas",
+        "spec_fingerprint",
+        "pause_generation",
+    )
+    shared_bootstrap_fields = (
+        "campaign_fingerprint",
+        "target_ref",
+        "manager_deployment_uid",
+        "manager_helm_spec_fingerprint",
+    )
+    return bool(
+        pause_contract
+        and operation_contract
+        and pause_predecessor.get("status") == "verified"
+        and operation_predecessor.get("status") == "verified"
+        and str(pause_predecessor.get("verified_at") or "").strip()
+        and str(operation_predecessor.get("verified_at") or "").strip()
+        and state.get("schema") == _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        and str(state.get("boundary") or "").strip() == "post-switch-resume"
+        and str(state.get("target_ref") or "").strip() == target_ref
+        and re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is not None
+        and pause_bootstrap.get("boundary") == "passive-slot-preparation"
+        and operation_bootstrap.get("boundary") == "active-slot-switch"
+        and all(pause_contract.get(key) == operation_contract.get(key) for key in shared_fields)
+        and all(
+            pause_bootstrap.get(key) == operation_bootstrap.get(key)
+            for key in shared_bootstrap_fields
+        )
+        and pause_bootstrap.get("campaign_fingerprint") == campaign_fingerprint
+        and pause_bootstrap.get("target_ref") == target_ref
+    )
+
+
+def _target_helm_admission_recorded_successor_split_is_exact(
+    *,
+    checkpoint: Mapping[str, Any],
+    state: Mapping[str, Any],
+    pause_predecessor: Mapping[str, Any],
+    operation_successor: Mapping[str, Any],
+    recorded_successor: Mapping[str, Any],
+    live_authority: Mapping[str, Any],
+    restore_authority: Mapping[str, Any],
+) -> bool:
+    """Prove the exact durable-receipt crash before rolling ownership moved."""
+
+    predecessor_contract = _in_place_target_manager_bootstrap_pause_contract(pause_predecessor)
+    successor_contract = _in_place_target_manager_bootstrap_pause_contract(operation_successor)
+    live_contract = _in_place_target_manager_bootstrap_pause_contract(live_authority)
+    predecessor_bootstrap = _mapping(predecessor_contract.get("bootstrap"))
+    successor_bootstrap = _mapping(successor_contract.get("bootstrap"))
+    receipt_material = _validated_target_helm_admission_manager_pause_successor(recorded_successor)
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    target_ref = str(state.get("target_ref") or "").strip()
+    shared_fields = ("deployment_uid", "original_replicas", "spec_fingerprint")
+    return bool(
+        predecessor_contract
+        and successor_contract
+        and live_contract
+        and receipt_material
+        and restore_authority
+        and pause_predecessor.get("status") == "verified"
+        and operation_successor.get("status") == "verified"
+        and str(pause_predecessor.get("verified_at") or "").strip()
+        and str(operation_successor.get("verified_at") or "").strip()
+        and state.get("schema") == _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        and str(state.get("boundary") or "").strip() == "post-switch-resume"
+        and str(checkpoint.get("target_ref") or "").strip() == target_ref
+        and predecessor_bootstrap.get("boundary")
+        in {"passive-slot-preparation", "active-slot-switch"}
+        and successor_bootstrap.get("boundary") == "post-switch-resume"
+        and predecessor_bootstrap.get("campaign_fingerprint") == campaign_fingerprint
+        and successor_bootstrap.get("campaign_fingerprint") == campaign_fingerprint
+        and predecessor_bootstrap.get("target_ref") == target_ref
+        and successor_bootstrap.get("target_ref") == target_ref
+        and predecessor_bootstrap.get("chart_content_fingerprint")
+        == successor_bootstrap.get("chart_content_fingerprint")
+        and predecessor_bootstrap.get("manager_helm_spec_fingerprint")
+        == successor_bootstrap.get("manager_helm_spec_fingerprint")
+        and all(
+            predecessor_contract.get(key) == successor_contract.get(key) for key in shared_fields
+        )
+        and _positive_int(predecessor_contract.get("pause_generation"), fallback=0)
+        == _positive_int(receipt_material.get("predecessor_pause_generation"), fallback=0)
+        and str(operation_successor.get("contract_fingerprint") or "")
+        == str(live_authority.get("contract_fingerprint") or "")
+        and successor_contract == live_contract
+        and _target_helm_admission_manager_pause_successor_replay_is_exact(
+            receipt=recorded_successor,
+            checkpoint=checkpoint,
+            state=state,
+            authority=operation_successor,
+            restore_authority=restore_authority,
+        )
+    )
+
+
+def _reconcile_target_helm_admission_bootstrap_manager_pause(
+    *,
+    checkpoint: Mapping[str, Any],
+    operation_phase: dict[str, Any],
+    pause_phase: dict[str, Any],
+    state: Mapping[str, Any],
+    prerequisites: Sequence[Mapping[str, Any]],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+) -> None:
+    """Adopt only the exact zero-replica manager created by this bootstrap."""
+
+    if checkpoint_writer is None:
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap manager pause requires durable checkpoints."
+        )
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    prerequisite_uids = _mapping(state.get("prerequisite_uids"))
+    manager_uid = str(prerequisite_uids.get("Deployment/soperator-manager") or "").strip()
+    restore_contract = _validated_target_helm_admission_manager_restore_contract(
+        state.get("manager_restore_contract"),
+        chart_content_fingerprint=str(state.get("chart_content_fingerprint") or ""),
+    )
+    manager_documents = [
+        document
+        for document in prerequisites
+        if _target_helm_admission_bootstrap_resource_identity(document)
+        == ("Deployment", "soperator-manager")
+    ]
+    if (
+        state.get("schema") not in _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_STATE_SCHEMAS
+        or str(state.get("status") or "").strip() != "prerequisites-ready"
+        or re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is None
+        or len(manager_documents) != 1
+        or not manager_uid
+        or not restore_contract
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap manager pause lacks its exact campaign, rendered "
+            "restore, or prerequisite identity contract."
+        )
+    manager = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "deployment/soperator-manager",
+            "-o",
+            "json",
+            "--show-managed-fields",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    metadata = _mapping(manager.get("metadata"))
+    status = _mapping(manager.get("status"))
+    generation = _positive_int(metadata.get("generation"), fallback=0)
+    live_uid = str(metadata.get("uid") or "").strip()
+    live_annotation = str(
+        _mapping(metadata.get("annotations")).get(_TARGET_HELM_ADMISSION_BOOTSTRAP_ANNOTATION) or ""
+    ).strip()
+    if (
+        live_uid != manager_uid
+        or not str(metadata.get("resourceVersion") or "").strip()
+        or metadata.get("deletionTimestamp")
+        or generation <= 0
+        or live_annotation != campaign_fingerprint
+        or _resource_replicas(manager, default=-1) != 0
+        or any(
+            _non_negative_int(status.get(field), fallback=0) != 0
+            for field in ("replicas", "readyReplicas", "availableReplicas")
+        )
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap manager pause could not prove the exact annotated "
+            "zero-replica Deployment identity."
+        )
+    manager_helm_spec_fingerprint = _immutable_child_manager_helm_spec_fingerprint(
+        declared_manager=manager_documents[0],
+        live_manager=manager,
+    )
+    if manager_helm_spec_fingerprint != str(
+        restore_contract.get("manager_helm_spec_fingerprint") or ""
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target admission bootstrap fenced manager spec differs from its exact "
+            "ungated restore contract."
+        )
+    _immutable_child_require_zero_owned_manager_pods(
+        manager=manager,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    spec_fingerprint = _in_place_manager_restore_spec_fingerprint(manager)
+    bootstrap = {
+        "schema": str(state.get("schema") or ""),
+        "campaign_fingerprint": campaign_fingerprint,
+        "boundary": str(state.get("boundary") or "").strip(),
+        "target_ref": str(state.get("target_ref") or "").strip(),
+        "chart_content_fingerprint": str(state.get("chart_content_fingerprint") or "").strip(),
+        "values_fingerprint": str(state.get("values_fingerprint") or "").strip(),
+        "prerequisites_fingerprint": str(state.get("prerequisites_fingerprint") or "").strip(),
+        "prerequisite_uids_fingerprint": _fingerprint(
+            dict(sorted((str(key), str(value)) for key, value in prerequisite_uids.items()))
+        ),
+        "manager_deployment_uid": live_uid,
+        "manager_helm_spec_fingerprint": manager_helm_spec_fingerprint,
+        "restore_values_fingerprint": str(restore_contract.get("values_fingerprint") or "").strip(),
+    }
+    authority = {
+        "schema": _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA,
+        "status": "verified",
+        "deployment_uid": live_uid,
+        "original_replicas": _positive_int(
+            restore_contract.get("original_replicas"),
+            fallback=0,
+        ),
+        "spec_fingerprint": spec_fingerprint,
+        "pause_generation": generation,
+        "bootstrap": bootstrap,
+        "accepted_at": str(state.get("apply_intent_at") or state.get("intent_at") or ""),
+        "verified_at": _utc_now(),
+    }
+    _seal_in_place_target_manager_bootstrap_pause_contract(authority)
+    boundary = str(state.get("boundary") or "").strip()
+    raw_successors = operation_phase.get("target_helm_admission_manager_pause_successors")
+    if raw_successors is None:
+        successor_records: Mapping[str, Any] = {}
+    elif isinstance(raw_successors, Mapping):
+        successor_records = raw_successors
+    else:
+        raise RuntimeError(
+            "recovery-required: target admission bootstrap manager pause successor "
+            "checkpoint collection is malformed."
+        )
+    recorded_successor = successor_records.get(boundary)
+    if recorded_successor is not None and (
+        not isinstance(recorded_successor, Mapping) or not recorded_successor
+    ):
+        raise RuntimeError(
+            "recovery-required: target admission bootstrap manager pause successor "
+            "checkpoint is malformed."
+        )
+    recorded_restore_authority = (
+        _target_helm_admission_manager_pause_restore_authority(
+            checkpoint=checkpoint,
+            state=state,
+            authority=authority,
+        )
+        if isinstance(recorded_successor, Mapping)
+        else {}
+    )
+    raw_reuses = operation_phase.get("target_helm_admission_manager_pause_reuses")
+    if raw_reuses is None:
+        reuse_records: Mapping[str, Any] = {}
+    elif isinstance(raw_reuses, Mapping):
+        reuse_records = raw_reuses
+    else:
+        raise RuntimeError(
+            "recovery-required: target admission bootstrap continuous manager pause reuse "
+            "checkpoint collection is malformed."
+        )
+    recorded_reuse = reuse_records.get(boundary)
+    if recorded_reuse is not None and (
+        not isinstance(recorded_reuse, Mapping) or not recorded_reuse
+    ):
+        raise RuntimeError(
+            "recovery-required: target admission bootstrap continuous manager pause reuse "
+            "checkpoint is malformed."
+        )
+
+    existing_pause = pause_phase.get("in_place_target_manager_pause")
+    operation_pause = (
+        operation_phase.get("in_place_target_manager_pause")
+        if operation_phase is not pause_phase
+        else None
+    )
+    raw_owner_records = [(pause_phase, existing_pause)]
+    if operation_phase is not pause_phase:
+        raw_owner_records.append((operation_phase, operation_pause))
+    owner_records: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
+    for owner, record in raw_owner_records:
+        if record is None:
+            continue
+        if not isinstance(record, Mapping) or not record:
+            raise RuntimeError(
+                "recovery-required: target admission bootstrap manager pause checkpoint "
+                "owners conflict because one journal is malformed."
+            )
+        owner_records.append((owner, record))
+    parallel_predecessors = False
+    recorded_successor_split = False
+    if len(owner_records) > 1 and any(
+        dict(record) != dict(owner_records[0][1]) for _, record in owner_records[1:]
+    ):
+        parallel_predecessors = bool(
+            operation_phase is not pause_phase
+            and isinstance(existing_pause, Mapping)
+            and isinstance(operation_pause, Mapping)
+            and _target_helm_admission_parallel_pause_predecessors_are_exact(
+                checkpoint=checkpoint,
+                state=state,
+                pause_predecessor=existing_pause,
+                operation_predecessor=operation_pause,
+            )
+        )
+        recorded_successor_split = bool(
+            not parallel_predecessors
+            and operation_phase is not pause_phase
+            and isinstance(existing_pause, Mapping)
+            and isinstance(operation_pause, Mapping)
+            and isinstance(recorded_successor, Mapping)
+            and _target_helm_admission_recorded_successor_split_is_exact(
+                checkpoint=checkpoint,
+                state=state,
+                pause_predecessor=existing_pause,
+                operation_successor=operation_pause,
+                recorded_successor=recorded_successor,
+                live_authority=authority,
+                restore_authority=recorded_restore_authority,
+            )
+        )
+        if not parallel_predecessors and not recorded_successor_split:
+            raise RuntimeError(
+                "recovery-required: target admission bootstrap manager pause checkpoint "
+                "owners conflict."
+            )
+
+    existing = (
+        operation_pause
+        if (parallel_predecessors or recorded_successor_split)
+        and isinstance(operation_pause, Mapping)
+        else owner_records[0][1]
+        if owner_records
+        else None
+    )
+    if recorded_successor is not None:
+        restore_authority = recorded_restore_authority
+        if (
+            existing is None
+            or not restore_authority
+            or str(existing.get("contract_fingerprint") or "")
+            != str(recorded_successor.get("successor_authority_fingerprint") or "")
+            or not _target_helm_admission_manager_pause_successor_replay_is_exact(
+                receipt=recorded_successor,
+                checkpoint=checkpoint,
+                state=state,
+                authority=authority,
+                restore_authority=restore_authority,
+            )
+        ):
+            raise RuntimeError(
+                "recovery-required: target admission bootstrap manager pause successor "
+                "checkpoint changed after recovery."
+            )
+        _require_manager_pause_rearm_target_binding(
+            contract=restore_authority,
+            target_ref=str(state.get("target_ref") or "").strip(),
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+    if existing is not None:
+        existing_is_live = (
+            _verified_live_in_place_target_manager_pause(
+                existing,
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+            is not None
+        )
+        existing_bootstrap = _in_place_target_manager_bootstrap_pause_contract(existing)
+        existing_is_current_bootstrap = bool(
+            existing_is_live
+            and existing.get("status") == "verified"
+            and existing_bootstrap
+            and str(existing.get("contract_fingerprint") or "")
+            == str(authority.get("contract_fingerprint") or "")
+        )
+        if existing_is_current_bootstrap:
+            if recorded_reuse is not None:
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap continuous manager pause "
+                    "reuse checkpoint changed after verification."
+                )
+            checkpoint_changed = False
+            if existing_pause is None or recorded_successor_split:
+                pause_phase["in_place_target_manager_pause"] = copy.deepcopy(dict(existing))
+                checkpoint_changed = True
+            if operation_phase is not pause_phase and operation_pause is not None:
+                operation_phase.pop("in_place_target_manager_pause", None)
+                checkpoint_changed = True
+            if checkpoint_changed:
+                checkpoint_writer()
+            return
+
+        rolling_owner = _mapping(
+            _mapping(checkpoint.get("phase_state")).get("rolling-compute-migration")
+        )
+        operation_owner = _mapping(
+            _mapping(checkpoint.get("phase_state")).get("populate-jail-refresh")
+        )
+        continuous_reuse_material = (
+            _target_helm_admission_continuous_manager_pause_reuse_material(
+                checkpoint=checkpoint,
+                state=state,
+                predecessor=existing,
+                authority=authority,
+            )
+            if (
+                existing_is_live
+                and operation_phase is not pause_phase
+                and operation_phase is operation_owner
+                and pause_phase is rolling_owner
+                and existing_pause is existing
+                and operation_pause is None
+            )
+            else {}
+        )
+        if recorded_reuse is not None:
+            if not continuous_reuse_material or not (
+                _target_helm_admission_manager_pause_reuse_is_exact(
+                    receipt=recorded_reuse,
+                    checkpoint=checkpoint,
+                    state=state,
+                    predecessor=existing,
+                    authority=authority,
+                )
+            ):
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap continuous manager pause "
+                    "reuse checkpoint changed after verification."
+                )
+            return
+        if continuous_reuse_material:
+            if len(reuse_records) >= 32:
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap continuous manager pause "
+                    "reuse checkpoint collection is exhausted."
+                )
+            reuse_receipt = {
+                **continuous_reuse_material,
+                "status": "verified",
+                "verified_at": _utc_now(),
+                "contract_fingerprint": _fingerprint(continuous_reuse_material),
+            }
+            if not _target_helm_admission_manager_pause_reuse_is_exact(
+                receipt=reuse_receipt,
+                checkpoint=checkpoint,
+                state=state,
+                predecessor=existing,
+                authority=authority,
+            ):
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap continuous manager pause "
+                    "reuse receipt could not be sealed."
+                )
+            next_reuses = copy.deepcopy(dict(reuse_records))
+            next_reuses[boundary] = reuse_receipt
+            operation_phase["target_helm_admission_manager_pause_reuses"] = next_reuses
+            checkpoint_writer()
+            return
+
+        interrupted_contract = _in_place_target_manager_interrupted_pause_contract(existing)
+        if not interrupted_contract:
+            restore_authority = _target_helm_admission_manager_pause_restore_authority(
+                checkpoint=checkpoint,
+                state=state,
+                authority=authority,
+            )
+            successor = (
+                _target_helm_admission_manager_pause_successor_receipt(
+                    checkpoint=checkpoint,
+                    state=state,
+                    predecessor=existing,
+                    authority=authority,
+                    restore_authority=restore_authority,
+                )
+                if restore_authority
+                else {}
+            )
+            if not successor or recorded_successor is not None:
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap found a manager pause "
+                    "checkpoint that is neither complete nor the exact interrupted transition."
+                )
+            if len(successor_records) >= 32:
+                raise RuntimeError(
+                    "recovery-required: target admission bootstrap manager pause successor "
+                    "checkpoint collection is exhausted."
+                )
+            _require_manager_pause_rearm_target_binding(
+                contract=restore_authority,
+                target_ref=str(state.get("target_ref") or "").strip(),
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+            for owner, _ in owner_records:
+                owner.pop("in_place_target_manager_pause", None)
+            pause_phase["in_place_target_manager_pause"] = authority
+            next_successors = copy.deepcopy(dict(successor_records))
+            next_successors[boundary] = successor
+            operation_phase["target_helm_admission_manager_pause_successors"] = next_successors
+            checkpoint_writer()
+            return
+        if (
+            interrupted_contract["deployment_uid"] != live_uid
+            or interrupted_contract["original_replicas"] != authority["original_replicas"]
+            or interrupted_contract["spec_fingerprint"] != spec_fingerprint
+            or interrupted_contract["pause_expected_generation"] != generation
+        ):
+            raise RuntimeError(
+                "recovery-required: target admission bootstrap found a manager pause "
+                "checkpoint that is neither complete nor the exact interrupted transition."
+            )
+        recovery = {
+            "schema": _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_RECOVERY_SCHEMA,
+            "status": "verified",
+            "from_schema": _IN_PLACE_TARGET_MANAGER_PAUSE_SCHEMA,
+            "partial_authority_fingerprint": _fingerprint(dict(existing)),
+            "bootstrap_authority_fingerprint": str(authority["contract_fingerprint"]),
+            "recovered_at": _utc_now(),
+        }
+        for owner, _ in owner_records:
+            owner.pop("in_place_target_manager_pause", None)
+        operation_phase["in_place_target_manager_pause_recovery"] = recovery
+    pause_phase["in_place_target_manager_pause"] = authority
+    checkpoint_writer()
+
+
+def _validated_in_place_target_manager_pause_checkpoint_authority(
+    authority: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """Return the exact live zero-replica manager pause or fail closed."""
+    """Return one exact sealed manager-pause authority without mutable API metadata."""
 
     deployment_uid = str(authority.get("deployment_uid") or "").strip()
     spec_fingerprint = str(authority.get("spec_fingerprint") or "").strip()
@@ -46041,8 +48896,9 @@ def _verified_live_in_place_target_manager_pause(
         else {}
     )
     standard_contract = _in_place_target_manager_pause_contract(authority)
+    bootstrap_contract = _in_place_target_manager_bootstrap_pause_contract(authority)
     if (
-        not (rearm_contract or standard_contract)
+        not (rearm_contract or standard_contract or bootstrap_contract)
         or authority.get("status") != "verified"
         or not deployment_uid
         or not re.fullmatch(r"[0-9a-f]{64}", spec_fingerprint)
@@ -46054,7 +48910,46 @@ def _verified_live_in_place_target_manager_pause(
             and pause_generation
             != _positive_int(standard_contract.get("pause_expected_generation"), fallback=0)
         )
+        or (
+            bootstrap_contract
+            and pause_generation
+            != _positive_int(bootstrap_contract.get("pause_generation"), fallback=0)
+        )
     ):
+        return None
+    authority_fingerprint_material = {
+        key: authority.get(key)
+        for key in (
+            "schema",
+            "contract_fingerprint",
+            "deployment_uid",
+            "original_replicas",
+            "spec_fingerprint",
+            "pause_from_generation",
+            "pause_expected_generation",
+            "pause_generation",
+            "bootstrap",
+        )
+    }
+    return {
+        "deployment_uid": deployment_uid,
+        "generation": pause_generation,
+        "original_replicas": original_replicas,
+        "spec_fingerprint": spec_fingerprint,
+        "authority_fingerprint": _fingerprint(authority_fingerprint_material),
+    }
+
+
+def _verified_live_in_place_target_manager_pause(
+    authority: Mapping[str, Any],
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, Any] | None:
+    """Return the exact live zero-replica manager pause or fail closed."""
+
+    checkpoint_authority = _validated_in_place_target_manager_pause_checkpoint_authority(authority)
+    if checkpoint_authority is None:
         return None
     manager = _json_from_command(
         command_runner,
@@ -46075,38 +48970,21 @@ def _verified_live_in_place_target_manager_pause(
     metadata = _mapping(manager.get("metadata"))
     status = _mapping(manager.get("status"))
     if (
-        str(metadata.get("uid") or "").strip() != deployment_uid
+        str(metadata.get("uid") or "").strip() != checkpoint_authority["deployment_uid"]
         or metadata.get("deletionTimestamp")
-        or _positive_int(metadata.get("generation"), fallback=0) != pause_generation
+        or _positive_int(metadata.get("generation"), fallback=0)
+        != checkpoint_authority["generation"]
         or not str(metadata.get("resourceVersion") or "").strip()
         or _resource_replicas(manager, default=-1) != 0
-        or _in_place_manager_restore_spec_fingerprint(manager) != spec_fingerprint
+        or _in_place_manager_restore_spec_fingerprint(manager)
+        != checkpoint_authority["spec_fingerprint"]
         or any(
             _non_negative_int(status.get(field), fallback=0) != 0
             for field in ("replicas", "readyReplicas", "availableReplicas")
         )
     ):
         return None
-    authority_fingerprint_material = {
-        key: authority.get(key)
-        for key in (
-            "schema",
-            "contract_fingerprint",
-            "deployment_uid",
-            "original_replicas",
-            "spec_fingerprint",
-            "pause_from_generation",
-            "pause_expected_generation",
-            "pause_generation",
-        )
-    }
-    return {
-        "deployment_uid": deployment_uid,
-        "generation": pause_generation,
-        "original_replicas": original_replicas,
-        "spec_fingerprint": spec_fingerprint,
-        "authority_fingerprint": _fingerprint(authority_fingerprint_material),
-    }
+    return checkpoint_authority
 
 
 def _reconcile_paused_manager_worker_readiness_checkpoint(
@@ -50810,6 +53688,10 @@ _GPU_TOPOLOGY_DRAIN_CONTROLLER_GAP_PROOF_SCHEMA = (
     "nebius-cxcli/in-place-gpu-topology-drain-controller-gap-proof/v1"
 )
 _GPU_TYPED_GRES_WORKER_ROLLOVER_SCHEMA = "nebius-cxcli-soperator-gpu-typed-gres-worker-rollover/v1"
+_GPU_TOPOLOGY_PRE_REPLAY_WORKER_PROCESS_SCHEMA = (
+    "nebius-cxcli/gpu-topology-pre-replay-worker-process/v1"
+)
+_GPU_TOPOLOGY_NODESET_STATIC_BINDING_SCHEMA = "nebius-cxcli/gpu-topology-nodeset-static-binding/v1"
 _GPU_TYPED_GRES_REGISTRATION_RESUME_PROOF_SCHEMA = (
     "nebius-cxcli/gpu-typed-gres-registration-resume-proof/v1"
 )
@@ -51277,10 +54159,34 @@ def _gpu_ready_node_binding(
     return binding
 
 
+def _locked_campaign_in_place_node_groups(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    checkpoint: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    """Return the full-campaign node-group inventory for an in-place fleet gate."""
+
+    campaign = _mapping(_target_onboarding(payload, target_ref).get("upgrade_path"))
+    campaign_fingerprint = str(campaign.get("fingerprint") or "").strip()
+    checkpoint_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    if (campaign_fingerprint or checkpoint_fingerprint) and (
+        not campaign_fingerprint
+        or campaign_fingerprint != checkpoint_fingerprint
+        or soperator_upgrade_campaign_fingerprint(campaign) != campaign_fingerprint
+    ):
+        raise RuntimeError(
+            "recovery-required: Jail Upgrade in-place fleet authority differs from "
+            "the locked config-owned campaign."
+        )
+    return _sequence_of_mappings(_mapping(campaign.get("mk8s")).get("node_groups"))
+
+
 def _target_gpu_node_group_bindings(
     *,
     checkpoint: Mapping[str, Any],
     gpu_nodesets: Sequence[str],
+    accepted_in_place_node_groups: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], ...]:
     """Return immutable campaign-owned GPU node-group identities."""
 
@@ -51293,9 +54199,34 @@ def _target_gpu_node_group_bindings(
             _mapping(checkpoint.get("operation_intent")).get("intended_postcondition")
         )
         mk8s = _mapping(intended.get("mk8s"))
-        for index, group in enumerate(_sequence_of_mappings(mk8s.get("node_groups"))):
+        segment_groups = _sequence_of_mappings(mk8s.get("node_groups"))
+        accepted_groups = (
+            segment_groups
+            if segment_groups
+            else tuple(_sequence_of_mappings(accepted_in_place_node_groups))
+        )
+        campaign_wide_fallback = not segment_groups
+        accepted_worker_scope = {
+            normalize_component_token(item)
+            for item in checkpoint.get("worker_node_groups", []) or []
+            if normalize_component_token(item)
+        }
+        if campaign_wide_fallback and accepted_groups and not accepted_worker_scope:
+            raise SoperatorMigrationPhasePending(
+                "GPU pre-activation fleet gate requires the exact accepted in-place "
+                "worker node-group scope before using campaign-wide identities."
+            )
+        for index, group in enumerate(accepted_groups):
             if str(group.get("gpu_software_mode") or "").strip() == "none":
                 continue
+            if campaign_wide_fallback:
+                group_aliases = {
+                    normalize_component_token(value)
+                    for value in (group.get("id"), group.get("name"), group.get("role"))
+                    if normalize_component_token(value)
+                }
+                if group_aliases.isdisjoint(accepted_worker_scope):
+                    continue
             accepted_role = normalize_component_token(group.get("role"))
             nodeset_name = (
                 accepted_role if accepted_role in expected_nodesets else sole_expected_nodeset
@@ -51776,10 +54707,10 @@ def _probe_ready_owned_target_gpu_fleet(
     stage: str,
     checkpointed_probes: Sequence[Mapping[str, Any]] = (),
     occupied_node_probes: Sequence[Mapping[str, Any]] = (),
+    node_groups: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
-    groups = _target_gpu_node_group_bindings(
-        checkpoint=checkpoint,
-        gpu_nodesets=gpu_nodesets,
+    groups = tuple(_sequence_of_mappings(node_groups)) or _target_gpu_node_group_bindings(
+        checkpoint=checkpoint, gpu_nodesets=gpu_nodesets
     )
     nodes = _ready_owned_target_gpu_nodes(
         command_runner=command_runner,
@@ -51994,6 +54925,7 @@ def _ensure_gpu_worker_jail_release_gate(
     values: Mapping[str, Any],
     checkpoint_writer: Callable[[], None] | None,
     gate_key: str = "gpu_workload_release_gate",
+    accepted_in_place_node_groups: Sequence[Mapping[str, Any]] = (),
 ) -> list[str]:
     gate = phase.setdefault(gate_key, {})
     if not isinstance(gate, dict):
@@ -52079,6 +55011,7 @@ def _ensure_gpu_worker_jail_release_gate(
             fleet_groups = _target_gpu_node_group_bindings(
                 checkpoint=checkpoint,
                 gpu_nodesets=gpu_nodesets,
+                accepted_in_place_node_groups=accepted_in_place_node_groups,
             )
             fleet_inventory_rows = _ready_owned_target_gpu_nodes(
                 command_runner=command_runner,
@@ -52353,6 +55286,7 @@ def _ensure_gpu_worker_jail_release_gate(
                 stage="inventory",
                 checkpointed_probes=_sequence_of_mappings(prior_gate.get("target_ready_gpu_nodes")),
                 occupied_node_probes=results,
+                node_groups=fleet_groups,
             )
         except (RuntimeError, SoperatorMigrationPhasePending) as exc:
             _fail(str(exc), workers=results)
@@ -52711,6 +55645,7 @@ def _revalidate_gpu_pre_activation_fleet_before_switch(
             stage="activation",
             checkpointed_probes=_sequence_of_mappings(prior_validation.get("nodes")),
             occupied_node_probes=original_workers,
+            node_groups=original_groups,
         )
     except (RuntimeError, SoperatorMigrationPhasePending) as exc:
         _fail(str(exc))
@@ -52773,6 +55708,7 @@ def _revalidate_gpu_pre_activation_fleet_before_switch(
             stage="activation",
             checkpointed_probes=provisional_fleet,
             occupied_node_probes=current_workers,
+            node_groups=original_groups,
         )
     except (RuntimeError, SoperatorMigrationPhasePending) as exc:
         _fail(str(exc))
@@ -54200,6 +57136,256 @@ def _gpu_typed_gres_stale_slurmd_contract(
     )
 
 
+def _gpu_typed_gres_stale_static_topology_process_contract(
+    *,
+    output: str,
+    node_name: str,
+    gpu_count: int,
+    topology: Mapping[str, Any],
+) -> bool:
+    """Recognize an exact idle process that predates its static-topology replay."""
+
+    fields = _jail_gpu_temporary_partition_fields(output)
+    configured_gres = str(topology.get("gres") or "").strip().lower()
+    observed_gres = str(fields.get("Gres") or "").strip().lower()
+    typed_match = re.fullmatch(r"gpu:([a-z0-9_]+):([1-9][0-9]*)", configured_gres)
+    state_tokens = {
+        token for token in re.split(r"[+~#*]+", str(fields.get("State") or "").upper()) if token
+    }
+    configured_cpus = _positive_int(topology.get("cpus"), fallback=0)
+    configured_boards = _positive_int(topology.get("boards"), fallback=0)
+    observed_cpus = _positive_int(fields.get("CPUTot"), fallback=0)
+    observed_boards = _positive_int(fields.get("Boards"), fallback=0)
+    observed_sockets = _positive_int(fields.get("Sockets"), fallback=0)
+    observed_cores = _positive_int(fields.get("CoresPerSocket"), fallback=0)
+    observed_threads = _positive_int(fields.get("ThreadsPerCore"), fallback=0)
+    observed_product = observed_boards * observed_sockets * observed_cores * observed_threads
+    reason = str(fields.get("Reason") or "").strip().lower()
+    return bool(
+        typed_match is not None
+        and int(typed_match.group(2)) == gpu_count
+        and fields.get("NodeName") == node_name
+        and re.fullmatch(rf"{re.escape(configured_gres)}(?:\(s:[^)]+\))?", observed_gres)
+        and configured_cpus > 0
+        and 0 < observed_cpus < configured_cpus
+        and configured_boards > 0
+        and observed_boards == configured_boards
+        and observed_product == observed_cpus
+        and not str(fields.get("Parameters") or "").strip()
+        and state_tokens == {"IDLE", "DYNAMIC_NORM"}
+        and reason in {"", "none", "(null)"}
+        and _non_negative_int(fields.get("CPUAlloc"), fallback=-1) == 0
+        and _non_negative_int(fields.get("AllocMem"), fallback=-1) == 0
+    )
+
+
+def _gpu_topology_pre_replay_worker_process_proof_is_exact(
+    proof: Mapping[str, Any],
+    *,
+    replay: Mapping[str, Any],
+    pod_uid: str,
+) -> bool:
+    expected_keys = {
+        "schema",
+        "status",
+        "pod_uid",
+        "pod_created_at",
+        "slurmd_started_at",
+        "replay_prepared_at",
+        "replay_verified_at",
+        "topology_replay_fingerprint",
+    }
+    if (
+        set(proof) != expected_keys
+        or proof.get("schema") != _GPU_TOPOLOGY_PRE_REPLAY_WORKER_PROCESS_SCHEMA
+        or proof.get("status") != "verified"
+        or not pod_uid
+        or str(proof.get("pod_uid") or "") != pod_uid
+        or str(proof.get("replay_prepared_at") or "") != str(replay.get("prepared_at") or "")
+        or str(proof.get("replay_verified_at") or "") != str(replay.get("verified_at") or "")
+        or str(proof.get("topology_replay_fingerprint") or "") != _fingerprint(replay)
+    ):
+        return False
+    try:
+        created_at = _journal_timestamp(
+            proof.get("pod_created_at"),
+            field="pre-replay worker Pod creation",
+        )
+        started_at = _journal_timestamp(
+            proof.get("slurmd_started_at"),
+            field="pre-replay slurmd start",
+        )
+        prepared_at = _journal_timestamp(
+            proof.get("replay_prepared_at"),
+            field="GPU topology replay preparation",
+        )
+        verified_at = _journal_timestamp(
+            proof.get("replay_verified_at"),
+            field="GPU topology replay verification",
+        )
+    except RuntimeError:
+        return False
+    return created_at <= started_at < prepared_at <= verified_at
+
+
+def _gpu_topology_pre_replay_worker_process_proof(
+    *,
+    pod: Mapping[str, Any],
+    replay: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    metadata = _mapping(pod.get("metadata"))
+    status = _mapping(pod.get("status"))
+    pod_uid = str(metadata.get("uid") or "").strip()
+    slurmd_statuses = tuple(
+        item
+        for item in _sequence_of_mappings(status.get("containerStatuses"))
+        if str(item.get("name") or "") == "slurmd"
+    )
+    if (
+        len(slurmd_statuses) != 1
+        or slurmd_statuses[0].get("ready") is not True
+        or _non_negative_int(slurmd_statuses[0].get("restartCount"), fallback=-1) != 0
+        or not str(slurmd_statuses[0].get("containerID") or "").strip()
+    ):
+        return None
+    proof = {
+        "schema": _GPU_TOPOLOGY_PRE_REPLAY_WORKER_PROCESS_SCHEMA,
+        "status": "verified",
+        "pod_uid": pod_uid,
+        "pod_created_at": str(metadata.get("creationTimestamp") or "").strip(),
+        "slurmd_started_at": str(
+            _mapping(_mapping(slurmd_statuses[0].get("state")).get("running")).get("startedAt")
+            or ""
+        ).strip(),
+        "replay_prepared_at": str(replay.get("prepared_at") or "").strip(),
+        "replay_verified_at": str(replay.get("verified_at") or "").strip(),
+        "topology_replay_fingerprint": _fingerprint(replay),
+    }
+    return (
+        proof
+        if _gpu_topology_pre_replay_worker_process_proof_is_exact(
+            proof,
+            replay=replay,
+            pod_uid=pod_uid,
+        )
+        else None
+    )
+
+
+def _gpu_topology_post_replay_slurmd_started_at(
+    *,
+    pod: Mapping[str, Any],
+    replay: Mapping[str, Any],
+) -> str:
+    statuses = tuple(
+        item
+        for item in _sequence_of_mappings(_mapping(pod.get("status")).get("containerStatuses"))
+        if str(item.get("name") or "") == "slurmd"
+    )
+    if (
+        len(statuses) != 1
+        or statuses[0].get("ready") is not True
+        or _non_negative_int(statuses[0].get("restartCount"), fallback=-1) != 0
+        or not str(statuses[0].get("containerID") or "").strip()
+    ):
+        return ""
+    started_at = str(
+        _mapping(_mapping(statuses[0].get("state")).get("running")).get("startedAt") or ""
+    ).strip()
+    try:
+        started = _journal_timestamp(started_at, field="post-replay slurmd start")
+        replay_verified = _journal_timestamp(
+            replay.get("verified_at"),
+            field="GPU topology replay verification",
+        )
+    except RuntimeError:
+        return ""
+    return started_at if replay_verified < started else ""
+
+
+def _gpu_topology_live_nodeset_static_binding(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    nodeset_name: str,
+    release_gate: Mapping[str, Any],
+    topology: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind the exact live NodeSet static topology before a process rollover."""
+
+    target = _mapping(release_gate.get("target_slurmcluster"))
+    workload_binding = _mapping(
+        _mapping(release_gate.get("nodeset_workload_bindings")).get(nodeset_name)
+    )
+    nodeset = _immutable_child_get_namespaced_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        resource_type="nodeset",
+        name=nodeset_name,
+    )
+    identity = _immutable_child_exact_identity(
+        nodeset,
+        label=f"GPU topology replay NodeSet {_SOPERATOR_NAMESPACE}/{nodeset_name}",
+    )
+    metadata = _mapping(nodeset.get("metadata"))
+    annotations = _mapping(metadata.get("annotations"))
+    labels = _mapping(metadata.get("labels"))
+    spec = _mapping(nodeset.get("spec"))
+    node_config = _mapping(spec.get("nodeConfig"))
+    live_static = str(node_config.get("static") or "").strip()
+    gpu_count_match = re.fullmatch(
+        r"gpu:[a-z0-9_]+:([1-9][0-9]*)",
+        str(topology.get("gres") or "").strip().lower(),
+    )
+    gpu_count = int(gpu_count_match.group(1)) if gpu_count_match is not None else 0
+    canonical_static = _gpu_worker_static(
+        _positive_int(topology.get("cpus"), fallback=0),
+        gpu_count,
+        live_static,
+        topology=topology,
+    )
+    generation = _positive_int(metadata.get("generation"), fallback=0)
+    configured_replicas = _nonnegative_int(
+        workload_binding.get("configured_replicas"),
+        fallback=-1,
+    )
+    if (
+        not str(target.get("name") or "").strip()
+        or not str(target.get("uid") or "").strip()
+        or identity["uid"] != str(workload_binding.get("nodeset_uid") or "").strip()
+        or _validated_resource_owner_references(
+            nodeset,
+            label=f"GPU topology replay NodeSet {_SOPERATOR_NAMESPACE}/{nodeset_name}",
+        )
+        or annotations.get("slurm.nebius.ai/parental-cluster-ref") != target.get("name")
+        or annotations.get("meta.helm.sh/release-name") != _SOPERATOR_TARGET_RELEASE_NAME
+        or annotations.get("meta.helm.sh/release-namespace") != _SOPERATOR_NAMESPACE
+        or labels.get("app.kubernetes.io/instance") != _SOPERATOR_TARGET_RELEASE_NAME
+        or labels.get("app.kubernetes.io/managed-by") != "Helm"
+        or generation <= 0
+        or configured_replicas < 0
+        or _nonnegative_int(spec.get("replicas"), fallback=-1) != configured_replicas
+        or not live_static
+        or canonical_static != live_static
+    ):
+        raise SoperatorMigrationPhasePending(
+            f"typed-GRES worker rollover found NodeSet {nodeset_name} outside the exact "
+            "live topology replay contract."
+        )
+    return {
+        "schema": _GPU_TOPOLOGY_NODESET_STATIC_BINDING_SCHEMA,
+        "nodeset": nodeset_name,
+        "nodeset_uid": identity["uid"],
+        "generation": generation,
+        "spec_fingerprint": _fingerprint(spec),
+        "static_sha256": hashlib.sha256(live_static.encode("utf-8")).hexdigest(),
+        "topology_fingerprint": _fingerprint(topology),
+        "target_name": str(target.get("name") or ""),
+        "target_uid": str(target.get("uid") or ""),
+        "configured_replicas": configured_replicas,
+    }
+
+
 def _gpu_typed_gres_slurmd_config_contract(
     *,
     output: str,
@@ -54235,6 +57421,7 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
     replay: Mapping[str, Any],
     release_gate: Mapping[str, Any],
     stale_workers: Sequence[str],
+    pre_replay_static_workers: Sequence[str] = (),
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     checkpoint_writer: Callable[[], None],
@@ -54244,23 +57431,43 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
     """Restart only exact stale slurmd Pods, issuing all deletes before waiting."""
 
     requested = tuple(dict.fromkeys(str(name or "").strip() for name in stale_workers))
+    pre_replay_static = tuple(
+        dict.fromkeys(str(name or "").strip() for name in pre_replay_static_workers)
+    )
     state = phase.setdefault("gpu_typed_gres_worker_rollover", {})
     if not isinstance(state, dict):
         raise SoperatorMigrationPhasePending("typed-GRES worker rollover checkpoint is malformed.")
     checkpoint_workers = tuple(_string_sequence(state.get("workers")))
+    checkpoint_pre_replay_static = tuple(_string_sequence(state.get("pre_replay_static_workers")))
     if checkpoint_workers:
         if not set(requested) <= set(checkpoint_workers):
             raise SoperatorMigrationPhasePending(
                 "typed-GRES worker rollover live stale set drifted from its checkpoint."
             )
         requested = checkpoint_workers
+        if checkpoint_pre_replay_static:
+            if pre_replay_static and not set(pre_replay_static) <= set(
+                checkpoint_pre_replay_static
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "typed-GRES worker rollover pre-replay process set drifted from its checkpoint."
+                )
+            pre_replay_static = checkpoint_pre_replay_static
+        elif pre_replay_static:
+            raise SoperatorMigrationPhasePending(
+                "typed-GRES worker rollover gained an uncheckpointed pre-replay process."
+            )
     workers = {
         str(worker.get("pod") or "").strip(): worker
         for worker in _sequence_of_mappings(release_gate.get("workers"))
     }
     topology_by_nodeset = _mapping(replay.get("topology_by_nodeset"))
     workload_bindings = _mapping(release_gate.get("nodeset_workload_bindings"))
-    if not requested or any(not name or name not in workers for name in requested):
+    if (
+        not requested
+        or any(not name or name not in workers for name in requested)
+        or any(not name or name not in requested for name in pre_replay_static)
+    ):
         raise SoperatorMigrationPhasePending(
             "typed-GRES worker rollover lacks exact release-gate worker identities."
         )
@@ -54276,6 +57483,25 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
             for nodeset, record in sorted(workload_bindings.items())
         },
     }
+    if pre_replay_static:
+        static_nodesets = tuple(
+            sorted({str(workers[name].get("nodeset") or "").strip() for name in pre_replay_static})
+        )
+        if any(not name for name in static_nodesets):
+            raise SoperatorMigrationPhasePending(
+                "typed-GRES worker rollover lacks a NodeSet for its pre-replay process set."
+            )
+        binding["pre_replay_static_workers"] = list(pre_replay_static)
+        binding["pre_replay_static_nodeset_bindings"] = {
+            nodeset: _gpu_topology_live_nodeset_static_binding(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                nodeset_name=nodeset,
+                release_gate=release_gate,
+                topology=_mapping(topology_by_nodeset.get(nodeset)),
+            )
+            for nodeset in static_nodesets
+        }
     if any(not all(record.values()) for record in binding["workload_bindings"].values()):
         raise SoperatorMigrationPhasePending(
             "typed-GRES worker rollover lacks exact NodeSet and StatefulSet identities."
@@ -54312,6 +57538,12 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
             nodeset = str(replacement.get("nodeset") or "")
             workload_binding = _mapping(binding["workload_bindings"].get(nodeset))
             replacement_resource_version = str(replacement.get("resource_version") or "")
+            pre_replay_process = _mapping(old.get("pre_replay_process"))
+            post_replay_started_at = (
+                _gpu_topology_post_replay_slurmd_started_at(pod=pod, replay=replay)
+                if pod_name in pre_replay_static
+                else ""
+            )
             if (
                 not str(old.get("uid") or "").strip()
                 or not str(old.get("delete_accepted_at") or "").strip()
@@ -54336,6 +57568,22 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
                 or any(
                     _non_negative_int(item.get("restartCount"), fallback=-1) != 0
                     for item in statuses
+                )
+                or bool(
+                    pod_name in pre_replay_static
+                    and (
+                        not _gpu_topology_pre_replay_worker_process_proof_is_exact(
+                            pre_replay_process,
+                            replay=replay,
+                            pod_uid=str(old.get("uid") or ""),
+                        )
+                        or not post_replay_started_at
+                        or str(replacement.get("slurmd_started_at") or "") != post_replay_started_at
+                        or not re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            str(replacement.get("slurmd_config_sha256") or ""),
+                        )
+                    )
                 )
             ):
                 raise SoperatorMigrationPhasePending(
@@ -54370,6 +57618,16 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
         node_name = str(_mapping(pod.get("spec")).get("nodeName") or "").strip()
         prior = _mapping(old_pods.get(pod_name))
         if prior:
+            if pod_name in pre_replay_static and not (
+                _gpu_topology_pre_replay_worker_process_proof_is_exact(
+                    _mapping(prior.get("pre_replay_process")),
+                    replay=replay,
+                    pod_uid=str(prior.get("uid") or ""),
+                )
+            ):
+                raise SoperatorMigrationPhasePending(
+                    f"typed-GRES worker rollover lost pre-replay process authority for {pod_name}."
+                )
             continue
         if (
             identity["uid"] != str(worker.get("pod_uid") or "").strip()
@@ -54382,6 +57640,16 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
         ):
             raise SoperatorMigrationPhasePending(
                 f"typed-GRES worker rollover refuses non-matching Pod binding for {pod_name}."
+            )
+        pre_replay_process = (
+            _gpu_topology_pre_replay_worker_process_proof(pod=pod, replay=replay)
+            if pod_name in pre_replay_static
+            else None
+        )
+        if pod_name in pre_replay_static and pre_replay_process is None:
+            raise SoperatorMigrationPhasePending(
+                f"typed-GRES worker rollover cannot prove that {pod_name} predates the "
+                "exact topology replay."
             )
         config = command_runner(
             [
@@ -54420,6 +57688,8 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
             "statefulset_uid": workload_uid,
             "slurmd_config_sha256": hashlib.sha256(config.stdout.encode("utf-8")).hexdigest(),
         }
+        if pre_replay_process is not None:
+            old_pods[pod_name]["pre_replay_process"] = pre_replay_process
     state.update(
         {**binding, "status": "delete-intent", "intent_at": state.get("intent_at") or _utc_now()}
     )
@@ -54429,6 +57699,43 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
         old = _mapping(old_pods.get(pod_name))
         if old.get("delete_accepted_at"):
             continue
+        if pod_name in pre_replay_static:
+            nodeset = str(old.get("nodeset") or "").strip()
+            live_nodeset_binding = _gpu_topology_live_nodeset_static_binding(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                nodeset_name=nodeset,
+                release_gate=release_gate,
+                topology=_mapping(topology_by_nodeset.get(nodeset)),
+            )
+            if live_nodeset_binding != _mapping(
+                _mapping(binding.get("pre_replay_static_nodeset_bindings")).get(nodeset)
+            ):
+                raise SoperatorMigrationPhasePending(
+                    f"typed-GRES worker rollover found live NodeSet drift before deleting "
+                    f"{pod_name}."
+                )
+            live_old_pod = _immutable_child_get_namespaced_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource_type="pod",
+                name=pod_name,
+            )
+            live_identity = _immutable_child_exact_identity(
+                live_old_pod,
+                label=f"pre-delete typed-GRES stale worker {_SOPERATOR_NAMESPACE}/{pod_name}",
+            )
+            live_process = _gpu_topology_pre_replay_worker_process_proof(
+                pod=live_old_pod,
+                replay=replay,
+            )
+            if live_identity["uid"] != str(old.get("uid") or "") or live_process != _mapping(
+                old.get("pre_replay_process")
+            ):
+                raise SoperatorMigrationPhasePending(
+                    f"typed-GRES worker rollover lost the exact pre-replay process before "
+                    f"deleting {pod_name}."
+                )
         _command_runner_uid_preconditioned_delete(
             command_runner,
             kube_context=kube_context,
@@ -54490,13 +57797,68 @@ def _rollover_gpu_typed_gres_stale_worker_processes(
                 raise SoperatorMigrationPhasePending(
                     f"typed-GRES replacement Pod binding is invalid for {pod_name}."
                 )
-            replacements[pod_name] = {
+            replacement_record = {
                 "uid": identity["uid"],
                 "resource_version": identity["resourceVersion"],
                 "node": str(old.get("node") or ""),
                 "nodeset": str(old.get("nodeset") or ""),
                 "statefulset_uid": str(old.get("statefulset_uid") or ""),
             }
+            if pod_name in pre_replay_static:
+                nodeset = str(old.get("nodeset") or "")
+                topology = _mapping(topology_by_nodeset.get(nodeset))
+                live_nodeset_binding = _gpu_topology_live_nodeset_static_binding(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    nodeset_name=nodeset,
+                    release_gate=release_gate,
+                    topology=topology,
+                )
+                post_replay_started_at = _gpu_topology_post_replay_slurmd_started_at(
+                    pod=pod,
+                    replay=replay,
+                )
+                config = command_runner(
+                    [
+                        "kubectl",
+                        "--context",
+                        kube_context,
+                        "-n",
+                        _SOPERATOR_NAMESPACE,
+                        "exec",
+                        pod_name,
+                        "-c",
+                        "slurmd",
+                        "--",
+                        "/usr/sbin/slurmd",
+                        "-C",
+                    ],
+                    timeout_seconds=60,
+                    check=False,
+                )
+                if (
+                    live_nodeset_binding
+                    != _mapping(
+                        _mapping(binding.get("pre_replay_static_nodeset_bindings")).get(nodeset)
+                    )
+                    or not post_replay_started_at
+                    or config.returncode != 0
+                    or not _gpu_typed_gres_slurmd_config_contract(
+                        output=config.stdout,
+                        node_name=pod_name,
+                        gpu_count=_positive_int(workers[pod_name].get("gpu_count"), fallback=0),
+                        topology=topology,
+                    )
+                ):
+                    raise SoperatorMigrationPhasePending(
+                        f"typed-GRES replacement process did not bind the exact post-replay "
+                        f"topology for {pod_name}."
+                    )
+                replacement_record["slurmd_started_at"] = post_replay_started_at
+                replacement_record["slurmd_config_sha256"] = hashlib.sha256(
+                    config.stdout.encode("utf-8")
+                ).hexdigest()
+            replacements[pod_name] = replacement_record
         if not pending:
             break
         if time.monotonic() >= deadline:
@@ -54650,11 +58012,18 @@ def _ensure_gpu_typed_gres_registration_resume_proof(
             "typed-GRES registration resume proof checkpoint is malformed."
         )
     proof = raw_proof if isinstance(raw_proof, dict) else {}
-    if proof and any(proof.get(key) != value for key, value in binding.items()):
-        raise SoperatorMigrationPhasePending(
-            "typed-GRES registration resume proof changed after its durable binding."
-        )
     if proof:
+        # The original observation fingerprint intentionally preserves the
+        # complete slurmd -C output, including non-contract fields such as
+        # RealMemory and TmpDisk that can vary between otherwise identical
+        # probes.  Replay above has freshly revalidated the exact successor
+        # lineage and the canonical CPU/GRES topology; keep the historical raw
+        # observation immutable instead of treating irrelevant output drift as
+        # a changed safety proof.
+        if not _gpu_typed_gres_registration_resume_proof_is_exact(rollover):
+            raise SoperatorMigrationPhasePending(
+                "typed-GRES registration resume proof changed after its durable binding."
+            )
         return dict(proof)
     proof.update({**binding, "verified_at": _utc_now()})
     rollover["registration_resume_proof"] = proof
@@ -55579,6 +58948,36 @@ def _reconcile_gpu_topology_replay_slurm_drains(
             rollover_chain=recovery_rollover_chain,
         )
 
+    cluster_id_repair_lines: list[str] = []
+    if isinstance(checkpoint, dict):
+        pre_slurm_queue_authority, marker_repair = (
+            _gpu_typed_gres_target_cluster_id_marker_replay_authority(
+                checkpoint=checkpoint,
+                phase=phase,
+            )
+        )
+        if pre_slurm_queue_authority is not None or marker_repair:
+            cluster_id_changed, cluster_id_repair_lines = _repair_target_bridge_cluster_id_marker(
+                checkpoint=checkpoint,
+                phase=mutable_topology_phase,
+                kube_context=kube_context,
+                command_runner=command_runner,
+                checkpoint_writer=checkpoint_writer,
+                mutation_guard=mutation_guard,
+                pre_slurm_queue_authority=pre_slurm_queue_authority,
+            )
+            if cluster_id_changed:
+                raise SoperatorMigrationCheckpointContinuation(
+                    "Target cluster-ID marker repair restored exact 2/2 HA; resume GPU "
+                    "topology recovery from the rebound controller generation.",
+                    boundary="target-cluster-id-marker-repaired",
+                    progress_evidence=_mapping(
+                        _mapping(
+                            _mapping(checkpoint.get("controller_bridge")).get("version_transition")
+                        ).get("target_cluster_id_marker_repair")
+                    ),
+                )
+
     target_pause_records = _ensure_gpu_topology_target_partitions_paused(
         checkpoint=checkpoint,
         phase=phase,
@@ -55684,14 +59083,16 @@ def _reconcile_gpu_topology_replay_slurm_drains(
                     bridge_recovery_lines.extend(authority_lines)
                     authority_mode = "exact topology-only release generation"
                 return [
+                    *cluster_id_repair_lines,
                     *bridge_recovery_lines,
                     "GPU topology drain recovery reused its exact zero-drain journal and "
                     f"rebound bridge authority to the {authority_mode}.",
                 ]
             return [
+                *cluster_id_repair_lines,
                 "GPU topology drain recovery reused its exact verified worker and target "
                 "partition journal while the target controller command gate is deliberately "
-                "inert."
+                "inert.",
             ]
         release_workers = _sequence_of_mappings(release_gate.get("workers"))
         provider_groups = [
@@ -55803,6 +59204,7 @@ def _reconcile_gpu_topology_replay_slurm_drains(
 
     topology_by_nodeset = _mapping(replay.get("topology_by_nodeset"))
     typed_gres_stale: list[str] = []
+    pre_replay_static_stale: list[str] = []
     for worker in workers:
         node_name = str(worker.get("pod") or "").strip()
         nodeset = str(worker.get("nodeset") or "").strip()
@@ -55827,12 +59229,22 @@ def _reconcile_gpu_topology_replay_slurm_drains(
             gpu_count=gpu_count,
             topology=topology,
         )
-        if observed.returncode != 0 or not (stale or ready or stale_process):
+        stale_static_process = _gpu_typed_gres_stale_static_topology_process_contract(
+            output=observed.stdout,
+            node_name=node_name,
+            gpu_count=gpu_count,
+            topology=topology,
+        )
+        if observed.returncode != 0 or not (
+            stale or ready or stale_process or stale_static_process
+        ):
             raise SoperatorMigrationPhasePending(
                 f"GPU topology drain recovery refuses non-matching Slurm state for {node_name}."
             )
-        if stale_process:
+        if stale_process or stale_static_process:
             typed_gres_stale.append(node_name)
+        if stale_static_process:
+            pre_replay_static_stale.append(node_name)
 
     rollover_lines: list[str] = []
     if typed_gres_stale:
@@ -55847,6 +59259,7 @@ def _reconcile_gpu_topology_replay_slurm_drains(
                     replay=replay,
                     release_gate=release_gate,
                     stale_workers=typed_gres_stale,
+                    pre_replay_static_workers=pre_replay_static_stale,
                     command_runner=command_runner,
                     kube_context=kube_context,
                     checkpoint_writer=checkpoint_writer,
@@ -55856,12 +59269,68 @@ def _reconcile_gpu_topology_replay_slurm_drains(
     config_recovery_lines: list[str] = []
     controller_bridge = _mapping((checkpoint or {}).get("controller_bridge"))
     controller_authority = _mapping(controller_bridge.get("authority"))
+    target_ha_config_stale: list[str] = []
+    registration_resume_proof: Mapping[str, Any] = {}
     if (
         typed_gres_stale
         and isinstance(checkpoint, dict)
         and controller_bridge.get("stage") == BridgeStage.TARGET_HA_ACTIVE.value
         and controller_authority.get("owner") == "bridge-target"
     ):
+        # A pre-replay daemon may register the exact topology immediately after
+        # its guarded restart. Re-observe the replacements before authorizing
+        # the shared target-HA config successor. The existing generic-GRES
+        # INVALID_REG contract remains sufficient on its own; an unchanged
+        # stale-static controller record additionally requires a fresh durable
+        # proof that the live replacement process loaded the replayed topology.
+        for worker in workers:
+            node_name = str(worker.get("pod") or "").strip()
+            if node_name not in typed_gres_stale:
+                continue
+            nodeset = str(worker.get("nodeset") or "").strip()
+            observed = _kubectl_exec_login_once(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                namespace=namespace,
+                args=("scontrol", "show", "node", node_name, "-o"),
+                timeout_seconds=60,
+            )
+            generic_stale = bool(
+                observed.returncode == 0
+                and _gpu_typed_gres_stale_slurmd_contract(
+                    output=observed.stdout,
+                    node_name=node_name,
+                    gpu_count=_positive_int(worker.get("gpu_count"), fallback=0),
+                    topology=_mapping(topology_by_nodeset.get(nodeset)),
+                )
+            )
+            static_controller_stale = bool(
+                observed.returncode == 0
+                and node_name in pre_replay_static_stale
+                and _gpu_typed_gres_stale_static_topology_process_contract(
+                    output=observed.stdout,
+                    node_name=node_name,
+                    gpu_count=_positive_int(worker.get("gpu_count"), fallback=0),
+                    topology=_mapping(topology_by_nodeset.get(nodeset)),
+                )
+            )
+            if static_controller_stale:
+                if not registration_resume_proof:
+                    registration_resume_proof = _ensure_gpu_typed_gres_registration_resume_proof(
+                        phase=phase,
+                        replay=replay,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        checkpoint_writer=checkpoint_writer,
+                    )
+                if node_name not in set(_string_sequence(registration_resume_proof.get("workers"))):
+                    raise SoperatorMigrationPhasePending(
+                        "typed-GRES target-HA config recovery proof lost an exact "
+                        "stale-static replacement worker."
+                    )
+            if generic_stale or static_controller_stale:
+                target_ha_config_stale.append(node_name)
+    if target_ha_config_stale:
         target_ref = str(
             _mapping(release_gate.get("target_slurmcluster")).get("name") or ""
         ).strip()
@@ -55889,7 +59358,6 @@ def _reconcile_gpu_topology_replay_slurm_drains(
 
     drained: list[str] = []
     observations: dict[str, str] = {}
-    registration_resume_proof: Mapping[str, Any] = {}
     registration_deadline = time.monotonic() + 300
     while True:
         drained = []
@@ -55919,6 +59387,12 @@ def _reconcile_gpu_topology_replay_slurm_drains(
                 gpu_count=gpu_count,
                 topology=topology,
             )
+            stale_static_process = _gpu_typed_gres_stale_static_topology_process_contract(
+                output=observed.stdout,
+                node_name=node_name,
+                gpu_count=gpu_count,
+                topology=topology,
+            )
             if observed.returncode == 0 and stale_process and node_name in typed_gres_stale:
                 if not registration_resume_proof:
                     registration_resume_proof = _ensure_gpu_typed_gres_registration_resume_proof(
@@ -55936,6 +59410,25 @@ def _reconcile_gpu_topology_replay_slurm_drains(
                     observed.stdout.encode("utf-8")
                 ).hexdigest()
                 drained.append(node_name)
+                continue
+            if (
+                observed.returncode == 0
+                and stale_static_process
+                and node_name in pre_replay_static_stale
+            ):
+                if not registration_resume_proof:
+                    registration_resume_proof = _ensure_gpu_typed_gres_registration_resume_proof(
+                        phase=phase,
+                        replay=replay,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        checkpoint_writer=checkpoint_writer,
+                    )
+                if node_name not in set(_string_sequence(registration_resume_proof.get("workers"))):
+                    raise SoperatorMigrationPhasePending(
+                        "typed-GRES registration proof lost an exact pre-replay worker."
+                    )
+                pending_registrations.append(node_name)
                 continue
             if observed.returncode != 0 or not (stale or ready):
                 pending_registrations.append(node_name)
@@ -56033,6 +59526,7 @@ def _reconcile_gpu_topology_replay_slurm_drains(
     )
     checkpoint_writer()
     return [
+        *cluster_id_repair_lines,
         *bridge_recovery_lines,
         *rollover_lines,
         *config_recovery_lines,
@@ -59694,6 +63188,125 @@ def _recover_controller_bridge_pre_authority_source_restart(
     ]
 
 
+def _reconcile_controller_bridge_node_group_create_operation(
+    *,
+    checkpoint: dict[str, Any],
+    journal: Mapping[str, Any],
+    record: dict[str, Any],
+    live_node_group: Mapping[str, Any],
+    nebius_api: SoperatorMigrationNebiusApi,
+    checkpoint_writer: Callable[[], None] | None,
+) -> None:
+    if not _controller_bridge_node_group_create_reconciliation_candidate(
+        checkpoint=checkpoint,
+        journal=journal,
+        record=record,
+    ):
+        raise RuntimeError(
+            "recovery-required: controller bridge node-group create state is not one "
+            "exact accepted provider operation; no terminal proof was inferred."
+        )
+    node_group_id = _node_group_id(live_node_group)
+    node_group_name = _node_group_name(live_node_group)
+    expected = _controller_bridge_node_group_create_postcondition(
+        journal=journal,
+        record=record,
+    )
+    recorded_id = str(record.get("id", "") or "").strip()
+    scheduling_domain = _mapping(record.get("scheduling_failure_domain"))
+    domain_group_id = str(scheduling_domain.get("node_group_id", "") or "").strip()
+    live_parent_id = _node_group_parent_id(live_node_group)
+    live_resource_version = _node_group_resource_version(live_node_group)
+    if (
+        not node_group_id
+        or node_group_name != expected["name"]
+        or (recorded_id and recorded_id != node_group_id)
+        or (domain_group_id and domain_group_id != node_group_id)
+        or (live_parent_id and live_parent_id != expected["cluster_id"])
+        or not live_resource_version
+        or _node_group_fixed_count(live_node_group) != expected["fixed_node_count"]
+        or _minor_version_text_or_empty(_node_group_version(live_node_group)) != expected["version"]
+    ):
+        raise RuntimeError(
+            "recovery-required: accepted controller bridge node-group create no longer "
+            "matches its exact live provider identity or postcondition."
+        )
+    metadata = _mapping(live_node_group.get("metadata"))
+    terminal_resource_uid = str(metadata.get("uid") or metadata.get("id") or node_group_id).strip()
+    _record_reconciled_provider_operation_terminal(
+        checkpoint=checkpoint,
+        resource_state=record,
+        nebius_api=nebius_api,
+        provider_payload=live_node_group,
+        operation_kind="MK8s node-group create",
+        resource_id=f"{expected['cluster_id']}/node-groups/{expected['name']}",
+        provider_resource_id=node_group_id,
+        terminal_resource_uid=terminal_resource_uid,
+        checkpoint_writer=checkpoint_writer,
+        verified_postcondition={**expected, "node_group_id": node_group_id},
+    )
+
+
+def _reconcile_controller_bridge_node_group_create_operations(
+    *,
+    checkpoint: dict[str, Any],
+    nebius_api: SoperatorMigrationNebiusApi,
+    checkpoint_writer: Callable[[], None] | None,
+) -> list[str]:
+    journal = checkpoint.get("controller_bridge")
+    if not isinstance(journal, Mapping):
+        return []
+    validate_bridge_journal(journal)
+    records = journal.get("node_groups")
+    if not isinstance(records, list):
+        raise RuntimeError("Controller bridge node-group journal must be a list.")
+    lines: list[str] = []
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or record.get("ownership") != "external-temporary"
+            or record.get("created") is not True
+            or _controller_bridge_node_group_create_terminal_proof_is_exact(
+                journal=journal,
+                record=record,
+                checkpoint=checkpoint,
+            )
+        ):
+            continue
+        node_group_id = str(record.get("id", "") or "").strip()
+        if not node_group_id:
+            raise RuntimeError(
+                "recovery-required: created controller bridge node-group has no immutable "
+                "provider identity."
+            )
+        live_node_group = _node_group_payload_by_id(
+            nebius_api=nebius_api,
+            node_group_id=node_group_id,
+        )
+        _reconcile_controller_bridge_node_group_create_operation(
+            checkpoint=checkpoint,
+            journal=journal,
+            record=record,
+            live_node_group=live_node_group,
+            nebius_api=nebius_api,
+            checkpoint_writer=checkpoint_writer,
+        )
+        if not _controller_bridge_node_group_create_terminal_proof_is_exact(
+            journal=journal,
+            record=record,
+            checkpoint=checkpoint,
+        ):
+            raise RuntimeError(
+                "recovery-required: controller bridge node-group create reconciliation "
+                "did not seal its exact terminal provider proof."
+            )
+        lines.append(
+            "Controller bridge node group: reconciled accepted create operation for "
+            f"{record['name']} ({node_group_id}) without dispatching another mutation."
+        )
+    return lines
+
+
 def _create_controller_bridge_node_groups(
     *,
     checkpoint: dict[str, Any],
@@ -59784,6 +63397,30 @@ def _create_controller_bridge_node_groups(
                 raise RuntimeError(
                     f"recovery-required: controller bridge node-group identity changed for {name}."
                 )
+            if not _controller_bridge_node_group_create_terminal_proof_is_exact(
+                journal=journal,
+                record=record,
+                node_group_id=node_group_id,
+                checkpoint=checkpoint,
+            ):
+                _reconcile_controller_bridge_node_group_create_operation(
+                    checkpoint=checkpoint,
+                    journal=journal,
+                    record=record,
+                    live_node_group=exact or existing,
+                    nebius_api=nebius_api,
+                    checkpoint_writer=checkpoint_writer,
+                )
+            if not _controller_bridge_node_group_create_terminal_proof_is_exact(
+                journal=journal,
+                record=record,
+                node_group_id=node_group_id,
+                checkpoint=checkpoint,
+            ):
+                raise RuntimeError(
+                    "recovery-required: existing controller bridge node-group lacks its "
+                    "exact terminal create operation proof."
+                )
             existing_domain = _mapping(record.get("scheduling_failure_domain"))
             domain_group_id = str(existing_domain.get("node_group_id", "") or "")
             topology_key = str(existing_domain.get("topology_key", "") or "")
@@ -59812,6 +63449,7 @@ def _create_controller_bridge_node_groups(
                 {
                     "id": node_group_id,
                     "created": True,
+                    "provider_resource_version": _node_group_resource_version(exact or existing),
                     "bound_at": _utc_now(),
                     "scheduling_failure_domain": {
                         "topology_key": "nebius.com/node-group-id",
@@ -65280,6 +68918,7 @@ def _in_place_target_controller_gate_partition_pause_gap_records(
     target = _mapping(_mapping(rolling.get("slurmcluster_handoff_binding")).get("target"))
     target_uid = str(target.get("uid") or "").strip()
     manager = _mapping(rolling.get("in_place_target_manager_pause"))
+    manager_authority = _validated_in_place_target_manager_pause_checkpoint_authority(manager)
     gate = _mapping(rolling.get("in_place_target_controller_command_gate"))
     window = _mapping(gate.get("slurmcluster_admission_window"))
     status = str(gate.get("status") or "").strip()
@@ -65303,11 +68942,8 @@ def _in_place_target_controller_gate_partition_pause_gap_records(
     if (
         not (_mapping(rolling.get("in_place_ownership_handoff")) or terminal_handoff_exact)
         or not target_uid
-        or manager.get("status") != "verified"
-        or not str(manager.get("deployment_uid") or "").strip()
-        or not str(manager.get("resource_version") or "").strip()
+        or not manager_authority
         or not str(manager.get("accepted_at") or "").strip()
-        or not str(manager.get("verified_at") or "").strip()
         or status not in accepted_statuses
         or str(gate.get("slurmcluster_uid") or "").strip() != target_uid
         or not str(gate.get("resource_version") or "").strip()
@@ -69889,6 +73525,152 @@ def _prove_controller_bridge_client_configuration(
                 (str(item.get("role", "") or ""), str(item.get("name", "") or "")): item
                 for item in evidence
             }
+            combined_login_successors: list[dict[str, str]] | None = None
+            combined_login_removals: list[dict[str, str]] | None = None
+            combined_login_successor_valid = False
+            retained_keys = sorted(set(previous_by_key) & set(evidence_by_key))
+            changed_retained_keys = {
+                key
+                for key in retained_keys
+                if tuple(previous_by_key[key].get(field) for field in immutable_fields)
+                != tuple(evidence_by_key[key].get(field) for field in immutable_fields)
+            }
+            if (
+                not config_successor_valid
+                and not login_successor_valid
+                and not login_surge_addition_valid
+                and not login_surge_removal_valid
+                and allow_session_free_target_login_successor
+                and allowed_target_login_surge_removal
+                and controller_gap_verified
+                and _mapping(previous).get("live_rpc_verified") is False
+                and previous_config_sha256 == expected_sha256
+                and len(previous_by_key) == len(previous_evidence)
+                and len(evidence_by_key) == len(evidence)
+                and set(evidence_by_key) < set(previous_by_key)
+                and changed_retained_keys
+            ):
+                combined_login_successors = (
+                    _prove_controller_bridge_session_free_target_login_successors(
+                        previous=[previous_by_key[key] for key in retained_keys],
+                        current=[evidence_by_key[key] for key in retained_keys],
+                        config_sha256=expected_sha256,
+                        previous_config_sha256=previous_config_sha256,
+                        target_ref=target_ref,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        allowed_replacement_node_uids=(allowed_target_login_replacement_node_uids),
+                    )
+                )
+                replacement_keys: set[tuple[str, str]] = set()
+                replacement_authorities: set[tuple[str, str]] = set()
+                replacement_material_valid = bool(combined_login_successors)
+                for successor in combined_login_successors or ():
+                    key = ("target-login", str(successor.get("name", "") or ""))
+                    prior = previous_by_key.get(key)
+                    observed = evidence_by_key.get(key)
+                    if (
+                        key in replacement_keys
+                        or key not in changed_retained_keys
+                        or prior is None
+                        or observed is None
+                        or str(successor.get("previous_uid", "") or "")
+                        != str(prior.get("uid", "") or "")
+                        or str(successor.get("replacement_uid", "") or "")
+                        != str(observed.get("uid", "") or "")
+                        or str(successor.get("previous_container_id", "") or "")
+                        != str(prior.get("container_id", "") or "")
+                        or str(successor.get("replacement_container_id", "") or "")
+                        != str(observed.get("container_id", "") or "")
+                        or str(successor.get("node_name", "") or "")
+                        != str(observed.get("node_name", "") or "")
+                        or not str(successor.get("workload_uid", "") or "")
+                        or not str(successor.get("slurmcluster_uid", "") or "")
+                    ):
+                        replacement_material_valid = False
+                        break
+                    replacement_keys.add(key)
+                    replacement_authorities.add(
+                        (
+                            str(successor.get("workload_uid", "") or ""),
+                            str(successor.get("slurmcluster_uid", "") or ""),
+                        )
+                    )
+                replacement_material_valid = bool(
+                    replacement_material_valid
+                    and replacement_keys == changed_retained_keys
+                    and len(replacement_authorities) == 1
+                )
+                if replacement_material_valid:
+                    normalized_current: list[dict[str, Any]] = []
+                    for observed in evidence:
+                        key = (
+                            str(observed.get("role", "") or ""),
+                            str(observed.get("name", "") or ""),
+                        )
+                        normalized_current.append(
+                            copy.deepcopy(
+                                to_plain_data(
+                                    previous_by_key[key] if key in replacement_keys else observed
+                                )
+                            )
+                        )
+                    combined_login_removals = _prove_controller_bridge_target_login_surge_removals(
+                        previous=previous_evidence,
+                        current=normalized_current,
+                        config_sha256=expected_sha256,
+                        target_ref=target_ref,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        contract=_mapping(allowed_target_login_surge_removal),
+                    )
+                    removed_keys = set(previous_by_key) - set(evidence_by_key)
+                    proven_removed_keys: set[tuple[str, str]] = set()
+                    removal_authorities: set[tuple[str, str]] = set()
+                    removal_material_valid = bool(combined_login_removals)
+                    for removal in combined_login_removals or ():
+                        key = ("target-login", str(removal.get("name", "") or ""))
+                        prior = previous_by_key.get(key)
+                        if (
+                            key in proven_removed_keys
+                            or key not in removed_keys
+                            or prior is None
+                            or str(removal.get("uid", "") or "") != str(prior.get("uid", "") or "")
+                            or str(removal.get("node_name", "") or "")
+                            != str(prior.get("node_name", "") or "")
+                            or str(removal.get("container_id", "") or "")
+                            != str(prior.get("container_id", "") or "")
+                            or not str(removal.get("workload_uid", "") or "")
+                            or not str(removal.get("slurmcluster_uid", "") or "")
+                        ):
+                            removal_material_valid = False
+                            break
+                        proven_removed_keys.add(key)
+                        removal_authorities.add(
+                            (
+                                str(removal.get("workload_uid", "") or ""),
+                                str(removal.get("slurmcluster_uid", "") or ""),
+                            )
+                        )
+                    combined_login_successor_valid = bool(
+                        removal_material_valid
+                        and proven_removed_keys == removed_keys
+                        and removal_authorities == replacement_authorities
+                    )
+                if combined_login_successor_valid:
+                    consumer_successors.append(
+                        {
+                            "kind": (
+                                "checkpointed-session-free-login-replacement-and-surge-removal"
+                            ),
+                            "previous_consumers_sha256": _fingerprint(previous_evidence),
+                            "replacement_consumers_sha256": _fingerprint(evidence),
+                            "logins": combined_login_successors,
+                            "removed_logins": combined_login_removals,
+                            "accepted_at": _utc_now(),
+                        }
+                    )
+                    old = new
             mixed_successors: list[dict[str, str]] = []
             changed_logins: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
             worker_pod_successors = _mapping(allowed_target_worker_pod_successors)
@@ -69897,6 +73679,7 @@ def _prove_controller_bridge_client_configuration(
                 and not login_successor_valid
                 and not login_surge_addition_valid
                 and not login_surge_removal_valid
+                and not combined_login_successor_valid
                 and previous_config_sha256 == expected_sha256
                 and len(previous_by_key) == len(previous_evidence)
                 and len(evidence_by_key) == len(evidence)
@@ -69997,6 +73780,7 @@ def _prove_controller_bridge_client_configuration(
                 or login_successor_valid
                 or login_surge_addition_valid
                 or login_surge_removal_valid
+                or combined_login_successor_valid
                 or mixed_successor_valid
                 or bool(
                     previous_config_sha256 == expected_sha256
@@ -70014,6 +73798,7 @@ def _prove_controller_bridge_client_configuration(
                 and not login_successor_valid
                 and not login_surge_addition_valid
                 and not login_surge_removal_valid
+                and not combined_login_successor_valid
                 and not mixed_successor_valid
             ):
                 nodes_payload = _json_from_command(
@@ -70076,6 +73861,7 @@ def _prove_controller_bridge_client_configuration(
                 and not login_successor_valid
                 and not login_surge_addition_valid
                 and not login_surge_removal_valid
+                and not combined_login_successor_valid
                 and not mixed_successor_valid
             ):
                 consumer_successors.append(
@@ -70734,6 +74520,13 @@ def _reconcile_in_place_login_slurm_config_projection_values(
                 checkpoint_writer=checkpoint_writer,
                 mutation_guard=None,
                 helm_operation=_apply_projection_values,
+                manager_restore_contract=(
+                    _target_helm_admission_manager_restore_contract(
+                        command_runner=command_runner,
+                        values=values,
+                        disable_open_metrics_for_legacy_clients=None,
+                    )
+                ),
                 bridge_phase=phase,
             )
         )
@@ -71761,6 +75554,7 @@ def _repair_in_place_login_bridge_config_propagation(
 
 def _in_place_login_bridge_writer_advanced_target_fence_is_exact(
     *,
+    checkpoint: Mapping[str, Any],
     phase: Mapping[str, Any],
     state: Mapping[str, Any],
     target_resource: Mapping[str, Any],
@@ -71774,6 +75568,10 @@ def _in_place_login_bridge_writer_advanced_target_fence_is_exact(
     reconciliation = _mapping(phase.get("in_place_login_surge_reconciliation"))
     receipt = _mapping(phase.get("in_place_login_surge_slurmcluster_regression"))
     apply_proof = _mapping(phase.get("in_place_login_surge_apply_proof"))
+    adoption = _mapping(phase.get("in_place_login_surge_post_switch_apply_adoption"))
+    semantic = _mapping(phase.get("in_place_login_surge_apply_semantic_drift"))
+    owner_restore = _mapping(phase.get("in_place_login_restore_slurmcluster_owner"))
+    protected_restore_material = _mapping(owner_restore.get("protected_successor_adoption"))
     target_binding = _mapping(_mapping(phase.get("slurmcluster_handoff_binding")).get("target"))
     manager = _mapping(phase.get("in_place_target_manager_pause"))
     controller_gate = _mapping(phase.get("in_place_target_controller_command_gate"))
@@ -71802,6 +75600,108 @@ def _in_place_login_bridge_writer_advanced_target_fence_is_exact(
         and str(receipt.get("historical_proof_sha256") or "") == _fingerprint(apply_proof)
         and str(apply_proof.get("live_spec_fingerprint") or "") == target_spec_fingerprint
     )
+    accounting_rebind_exact = bool(
+        accounting_rebind.get("schema") == _LEGACY_ROOTFS_SCONFIG_ACCOUNTING_REBIND_SCHEMA
+        and accounting_rebind.get("status") == "verified"
+        and accounting_rebind.get("target_uid") == target_uid
+        and str(accounting_rebind.get("command_fence_restored_at") or "").strip()
+        and str(accounting_rebind.get("writer_enabled_at") or "").strip()
+        and str(accounting_rebind.get("verified_at") or "").strip()
+    )
+    regression_route_exact = bool(
+        receipt.get("schema") == _IN_PLACE_LOGIN_SURGE_SLURMCLUSTER_REGRESSION_SCHEMA
+        and receipt.get("status") == "verified"
+        and _mapping(receipt.get("target"))
+        == {
+            "namespace": _SOPERATOR_NAMESPACE,
+            "name": target_ref,
+            "uid": target_uid,
+        }
+        and _positive_int(receipt.get("configured_replicas"), fallback=0) == configured
+        and _positive_int(receipt.get("surge_replicas"), fallback=0) == surged
+        and (
+            receipt.get("stable_spec_fingerprint")
+            == _in_place_login_surge_slurmcluster_stable_spec_fingerprint(target_resource)
+            or historical_apply_successor_exact
+            or restored_surge_successor_exact
+        )
+        and str(reconciliation.get("slurmcluster_regression_repair_sha256") or "")
+        == _fingerprint(receipt)
+        and str(manager.get("deployment_uid") or "") == str(receipt.get("manager_uid") or "")
+        and _positive_int(manager.get("pause_generation"), fallback=0)
+        == _positive_int(receipt.get("manager_pause_generation"), fallback=0)
+        and str(controller_gate.get("contract_fingerprint") or "")
+        == str(receipt.get("controller_gate_contract_fingerprint") or "")
+        and client_config_sha256 == str(receipt.get("client_config_sha256") or "")
+        and accounting_rebind_exact
+    )
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    desired_values_fingerprint = str(reconciliation.get("values_fingerprint") or "").strip()
+    populate_phase = _mapping(
+        _mapping(checkpoint.get("phase_state")).get(POPULATE_JAIL_REFRESH_PHASE_ID)
+    )
+    restore_bootstrap = _mapping(
+        _mapping(populate_phase.get("target_helm_admission_bootstraps")).get(
+            "in-place-login-surge-restore"
+        )
+    )
+    owner_target = _mapping(owner_restore.get("target"))
+    owner_stable_spec_fingerprint = str(owner_restore.get("stable_spec_fingerprint") or "").strip()
+    protected_restore_owner_exact = bool(
+        owner_restore.get("schema") == _IN_PLACE_LOGIN_RESTORE_SLURMCLUSTER_OWNER_SCHEMA
+        and owner_restore.get("status") == "verified"
+        and owner_target
+        == {
+            "namespace": _SOPERATOR_NAMESPACE,
+            "name": target_ref,
+            "uid": target_uid,
+        }
+        and _positive_int(owner_restore.get("configured_replicas"), fallback=0) == configured
+        and _positive_int(owner_restore.get("surge_replicas"), fallback=0) == surged
+        and _positive_int(owner_restore.get("successor_generation"), fallback=0) > 0
+        and str(owner_restore.get("successor_resource_version") or "").strip()
+        and str(owner_restore.get("verified_at") or "").strip()
+        and re.fullmatch(r"[0-9a-f]{64}", owner_stable_spec_fingerprint) is not None
+        and _in_place_login_restore_protected_successor_material_is_exact(
+            checkpoint=checkpoint,
+            rolling=phase,
+            restore_bootstrap=restore_bootstrap,
+            target_ref=target_ref,
+            stable_spec_fingerprint=owner_stable_spec_fingerprint,
+            material=protected_restore_material,
+        )
+    )
+    protected_post_switch_route_exact = bool(
+        restored_surge_successor_exact
+        and re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is not None
+        and re.fullmatch(r"[0-9a-f]{64}", desired_values_fingerprint) is not None
+        and str(manager.get("deployment_uid") or "").strip()
+        and _positive_int(manager.get("pause_generation"), fallback=0) > 0
+        and re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(controller_gate.get("contract_fingerprint") or "").strip(),
+        )
+        is not None
+        and str(reconciliation.get("post_switch_apply_adoption_sha256") or "")
+        == _fingerprint(adoption)
+        and command_fence.get("original_enabled") is True
+        and str(command_fence.get("restored_at") or "").strip()
+        and str(writer_gate.get("enabled_at") or "").strip()
+        and str(writer_gate.get("enabled_deployment_uid") or "").strip()
+        and _in_place_login_surge_post_switch_adoption_material_is_exact(
+            campaign_fingerprint=campaign_fingerprint,
+            target={
+                "namespace": _SOPERATOR_NAMESPACE,
+                "name": target_ref,
+                "uid": target_uid,
+            },
+            desired_values_fingerprint=desired_values_fingerprint,
+            receipt=adoption,
+            proof=apply_proof,
+            semantic=semantic,
+        )
+        and protected_restore_owner_exact
+    )
     return bool(
         fence.get("schema") == _LEGACY_ROOTFS_SCONFIG_WRITER_FENCE_SCHEMA
         and fence.get("status") == "prepared"
@@ -71820,46 +75720,20 @@ def _in_place_login_bridge_writer_advanced_target_fence_is_exact(
         )
         and _sconfigcontroller_replicas(target_resource)
         == _positive_int(fence.get("original_size"), fallback=0)
-        and receipt.get("schema") == _IN_PLACE_LOGIN_SURGE_SLURMCLUSTER_REGRESSION_SCHEMA
-        and receipt.get("status") == "verified"
-        and _mapping(receipt.get("target"))
-        == {
-            "namespace": _SOPERATOR_NAMESPACE,
-            "name": target_ref,
-            "uid": target_uid,
-        }
-        and _positive_int(receipt.get("configured_replicas"), fallback=0) == configured
-        and _positive_int(receipt.get("surge_replicas"), fallback=0) == surged
-        and (
-            receipt.get("stable_spec_fingerprint")
-            == _in_place_login_surge_slurmcluster_stable_spec_fingerprint(target_resource)
-            or historical_apply_successor_exact
-            or restored_surge_successor_exact
-        )
         and reconciliation.get("schema") == _IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA
         and reconciliation.get("status")
         in {"applied", "peer-ready", "released", "restoring", "restored"}
         and _positive_int(reconciliation.get("configured_replicas"), fallback=0) == configured
         and _positive_int(reconciliation.get("surge_replicas"), fallback=0) == surged
         and str(reconciliation.get("target_slurmcluster_uid") or "").strip() == target_uid
-        and str(reconciliation.get("slurmcluster_regression_repair_sha256") or "")
-        == _fingerprint(receipt)
         and manager.get("status") == "verified"
-        and str(manager.get("deployment_uid") or "") == str(receipt.get("manager_uid") or "")
-        and _positive_int(manager.get("pause_generation"), fallback=0)
-        == _positive_int(receipt.get("manager_pause_generation"), fallback=0)
         and controller_gate.get("status") == "verified"
-        and str(controller_gate.get("contract_fingerprint") or "")
-        == str(receipt.get("controller_gate_contract_fingerprint") or "")
         and client_handoff.get("status") == "verified"
         and propagation.get("status") == "verified"
         and re.fullmatch(r"[0-9a-f]{64}", client_config_sha256) is not None
         and str(propagation.get("config_sha256") or "") == client_config_sha256
-        and client_config_sha256 == str(receipt.get("client_config_sha256") or "")
+        and (regression_route_exact or protected_post_switch_route_exact)
         and accounting.get("status") in {"target-enabled", "verified"}
-        and accounting_rebind.get("schema") == _LEGACY_ROOTFS_SCONFIG_ACCOUNTING_REBIND_SCHEMA
-        and accounting_rebind.get("status") == "verified"
-        and accounting_rebind.get("target_uid") == target_uid
         and writer_gate.get("schema") == _ACCOUNTING_HANDOFF_WRITER_COMMAND_FENCE_SCHEMA
         and writer_gate.get("status") == "enabled"
         and _mapping(writer_gate.get("binding")).get("uid") == target_uid
@@ -71868,9 +75742,6 @@ def _in_place_login_bridge_writer_advanced_target_fence_is_exact(
         and _mapping(command_fence.get("binding")).get("uid") == target_uid
         and restored_resource_version
         and writer_gate.get("enabled_resource_version") == restored_resource_version
-        and str(accounting_rebind.get("command_fence_restored_at") or "").strip()
-        and str(accounting_rebind.get("writer_enabled_at") or "").strip()
-        and str(accounting_rebind.get("verified_at") or "").strip()
     )
 
 
@@ -72210,6 +76081,7 @@ def _refresh_in_place_login_bridge_config_via_target_writer(
         kube_context=kube_context,
     )
     advanced_target_fence = _in_place_login_bridge_writer_advanced_target_fence_is_exact(
+        checkpoint=checkpoint,
         phase=phase,
         state=state,
         target_resource=target_resource,
@@ -79811,7 +83683,6 @@ def _execute_controller_ha_bridge_phase(
             command_runner=command_runner,
             kube_context=kube_context,
             checkpoint_writer=checkpoint_writer,
-            checkpoint=checkpoint,
         )
     )
     lines.extend(
@@ -87990,6 +91861,671 @@ def _rebind_in_place_worker_munge_bridge_material_successor(
     ]
 
 
+def _in_place_accounting_munge_bridge_pods(
+    *,
+    journal: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> tuple[dict[str, str], ...]:
+    """Bind the two live retained controllers used for Munge cross-auth."""
+
+    namespace = str(journal.get("namespace") or "").strip()
+    roles = _sequence_of_mappings(journal.get("controller_roles"))
+    _prove_journaled_controller_bridge_exclusivity(
+        journal=journal,
+        proof_label="accounting Munge runtime reload",
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    if not namespace or len(roles) != 2:
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload requires two exact retained controllers."
+        )
+    bindings: list[dict[str, str]] = []
+    for role in roles:
+        pod_name = str(role.get("pod_name") or "").strip()
+        pod_uid = str(role.get("pod_uid") or "").strip()
+        pod = _json_from_command(
+            command_runner,
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "get",
+                "pod",
+                pod_name,
+                "-o",
+                "json",
+            ],
+            timeout_seconds=120,
+            check=False,
+        )
+        metadata = _mapping(pod.get("metadata"))
+        status = _mapping(pod.get("status"))
+        containers = tuple(
+            item
+            for item in _sequence_of_mappings(_mapping(pod.get("spec")).get("containers"))
+            if str(item.get("name") or "").strip() == "slurmctld"
+        )
+        container_status = next(
+            (
+                item
+                for item in _sequence_of_mappings(status.get("containerStatuses"))
+                if str(item.get("name") or "").strip() == "slurmctld"
+            ),
+            {},
+        )
+        if (
+            not pod_name
+            or not pod_uid
+            or str(metadata.get("name") or "") != pod_name
+            or str(metadata.get("uid") or "") != pod_uid
+            or metadata.get("deletionTimestamp")
+            or str(status.get("phase") or "") != "Running"
+            or not _pod_condition_true(pod, "Ready")
+            or len(containers) != 1
+            or container_status.get("ready") is not True
+            or _non_negative_int(container_status.get("restartCount"), fallback=-1) != 0
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting Munge runtime reload found retained controller identity "
+                f"or readiness drift for {pod_name or '<unknown>'}."
+            )
+        bindings.append({"namespace": namespace, "name": pod_name, "uid": pod_uid})
+    return tuple(sorted(bindings, key=lambda item: (item["name"], item["uid"])))
+
+
+def _in_place_accounting_munge_probe(
+    *,
+    accounting_pod: str,
+    bridge_pods: Sequence[Mapping[str, str]],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> dict[str, Any]:
+    """Classify local and cross-runtime Munge without retaining credentials."""
+
+    endpoints = [
+        (
+            "accounting",
+            _SOPERATOR_NAMESPACE,
+            accounting_pod,
+            "accounting",
+        ),
+        *(
+            (
+                f"bridge-{index}",
+                str(binding.get("namespace") or ""),
+                str(binding.get("name") or ""),
+                "slurmctld",
+            )
+            for index, binding in enumerate(bridge_pods)
+        ),
+    ]
+    if (
+        not accounting_pod
+        or len(endpoints) != 3
+        or any(
+            not namespace or not pod_name for _label, namespace, pod_name, _container in endpoints
+        )
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge probe lacks one accounting and two bridge endpoints."
+        )
+    credentials: dict[str, str] = {}
+    local_decode_count = 0
+    for label, namespace, pod_name, container in endpoints:
+        encoded = command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "exec",
+                pod_name,
+                "-c",
+                container,
+                "--",
+                "munge",
+                "-n",
+            ],
+            timeout_seconds=30,
+            check=False,
+        )
+        credential = encoded.stdout if encoded.returncode == 0 else ""
+        if not credential:
+            continue
+        decoded = command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "exec",
+                "-i",
+                pod_name,
+                "-c",
+                container,
+                "--",
+                "unmunge",
+            ],
+            input_text=credential,
+            timeout_seconds=30,
+            check=False,
+        )
+        if decoded.returncode == 0:
+            credentials[label] = credential
+            local_decode_count += 1
+    cross_decode_count = 0
+    cross_attempt_count = 0
+    if len(credentials) == len(endpoints):
+        accounting_endpoint = endpoints[0]
+        accounting_credential = credentials["accounting"]
+        for bridge_endpoint in endpoints[1:]:
+            for credential, target in (
+                (credentials[bridge_endpoint[0]], accounting_endpoint),
+                (accounting_credential, bridge_endpoint),
+            ):
+                _target_label, namespace, pod_name, container = target
+                cross_attempt_count += 1
+                decoded = command_runner(
+                    [
+                        "kubectl",
+                        "--context",
+                        kube_context,
+                        "-n",
+                        namespace,
+                        "exec",
+                        "-i",
+                        pod_name,
+                        "-c",
+                        container,
+                        "--",
+                        "unmunge",
+                    ],
+                    input_text=credential,
+                    timeout_seconds=30,
+                    check=False,
+                )
+                if decoded.returncode == 0:
+                    cross_decode_count += 1
+    local_exact = local_decode_count == len(endpoints)
+    authenticated = local_exact and cross_attempt_count == 4 and cross_decode_count == 4
+    isolated = local_exact and cross_attempt_count == 4 and cross_decode_count == 0
+    return {
+        "schema": _IN_PLACE_ACCOUNTING_MUNGE_PROBE_SCHEMA,
+        "status": "authenticated" if authenticated else "isolated" if isolated else "invalid",
+        "local_decode_count": local_decode_count,
+        "local_endpoint_count": len(endpoints),
+        "cross_decode_count": cross_decode_count,
+        "cross_attempt_count": cross_attempt_count,
+    }
+
+
+def _in_place_accounting_munge_queue_proof(
+    *,
+    phase: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> dict[str, Any]:
+    records = _rolling_compute_checkpoint_pause_records(phase)
+    if not records or any(
+        record.applied_state != "DOWN"
+        or not record.applied_record
+        or not record.applied_record_fingerprint
+        for record in records
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload requires exact checkpointed partition pauses."
+        )
+    queue = _kubectl_exec_login_once(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        args=("squeue", "-h", "-o", "%i|%T|%N|%P|%r"),
+        timeout_seconds=60,
+    )
+    if queue.returncode != 0 or queue.stdout.strip():
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload requires an empty Slurm queue while "
+            "all checkpointed partitions remain paused."
+        )
+    return {
+        "schema": "nebius-cxcli/in-place-accounting-munge-queue-proof/v1",
+        "status": "empty-paused",
+        "partitions": sorted(record.partition for record in records),
+        "partition_pause_fingerprint": _fingerprint([record.as_payload() for record in records]),
+    }
+
+
+def _in_place_accounting_munge_pod_projection(
+    pod: Mapping[str, Any],
+    *,
+    include_resource_version: bool,
+) -> dict[str, Any]:
+    keys = [
+        "name",
+        "uid",
+        "created_at",
+        "replica_set_uid",
+        "node_name",
+        "writer_image",
+        "writer_image_id",
+        "writer_container_id",
+        "writer_restart_count",
+        "writer_started_at",
+        "munge_secret_name",
+    ]
+    if include_resource_version:
+        keys.append("resource_version")
+    return {key: copy.deepcopy(pod.get(key)) for key in keys}
+
+
+def _in_place_accounting_munge_live_pod(
+    *,
+    contract: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    require_ready: bool,
+) -> dict[str, Any]:
+    deployment = _accounting_handoff_deployment_state(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    selector = _accounting_handoff_deployment_selector(deployment)
+    if (
+        str(deployment.get("uid") or "") != str(contract.get("deployment_uid") or "")
+        or str(deployment.get("owner_uid") or "") != str(contract.get("target_uid") or "")
+        or _positive_int(deployment.get("replicas"), fallback=0) != 1
+        or selector != _mapping(contract.get("deployment_selector"))
+        or str(deployment.get("strategy_type") or "") != "Recreate"
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload found target Deployment drift."
+        )
+    pods = _accounting_handoff_selector_pods(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        selector=selector,
+        deployment_uid=str(deployment.get("uid") or ""),
+    )
+    if len(pods) > 1:
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload found multiple target accounting Pods."
+        )
+    if not pods:
+        return {}
+    pod = pods[0]
+    if (
+        not str(pod.get("name") or "")
+        or not str(pod.get("uid") or "")
+        or not str(pod.get("resource_version") or "")
+        or pod.get("owned") is not True
+        or _positive_int(pod.get("writer_container_count"), fallback=0) != 1
+        or _non_negative_int(pod.get("writer_restart_count"), fallback=-1) != 0
+        or not str(pod.get("writer_container_id") or "")
+        or not str(pod.get("writer_started_at") or "")
+        or str(pod.get("munge_secret_name") or "") != str(contract.get("target_secret_name") or "")
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload found accounting Pod lineage, runtime, "
+            "or Secret drift."
+        )
+    if require_ready and (
+        pod.get("deleting") is not False
+        or pod.get("phase") != "Running"
+        or pod.get("ready") is not True
+    ):
+        return {}
+    return dict(pod)
+
+
+def _in_place_accounting_munge_runtime_contract(
+    *,
+    journal: Mapping[str, Any],
+    phase: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> dict[str, Any]:
+    accounting = _mapping(phase.get("accounting_handoff"))
+    if not accounting or handoff.get("patched") is not True:
+        return {}
+    if accounting.get("status") not in {"target-enabled", "verified"}:
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload requires the enabled target accounting writer."
+        )
+    deployment = _accounting_handoff_assert_target_writer_ready(
+        state=accounting,
+        phase=phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    selector = _accounting_handoff_deployment_selector(deployment)
+    if _positive_int(deployment.get("replicas"), fallback=0) != 1:
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload requires one target accounting writer."
+        )
+    service_name = f"{target_ref}-accounting-svc"
+    service = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "service",
+            service_name,
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    service_metadata = _mapping(service.get("metadata"))
+    service_selector = {
+        str(key): str(value)
+        for key, value in _mapping(_mapping(service.get("spec")).get("selector")).items()
+    }
+    bridge_pods = _in_place_accounting_munge_bridge_pods(
+        journal=journal,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    accepted_at = str(handoff.get("accepted_at") or "").strip()
+    if (
+        handoff.get("status") != "verified"
+        or not accepted_at
+        or str(handoff.get("target_ref") or "") != target_ref
+        or not str(handoff.get("target_uid") or "")
+        or not str(handoff.get("target_secret_name") or "")
+        or not str(handoff.get("target_secret_uid") or "")
+        or not str(handoff.get("accepted_target_effective_material_sha256") or "")
+        or str(deployment.get("owner_uid") or "") != str(handoff.get("target_uid") or "")
+        or str(service_metadata.get("name") or "") != service_name
+        or not str(service_metadata.get("uid") or "")
+        or service_selector != selector
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload lost its Secret, target, Service, "
+            "or Deployment binding."
+        )
+    return {
+        "schema": _IN_PLACE_ACCOUNTING_MUNGE_RUNTIME_RELOAD_SCHEMA,
+        "authority_epoch": str(_mapping(journal.get("authority")).get("epoch") or ""),
+        "target_ref": target_ref,
+        "target_uid": str(handoff.get("target_uid") or ""),
+        "target_secret_name": str(handoff.get("target_secret_name") or ""),
+        "target_secret_uid": str(handoff.get("target_secret_uid") or ""),
+        "accepted_effective_material_sha256": str(
+            handoff.get("accepted_target_effective_material_sha256") or ""
+        ),
+        "accepted_at": accepted_at,
+        "deployment_uid": str(deployment.get("uid") or ""),
+        "deployment_selector": selector,
+        "service_name": service_name,
+        "service_uid": str(service_metadata.get("uid") or ""),
+        "bridge_pods": list(bridge_pods),
+    }
+
+
+def _repair_in_place_accounting_munge_runtime_after_cas(
+    *,
+    journal: Mapping[str, Any],
+    phase: Mapping[str, Any],
+    rollout: dict[str, Any],
+    handoff: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    checkpoint_writer: Callable[[], None],
+    timeout_seconds: float = 600,
+) -> list[str]:
+    """Reload one exact target accounting Pod whose Munge predates the CAS."""
+
+    contract = _in_place_accounting_munge_runtime_contract(
+        journal=journal,
+        phase=phase,
+        handoff=handoff,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    if not contract:
+        return []
+    state = rollout.setdefault("accounting_munge_runtime_reload", {})
+    if not isinstance(state, dict):
+        raise RuntimeError("Accounting Munge runtime reload journal must be a mapping.")
+    stable = dict(contract)
+    if state and any(state.get(key) != value for key, value in stable.items()):
+        raise RuntimeError(
+            "recovery-required: accounting Munge runtime reload changed its target, "
+            "Secret, writer, Service, or bridge binding."
+        )
+    current = _in_place_accounting_munge_live_pod(
+        contract=contract,
+        kube_context=kube_context,
+        command_runner=command_runner,
+        require_ready=True,
+    )
+    if state.get("status") == "verified":
+        successor = _in_place_accounting_munge_pod_projection(
+            current,
+            include_resource_version=False,
+        )
+        if not current or successor != _mapping(state.get("successor")):
+            raise SoperatorMigrationPhasePending(
+                "verified accounting Munge runtime successor changed identity."
+            )
+        probe = _in_place_accounting_munge_probe(
+            accounting_pod=str(current.get("name") or ""),
+            bridge_pods=_sequence_of_mappings(contract.get("bridge_pods")),
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+        if probe.get("status") != "authenticated":
+            raise SoperatorMigrationPhasePending(
+                "verified accounting Munge runtime lost retained-controller authentication."
+            )
+        return ["Reused the verified target accounting Munge runtime successor."]
+
+    if not state:
+        if not current:
+            raise SoperatorMigrationPhasePending(
+                "accounting Munge runtime reload requires one Ready source Pod before intent."
+            )
+        probe = _in_place_accounting_munge_probe(
+            accounting_pod=str(current.get("name") or ""),
+            bridge_pods=_sequence_of_mappings(contract.get("bridge_pods")),
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+        successor = _in_place_accounting_munge_pod_projection(
+            current,
+            include_resource_version=False,
+        )
+        if probe.get("status") == "authenticated":
+            state.update(
+                {
+                    **stable,
+                    "status": "verified",
+                    "no_restart_required": True,
+                    "successor": successor,
+                    "probe": probe,
+                    "verified_at": _utc_now(),
+                }
+            )
+            checkpoint_writer()
+            return [
+                "Verified the target accounting Munge runtime already authenticates "
+                "both retained controllers."
+            ]
+        if probe.get("status") != "isolated":
+            raise SoperatorMigrationPhasePending(
+                "accounting Munge runtime probe is neither exact authentication nor "
+                "the exact pre-CAS isolation contract."
+            )
+        try:
+            stale_runtime = _journal_timestamp(
+                current.get("writer_started_at"),
+                field="accounting writer start",
+            ) < _journal_timestamp(contract.get("accepted_at"), field="Munge Secret acceptance")
+        except RuntimeError as exc:
+            raise SoperatorMigrationPhasePending(
+                "accounting Munge runtime reload lacks exact comparable timestamps."
+            ) from exc
+        if not stale_runtime:
+            raise SoperatorMigrationPhasePending(
+                "a post-CAS accounting Munge runtime still cannot authenticate the "
+                "retained controllers; refusing an unproven restart."
+            )
+        queue_proof = _in_place_accounting_munge_queue_proof(
+            phase=phase,
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+        state.update(
+            {
+                **stable,
+                "status": "delete-intent-recorded",
+                "source": _in_place_accounting_munge_pod_projection(
+                    current,
+                    include_resource_version=True,
+                ),
+                "pre_delete_probe": probe,
+                "queue_proof": queue_proof,
+                "intent_at": _utc_now(),
+            }
+        )
+        checkpoint_writer()
+
+    source = _mapping(state.get("source"))
+    if state.get("status") == "delete-intent-recorded":
+        current = _in_place_accounting_munge_live_pod(
+            contract=contract,
+            kube_context=kube_context,
+            command_runner=command_runner,
+            require_ready=False,
+        )
+        if current and str(current.get("uid") or "") == str(source.get("uid") or ""):
+            current_source = _in_place_accounting_munge_pod_projection(
+                current,
+                include_resource_version=True,
+            )
+            probe = _in_place_accounting_munge_probe(
+                accounting_pod=str(current.get("name") or ""),
+                bridge_pods=_sequence_of_mappings(contract.get("bridge_pods")),
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+            queue_proof = _in_place_accounting_munge_queue_proof(
+                phase=phase,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+            if (
+                current_source != source
+                or probe.get("status") != "isolated"
+                or queue_proof != _mapping(state.get("queue_proof"))
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "accounting Munge source, isolation, or empty-queue proof drifted "
+                    "before its UID-bound restart."
+                )
+            _command_runner_uid_preconditioned_delete(
+                command_runner,
+                kube_context=kube_context,
+                api_path=(
+                    f"/api/v1/namespaces/{_SOPERATOR_NAMESPACE}/pods/"
+                    f"{str(source.get('name') or '')}"
+                ),
+                uid=str(source.get("uid") or ""),
+                resource_version=str(source.get("resource_version") or ""),
+                propagation_policy="Background",
+                timeout_seconds=300,
+                allow_not_found=True,
+            )
+        state.update(
+            {
+                "status": "delete-accepted",
+                "delete_accepted_at": _utc_now(),
+            }
+        )
+        checkpoint_writer()
+
+    if state.get("status") != "delete-accepted":
+        raise SoperatorMigrationPhasePending(
+            "accounting Munge runtime reload has an unsupported partial checkpoint."
+        )
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    while True:
+        successor_pod = _in_place_accounting_munge_live_pod(
+            contract=contract,
+            kube_context=kube_context,
+            command_runner=command_runner,
+            require_ready=True,
+        )
+        successor_uid = str(successor_pod.get("uid") or "")
+        if successor_pod and successor_uid != str(source.get("uid") or ""):
+            try:
+                post_cas = _journal_timestamp(
+                    successor_pod.get("writer_started_at"),
+                    field="accounting successor start",
+                ) >= _journal_timestamp(
+                    contract.get("accepted_at"),
+                    field="Munge Secret acceptance",
+                )
+            except RuntimeError:
+                post_cas = False
+            probe = _in_place_accounting_munge_probe(
+                accounting_pod=str(successor_pod.get("name") or ""),
+                bridge_pods=_sequence_of_mappings(contract.get("bridge_pods")),
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+            if not post_cas or probe.get("status") != "authenticated":
+                raise SoperatorMigrationPhasePending(
+                    "accounting Munge successor is Ready but does not have exact "
+                    "post-CAS retained-controller authentication."
+                )
+            accounting = _mapping(phase.get("accounting_handoff"))
+            _accounting_handoff_assert_target_writer_ready(
+                state=accounting,
+                phase=phase,
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+            state.update(
+                {
+                    "status": "verified",
+                    "no_restart_required": False,
+                    "successor": _in_place_accounting_munge_pod_projection(
+                        successor_pod,
+                        include_resource_version=False,
+                    ),
+                    "probe": probe,
+                    "verified_at": _utc_now(),
+                }
+            )
+            checkpoint_writer()
+            return [
+                "Reloaded the exact pre-CAS target accounting Munge runtime and "
+                "verified bidirectional authentication with both retained controllers."
+            ]
+        if time.monotonic() >= deadline:
+            raise SoperatorMigrationPhasePending(
+                "target accounting did not produce an exact authenticated post-CAS "
+                "runtime successor."
+            )
+        time.sleep(5)
+
+
 def _ensure_in_place_worker_bridge_munge_continuity(
     *,
     journal: dict[str, Any],
@@ -88222,6 +92758,16 @@ def _ensure_in_place_worker_bridge_munge_continuity(
         command_runner=command_runner,
         checkpoint_writer=checkpoint_writer,
     )
+    accounting_runtime_lines = _repair_in_place_accounting_munge_runtime_after_cas(
+        journal=journal,
+        phase=phase,
+        rollout=rollout,
+        handoff=handoff,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        command_runner=command_runner,
+        checkpoint_writer=checkpoint_writer,
+    )
     return [
         *rebind_lines,
         (
@@ -88232,6 +92778,7 @@ def _ensure_in_place_worker_bridge_munge_continuity(
             "against the retained HA bridge before worker recreation."
         ),
         *restart_lines,
+        *accounting_runtime_lines,
     ]
 
 
@@ -90612,7 +95159,7 @@ def _repair_in_place_worker_bridge_config_propagation(
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None,
 ) -> list[str]:
-    """Serially reload exact job-free workers whose mounted config is the predecessor."""
+    """Serially reload exact job-free workers whose runtime has not converged."""
 
     if checkpoint_writer is None:
         raise SoperatorMigrationPhasePending(
@@ -90813,20 +95360,21 @@ def _repair_in_place_worker_bridge_config_propagation(
                 kube_context=kube_context,
                 command_runner=command_runner,
             )
-            if observed_sha256 == expected_sha256 and current.get("ready") == "true":
-                state.update(
-                    {
-                        "status": "verified",
-                        "replacement_required": False,
-                        "config_sha256": expected_sha256,
-                        "source": dict(current),
-                        "successor": dict(current),
-                        "verified_at": _utc_now(),
-                    }
-                )
-                checkpoint_writer()
-                continue
-            if observed_sha256 != predecessor_sha256:
+            if observed_sha256 == expected_sha256:
+                if current.get("ready") == "true":
+                    state.update(
+                        {
+                            "status": "verified",
+                            "replacement_required": False,
+                            "config_sha256": expected_sha256,
+                            "source": dict(current),
+                            "successor": dict(current),
+                            "verified_at": _utc_now(),
+                        }
+                    )
+                    checkpoint_writer()
+                    continue
+            elif observed_sha256 != predecessor_sha256:
                 raise RuntimeError(
                     f"recovery-required: target worker {pod_name} mounted neither the "
                     "exact bridge-config predecessor nor successor."
@@ -102040,11 +106588,15 @@ def _accounting_handoff_selector_pods(
             ),
             {},
         )
+        munge_volume = _pod_named_volume_source(item, "munge-key")
+        munge_secret_name = str(_mapping(munge_volume.get("secret")).get("secretName") or "")
         result.append(
             {
                 "name": str(metadata.get("name") or "").strip(),
                 "uid": str(metadata.get("uid") or "").strip(),
                 "resource_version": str(metadata.get("resourceVersion") or "").strip(),
+                "created_at": str(metadata.get("creationTimestamp") or "").strip(),
+                "replica_set_uid": next(iter(owner_uids), ""),
                 "labels": {
                     str(key): str(value)
                     for key, value in labels.items()
@@ -102062,6 +106614,15 @@ def _accounting_handoff_selector_pods(
                     writer_containers[0].get("image") if len(writer_containers) == 1 else ""
                 ).strip(),
                 "writer_image_id": str(writer_status.get("imageID") or "").strip(),
+                "writer_container_id": str(writer_status.get("containerID") or "").strip(),
+                "writer_restart_count": _non_negative_int(
+                    writer_status.get("restartCount"), fallback=-1
+                ),
+                "writer_started_at": str(
+                    _mapping(_mapping(writer_status.get("state")).get("running")).get("startedAt")
+                    or ""
+                ).strip(),
+                "munge_secret_name": munge_secret_name,
                 "writer_command_present": bool(writer_config.get("command_present")),
                 "writer_command": list(writer_config.get("command") or []),
                 "writer_args_present": bool(writer_config.get("args_present")),
@@ -107355,11 +111916,124 @@ def _accounting_handoff_require_exact_slurmcluster_controller_owner(
         )
 
 
+def _accounting_handoff_verified_protected_login_rollout(
+    *,
+    login: Mapping[str, Any],
+    ready_pods: Sequence[Mapping[str, str]],
+    checkpoint: Mapping[str, Any] | None,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+) -> dict[str, Any] | None:
+    """Accept only rollout lag caused by the exact live cxcli login hold."""
+
+    if checkpoint is None or checkpoint_writer is None:
+        return None
+    raw_hold = checkpoint.get("active_login_session_hold")
+    if not isinstance(raw_hold, dict) or raw_hold.get("status") != "verified":
+        return None
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    try:
+        expected_contract = _login_session_hold_contract(campaign_fingerprint)
+    except RuntimeError:
+        return None
+    if to_plain_data(_mapping(raw_hold.get("contract"))) != expected_contract:
+        return None
+
+    metadata = _mapping(login.get("metadata"))
+    spec = _mapping(login.get("spec"))
+    status = _mapping(login.get("status"))
+    generation = _positive_int(metadata.get("generation"), fallback=0)
+    observed_generation = _positive_int(status.get("observedGeneration"), fallback=0)
+    desired = _nonnegative_int(spec.get("replicas"), fallback=0)
+    current = _nonnegative_int(status.get("replicas"), fallback=0)
+    updated = _nonnegative_int(status.get("updatedReplicas"), fallback=0)
+    ready = _nonnegative_int(status.get("readyReplicas"), fallback=0)
+    available = _nonnegative_int(status.get("availableReplicas"), fallback=0)
+    update_revision = str(status.get("updateRevision") or "").strip()
+    held_pods = {
+        (str(item.get("name") or "").strip(), str(item.get("uid") or "").strip())
+        for item in _sequence_of_mappings(raw_hold.get("pods"))
+    }
+    observed_pods = {
+        (str(item.get("name") or "").strip(), str(item.get("uid") or "").strip()): str(
+            item.get("revision") or ""
+        ).strip()
+        for item in ready_pods
+    }
+    if (
+        desired <= 0
+        or observed_generation < generation
+        or current != desired
+        or ready != desired
+        or available < desired
+        or updated >= desired
+        or len(observed_pods) != desired
+        or not held_pods
+        or any(not all(identity) for identity in held_pods)
+        or not update_revision
+        or any(not revision for revision in observed_pods.values())
+    ):
+        return None
+    protected_old_revision_pods = {
+        identity for identity, revision in observed_pods.items() if revision != update_revision
+    }
+    if (
+        protected_old_revision_pods != held_pods
+        or updated != desired - len(protected_old_revision_pods)
+        or any(
+            revision != update_revision
+            for identity, revision in observed_pods.items()
+            if identity not in held_pods
+        )
+    ):
+        return None
+
+    _verify_active_login_session_hold(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        state=raw_hold,
+        checkpoint_writer=checkpoint_writer,
+        checkpoint=checkpoint,
+    )
+    verified_hold_items = _sequence_of_mappings(raw_hold.get("pods"))
+    verified_held_pods = {
+        (str(item.get("name") or "").strip(), str(item.get("uid") or "").strip())
+        for item in verified_hold_items
+    }
+    login_uid = str(metadata.get("uid") or "").strip()
+    if (
+        raw_hold.get("status") != "verified"
+        or verified_held_pods != held_pods
+        or not login_uid
+        or any(
+            str(_mapping(item.get("workload")).get("api_version") or "").strip()
+            != "apps.kruise.io/v1beta1"
+            or str(_mapping(item.get("workload")).get("kind") or "").strip() != "StatefulSet"
+            or str(_mapping(item.get("workload")).get("name") or "").strip() != "login"
+            or str(_mapping(item.get("workload")).get("uid") or "").strip() != login_uid
+            for item in verified_hold_items
+        )
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target login rollout protection changed during verification."
+        )
+    return {
+        "status": "verified-protected-hold",
+        "updated_pods": updated,
+        "protected_unupdated_pods": len(protected_old_revision_pods),
+        "update_revision": update_revision,
+    }
+
+
 def _accounting_handoff_exact_target_login_state(
     *,
     target_binding: Mapping[str, Any],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    checkpoint: Mapping[str, Any] | None = None,
+    checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     target_uid = str(target_binding.get("uid") or "").strip()
     target_name = str(target_binding.get("name") or "").strip()
@@ -107416,11 +112090,10 @@ def _accounting_handoff_exact_target_login_state(
         or not login_uid
         or login_labels.get("app.kubernetes.io/instance") != target_name
         or login_labels.get("app.kubernetes.io/component") != "login"
-        or not login_ready
     ):
         raise SoperatorMigrationPhasePending(
-            "accounting handoff will not retire the source owner until the exact "
-            f"target-owned login workload is ready ({login_detail})."
+            "accounting handoff requires the exact target-owned login workload to be "
+            f"ready ({login_detail})."
         )
 
     pod_payload = _json_from_command(
@@ -107472,13 +112145,41 @@ def _accounting_handoff_exact_target_login_state(
             and str(_mapping(pod.get("status")).get("phase") or "").strip() == "Running"
             and conditions.get("Ready") == "True"
         ):
-            ready_pods.append({"name": name, "uid": uid})
+            ready_pods.append(
+                {
+                    "name": name,
+                    "uid": uid,
+                    "revision": str(
+                        _mapping(metadata.get("labels")).get("controller-revision-hash") or ""
+                    ).strip(),
+                }
+            )
     desired = _non_negative_int(_mapping(login.get("spec")).get("replicas"), fallback=0)
     if desired != expected_login_replicas or len(ready_pods) < desired:
         raise SoperatorMigrationPhasePending(
             "accounting handoff exact target login replica contract is not ready "
             f"({len(ready_pods)}/{desired}; configured={expected_login_replicas})."
         )
+    if login_ready:
+        rollout_evidence = {
+            "status": "fully-updated",
+            "updated_pods": desired,
+            "protected_unupdated_pods": 0,
+        }
+    else:
+        rollout_evidence = _accounting_handoff_verified_protected_login_rollout(
+            login=login,
+            ready_pods=ready_pods,
+            checkpoint=checkpoint,
+            command_runner=command_runner,
+            kube_context=kube_context,
+            checkpoint_writer=checkpoint_writer,
+        )
+        if rollout_evidence is None:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff requires the exact target-owned login workload to be "
+                f"ready ({login_detail})."
+            )
 
     services_payload = _json_from_command(
         command_runner,
@@ -107627,6 +112328,7 @@ def _accounting_handoff_exact_target_login_state(
         "ready_pods": len(ready_pods),
         "desired_pods": desired,
         "configured_pods": expected_login_replicas,
+        "rollout": rollout_evidence,
         "services": len(login_services),
         "ready_endpoints": sum(endpoint_counts.values()),
     }
@@ -107640,6 +112342,8 @@ def _accounting_handoff_held_job_retirement_evidence(
     target_binding: Mapping[str, Any],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    checkpoint: Mapping[str, Any] | None = None,
+    checkpoint_writer: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     active_operations = _active_slurm_held_job_operations(held_job_operations)
     evidence: dict[str, Any] = {
@@ -107658,6 +112362,8 @@ def _accounting_handoff_held_job_retirement_evidence(
         target_binding=target_binding,
         command_runner=command_runner,
         kube_context=kube_context,
+        checkpoint=checkpoint,
+        checkpoint_writer=checkpoint_writer,
     )
     jobs: dict[str, Any] = {}
     for job_id, operation in sorted(active_operations.items()):
@@ -107703,6 +112409,7 @@ def _accounting_handoff_require_target_control_plane_ready(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     checkpoint_writer: Callable[[], None] | None,
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> None:
     target_resource, _target_resource_version, _target_accounting_enabled = (
         _accounting_handoff_exact_slurmcluster(
@@ -107763,6 +112470,8 @@ def _accounting_handoff_require_target_control_plane_ready(
         target_binding=target_binding,
         command_runner=command_runner,
         kube_context=kube_context,
+        checkpoint=checkpoint,
+        checkpoint_writer=checkpoint_writer,
     )
     ping = _kubectl_exec_login_once(
         command_runner=command_runner,
@@ -108264,6 +112973,7 @@ def _accounting_handoff_checkpoint_final_source_delete_preconditions(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     checkpoint_writer: Callable[[], None] | None,
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> str:
     state = _accounting_handoff_state(phase)
     handoff_binding = _mapping(phase.get("slurmcluster_handoff_binding"))
@@ -108368,6 +113078,8 @@ def _accounting_handoff_checkpoint_final_source_delete_preconditions(
         target_binding=target_binding,
         command_runner=command_runner,
         kube_context=kube_context,
+        checkpoint=checkpoint,
+        checkpoint_writer=checkpoint_writer,
     )
     if existing and existing != replacement:
         history = state.setdefault("source_cleanup_precondition_history", [])
@@ -109357,6 +114069,7 @@ def _complete_accounting_handoff_import_with_admission_bootstrap(
     phase: dict[str, Any],
     target_ref: str,
     values: Mapping[str, Any],
+    manager_restore_values: Mapping[str, Any],
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None,
@@ -109409,6 +114122,13 @@ def _complete_accounting_handoff_import_with_admission_bootstrap(
         additional_immutable={
             "source_binding": source_binding,
             "target_binding": target_binding,
+            "manager_restore_contract": (
+                _target_helm_admission_manager_restore_contract(
+                    command_runner=command_runner,
+                    values=manager_restore_values,
+                    disable_open_metrics_for_legacy_clients=None,
+                )
+            ),
         },
         allow_unbound_target=False,
         recovered_line=(
@@ -109592,7 +114312,6 @@ def _accounting_handoff_temporary_login_helm_replay_is_safe(
         all(source_binding.values())
         and all(target_binding.values())
         and source_cleanup_binding == source_binding
-        and phase.get("live_source_slurmcluster_present") is False
         and _accounting_handoff_source_retirement_checkpoint_is_exact(
             phase=phase,
             state=state,
@@ -111908,37 +116627,40 @@ def _execute_rolling_compute_migration_phase(
             "Compute migration skipped: no Slurm custom resources were detected on the source cluster."
         ]
     compute_migration = _compute_migration_contract(payload, target_ref)
-    if (
-        compute_migration.get("mode") == COMPUTE_MIGRATION_MODE_IN_PLACE
-        and not in_place_ownership_handoff_only
-    ):
-        return _execute_in_place_compute_migration_phase(
-            checkpoint=checkpoint,
+    if compute_migration.get("mode") == COMPUTE_MIGRATION_MODE_IN_PLACE:
+        accepted_in_place_node_groups = _locked_campaign_in_place_node_groups(
             payload=payload,
-            source_report=source_report,
-            live_snapshot=live_snapshot,
             target_ref=target_ref,
-            kube_context=kube_context,
-            nebius_api=nebius_api,
-            command_runner=command_runner,
-            checkpoint_writer=checkpoint_writer,
-            job_policy=job_policy,
-            cancel_job_ids=cancel_job_ids,
-            requeue_job_ids=requeue_job_ids,
-            job_wait_timeout_seconds=job_wait_timeout_seconds,
-            job_refresh_interval_seconds=job_refresh_interval_seconds,
-            slurm_scheduling_pause=slurm_scheduling_pause,
-            slurm_decision_recorder=slurm_decision_recorder,
-            interactive_prompt_pause=interactive_prompt_pause,
-            allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
-            impact_reporter=impact_reporter,
-            mutation_guard=mutation_guard,
+            checkpoint=checkpoint,
         )
-    if in_place_ownership_handoff_only:
         _checkpoint_in_place_login_handoff_binding(
             checkpoint=checkpoint,
             checkpoint_writer=checkpoint_writer,
+            accepted_in_place_node_groups=accepted_in_place_node_groups,
         )
+        if not in_place_ownership_handoff_only:
+            return _execute_in_place_compute_migration_phase(
+                checkpoint=checkpoint,
+                payload=payload,
+                source_report=source_report,
+                live_snapshot=live_snapshot,
+                target_ref=target_ref,
+                kube_context=kube_context,
+                nebius_api=nebius_api,
+                command_runner=command_runner,
+                checkpoint_writer=checkpoint_writer,
+                job_policy=job_policy,
+                cancel_job_ids=cancel_job_ids,
+                requeue_job_ids=requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                slurm_scheduling_pause=slurm_scheduling_pause,
+                slurm_decision_recorder=slurm_decision_recorder,
+                interactive_prompt_pause=interactive_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                impact_reporter=impact_reporter,
+                mutation_guard=mutation_guard,
+            )
     pre_mutation_lines = _ensure_continuous_worker_slurm_pause(
         checkpoint=checkpoint,
         source_report=source_report,
@@ -112474,6 +117196,13 @@ def _execute_rolling_compute_migration_phase(
                         checkpoint_writer=checkpoint_writer,
                         mutation_guard=mutation_guard,
                         helm_operation=_target_helm_operation,
+                        manager_restore_contract=(
+                            _target_helm_admission_manager_restore_contract(
+                                command_runner=command_runner,
+                                values=ungated_values,
+                                disable_open_metrics_for_legacy_clients=None,
+                            )
+                        ),
                     )
                 )
             else:
@@ -112532,6 +117261,7 @@ def _execute_rolling_compute_migration_phase(
                     phase=phase,
                     target_ref=target_ref,
                     values=values,
+                    manager_restore_values=ungated_values,
                     kube_context=kube_context,
                     command_runner=command_runner,
                     checkpoint_writer=checkpoint_writer,
@@ -112671,6 +117401,7 @@ def _execute_rolling_compute_migration_phase(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     checkpoint_writer=checkpoint_writer,
+                    checkpoint=checkpoint,
                 )
             )
             handoff_binding = _mapping(phase.get("slurmcluster_handoff_binding"))
@@ -112709,6 +117440,7 @@ def _execute_rolling_compute_migration_phase(
                 retire_slurmcluster_only=True,
                 mutation_guard=mutation_guard,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             _accounting_handoff_checkpoint_source_owner_retired(
                 phase=phase,
@@ -112802,6 +117534,7 @@ def _execute_rolling_compute_migration_phase(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             lines.extend(
                 _rollover_orphaned_worker_pods_for_target_statefulsets(
@@ -112853,6 +117586,7 @@ def _execute_rolling_compute_migration_phase(
                 target_slurmcluster_binding=live_target_binding,
                 mutation_guard=mutation_guard,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             _checkpoint_source_cleanup_completion_from_live(
                 phase=phase,
@@ -113394,6 +118128,7 @@ def _reapply_stale_rolling_compute_values(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     checkpoint_writer=checkpoint_writer,
+                    checkpoint=checkpoint,
                 )
             )
             handoff_binding = _mapping(phase.get("slurmcluster_handoff_binding"))
@@ -113432,6 +118167,7 @@ def _reapply_stale_rolling_compute_values(
                 retire_slurmcluster_only=True,
                 mutation_guard=mutation_guard,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             _accounting_handoff_checkpoint_source_owner_retired(
                 phase=phase,
@@ -113493,6 +118229,7 @@ def _reapply_stale_rolling_compute_values(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             lines.extend(
                 _rollover_orphaned_worker_pods_for_target_statefulsets(
@@ -113544,6 +118281,7 @@ def _reapply_stale_rolling_compute_values(
                 target_slurmcluster_binding=live_target_binding,
                 mutation_guard=mutation_guard,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             _checkpoint_source_cleanup_completion_from_live(
                 phase=phase,
@@ -113912,6 +118650,7 @@ def _reconcile_completed_compute_cutover(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
         )
         handoff_binding = _mapping(phase.get("slurmcluster_handoff_binding"))
@@ -113950,6 +118689,7 @@ def _reconcile_completed_compute_cutover(
             retire_slurmcluster_only=True,
             mutation_guard=mutation_guard,
             checkpoint_writer=checkpoint_writer,
+            checkpoint=checkpoint,
         )
         _accounting_handoff_checkpoint_source_owner_retired(
             phase=phase,
@@ -114027,6 +118767,7 @@ def _reconcile_completed_compute_cutover(
             command_runner=command_runner,
             kube_context=kube_context,
             checkpoint_writer=checkpoint_writer,
+            checkpoint=checkpoint,
         )
         lines.extend(
             _rollover_orphaned_worker_pods_for_target_statefulsets(
@@ -114080,6 +118821,7 @@ def _reconcile_completed_compute_cutover(
                 target_slurmcluster_binding=live_target_binding,
                 mutation_guard=mutation_guard,
                 checkpoint_writer=checkpoint_writer,
+                checkpoint=checkpoint,
             )
             or source_cleanup
         )
@@ -119710,7 +124452,7 @@ def _exact_deployed_target_soperator_release(
         or _positive_int(releases[0].revision, fallback=0) <= 0
     ):
         raise SoperatorMigrationPhasePending(
-            "GPU driver jail init repair requires one exact deployed target Helm release."
+            "target reconciliation requires one exact deployed target Helm release."
         )
     return releases[0]
 
@@ -120577,6 +125319,7 @@ def _repair_gpu_worker_topology_before_jail_smoke(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 values=replay_values,
+                manager_restore_values=values,
                 expected_version=expected_version,
                 boundary="gpu-worker-topology-replay",
                 login_session_policy=login_session_policy,
@@ -122173,6 +126916,7 @@ def _repair_gpu_driver_jail_init_loader_for_target_workers(
             command_runner=command_runner,
             kube_context=kube_context,
             values=stored_values,
+            manager_restore_values=values,
             expected_version=expected_version,
             boundary="gpu-driver-jail-init-loader-repair",
             login_session_policy=login_session_policy,
@@ -122532,6 +127276,7 @@ def _repair_gpu_health_sysfs_for_target_workers(
             command_runner=command_runner,
             kube_context=kube_context,
             values=stored_values,
+            manager_restore_values=values,
             expected_version=expected_version,
             boundary="gpu-health-sysfs-repair",
             login_session_policy=login_session_policy,
@@ -130404,6 +135149,7 @@ def _accounting_handoff_revalidate_held_jobs_after_child_capture(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     checkpoint_writer: Callable[[], None] | None,
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> None:
     active_operations = _active_slurm_held_job_operations(held_job_operations)
     active_job_ids = sorted(active_operations)
@@ -130439,6 +135185,8 @@ def _accounting_handoff_revalidate_held_jobs_after_child_capture(
         target_binding=target_binding,
         command_runner=command_runner,
         kube_context=kube_context,
+        checkpoint=checkpoint,
+        checkpoint_writer=checkpoint_writer,
     )
     evidence["boundary"] = "post-child-capture"
     state["held_jobs_before_source_retirement"] = evidence
@@ -130895,6 +135643,7 @@ def _delete_conflicting_source_slurm_resources(
     retire_slurmcluster_only: bool = False,
     mutation_guard: Callable[[], None] | None = None,
     checkpoint_writer: Callable[[], None] | None = None,
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> bool:
     cleanup_binding = _source_cleanup_binding(source_report, target_ref=target_ref)
     bound_name = cleanup_binding["name"]
@@ -131083,6 +135832,7 @@ def _delete_conflicting_source_slurm_resources(
             command_runner=command_runner,
             kube_context=kube_context,
             checkpoint_writer=checkpoint_writer,
+            checkpoint=checkpoint,
         )
         if str(source_metadata.get("deletionTimestamp") or "").strip():
             _recover_stalled_source_orphan_finalizer(
@@ -131998,6 +136748,7 @@ def _finalize_in_place_source_cleanup_after_rollout(
         target_worker_workload_bindings=(_in_place_source_cleanup_target_worker_bindings(phase)),
         mutation_guard=mutation_guard,
         checkpoint_writer=checkpoint_writer,
+        checkpoint=checkpoint,
     )
     _checkpoint_source_cleanup_completion_from_live(
         phase=phase,
@@ -134214,6 +138965,7 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     values: Mapping[str, Any],
+    manager_restore_values: Mapping[str, Any],
     expected_version: str,
     boundary: str,
     login_session_policy: str,
@@ -134229,7 +138981,14 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
     completed_recovery_predecessor_values_fingerprint: str | None = None,
     target_admission_bridge_phase: dict[str, Any] | None = None,
     pre_helm_live_boundary: Callable[[], None] | None = None,
+    pre_helm_dispatch_boundary: Callable[[], None] | None = None,
+    release_precondition: _TargetHelmAdmissionReleasePrecondition | None = None,
 ) -> list[str]:
+    if (release_precondition is None) != (pre_helm_dispatch_boundary is None):
+        raise ValueError(
+            "post-switch protected Helm dispatch requires one paired release precondition "
+            "and live validator."
+        )
     gate_lines: list[str] = []
     apply_values = values
     if checkpoint is not None and checkpoint.get("controller_bridge") is not None:
@@ -134273,6 +139032,17 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
         )
 
     def _helm_operation() -> list[str]:
+        def _before_dispatch() -> None:
+            if pre_helm_dispatch_boundary is not None:
+                pre_helm_dispatch_boundary()
+            if release_precondition is not None:
+                _checkpoint_target_helm_admission_protected_dispatch(
+                    phase=phase,
+                    boundary=boundary,
+                    selected_release=release_precondition,
+                    checkpoint_writer=checkpoint_writer,
+                )
+
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -134280,9 +139050,36 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
             expected_version=expected_version,
             wait=wait,
             disable_open_metrics_for_legacy_clients=disable_open_metrics_for_legacy_clients,
+            before_mutation=pre_helm_dispatch_boundary,
             before_reconcile=_before_reconcile,
+            before_dispatch=_before_dispatch,
             after_reconcile=_after_reconcile,
+            retry_after_dispatch_error=release_precondition is None,
         )
+        if release_precondition is not None:
+            recovered = _recover_target_helm_admission_protected_dispatch(
+                phase=phase,
+                rolling_phase=target_admission_bridge_phase or phase,
+                boundary=boundary,
+                target_ref=(
+                    str(checkpoint.get("target_ref") or "").strip()
+                    if checkpoint is not None
+                    else release_precondition.target_name
+                ),
+                expected_version=expected_version,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                checkpoint_writer=checkpoint_writer,
+            )
+            if (
+                recovered is None
+                or recovered.release_precondition.status != "deployed"
+                or recovered.release_precondition.revision != release_precondition.revision + 1
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "post-switch protected Helm command did not checkpoint its exact "
+                    "deployed successor."
+                )
         return gate_lines
 
     target_binding = _mapping(_mapping(phase.get("slurmcluster_handoff_binding")).get("target"))
@@ -134302,6 +139099,11 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
             or force_target_admission_bootstrap
         )
     ):
+        manager_restore_contract = _target_helm_admission_manager_restore_contract(
+            command_runner=command_runner,
+            values=manager_restore_values,
+            disable_open_metrics_for_legacy_clients=disable_open_metrics_for_legacy_clients,
+        )
         return _run_target_helm_with_admission_bootstrap(
             checkpoint=checkpoint,
             phase=phase,
@@ -134314,6 +139116,8 @@ def _helm_upgrade_target_soperator_with_jail_login_session_policy(
             checkpoint_writer=checkpoint_writer,
             mutation_guard=mutation_guard,
             helm_operation=_helm_operation,
+            manager_restore_contract=manager_restore_contract,
+            release_precondition=release_precondition,
             bridge_phase=target_admission_bridge_phase,
             force_completed_reapply=force_completed_admission_reapply,
             completed_recovery_predecessor_values_fingerprint=(
@@ -134809,10 +139613,27 @@ def _require_exact_temporary_login_helm_proof(
     candidate["target_handoff_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
     candidate["target_handoff_values_proof"] = copy.deepcopy(to_plain_data(proof))
     candidate["target_handoff_values_semantic_drift"] = copy.deepcopy(to_plain_data(semantic_drift))
-    if str(proof.get("values_fingerprint") or "").strip() != _fingerprint(values):
-        raise SoperatorMigrationPhasePending(
-            "temporary login replica Helm proof does not match its exact applied values."
-        )
+    proof_values_fingerprint = str(proof.get("values_fingerprint") or "").strip()
+    desired_values_fingerprint = _fingerprint(values)
+    if proof_values_fingerprint != desired_values_fingerprint:
+        proof_semantic_drift = _mapping(proof.get("semantic_drift"))
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", proof_values_fingerprint) is None
+            or proof_semantic_drift != semantic_drift
+            or semantic_drift.get("schema") != _TARGET_HELM_SEMANTIC_DRIFT_SCHEMA
+            or semantic_drift.get("status") != "compatible-target-spec-normalization"
+            or semantic_drift.get("values_changed_since_apply") is not True
+            or str(semantic_drift.get("applied_values_fingerprint") or "")
+            != proof_values_fingerprint
+            or str(semantic_drift.get("desired_values_fingerprint") or "")
+            != desired_values_fingerprint
+            or semantic_drift.get("open_metrics_changed") is not False
+            or semantic_drift.get("unclassified_target_spec_drift") is not False
+        ):
+            raise SoperatorMigrationPhasePending(
+                "temporary login replica Helm proof does not bind its exact applied and "
+                "desired values."
+            )
     _require_target_soperator_semantic_compatibility_for_child_handoff(candidate)
 
 
@@ -135710,19 +140531,80 @@ def _reconcile_in_place_login_restore_slurmcluster_owner(
             "in-place login restore SlurmCluster owner found identity or replica drift."
         )
 
+    protected_successor_adoption = _mapping(state.get("protected_successor_adoption"))
+    if state and protected_successor_adoption:
+        if (
+            state.get("status") != "verified"
+            or live_replicas != configured
+            or str(state.get("stable_spec_fingerprint") or "") != stable_fingerprint
+            or _positive_int(state.get("successor_generation"), fallback=0) != generation
+            or not str(state.get("successor_resource_version") or "").strip()
+            or not str(state.get("verified_at") or "").strip()
+            or not _in_place_login_restore_protected_successor_material_is_exact(
+                checkpoint=checkpoint,
+                rolling=rolling,
+                restore_bootstrap=restore_bootstrap,
+                target_ref=target_ref,
+                stable_spec_fingerprint=stable_fingerprint,
+                material=protected_successor_adoption,
+            )
+        ):
+            raise RuntimeError(
+                "recovery-required: in-place login restore protected owner adoption drifted."
+            )
+        return False, [
+            "Reused the exact protected Helm successor that already restored the "
+            "target SlurmCluster login owner to configured replicas."
+        ]
+
     if not state:
         proof = _mapping(predecessor_proof)
         predecessor = _mapping(proof.get("live_login_size_predecessor"))
-        if (
-            proof.get("schema") != _TARGET_HELM_APPLY_PROOF_SCHEMA
-            or proof.get("status") != "verified"
-            or _mapping(proof.get("target")) != target_binding
-            or str(proof.get("values_fingerprint") or "") != values_fingerprint
-            or _positive_int(predecessor.get("from_replicas"), fallback=0) != surge
-            or _positive_int(predecessor.get("to_replicas"), fallback=0) != configured
-            or str(predecessor.get("stable_spec_fingerprint") or "") != stable_fingerprint
-            or live_replicas != surge
-        ):
+        base_proof_valid = bool(
+            proof.get("schema") == _TARGET_HELM_APPLY_PROOF_SCHEMA
+            and proof.get("status") == "verified"
+            and _mapping(proof.get("target")) == target_binding
+            and str(proof.get("values_fingerprint") or "") == values_fingerprint
+            and _positive_int(predecessor.get("from_replicas"), fallback=0) == surge
+            and _positive_int(predecessor.get("to_replicas"), fallback=0) == configured
+            and str(predecessor.get("stable_spec_fingerprint") or "") == stable_fingerprint
+        )
+        protected_material = _mapping(proof.get("protected_release_predecessor"))
+        protected_head = _mapping(protected_material.get("head_release"))
+        proof_semantic = _mapping(proof.get("semantic_drift"))
+        surged_predecessor_valid = base_proof_valid and live_replicas == surge
+        protected_successor_valid = bool(
+            base_proof_valid
+            and live_replicas == configured
+            and str(proof.get("mode") or "")
+            .strip()
+            .endswith("+protected-release-history-predecessor")
+            and str(proof.get("live_spec_fingerprint") or "")
+            == _fingerprint(_mapping(target.get("spec")))
+            and _positive_int(proof.get("release_revision"), fallback=0)
+            == _positive_int(protected_head.get("revision"), fallback=0)
+            and str(proof.get("chart") or "").strip()
+            == str(protected_head.get("chart") or "").strip()
+            and str(proof.get("app_version") or "").strip()
+            == str(protected_head.get("app_version") or "").strip()
+            and str(proof.get("installed_manifest_fingerprint") or "")
+            == str(protected_material.get("head_manifest_fingerprint") or "")
+            and str(proof.get("installed_spec_fingerprint") or "")
+            == str(protected_material.get("head_spec_fingerprint") or "")
+            and proof_semantic.get("status")
+            in {"compatible", "compatible-target-spec-normalization"}
+            and proof_semantic.get("open_metrics_changed") is False
+            and proof_semantic.get("unclassified_target_spec_drift") is False
+            and _in_place_login_restore_protected_successor_material_is_exact(
+                checkpoint=checkpoint,
+                rolling=rolling,
+                restore_bootstrap=restore_bootstrap,
+                target_ref=target_ref,
+                stable_spec_fingerprint=stable_fingerprint,
+                material=protected_material,
+            )
+        )
+        if not (surged_predecessor_valid or protected_successor_valid):
             raise SoperatorMigrationPhasePending(
                 "in-place login restore SlurmCluster owner lacks the exact Helm-bound "
                 "surge-to-configured predecessor proof."
@@ -135743,8 +140625,30 @@ def _reconcile_in_place_login_restore_slurmcluster_owner(
                 "current_chart_content_fingerprint",
                 "apply_intent_schema",
                 "live_login_size_predecessor",
+                "protected_release_predecessor",
             )
         }
+        if protected_successor_valid:
+            state.update(
+                {
+                    **immutable,
+                    "status": "verified",
+                    "predecessor_proof_fingerprint": _fingerprint(predecessor_material),
+                    "stable_spec_fingerprint": stable_fingerprint,
+                    "successor_resource_version": resource_version,
+                    "successor_generation": generation,
+                    "protected_successor_adoption": copy.deepcopy(
+                        to_plain_data(protected_material)
+                    ),
+                    "adopted_at": _utc_now(),
+                    "verified_at": _utc_now(),
+                }
+            )
+            checkpoint_writer()
+            return False, [
+                "Adopted the exact protected Helm successor that already restored the "
+                "target SlurmCluster login owner from surge to configured replicas."
+            ]
         state.update(
             {
                 **immutable,
@@ -135848,6 +140752,1073 @@ def _reconcile_in_place_login_restore_slurmcluster_owner(
     ]
 
 
+def _adopt_in_place_login_surge_completed_post_switch_apply(
+    *,
+    checkpoint: Mapping[str, Any],
+    populate_phase: Mapping[str, Any],
+    rolling: dict[str, Any],
+    values: Mapping[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+) -> list[str]:
+    """Bind an already-applied surge to its completed protected dispatch."""
+
+    if checkpoint_writer is None:
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch adoption requires a durable checkpoint writer."
+        )
+    bootstrap = _mapping(
+        _mapping(populate_phase.get("target_helm_admission_bootstraps")).get("post-switch-resume")
+    )
+    desired_values_fingerprint = _fingerprint(_effective_target_soperator_helm_values(values))
+    bootstrap_values_fingerprint = str(bootstrap.get("values_fingerprint") or "").strip()
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    chart_content_fingerprint = str(bootstrap.get("chart_content_fingerprint") or "").strip()
+    helm_applied_at = str(bootstrap.get("helm_applied_at") or "").strip()
+    completed_at = str(bootstrap.get("completed_at") or "").strip()
+    if (
+        bootstrap.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or bootstrap.get("status") != "complete"
+        or bootstrap.get("boundary") != "post-switch-resume"
+        or bootstrap.get("target_ref") != target_ref
+        or re.fullmatch(r"[0-9a-f]{64}", bootstrap_values_fingerprint) is None
+        or re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is None
+        or re.fullmatch(r"[0-9a-f]{64}", chart_content_fingerprint) is None
+        or not helm_applied_at
+        or not completed_at
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge cannot bind the live replicas to one completed "
+            "post-switch admission lifecycle."
+        )
+
+    root = _target_helm_admission_release_precondition_from_payload(
+        _mapping(bootstrap.get("release_precondition")),
+        require_deployed=True,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(bootstrap, root=root)
+    dispatch_status = str(dispatch.get("status") or "").strip()
+    if dispatch_status not in {"dispatched", "succeeded"}:
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch adoption requires an exact successful "
+            "protected Helm dispatch."
+        )
+    deployed = _target_helm_admission_exact_deployed_selection(
+        rolling_phase=rolling,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    deployed_release = deployed.release_precondition
+    applied_values = dict(copy.deepcopy(to_plain_data(deployed.values)))
+    applied_values_fingerprint = _fingerprint(applied_values)
+    dispatch_head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release"))
+    )
+    expected_revision = _positive_int(dispatch.get("expected_revision"), fallback=0)
+    if (
+        deployed_release.status != "deployed"
+        or deployed_release.chart != root.chart
+        or deployed_release.app_version != root.app_version
+        or deployed_release.values_fingerprint != applied_values_fingerprint
+        or bootstrap_values_fingerprint != applied_values_fingerprint
+        or (dispatch_status == "dispatched" and deployed_release.revision != expected_revision)
+        or (dispatch_status == "succeeded" and deployed_release != dispatch_head)
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch adoption found release drift outside "
+            "the checkpointed protected dispatch."
+        )
+    history = _target_helm_admission_protected_dispatch_history(
+        root=root,
+        head=deployed,
+        desired_values_fingerprint=applied_values_fingerprint,
+        first_dispatched_at=str(dispatch.get("first_dispatched_at") or ""),
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if dispatch_status == "succeeded" and _mapping(dispatch.get("successor_history")) != history:
+        raise RuntimeError(
+            "recovery-required: in-place login surge post-switch dispatch history "
+            "changed after successful recovery."
+        )
+    history_entries = _sequence_of_mappings(history.get("entries"))
+    if not history_entries:
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch adoption found no protected successor."
+        )
+    first_dispatched_time = _target_soperator_helm_history_time(dispatch.get("first_dispatched_at"))
+    successor_time = _target_soperator_helm_history_time(history_entries[-1].get("updated_at"))
+    helm_applied_time = _target_soperator_helm_history_time(helm_applied_at)
+    completed_time = _target_soperator_helm_history_time(completed_at)
+    if not (first_dispatched_time <= successor_time <= helm_applied_time <= completed_time):
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch successor is outside its exact dispatch "
+            "and completed-admission time bounds."
+        )
+
+    intent_material = _target_soperator_helm_apply_intent_material(
+        command_runner=command_runner,
+        target_ref=target_ref,
+        values=deployed.values,
+        expected_version=expected_version,
+    )
+    material_release = _mapping(intent_material.get("release"))
+    if (
+        str(intent_material.get("values_fingerprint") or "") != applied_values_fingerprint
+        or str(intent_material.get("chart_content_fingerprint") or "") != chart_content_fingerprint
+        or str(material_release.get("chart") or "") != deployed_release.chart
+        or str(material_release.get("app_version") or "") != deployed_release.app_version
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge current deterministic Helm material drifted from "
+            "the completed post-switch successor."
+        )
+    proof_phase = dict(copy.deepcopy(to_plain_data(rolling)))
+    proof_phase["in_place_login_surge_apply_intent"] = {
+        **intent_material,
+        "prepared_at": str(dispatch.get("first_dispatched_at") or ""),
+    }
+    proof = _prove_target_soperator_helm_apply(
+        phase=proof_phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        target_ref=target_ref,
+        values=values,
+        expected_version=expected_version,
+        require_command_fence_override=False,
+        recovered_from_live_state=True,
+        intent_key="in_place_login_surge_apply_intent",
+    )
+    target = {
+        "namespace": root.target_namespace,
+        "name": root.target_name,
+        "uid": root.target_uid,
+    }
+    apply_authority = {
+        "schema": _IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_AUTHORITY_SCHEMA,
+        "boundary": "post-switch-resume",
+        "campaign_fingerprint": campaign_fingerprint,
+        "target": target,
+        "root_release": _target_helm_admission_release_precondition_payload(root),
+        "dispatch_count": _positive_int(dispatch.get("dispatch_count"), fallback=0),
+        "first_dispatched_at": str(dispatch.get("first_dispatched_at") or ""),
+        "successor_history": history,
+        "deployed_release": _target_helm_admission_release_precondition_payload(deployed_release),
+        "helm_applied_at": helm_applied_at,
+        "completed_at": completed_at,
+        "applied_values_fingerprint": applied_values_fingerprint,
+        "desired_values_fingerprint": desired_values_fingerprint,
+        "chart_content_fingerprint": chart_content_fingerprint,
+        "apply_intent_material_sha256": _fingerprint(intent_material),
+    }
+    proof["mode"] = "protected-dispatch-bound"
+    proof["apply_authority"] = copy.deepcopy(to_plain_data(apply_authority))
+    semantic_drift = dict(copy.deepcopy(to_plain_data(_mapping(proof.get("semantic_drift")))))
+    values_changed_since_apply = applied_values_fingerprint != desired_values_fingerprint
+    expected_semantic_status = (
+        "compatible-target-spec-normalization" if values_changed_since_apply else "compatible"
+    )
+    if (
+        str(proof.get("values_fingerprint") or "") != applied_values_fingerprint
+        or str(semantic_drift.get("applied_values_fingerprint") or "") != applied_values_fingerprint
+        or str(semantic_drift.get("desired_values_fingerprint") or "") != desired_values_fingerprint
+        or semantic_drift.get("schema") != _TARGET_HELM_SEMANTIC_DRIFT_SCHEMA
+        or semantic_drift.get("status") != expected_semantic_status
+        or semantic_drift.get("values_changed_since_apply") is not values_changed_since_apply
+        or semantic_drift.get("open_metrics_changed") is not False
+        or semantic_drift.get("unclassified_target_spec_drift") is not False
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login surge post-switch adoption found incompatible target semantic drift."
+        )
+    normalized_proof = _immutable_target_soperator_helm_apply_proof_material(proof)
+    normalized_semantic = copy.deepcopy(to_plain_data(semantic_drift))
+    normalized_semantic.pop("verified_at", None)
+    receipt_material = {
+        "schema": _IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_ADOPTION_SCHEMA,
+        "status": "verified",
+        "target": target,
+        "boundary": "post-switch-resume",
+        "campaign_fingerprint": campaign_fingerprint,
+        "apply_authority_sha256": _fingerprint(apply_authority),
+        "normalized_proof_sha256": _fingerprint(normalized_proof),
+        "normalized_semantic_drift_sha256": _fingerprint(normalized_semantic),
+    }
+    receipt_key = "in_place_login_surge_post_switch_apply_adoption"
+    proof_key = "in_place_login_surge_apply_proof"
+    semantic_key = "in_place_login_surge_apply_semantic_drift"
+    existing_receipt = rolling.get(receipt_key)
+    existing_proof = rolling.get(proof_key)
+    existing_semantic = rolling.get(semantic_key)
+    if existing_receipt is not None:
+        if (
+            not isinstance(existing_receipt, Mapping)
+            or set(existing_receipt) != {*receipt_material, "verified_at"}
+            or not str(existing_receipt.get("verified_at") or "").strip()
+            or any(existing_receipt.get(key) != value for key, value in receipt_material.items())
+            or not isinstance(existing_proof, Mapping)
+            or _immutable_target_soperator_helm_apply_proof_material(existing_proof)
+            != normalized_proof
+            or not isinstance(existing_semantic, Mapping)
+        ):
+            raise RuntimeError(
+                "recovery-required: in-place login surge post-switch adoption receipt "
+                "or proof changed after checkpointing."
+            )
+        stored_semantic = copy.deepcopy(to_plain_data(dict(existing_semantic)))
+        stored_semantic.pop("verified_at", None)
+        if stored_semantic != normalized_semantic:
+            raise RuntimeError(
+                "recovery-required: in-place login surge post-switch semantic proof "
+                "changed after checkpointing."
+            )
+        return ["In-place login surge reused its exact protected post-switch Helm successor proof."]
+    if existing_proof is not None or existing_semantic is not None:
+        raise RuntimeError(
+            "recovery-required: in-place login surge found unreceipted Helm proof state."
+        )
+    receipt = {**receipt_material, "verified_at": _utc_now()}
+    if not _in_place_login_surge_post_switch_adoption_material_is_exact(
+        campaign_fingerprint=campaign_fingerprint,
+        target=target,
+        desired_values_fingerprint=desired_values_fingerprint,
+        receipt=receipt,
+        proof=proof,
+        semantic=semantic_drift,
+    ):
+        raise RuntimeError(
+            "recovery-required: in-place login surge produced incomplete protected "
+            "post-switch adoption authority."
+        )
+    rolling[proof_key] = proof
+    rolling[semantic_key] = semantic_drift
+    rolling[receipt_key] = receipt
+    checkpoint_writer()
+    return [
+        "In-place login surge adopted the exact completed protected post-switch Helm "
+        "successor without another Helm apply."
+    ]
+
+
+def _in_place_login_surge_post_switch_adoption_material_is_exact(
+    *,
+    campaign_fingerprint: str,
+    target: Mapping[str, Any],
+    desired_values_fingerprint: str,
+    receipt: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    semantic: Mapping[str, Any],
+) -> bool:
+    """Validate the complete writer-owned protected-dispatch adoption material."""
+
+    receipt_keys = {
+        "schema",
+        "status",
+        "target",
+        "boundary",
+        "campaign_fingerprint",
+        "apply_authority_sha256",
+        "normalized_proof_sha256",
+        "normalized_semantic_drift_sha256",
+        "verified_at",
+    }
+    proof_keys = {
+        "schema",
+        "status",
+        "mode",
+        "target",
+        "release_revision",
+        "chart",
+        "app_version",
+        "requested_target_version",
+        "values_fingerprint",
+        "installed_manifest_fingerprint",
+        "installed_spec_fingerprint",
+        "current_chart_content_fingerprint",
+        "live_spec_fingerprint",
+        "apply_intent_schema",
+        "legacy_history",
+        "live_login_size_predecessor",
+        "semantic_drift",
+        "verified_at",
+        "apply_authority",
+    }
+    semantic_keys = {
+        "schema",
+        "status",
+        "values_changed_since_apply",
+        "applied_values_fingerprint",
+        "desired_values_fingerprint",
+        "chart_content_changed_since_apply",
+        "open_metrics_changed",
+        "unclassified_target_spec_drift",
+        "verified_at",
+    }
+    authority_keys = {
+        "schema",
+        "boundary",
+        "campaign_fingerprint",
+        "target",
+        "root_release",
+        "dispatch_count",
+        "first_dispatched_at",
+        "successor_history",
+        "deployed_release",
+        "helm_applied_at",
+        "completed_at",
+        "applied_values_fingerprint",
+        "desired_values_fingerprint",
+        "chart_content_fingerprint",
+        "apply_intent_material_sha256",
+    }
+    release_keys = {
+        "revision",
+        "status",
+        "chart",
+        "app_version",
+        "values_fingerprint",
+        "target_namespace",
+        "target_name",
+        "target_uid",
+    }
+    history_keys = {
+        "root_revision",
+        "head_revision",
+        "head_status",
+        "values_fingerprint",
+        "entries",
+    }
+    history_entry_keys = {
+        "revision",
+        "status",
+        "updated_at",
+        "description_sha256",
+        "values_fingerprint",
+    }
+    authority = _mapping(proof.get("apply_authority"))
+    proof_semantic = _mapping(proof.get("semantic_drift"))
+    root_payload = _mapping(authority.get("root_release"))
+    deployed_payload = _mapping(authority.get("deployed_release"))
+    history = _mapping(authority.get("successor_history"))
+    entries = _sequence_of_mappings(history.get("entries"))
+    expected_target = {
+        "namespace": str(target.get("namespace") or "").strip(),
+        "name": str(target.get("name") or "").strip(),
+        "uid": str(target.get("uid") or "").strip(),
+    }
+    applied_values_fingerprint = str(proof.get("values_fingerprint") or "").strip()
+    if (
+        set(receipt) != receipt_keys
+        or set(proof) != proof_keys
+        or set(semantic) != semantic_keys
+        or set(authority) != authority_keys
+        or set(root_payload) != release_keys
+        or set(deployed_payload) != release_keys
+        or set(history) != history_keys
+        or not entries
+        or any(set(entry) != history_entry_keys for entry in entries)
+        or set(expected_target) != {"namespace", "name", "uid"}
+        or expected_target["namespace"] != _SOPERATOR_NAMESPACE
+        or not expected_target["name"]
+        or not expected_target["uid"]
+        or re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is None
+        or re.fullmatch(r"[0-9a-f]{64}", desired_values_fingerprint) is None
+        or re.fullmatch(r"[0-9a-f]{64}", applied_values_fingerprint) is None
+    ):
+        return False
+    try:
+        root = _target_helm_admission_release_precondition_from_payload(
+            root_payload,
+            require_deployed=True,
+        )
+        deployed = _target_helm_admission_release_precondition_from_payload(
+            deployed_payload,
+            require_deployed=True,
+        )
+        first_dispatched_at = _target_soperator_helm_history_time(
+            authority.get("first_dispatched_at")
+        )
+        helm_applied_at = _target_soperator_helm_history_time(authority.get("helm_applied_at"))
+        completed_at = _target_soperator_helm_history_time(authority.get("completed_at"))
+        receipt_verified_at = _target_soperator_helm_history_time(receipt.get("verified_at"))
+        proof_verified_at = _target_soperator_helm_history_time(proof.get("verified_at"))
+        semantic_verified_at = _target_soperator_helm_history_time(semantic.get("verified_at"))
+        entry_times = [
+            _target_soperator_helm_history_time(entry.get("updated_at")) for entry in entries
+        ]
+    except SoperatorMigrationPhasePending:
+        return False
+    expected_revisions = list(range(root.revision + 1, deployed.revision + 1))
+    entry_revisions = [_positive_int(entry.get("revision"), fallback=0) for entry in entries]
+    values_changed_since_apply = applied_values_fingerprint != desired_values_fingerprint
+    expected_semantic_status = (
+        "compatible-target-spec-normalization" if values_changed_since_apply else "compatible"
+    )
+    normalized_semantic = dict(copy.deepcopy(to_plain_data(semantic)))
+    normalized_semantic.pop("verified_at", None)
+    return bool(
+        root.revision < deployed.revision
+        and root.chart == deployed.chart
+        and root.app_version == deployed.app_version
+        and {
+            "namespace": root.target_namespace,
+            "name": root.target_name,
+            "uid": root.target_uid,
+        }
+        == expected_target
+        and {
+            "namespace": deployed.target_namespace,
+            "name": deployed.target_name,
+            "uid": deployed.target_uid,
+        }
+        == expected_target
+        and deployed.values_fingerprint == applied_values_fingerprint
+        and len(entries)
+        <= _positive_int(authority.get("dispatch_count"), fallback=0)
+        <= _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT + 1
+        and re.fullmatch(r"[0-9a-f]{64}", str(authority.get("chart_content_fingerprint") or ""))
+        is not None
+        and re.fullmatch(r"[0-9a-f]{64}", str(authority.get("apply_intent_material_sha256") or ""))
+        is not None
+        and authority.get("schema") == _IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_AUTHORITY_SCHEMA
+        and authority.get("boundary") == "post-switch-resume"
+        and str(authority.get("campaign_fingerprint") or "").strip() == campaign_fingerprint
+        and _mapping(authority.get("target")) == expected_target
+        and str(authority.get("applied_values_fingerprint") or "").strip()
+        == applied_values_fingerprint
+        and str(authority.get("desired_values_fingerprint") or "").strip()
+        == desired_values_fingerprint
+        and _positive_int(history.get("root_revision"), fallback=0) == root.revision
+        and _positive_int(history.get("head_revision"), fallback=0) == deployed.revision
+        and str(history.get("head_status") or "").strip() == "deployed"
+        and str(history.get("values_fingerprint") or "").strip() == applied_values_fingerprint
+        and entry_revisions == expected_revisions
+        and len(entries) <= _TARGET_HELM_WEBHOOK_STARTUP_RETRY_LIMIT + 1
+        and all(
+            str(entry.get("status") or "").strip()
+            == ("deployed" if index == len(entries) - 1 else "failed")
+            and str(entry.get("values_fingerprint") or "").strip() == applied_values_fingerprint
+            and re.fullmatch(r"[0-9a-f]{64}", str(entry.get("description_sha256") or ""))
+            is not None
+            for index, entry in enumerate(entries)
+        )
+        and entry_times == sorted(entry_times)
+        and first_dispatched_at <= entry_times[0]
+        and entry_times[-1] <= helm_applied_at <= completed_at
+        and completed_at <= semantic_verified_at <= proof_verified_at <= receipt_verified_at
+        and receipt.get("schema") == _IN_PLACE_LOGIN_SURGE_POST_SWITCH_APPLY_ADOPTION_SCHEMA
+        and receipt.get("status") == "verified"
+        and receipt.get("boundary") == "post-switch-resume"
+        and str(receipt.get("campaign_fingerprint") or "").strip() == campaign_fingerprint
+        and _mapping(receipt.get("target")) == expected_target
+        and str(receipt.get("apply_authority_sha256") or "").strip() == _fingerprint(authority)
+        and str(receipt.get("normalized_proof_sha256") or "").strip()
+        == _fingerprint(_immutable_target_soperator_helm_apply_proof_material(proof))
+        and str(receipt.get("normalized_semantic_drift_sha256") or "").strip()
+        == _fingerprint(normalized_semantic)
+        and proof.get("schema") == _TARGET_HELM_APPLY_PROOF_SCHEMA
+        and proof.get("status") == "verified"
+        and proof.get("mode") == "protected-dispatch-bound"
+        and _mapping(proof.get("target")) == expected_target
+        and _positive_int(proof.get("release_revision"), fallback=0) == deployed.revision
+        and str(proof.get("chart") or "").strip() == deployed.chart
+        and str(proof.get("app_version") or "").strip() == deployed.app_version
+        and str(proof.get("requested_target_version") or "").strip()
+        and proof.get("apply_intent_schema") == _TARGET_HELM_APPLY_INTENT_SCHEMA
+        and isinstance(proof.get("legacy_history"), Mapping)
+        and isinstance(proof.get("live_login_size_predecessor"), Mapping)
+        and all(
+            re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key) or "")) is not None
+            for key in (
+                "installed_manifest_fingerprint",
+                "installed_spec_fingerprint",
+                "live_spec_fingerprint",
+            )
+        )
+        and str(proof.get("current_chart_content_fingerprint") or "").strip()
+        == str(authority.get("chart_content_fingerprint") or "").strip()
+        and proof_semantic == semantic
+        and semantic.get("schema") == _TARGET_HELM_SEMANTIC_DRIFT_SCHEMA
+        and semantic.get("status") == expected_semantic_status
+        and semantic.get("values_changed_since_apply") is values_changed_since_apply
+        and str(semantic.get("applied_values_fingerprint") or "").strip()
+        == applied_values_fingerprint
+        and str(semantic.get("desired_values_fingerprint") or "").strip()
+        == desired_values_fingerprint
+        and semantic.get("chart_content_changed_since_apply") is False
+        and semantic.get("open_metrics_changed") is False
+        and semantic.get("unclassified_target_spec_drift") is False
+    )
+
+
+def _in_place_login_surge_released_post_switch_adoption_is_exact(
+    *,
+    checkpoint: Mapping[str, Any],
+    rolling: Mapping[str, Any],
+    target_ref: str,
+    desired_values_fingerprint: str,
+) -> bool:
+    """Recognize the exact adopted-surge receipt after its hold is released."""
+
+    contract = _mapping(rolling.get("in_place_login_surge"))
+    reconciliation = _mapping(rolling.get("in_place_login_surge_reconciliation"))
+    observation = _mapping(reconciliation.get("observation"))
+    receipt = _mapping(rolling.get("in_place_login_surge_post_switch_apply_adoption"))
+    proof = _mapping(rolling.get("in_place_login_surge_apply_proof"))
+    semantic = _mapping(rolling.get("in_place_login_surge_apply_semantic_drift"))
+    target_binding = _mapping(_mapping(rolling.get("slurmcluster_handoff_binding")).get("target"))
+    configured = _positive_int(contract.get("configured_replicas"), fallback=0)
+    surge = _positive_int(contract.get("surge_replicas"), fallback=0)
+    target_uid = str(contract.get("target_slurmcluster_uid") or "").strip()
+    target = {
+        "namespace": _SOPERATOR_NAMESPACE,
+        "name": target_ref,
+        "uid": target_uid,
+    }
+    return bool(
+        contract.get("schema") == _IN_PLACE_LOGIN_SURGE_SCHEMA
+        and configured > 0
+        and surge == configured + 1
+        and target_uid
+        and target_binding == target
+        and reconciliation.get("schema") == _IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA
+        and reconciliation.get("status") in {"peer-ready", "released"}
+        and _positive_int(reconciliation.get("configured_replicas"), fallback=0) == configured
+        and _positive_int(reconciliation.get("surge_replicas"), fallback=0) == surge
+        and str(reconciliation.get("target_slurmcluster_uid") or "").strip() == target_uid
+        and str(reconciliation.get("values_fingerprint") or "").strip()
+        == desired_values_fingerprint
+        and _positive_int(observation.get("slurmcluster_replicas"), fallback=0) == surge
+        and _positive_int(observation.get("workload_replicas"), fallback=0) == surge
+        and str(reconciliation.get("applied_at") or "").strip()
+        and str(reconciliation.get("peer_ready_at") or "").strip()
+        and (
+            reconciliation.get("status") != "released"
+            or str(reconciliation.get("hold_released_at") or "").strip()
+        )
+        and str(reconciliation.get("post_switch_apply_adoption_sha256") or "").strip()
+        == _fingerprint(receipt)
+        and _in_place_login_surge_post_switch_adoption_material_is_exact(
+            campaign_fingerprint=str(checkpoint.get("campaign_fingerprint") or "").strip(),
+            target=target,
+            desired_values_fingerprint=desired_values_fingerprint,
+            receipt=receipt,
+            proof=proof,
+            semantic=semantic,
+        )
+    )
+
+
+def _in_place_login_surge_restore_predecessor_release_precondition(
+    *,
+    checkpoint: Mapping[str, Any],
+    rolling: Mapping[str, Any],
+    target_ref: str,
+) -> _TargetHelmAdmissionReleasePrecondition:
+    """Bind login restore to the exact Helm release that owns the surge."""
+
+    contract = _mapping(rolling.get("in_place_login_surge"))
+    reconciliation = _mapping(rolling.get("in_place_login_surge_reconciliation"))
+    proof = _mapping(rolling.get("in_place_login_surge_apply_proof"))
+    semantic = _mapping(rolling.get("in_place_login_surge_apply_semantic_drift"))
+    target_binding = _mapping(_mapping(rolling.get("slurmcluster_handoff_binding")).get("target"))
+    configured = _positive_int(contract.get("configured_replicas"), fallback=0)
+    surge = _positive_int(contract.get("surge_replicas"), fallback=0)
+    target = {
+        "namespace": _SOPERATOR_NAMESPACE,
+        "name": target_ref,
+        "uid": str(contract.get("target_slurmcluster_uid") or "").strip(),
+    }
+    desired_values_fingerprint = str(reconciliation.get("values_fingerprint") or "").strip()
+    common_valid = bool(
+        contract.get("schema") == _IN_PLACE_LOGIN_SURGE_SCHEMA
+        and configured > 0
+        and surge == configured + 1
+        and target["uid"]
+        and target_binding == target
+        and reconciliation.get("schema") == _IN_PLACE_LOGIN_SURGE_RECONCILIATION_SCHEMA
+        and reconciliation.get("status") in {"peer-ready", "released", "restoring", "restored"}
+        and _positive_int(reconciliation.get("configured_replicas"), fallback=0) == configured
+        and _positive_int(reconciliation.get("surge_replicas"), fallback=0) == surge
+        and str(reconciliation.get("target_slurmcluster_uid") or "").strip() == target["uid"]
+        and re.fullmatch(r"[0-9a-f]{64}", desired_values_fingerprint) is not None
+        and proof.get("schema") == _TARGET_HELM_APPLY_PROOF_SCHEMA
+        and proof.get("status") == "verified"
+        and _mapping(proof.get("target")) == target
+        and _mapping(proof.get("semantic_drift")) == semantic
+        and semantic.get("schema") == _TARGET_HELM_SEMANTIC_DRIFT_SCHEMA
+        and semantic.get("status") in {"compatible", "compatible-target-spec-normalization"}
+        and semantic.get("open_metrics_changed") is False
+        and semantic.get("unclassified_target_spec_drift") is False
+    )
+    if not common_valid:
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore lacks its exact verified surge Helm predecessor."
+        )
+
+    receipt = _mapping(rolling.get("in_place_login_surge_post_switch_apply_adoption"))
+    if receipt or proof.get("mode") == "protected-dispatch-bound":
+        if str(
+            reconciliation.get("post_switch_apply_adoption_sha256") or ""
+        ).strip() != _fingerprint(
+            receipt
+        ) or not _in_place_login_surge_post_switch_adoption_material_is_exact(
+            campaign_fingerprint=str(checkpoint.get("campaign_fingerprint") or "").strip(),
+            target=target,
+            desired_values_fingerprint=desired_values_fingerprint,
+            receipt=receipt,
+            proof=proof,
+            semantic=semantic,
+        ):
+            raise SoperatorMigrationPhasePending(
+                "in-place login restore found incomplete protected surge Helm authority."
+            )
+        deployed_payload = _mapping(_mapping(proof.get("apply_authority")).get("deployed_release"))
+        return _target_helm_admission_release_precondition_from_payload(
+            deployed_payload,
+            require_deployed=True,
+        )
+
+    intent = _validated_target_soperator_helm_apply_intent(
+        rolling,
+        target_ref=target_ref,
+        intent_key="in_place_login_surge_apply_intent",
+    )
+    intent_release = _mapping(intent.get("release"))
+    applied_values_fingerprint = str(proof.get("values_fingerprint") or "").strip()
+    values_changed_since_apply = applied_values_fingerprint != desired_values_fingerprint
+    if (
+        not intent
+        or proof.get("mode") != "intent-bound"
+        or proof.get("apply_intent_schema") != _TARGET_HELM_APPLY_INTENT_SCHEMA
+        or _positive_int(proof.get("release_revision"), fallback=0) <= 0
+        or str(proof.get("chart") or "").strip() != str(intent_release.get("chart") or "").strip()
+        or str(proof.get("app_version") or "").strip()
+        != str(intent_release.get("app_version") or "").strip()
+        or re.fullmatch(r"[0-9a-f]{64}", applied_values_fingerprint) is None
+        or str(semantic.get("applied_values_fingerprint") or "").strip()
+        != applied_values_fingerprint
+        or str(semantic.get("desired_values_fingerprint") or "").strip()
+        != desired_values_fingerprint
+        or semantic.get("values_changed_since_apply") is not values_changed_since_apply
+        or semantic.get("status")
+        != ("compatible-target-spec-normalization" if values_changed_since_apply else "compatible")
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore found drifted intent-bound surge Helm authority."
+        )
+    return _TargetHelmAdmissionReleasePrecondition(
+        revision=_positive_int(proof.get("release_revision"), fallback=0),
+        chart=str(proof.get("chart") or "").strip(),
+        app_version=str(proof.get("app_version") or "").strip(),
+        values_fingerprint=applied_values_fingerprint,
+        target_namespace=target["namespace"],
+        target_name=target["name"],
+        target_uid=target["uid"],
+    )
+
+
+def _in_place_login_restore_protected_successor_material_is_exact(
+    *,
+    checkpoint: Mapping[str, Any],
+    rolling: Mapping[str, Any],
+    restore_bootstrap: Mapping[str, Any],
+    target_ref: str,
+    stable_spec_fingerprint: str,
+    material: Mapping[str, Any],
+) -> bool:
+    expected_keys = {
+        "schema",
+        "status",
+        "target",
+        "root_release",
+        "head_release",
+        "successor_history_fingerprint",
+        "root_manifest_fingerprint",
+        "root_spec_fingerprint",
+        "head_manifest_fingerprint",
+        "head_spec_fingerprint",
+        "stable_spec_fingerprint",
+        "verified_at",
+    }
+    restore_intent = _validated_target_soperator_helm_apply_intent(
+        rolling,
+        target_ref=target_ref,
+        intent_key="in_place_login_surge_restore_intent",
+    )
+    root = _target_helm_admission_release_precondition_from_payload(
+        _mapping(restore_bootstrap.get("release_precondition")),
+        require_deployed=True,
+    )
+    expected_root = _in_place_login_surge_restore_predecessor_release_precondition(
+        checkpoint=checkpoint,
+        rolling=rolling,
+        target_ref=target_ref,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(
+        restore_bootstrap,
+        root=root,
+    )
+    head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release")),
+        require_deployed=True,
+    )
+    surge_proof = _mapping(rolling.get("in_place_login_surge_apply_proof"))
+    target = {
+        "namespace": root.target_namespace,
+        "name": root.target_name,
+        "uid": root.target_uid,
+    }
+    return bool(
+        set(material) == expected_keys
+        and root == expected_root
+        and dispatch.get("status") == "succeeded"
+        and head.revision > root.revision
+        and material.get("schema") == _IN_PLACE_LOGIN_RESTORE_PROTECTED_SUCCESSOR_PREDECESSOR_SCHEMA
+        and material.get("status") == "verified"
+        and _mapping(material.get("target")) == target
+        and _mapping(material.get("root_release"))
+        == _target_helm_admission_release_precondition_payload(root)
+        and _mapping(material.get("head_release"))
+        == _target_helm_admission_release_precondition_payload(head)
+        and str(material.get("successor_history_fingerprint") or "")
+        == _fingerprint(_mapping(dispatch.get("successor_history")))
+        and str(material.get("root_manifest_fingerprint") or "")
+        == str(surge_proof.get("installed_manifest_fingerprint") or "")
+        and str(material.get("root_spec_fingerprint") or "")
+        == str(surge_proof.get("installed_spec_fingerprint") or "")
+        and str(material.get("head_manifest_fingerprint") or "")
+        == str(restore_intent.get("rendered_manifest_fingerprint") or "")
+        and str(material.get("head_spec_fingerprint") or "")
+        == str(restore_intent.get("rendered_target_spec_fingerprint") or "")
+        and str(restore_intent.get("values_fingerprint") or "") == head.values_fingerprint
+        and str(material.get("stable_spec_fingerprint") or "") == stable_spec_fingerprint
+        and re.fullmatch(r"[0-9a-f]{64}", stable_spec_fingerprint) is not None
+        and str(material.get("verified_at") or "").strip()
+    )
+
+
+def _in_place_login_restore_protected_successor_predecessor_proof(
+    *,
+    checkpoint: Mapping[str, Any],
+    rolling: Mapping[str, Any],
+    populate_phase: Mapping[str, Any],
+    target_ref: str,
+    configured: int,
+    surge: int,
+    successor_proof: Mapping[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, Any]:
+    """Bind a Helm-applied configured owner to its exact surged release root."""
+
+    proof = dict(copy.deepcopy(to_plain_data(successor_proof)))
+    restore_intent = _validated_target_soperator_helm_apply_intent(
+        rolling,
+        target_ref=target_ref,
+        intent_key="in_place_login_surge_restore_intent",
+    )
+    restore_bootstrap = _mapping(
+        _mapping(populate_phase.get("target_helm_admission_bootstraps")).get(
+            "in-place-login-surge-restore"
+        )
+    )
+    root = _target_helm_admission_release_precondition_from_payload(
+        _mapping(restore_bootstrap.get("release_precondition")),
+        require_deployed=True,
+    )
+    expected_root = _in_place_login_surge_restore_predecessor_release_precondition(
+        checkpoint=checkpoint,
+        rolling=rolling,
+        target_ref=target_ref,
+    )
+    dispatch = _target_helm_admission_protected_dispatch_state(
+        restore_bootstrap,
+        root=root,
+    )
+    head = _target_helm_admission_release_precondition_from_payload(
+        _mapping(dispatch.get("head_release")),
+        require_deployed=True,
+    )
+    target = {
+        "namespace": root.target_namespace,
+        "name": root.target_name,
+        "uid": root.target_uid,
+    }
+    values_fingerprint = str(restore_intent.get("values_fingerprint") or "").strip()
+    if (
+        not restore_intent
+        or restore_bootstrap.get("status") != "complete"
+        or root != expected_root
+        or dispatch.get("status") != "succeeded"
+        or head.revision <= root.revision
+        or head.status != "deployed"
+        or head.target_namespace != target["namespace"]
+        or head.target_name != target["name"]
+        or head.target_uid != target["uid"]
+        or head.values_fingerprint != values_fingerprint
+        or proof.get("schema") != _TARGET_HELM_APPLY_PROOF_SCHEMA
+        or proof.get("status") != "verified"
+        or _mapping(proof.get("target")) != target
+        or _positive_int(proof.get("release_revision"), fallback=0) != head.revision
+        or str(proof.get("chart") or "").strip() != head.chart
+        or str(proof.get("app_version") or "").strip() != head.app_version
+        or str(proof.get("values_fingerprint") or "").strip() != values_fingerprint
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore cannot bind its configured owner to the exact "
+            "protected Helm successor."
+        )
+    history = _target_helm_admission_protected_dispatch_history(
+        root=root,
+        head=_TargetHelmAdmissionValuesSelection(
+            values={},
+            release_precondition=head,
+        ),
+        desired_values_fingerprint=values_fingerprint,
+        first_dispatched_at=str(dispatch.get("first_dispatched_at") or ""),
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if history != _mapping(dispatch.get("successor_history")):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore protected Helm successor history drifted."
+        )
+
+    root_manifest = _target_soperator_helm_revision_manifest(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        revision=root.revision,
+    )
+    head_manifest = _target_soperator_helm_revision_manifest(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        revision=head.revision,
+    )
+    root_label = f"protected login-restore root revision {root.revision}"
+    head_label = f"protected login-restore head revision {head.revision}"
+    root_manifest_fingerprint = _target_slurmcluster_manifest_fingerprint(
+        root_manifest,
+        target_ref=target_ref,
+        label=root_label,
+    )
+    head_manifest_fingerprint = _target_slurmcluster_manifest_fingerprint(
+        head_manifest,
+        target_ref=target_ref,
+        label=head_label,
+    )
+    root_spec = _target_slurmcluster_spec_from_helm_documents(
+        root_manifest,
+        target_ref=target_ref,
+        label=root_label,
+    )
+    head_spec = _target_slurmcluster_spec_from_helm_documents(
+        head_manifest,
+        target_ref=target_ref,
+        label=head_label,
+    )
+    surge_proof = _mapping(rolling.get("in_place_login_surge_apply_proof"))
+    if (
+        root_manifest_fingerprint != str(surge_proof.get("installed_manifest_fingerprint") or "")
+        or _fingerprint(root_spec) != str(surge_proof.get("installed_spec_fingerprint") or "")
+        or head_manifest_fingerprint != str(proof.get("installed_manifest_fingerprint") or "")
+        or _fingerprint(head_spec) != str(proof.get("installed_spec_fingerprint") or "")
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore protected Helm revision manifests drifted from "
+            "their immutable proofs."
+        )
+    crd_schema = _target_slurmcluster_live_crd_spec_schema(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    defaulted_root_spec = _apply_openapi_defaults(root_spec, crd_schema)
+    defaulted_head_spec = _apply_openapi_defaults(head_spec, crd_schema)
+    stable_spec_fingerprint = _exact_in_place_login_size_transition_fingerprint(
+        live_spec=defaulted_root_spec,
+        expected_spec=defaulted_head_spec,
+        from_replicas=surge,
+        to_replicas=configured,
+    )
+    if not stable_spec_fingerprint:
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore protected Helm revisions changed more than the "
+            "login replica owner."
+        )
+    material = {
+        "schema": _IN_PLACE_LOGIN_RESTORE_PROTECTED_SUCCESSOR_PREDECESSOR_SCHEMA,
+        "status": "verified",
+        "target": target,
+        "root_release": _target_helm_admission_release_precondition_payload(root),
+        "head_release": _target_helm_admission_release_precondition_payload(head),
+        "successor_history_fingerprint": _fingerprint(history),
+        "root_manifest_fingerprint": root_manifest_fingerprint,
+        "root_spec_fingerprint": _fingerprint(root_spec),
+        "head_manifest_fingerprint": head_manifest_fingerprint,
+        "head_spec_fingerprint": _fingerprint(head_spec),
+        "stable_spec_fingerprint": stable_spec_fingerprint,
+        "verified_at": _utc_now(),
+    }
+    proof.update(
+        {
+            "mode": (
+                f"{str(proof.get('mode') or '').strip()}+protected-release-history-predecessor"
+            ),
+            "live_login_size_predecessor": {
+                "from_replicas": surge,
+                "to_replicas": configured,
+                "stable_spec_fingerprint": stable_spec_fingerprint,
+            },
+            "protected_release_predecessor": material,
+        }
+    )
+    return proof
+
+
+def _target_helm_admission_in_place_login_restore_selection(
+    *,
+    checkpoint: dict[str, Any],
+    populate_phase: dict[str, Any],
+    rolling: dict[str, Any],
+    target_ref: str,
+    expected_version: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+    completed_reapply_values_fingerprint: str | None = None,
+) -> _TargetHelmAdmissionValuesSelection:
+    """Select or recover the exact release head for one login-restore dispatch."""
+
+    boundary = "in-place-login-surge-restore"
+    raw_bootstraps = populate_phase.get("target_helm_admission_bootstraps")
+    if raw_bootstraps is not None and not isinstance(raw_bootstraps, dict):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore admission bootstrap collection is malformed."
+        )
+    state_value = raw_bootstraps.get(boundary) if isinstance(raw_bootstraps, dict) else None
+    if state_value is not None and not isinstance(state_value, dict):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore admission bootstrap is malformed."
+        )
+    state = state_value if isinstance(state_value, dict) else {}
+
+    if completed_reapply_values_fingerprint is not None:
+        if re.fullmatch(r"[0-9a-f]{64}", completed_reapply_values_fingerprint) is None:
+            raise SoperatorMigrationPhasePending(
+                "in-place login restore completed-reapply predecessor fingerprint is invalid."
+            )
+        selection = _target_helm_admission_exact_deployed_selection(
+            rolling_phase=rolling,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if (
+            selection.release_precondition.values_fingerprint
+            != completed_reapply_values_fingerprint
+        ):
+            raise SoperatorMigrationPhasePending(
+                "in-place login restore completed-reapply release predecessor drifted."
+            )
+        return selection
+
+    expected_predecessor = _in_place_login_surge_restore_predecessor_release_precondition(
+        checkpoint=checkpoint,
+        rolling=rolling,
+        target_ref=target_ref,
+    )
+    raw_root = _mapping(state.get("release_precondition"))
+    if raw_root:
+        root = _target_helm_admission_release_precondition_from_payload(
+            raw_root,
+            require_deployed=True,
+        )
+        if root != expected_predecessor:
+            raise SoperatorMigrationPhasePending(
+                "in-place login restore protected release root drifted from its surge proof."
+            )
+        dispatch = _target_helm_admission_protected_dispatch_state(state, root=root)
+        if dispatch:
+            recovered = _recover_target_helm_admission_protected_dispatch(
+                phase=populate_phase,
+                rolling_phase=rolling,
+                boundary=boundary,
+                target_ref=target_ref,
+                expected_version=expected_version,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                checkpoint_writer=checkpoint_writer,
+            )
+            if recovered is None:
+                raise SoperatorMigrationPhasePending(
+                    "in-place login restore lost its protected Helm dispatch recovery."
+                )
+            return recovered
+
+    selection = _target_helm_admission_exact_deployed_selection(
+        rolling_phase=rolling,
+        target_ref=target_ref,
+        expected_version=expected_version,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if selection.release_precondition != expected_predecessor:
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore live release is not its exact protected surge predecessor."
+        )
+    if raw_root:
+        return selection
+    if not state:
+        return selection
+
+    restore_intent = _validated_target_soperator_helm_apply_intent(
+        rolling,
+        target_ref=target_ref,
+        intent_key="in_place_login_surge_restore_intent",
+    )
+    if (
+        state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or state.get("boundary") != boundary
+        or state.get("target_ref") != target_ref
+        or state.get("status") != "admission-ready"
+        or not restore_intent
+        or str(state.get("values_fingerprint") or "").strip()
+        != str(restore_intent.get("values_fingerprint") or "").strip()
+        or state.get("protected_helm_dispatch") is not None
+        or state.get("helm_applied_at") not in {None, ""}
+        or state.get("completed_at") not in {None, ""}
+        or state.get("release_precondition_recovery") is not None
+    ):
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore cannot recover a missing release precondition from "
+            "this admission lifecycle."
+        )
+    if checkpoint_writer is None:
+        raise SoperatorMigrationPhasePending(
+            "in-place login restore release-precondition recovery requires a durable checkpoint."
+        )
+    state["release_precondition"] = _target_helm_admission_release_precondition_payload(
+        expected_predecessor
+    )
+    state["release_precondition_recovery"] = {
+        "schema": _IN_PLACE_LOGIN_RESTORE_RELEASE_PRECONDITION_RECOVERY_SCHEMA,
+        "status": "verified",
+        "reason": (
+            "the prior ambiguous Helm create timeout produced no release revision; the "
+            "exact protected surge predecessor remained deployed"
+        ),
+        "recovered_at": _utc_now(),
+    }
+    checkpoint_writer()
+    return selection
+
+
 def _reconcile_in_place_jail_login_surge(
     *,
     checkpoint: dict[str, Any],
@@ -135934,9 +141905,18 @@ def _reconcile_in_place_jail_login_surge(
     reconciliation_status = str(
         _mapping(rolling.get("in_place_login_surge_reconciliation")).get("status") or ""
     ).strip()
+    released_post_switch_adoption = bool(
+        reconciliation_status in {"peer-ready", "released"}
+        and _in_place_login_surge_released_post_switch_adoption_is_exact(
+            checkpoint=checkpoint,
+            rolling=rolling,
+            target_ref=target_ref,
+            desired_values_fingerprint=_fingerprint(apply_values),
+        )
+    )
     if (
         hold_status == "released"
-        and reconciliation_status in {"restoring", "restored"}
+        and (reconciliation_status in {"restoring", "restored"} or released_post_switch_adoption)
         and live_pair
         in {
             (surge, surge),
@@ -136068,6 +142048,7 @@ def _reconcile_in_place_jail_login_surge(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 values=apply_values,
+                manager_restore_values=surged_values,
                 expected_version=expected_version,
                 boundary="in-place-login-surge",
                 login_session_policy=login_session_policy,
@@ -136128,10 +142109,37 @@ def _reconcile_in_place_jail_login_surge(
                 command_runner=command_runner,
                 kube_context=kube_context,
             )
+    post_switch_apply_adopted = bool(
+        not slurmcluster_regression_repaired
+        and live_pair == (surge, surge)
+        and not preexisting_surge_intent_present
+        and not failed_helm_recovery_state_present
+        and not mutation_performed
+    )
     if slurmcluster_regression_repaired:
         lines.append(
             "In-place login surge retained its exact historical intent-bound Helm "
             "proof and used the dedicated SlurmCluster regression receipt."
+        )
+    elif post_switch_apply_adopted:
+        lines.extend(
+            _adopt_in_place_login_surge_completed_post_switch_apply(
+                checkpoint=checkpoint,
+                populate_phase=populate_phase,
+                rolling=rolling,
+                values=apply_values,
+                target_ref=target_ref,
+                expected_version=expected_version,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                checkpoint_writer=checkpoint_writer,
+            )
+        )
+        _require_exact_temporary_login_helm_proof(
+            rolling=rolling,
+            values=apply_values,
+            proof_key="in_place_login_surge_apply_proof",
+            semantic_drift_key="in_place_login_surge_apply_semantic_drift",
         )
     else:
         lines.extend(
@@ -136218,6 +142226,10 @@ def _reconcile_in_place_jail_login_surge(
             "observation": observation,
             "applied_at": _utc_now(),
         }
+        if post_switch_apply_adopted:
+            reconciliation["post_switch_apply_adoption_sha256"] = _fingerprint(
+                _mapping(rolling.get("in_place_login_surge_post_switch_apply_adoption"))
+            )
     rolling["in_place_login_surge_reconciliation"] = reconciliation
     if checkpoint_writer is not None:
         checkpoint_writer()
@@ -136661,6 +142673,31 @@ def _restore_in_place_jail_login_surge(
                 "in-place login surge restore requires the exact restored target accounting "
                 "writer and retired source-owner proof before Helm replay."
             )
+        restore_selection = _target_helm_admission_in_place_login_restore_selection(
+            checkpoint=checkpoint,
+            populate_phase=populate_phase,
+            rolling=rolling,
+            target_ref=target_ref,
+            expected_version=expected_version,
+            command_runner=command_runner,
+            kube_context=kube_context,
+            checkpoint_writer=checkpoint_writer,
+            completed_reapply_values_fingerprint=(
+                _fingerprint(restore_apply_values) if force_completed_admission_reapply else None
+            ),
+        )
+        restore_release_precondition = restore_selection.release_precondition
+
+        def _require_restore_release_precondition() -> None:
+            _require_target_helm_admission_release_precondition(
+                precondition=restore_release_precondition,
+                rolling_phase=rolling,
+                target_ref=target_ref,
+                expected_version=expected_version,
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+
         rolling["in_place_login_surge_reconciliation"] = {
             **dict(reconciliation),
             "status": "restoring",
@@ -136676,6 +142713,7 @@ def _restore_in_place_jail_login_surge(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 values=restore_apply_values,
+                manager_restore_values=values,
                 expected_version=expected_version,
                 boundary="in-place-login-surge-restore",
                 login_session_policy=login_session_policy,
@@ -136693,6 +142731,8 @@ def _restore_in_place_jail_login_surge(
                         kube_context=kube_context,
                     )
                 ),
+                pre_helm_dispatch_boundary=_require_restore_release_precondition,
+                release_precondition=restore_release_precondition,
             )
         )
         mutation_performed = True
@@ -136734,8 +142774,9 @@ def _restore_in_place_jail_login_surge(
     )
     if owner_pair in {(surge, surge), (configured, surge)}:
         predecessor_proof: Mapping[str, Any] | None = None
-        if owner_pair == (surge, surge):
-            predecessor_proof = _prove_target_soperator_helm_apply(
+        owner_state = _mapping(rolling.get("in_place_login_restore_slurmcluster_owner"))
+        if not owner_state:
+            successor_proof = _prove_target_soperator_helm_apply(
                 phase=rolling,
                 command_runner=command_runner,
                 kube_context=kube_context,
@@ -136746,6 +142787,21 @@ def _restore_in_place_jail_login_surge(
                 recovered_from_live_state=not mutation_performed,
                 intent_key="in_place_login_surge_restore_intent",
                 allowed_live_login_size_predecessor=(surge, configured),
+            )
+            predecessor_proof = (
+                successor_proof
+                if owner_pair == (surge, surge)
+                else _in_place_login_restore_protected_successor_predecessor_proof(
+                    checkpoint=checkpoint,
+                    rolling=rolling,
+                    populate_phase=populate_phase,
+                    target_ref=target_ref,
+                    configured=configured,
+                    surge=surge,
+                    successor_proof=successor_proof,
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                )
             )
         owner_changed, owner_lines = _reconcile_in_place_login_restore_slurmcluster_owner(
             checkpoint=checkpoint,
@@ -139083,6 +145139,7 @@ def _execute_populate_jail_refresh_phase(
         _mapping(source_slurmcluster.get("spec")).get("slurmNodes")
     )
     migration_mode = ""
+    accepted_in_place_node_groups: tuple[Mapping[str, Any], ...] = ()
     if source_declares_controller:
         migration_mode = str(
             _compute_migration_contract(payload, target_ref).get("mode", "") or ""
@@ -139102,6 +145159,11 @@ def _execute_populate_jail_refresh_phase(
                 f"controller bridge journal: {exc}"
             ) from exc
         if migration_mode == COMPUTE_MIGRATION_MODE_IN_PLACE:
+            accepted_in_place_node_groups = _locked_campaign_in_place_node_groups(
+                payload=payload,
+                target_ref=target_ref,
+                checkpoint=checkpoint,
+            )
             if bridge_stage not in {
                 BridgeStage.SOURCE_HA_ACTIVE,
                 BridgeStage.TARGET_HA_ACTIVE,
@@ -139388,6 +145450,7 @@ def _execute_populate_jail_refresh_phase(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     values=desired_values,
+                    manager_restore_values=desired_values,
                     expected_version=target_version,
                     boundary="stale-persistent-copy-cleanup",
                     login_session_policy=login_session_policy,
@@ -139887,11 +145950,6 @@ def _execute_populate_jail_refresh_phase(
                 or open_metrics_reapply_required
                 or post_switch_admission_resume_required
             ):
-                if open_metrics_compatibility_required and open_metrics_handoff is not None:
-                    _record_jail_open_metrics_switch_intent(
-                        state=open_metrics_handoff,
-                        checkpoint_writer=checkpoint_writer,
-                    )
                 if alias_reapply_required:
                     resume_slots = active_passive_jail_rootfs_slots(switched_values)
                     _checkpoint_legacy_rootfs_jail_boundary_intent(
@@ -139911,12 +145969,32 @@ def _execute_populate_jail_refresh_phase(
                     )
                 resume_helm_values = switched_values
                 resume_recovery_predecessor_values_fingerprint: str | None = None
-                if open_metrics_reapply_required:
-                    post_switch_bootstrap = _mapping(
-                        _mapping(phase.get("target_helm_admission_bootstraps")).get(
-                            "post-switch-resume"
-                        )
+                resume_release_precondition: _TargetHelmAdmissionReleasePrecondition | None = None
+                post_switch_bootstrap = _mapping(
+                    _mapping(phase.get("target_helm_admission_bootstraps")).get(
+                        "post-switch-resume"
                     )
+                )
+                if post_switch_admission_resume_required:
+                    resume_selection = _target_helm_admission_post_switch_resume_selection(
+                        phase=phase,
+                        rolling_phase=rolling_phase,
+                        target_ref=target_ref,
+                        expected_version=target_version,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        expected_jail_alias_pvc=expected_jail_alias_pvc,
+                        expected_maintenance=expected_maintenance,
+                        disable_open_metrics_for_legacy_clients=(
+                            open_metrics_compatibility_required
+                            if open_metrics_handoff is not None
+                            else None
+                        ),
+                        checkpoint_writer=checkpoint_writer,
+                    )
+                    resume_helm_values = resume_selection.values
+                    resume_release_precondition = resume_selection.release_precondition
+                elif open_metrics_reapply_required and post_switch_bootstrap:
                     historical_values, historical_proof = (
                         _completed_target_helm_admission_historical_values(
                             phase=phase,
@@ -139940,10 +146018,15 @@ def _execute_populate_jail_refresh_phase(
                             "longer reproduce the exact OpenMetrics, jail alias, and "
                             "maintenance contract."
                         )
-                    live_values = _target_soperator_helm_stored_values(
+                    live_selection = _target_helm_admission_exact_deployed_selection(
+                        rolling_phase=rolling_phase,
+                        target_ref=target_ref,
+                        expected_version=target_version,
                         command_runner=command_runner,
                         kube_context=kube_context,
                     )
+                    live_values = live_selection.values
+                    resume_release_precondition = live_selection.release_precondition
                     live_values_fingerprint = _fingerprint(live_values)
                     post_switch_values_fingerprint = str(
                         post_switch_bootstrap.get("values_fingerprint") or ""
@@ -139999,24 +146082,41 @@ def _execute_populate_jail_refresh_phase(
                     resume_helm_values = historical_values
                     if checkpoint_writer is not None:
                         checkpoint_writer()
-                elif post_switch_admission_resume_required:
-                    resume_helm_values = _target_helm_admission_exact_deployed_resume_values(
-                        phase,
-                        boundary="post-switch-resume",
+                elif open_metrics_reapply_required:
+                    resume_selection = _target_helm_admission_fresh_post_switch_selection(
+                        phase=phase,
+                        rolling_phase=rolling_phase,
                         target_ref=target_ref,
+                        expected_version=target_version,
                         command_runner=command_runner,
                         kube_context=kube_context,
                         expected_jail_alias_pvc=expected_jail_alias_pvc,
                         expected_maintenance=expected_maintenance,
-                        disable_open_metrics_for_legacy_clients=(
-                            open_metrics_compatibility_required
-                            if open_metrics_handoff is not None
-                            else None
-                        ),
+                    )
+                    resume_helm_values = resume_selection.values
+                    resume_release_precondition = resume_selection.release_precondition
+                if open_metrics_compatibility_required and open_metrics_handoff is not None:
+                    _record_jail_open_metrics_switch_intent(
+                        state=open_metrics_handoff,
+                        checkpoint_writer=checkpoint_writer,
                     )
                 _require_live_rolling_sconfig_fence(
                     boundary="post-switch resume Helm reconciliation"
                 )
+                pre_helm_dispatch_boundary: Callable[[], None] | None = None
+                if resume_release_precondition is not None:
+
+                    def _require_resume_release_precondition() -> None:
+                        _require_target_helm_admission_release_precondition(
+                            precondition=resume_release_precondition,
+                            rolling_phase=rolling_phase,
+                            target_ref=target_ref,
+                            expected_version=target_version,
+                            command_runner=command_runner,
+                            kube_context=kube_context,
+                        )
+
+                    pre_helm_dispatch_boundary = _require_resume_release_precondition
                 resume_lines.extend(
                     _helm_upgrade_target_soperator_with_jail_login_session_policy(
                         checkpoint=checkpoint,
@@ -140024,6 +146124,7 @@ def _execute_populate_jail_refresh_phase(
                         command_runner=command_runner,
                         kube_context=kube_context,
                         values=resume_helm_values,
+                        manager_restore_values=switched_values,
                         expected_version=target_version,
                         boundary="post-switch-resume",
                         login_session_policy=login_session_policy,
@@ -140035,9 +146136,13 @@ def _execute_populate_jail_refresh_phase(
                             else None
                         ),
                         checkpoint_writer=checkpoint_writer,
+                        force_target_admission_bootstrap=(resume_release_precondition is not None),
                         completed_recovery_predecessor_values_fingerprint=(
                             resume_recovery_predecessor_values_fingerprint
                         ),
+                        target_admission_bridge_phase=rolling_phase,
+                        pre_helm_dispatch_boundary=pre_helm_dispatch_boundary,
+                        release_precondition=resume_release_precondition,
                     )
                 )
                 mutation_performed = True
@@ -141217,6 +147322,7 @@ def _execute_populate_jail_refresh_phase(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     values=refresh_values,
+                    manager_restore_values=refresh_values,
                     expected_version=target_version,
                     boundary="passive-slot-preparation",
                     login_session_policy=login_session_policy,
@@ -141228,6 +147334,7 @@ def _execute_populate_jail_refresh_phase(
                     writer_hold_state=(writer_hold_state if legacy_migration_entries else None),
                     checkpoint_writer=checkpoint_writer,
                     mutation_guard=mutation_guard,
+                    target_admission_bridge_phase=rolling_phase,
                 )
             )
             if in_place_source_fence_required:
@@ -141365,6 +147472,7 @@ def _execute_populate_jail_refresh_phase(
                 values=values,
                 checkpoint_writer=checkpoint_writer,
                 gate_key=_GPU_PRE_ACTIVATION_FLEET_GATE_KEY,
+                accepted_in_place_node_groups=accepted_in_place_node_groups,
             )
         )
         if legacy_migration_entries:
@@ -141477,6 +147585,7 @@ def _execute_populate_jail_refresh_phase(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 values=switched_values,
+                manager_restore_values=switched_values,
                 expected_version=target_version,
                 boundary="active-slot-switch",
                 login_session_policy=login_session_policy,
@@ -148302,6 +154411,12 @@ def _ensure_in_place_target_manager_paused(
             raise RuntimeError(
                 "recovery-required: target manager pause contract changed after checkpointing."
             )
+    elif manager_pause.get("schema") == _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA:
+        if not _in_place_target_manager_bootstrap_pause_contract(manager_pause):
+            raise RuntimeError(
+                "recovery-required: target manager bootstrap pause contract changed after "
+                "checkpointing."
+            )
     elif manager_pause.get("schema") not in {None, ""}:
         raise RuntimeError("recovery-required: target manager pause schema is unsupported.")
     if recorded_uid and recorded_uid != live_uid:
@@ -148309,6 +154424,11 @@ def _ensure_in_place_target_manager_paused(
             "recovery-required: Soperator manager Deployment UID changed during its pause."
         )
     if manager_replicas > 0:
+        if manager_pause.get("schema") == _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA:
+            raise RuntimeError(
+                "recovery-required: bootstrap-created target manager resumed without an "
+                "explicit restore or repause authority."
+            )
         manager_resource_version = str(manager_metadata.get("resourceVersion", "") or "").strip()
         if not manager_resource_version:
             raise SoperatorMigrationPhasePending(
@@ -148362,7 +154482,7 @@ def _ensure_in_place_target_manager_paused(
             }
         )
         if not rearm_contract:
-            _seal_in_place_target_manager_pause_contract(manager_pause)
+            _seal_in_place_target_manager_pause_authority(manager_pause)
         if checkpoint_writer is not None:
             checkpoint_writer()
         raise SoperatorMigrationCheckpointContinuation(
@@ -148376,7 +154496,10 @@ def _ensure_in_place_target_manager_paused(
     recorded_fingerprint = str(manager_pause.get("spec_fingerprint") or "").strip()
     expected_generation = _positive_int(
         manager_pause.get("pause_expected_generation"),
-        fallback=manager_generation,
+        fallback=_positive_int(
+            manager_pause.get("pause_generation"),
+            fallback=manager_generation,
+        ),
     )
     if rearm_contract and manager_generation > expected_generation:
         raise RuntimeError(
@@ -148401,16 +154524,13 @@ def _ensure_in_place_target_manager_paused(
                     "to_fingerprint": manager_spec_fingerprint,
                     "generation": manager_generation,
                     "reserialized_at": _utc_now(),
-                    "reason": (
-                        "same-generation serialization drift; the pause "
-                        "generation is unchanged so no spec mutation occurred"
-                    ),
+                    "reason": _IN_PLACE_TARGET_MANAGER_PAUSE_RESERIALIZATION_REASON,
                 }
             )
             manager_pause["spec_fingerprint"] = manager_spec_fingerprint
             recorded_fingerprint = manager_spec_fingerprint
             if not rearm_contract:
-                _seal_in_place_target_manager_pause_contract(manager_pause)
+                _seal_in_place_target_manager_pause_authority(manager_pause)
             if checkpoint_writer is not None:
                 checkpoint_writer()
         else:
@@ -148446,7 +154566,7 @@ def _ensure_in_place_target_manager_paused(
         }
     )
     if not rearm_contract:
-        _seal_in_place_target_manager_pause_contract(manager_pause)
+        _seal_in_place_target_manager_pause_authority(manager_pause)
     helm_repause = _mapping(manager_pause.get("helm_resume_repause"))
     if helm_repause:
         if (
@@ -148800,6 +154920,516 @@ def _require_manager_pause_rearm_target_binding(
         )
 
 
+def _active_bridge_target_admission_rolling_authority_role(
+    *,
+    checkpoint: Mapping[str, Any],
+    target_ref: str,
+    rolling_authority: Mapping[str, Any],
+    successor: Mapping[str, Any],
+    receipt_material: Mapping[str, Any],
+) -> str:
+    """Classify only an exact receipt predecessor or post-switch sibling."""
+
+    rolling_contract = _in_place_target_manager_bootstrap_pause_contract(rolling_authority)
+    successor_contract = _in_place_target_manager_bootstrap_pause_contract(successor)
+    rolling_bootstrap = _mapping(rolling_contract.get("bootstrap"))
+    successor_bootstrap = _mapping(successor_contract.get("bootstrap"))
+    campaign_fingerprint = str(checkpoint.get("campaign_fingerprint") or "").strip()
+    rolling_generation = _positive_int(
+        rolling_contract.get("pause_generation"),
+        fallback=0,
+    )
+    successor_generation = _positive_int(
+        successor_contract.get("pause_generation"),
+        fallback=0,
+    )
+    shared_contract_fields = (
+        "deployment_uid",
+        "original_replicas",
+        "spec_fingerprint",
+    )
+    shared_bootstrap_fields = (
+        "campaign_fingerprint",
+        "target_ref",
+        "chart_content_fingerprint",
+        "manager_deployment_uid",
+        "manager_helm_spec_fingerprint",
+    )
+    if not (
+        rolling_contract
+        and successor_contract
+        and receipt_material
+        and rolling_authority.get("status") == "verified"
+        and str(rolling_authority.get("verified_at") or "").strip()
+        and rolling_bootstrap.get("boundary") in {"passive-slot-preparation", "active-slot-switch"}
+        and successor_bootstrap.get("boundary") == "post-switch-resume"
+        and re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint) is not None
+        and rolling_bootstrap.get("campaign_fingerprint") == campaign_fingerprint
+        and successor_bootstrap.get("campaign_fingerprint") == campaign_fingerprint
+        and rolling_bootstrap.get("target_ref") == target_ref
+        and successor_bootstrap.get("target_ref") == target_ref
+        and all(
+            rolling_contract.get(key) == successor_contract.get(key)
+            for key in shared_contract_fields
+        )
+        and all(
+            rolling_bootstrap.get(key) == successor_bootstrap.get(key)
+            for key in shared_bootstrap_fields
+        )
+        and successor_generation
+        == _positive_int(receipt_material.get("successor_pause_generation"), fallback=0)
+    ):
+        return ""
+    if rolling_generation == _positive_int(
+        receipt_material.get("predecessor_pause_generation"),
+        fallback=0,
+    ):
+        return "receipt-predecessor"
+    sibling_bootstrap_fields = (
+        "schema",
+        "prerequisites_fingerprint",
+        "prerequisite_uids_fingerprint",
+    )
+    if rolling_generation == successor_generation and all(
+        rolling_bootstrap.get(key) == successor_bootstrap.get(key)
+        for key in sibling_bootstrap_fields
+    ):
+        return "successor-sibling"
+    return ""
+
+
+def _active_bridge_target_admission_adoption_bridge_authority_is_exact(
+    *,
+    recorded_adoption: Mapping[str, Any],
+    bridge: Mapping[str, Any],
+    bridge_stage: BridgeStage,
+    expected_bridge_owner: str,
+    bridge_epoch: str,
+) -> bool:
+    """Accept the adoption epoch or its exact one-way source-to-target successor."""
+
+    recorded_stage = str(recorded_adoption.get("bridge_stage") or "").strip()
+    recorded_owner = str(recorded_adoption.get("bridge_authority_owner") or "").strip()
+    recorded_epoch = str(recorded_adoption.get("bridge_authority_epoch") or "").strip()
+    if (
+        recorded_stage == bridge_stage.value
+        and recorded_owner == expected_bridge_owner
+        and recorded_epoch == bridge_epoch
+    ):
+        return True
+    if not (
+        recorded_stage == BridgeStage.SOURCE_HA_ACTIVE.value
+        and recorded_owner == "bridge-source"
+        and recorded_epoch
+        and bridge_stage is BridgeStage.TARGET_HA_ACTIVE
+        and expected_bridge_owner == "bridge-target"
+        and bridge_epoch
+        and str(bridge.get("stage") or "").strip() == BridgeStage.TARGET_HA_ACTIVE.value
+    ):
+        return False
+    authority = _mapping(bridge.get("authority"))
+    history = _sequence_of_mappings(authority.get("history"))
+    if len(history) < 2:
+        return False
+    source_entry = history[-2]
+    target_entry = history[-1]
+    adopted_at = recorded_adoption.get("adopted_at")
+    return bool(
+        authority.get("owner") == "bridge-target"
+        and str(authority.get("epoch") or "").strip() == bridge_epoch
+        and source_entry.get("owner") == "bridge-source"
+        and str(source_entry.get("epoch") or "").strip() == recorded_epoch
+        and source_entry.get("reason")
+        == "source-version bridge writer scale accepted for promoted shared state"
+        and target_entry.get("owner") == "bridge-target"
+        and str(target_entry.get("epoch") or "").strip() == bridge_epoch
+        and target_entry.get("reason")
+        == "target-version bridge writer scale accepted for shared controller state"
+        and sum(
+            1
+            for item in history
+            if item.get("owner") == "bridge-source"
+            and str(item.get("epoch") or "").strip() == recorded_epoch
+        )
+        == 1
+        and _timestamp_at_or_after(adopted_at, source_entry.get("at"))
+        and _timestamp_at_or_after(target_entry.get("at"), adopted_at)
+    )
+
+
+def _reconcile_active_bridge_target_admission_manager_pause_successor(
+    *,
+    checkpoint: dict[str, Any],
+    phase: dict[str, Any],
+    bridge_stage: BridgeStage,
+    target_ref: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    checkpoint_writer: Callable[[], None] | None,
+) -> dict[str, Any]:
+    """Move an exact historical post-switch pause split to its rolling owner."""
+
+    phase_state = checkpoint.get("phase_state")
+    if not isinstance(phase_state, Mapping):
+        return {}
+    rolling = phase_state.get("rolling-compute-migration")
+    populate = phase_state.get("populate-jail-refresh")
+    if not isinstance(rolling, dict) or phase is not rolling or not isinstance(populate, dict):
+        return {}
+    raw_successors = populate.get("target_helm_admission_manager_pause_successors")
+    raw_bootstraps = populate.get("target_helm_admission_bootstraps")
+    recorded_adoption = phase.get("in_place_target_manager_pause_successor_adoption")
+    if raw_successors is None and recorded_adoption is None:
+        return {}
+    if not isinstance(raw_successors, Mapping) or not isinstance(raw_bootstraps, Mapping):
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause authority "
+            "collections are malformed."
+        )
+    receipt = raw_successors.get("post-switch-resume")
+    state = raw_bootstraps.get("post-switch-resume")
+    if not isinstance(receipt, Mapping) or not isinstance(state, Mapping):
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause successor "
+            "or lifecycle state is missing."
+        )
+    phase_pause = phase.get("in_place_target_manager_pause")
+    populate_pause = populate.get("in_place_target_manager_pause")
+    if populate_pause is not None and (
+        not isinstance(populate_pause, Mapping) or not populate_pause
+    ):
+        raise RuntimeError(
+            "recovery-required: populate target-admission manager-pause successor is malformed."
+        )
+    if (
+        populate_pause is None
+        and recorded_adoption is None
+        and (
+            not isinstance(phase_pause, Mapping)
+            or phase_pause.get("schema") != _IN_PLACE_TARGET_MANAGER_BOOTSTRAP_PAUSE_SCHEMA
+        )
+    ):
+        return {}
+    completed_operation_pause_reuse_material: dict[str, Any] = {}
+    completed_operation_pause_reuse_state: Mapping[str, Any] = {}
+    recorded_operation_pause_reuse: Mapping[str, Any] | None = None
+    operation_pause_reuse_records: Mapping[str, Any] = {}
+    if recorded_adoption is not None and isinstance(populate_pause, Mapping):
+        if not isinstance(phase_pause, Mapping) or not phase_pause:
+            raise RuntimeError(
+                "recovery-required: completed target-admission operation pause lost its "
+                "canonical rolling predecessor."
+            )
+        populate_pause_contract = _in_place_target_manager_bootstrap_pause_contract(populate_pause)
+        populate_pause_boundary = str(
+            _mapping(populate_pause_contract.get("bootstrap")).get("boundary") or ""
+        ).strip()
+        candidate_state = raw_bootstraps.get(populate_pause_boundary)
+        raw_reuses = populate.get("target_helm_admission_manager_pause_reuses")
+        if raw_reuses is None:
+            operation_pause_reuse_records = {}
+        elif isinstance(raw_reuses, Mapping):
+            operation_pause_reuse_records = raw_reuses
+        else:
+            raise RuntimeError(
+                "recovery-required: completed target-admission operation pause reuse "
+                "collection is malformed."
+            )
+        candidate_reuse = operation_pause_reuse_records.get(populate_pause_boundary)
+        if candidate_reuse is not None and (
+            not isinstance(candidate_reuse, Mapping) or not candidate_reuse
+        ):
+            raise RuntimeError(
+                "recovery-required: completed target-admission operation pause reuse "
+                "receipt is malformed."
+            )
+        completed_operation_pause_reuse_state = (
+            candidate_state if isinstance(candidate_state, Mapping) else {}
+        )
+        completed_operation_pause_reuse_material = (
+            _completed_target_helm_admission_continuous_manager_pause_reuse_material(
+                checkpoint=checkpoint,
+                state=completed_operation_pause_reuse_state,
+                predecessor=phase_pause,
+                authority=populate_pause,
+            )
+        )
+        recorded_operation_pause_reuse = (
+            candidate_reuse if isinstance(candidate_reuse, Mapping) else None
+        )
+        if not completed_operation_pause_reuse_material or (
+            recorded_operation_pause_reuse is not None
+            and not _target_helm_admission_manager_pause_reuse_is_exact(
+                receipt=recorded_operation_pause_reuse,
+                checkpoint=checkpoint,
+                state=completed_operation_pause_reuse_state,
+                predecessor=phase_pause,
+                authority=populate_pause,
+            )
+        ):
+            raise RuntimeError(
+                "recovery-required: completed target-admission operation pause does not "
+                "match its exact canonical rolling authority."
+            )
+    successor = (
+        phase_pause
+        if completed_operation_pause_reuse_material
+        else populate_pause
+        if isinstance(populate_pause, Mapping)
+        else phase_pause
+    )
+    if not isinstance(successor, Mapping) or not successor:
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause successor "
+            "lost its canonical pause authority."
+        )
+    successor_contract = _in_place_target_manager_bootstrap_pause_contract(successor)
+    receipt_material = _validated_target_helm_admission_manager_pause_successor(receipt)
+    restore_authority = _target_helm_admission_manager_pause_restore_authority(
+        checkpoint=checkpoint,
+        state=state,
+        authority=successor,
+    )
+    bridge = _mapping(checkpoint.get("controller_bridge"))
+    bridge_authority = _mapping(bridge.get("authority"))
+    expected_bridge_owner = (
+        "bridge-source" if bridge_stage is BridgeStage.SOURCE_HA_ACTIVE else "bridge-target"
+    )
+    bridge_epoch = str(bridge_authority.get("epoch") or "").strip()
+    if (
+        not successor_contract
+        or successor.get("status") != "verified"
+        or not str(successor.get("verified_at") or "").strip()
+        or state.get("schema") != _TARGET_HELM_ADMISSION_BOOTSTRAP_SCHEMA
+        or state.get("status") != "complete"
+        or str(state.get("boundary") or "").strip() != "post-switch-resume"
+        or str(state.get("target_ref") or "").strip() != target_ref
+        or str(checkpoint.get("target_ref") or "").strip() != target_ref
+        or not receipt_material
+        or not restore_authority
+        or not _target_helm_admission_manager_pause_successor_replay_is_exact(
+            receipt=receipt,
+            checkpoint=checkpoint,
+            state=state,
+            authority=successor,
+            restore_authority=restore_authority,
+        )
+        or bridge_authority.get("owner") != expected_bridge_owner
+        or bridge_authority.get("source_restart_prohibited") is not True
+        or not bridge_epoch
+    ):
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause successor "
+            "lost its exact campaign, restore, target, or bridge authority."
+        )
+    _require_manager_pause_rearm_target_binding(
+        contract=restore_authority,
+        target_ref=target_ref,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if (
+        _verified_live_in_place_target_manager_pause(
+            successor,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        is None
+    ):
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause successor "
+            "does not match the exact live zero-manager authority."
+        )
+
+    successor_fingerprint = str(successor.get("contract_fingerprint") or "").strip()
+    receipt_fingerprint = str(receipt.get("contract_fingerprint") or "").strip()
+    if populate_pause is not None and not completed_operation_pause_reuse_material:
+        if not isinstance(phase_pause, Mapping) or not phase_pause:
+            raise RuntimeError(
+                "recovery-required: active bridge target-admission manager-pause handoff "
+                "lost its rolling predecessor."
+            )
+        predecessor_contract = _in_place_target_manager_bootstrap_pause_contract(phase_pause)
+        predecessor_bootstrap = _mapping(predecessor_contract.get("bootstrap"))
+        predecessor_role = _active_bridge_target_admission_rolling_authority_role(
+            checkpoint=checkpoint,
+            target_ref=target_ref,
+            rolling_authority=phase_pause,
+            successor=successor,
+            receipt_material=receipt_material,
+        )
+        if recorded_adoption is not None or not predecessor_role:
+            raise RuntimeError(
+                "recovery-required: active bridge target-admission manager-pause handoff "
+                "does not match its exact rolling predecessor."
+            )
+        if checkpoint_writer is None:
+            raise SoperatorMigrationPhasePending(
+                "active bridge target-admission manager-pause handoff requires a durable "
+                "checkpoint writer."
+            )
+        adoption_material = {
+            "schema": _ACTIVE_BRIDGE_TARGET_ADMISSION_MANAGER_PAUSE_ADOPTION_SCHEMA,
+            "source": "target-admission-post-switch-successor",
+            "target_ref": target_ref,
+            "campaign_fingerprint": str(checkpoint.get("campaign_fingerprint") or "").strip(),
+            "bridge_stage": bridge_stage.value,
+            "bridge_authority_owner": expected_bridge_owner,
+            "bridge_authority_epoch": bridge_epoch,
+            "predecessor_role": predecessor_role,
+            "predecessor_authority_fingerprint": str(
+                phase_pause.get("contract_fingerprint") or ""
+            ).strip(),
+            "predecessor_boundary": str(predecessor_bootstrap.get("boundary") or "").strip(),
+            "predecessor_pause_generation": _positive_int(
+                predecessor_contract.get("pause_generation"), fallback=0
+            ),
+            "successor_receipt_fingerprint": receipt_fingerprint,
+            "successor_authority_fingerprint": successor_fingerprint,
+            "successor_pause_generation": _positive_int(
+                successor_contract.get("pause_generation"), fallback=0
+            ),
+            "manager_deployment_uid": str(successor_contract.get("deployment_uid") or ""),
+            "original_replicas": _positive_int(
+                successor_contract.get("original_replicas"), fallback=0
+            ),
+            "spec_fingerprint": str(successor_contract.get("spec_fingerprint") or ""),
+            "target_slurmcluster_uid": str(restore_authority.get("target_slurmcluster_uid") or ""),
+        }
+        phase["in_place_target_manager_pause"] = copy.deepcopy(dict(successor))
+        phase["in_place_target_manager_pause_successor_adoption"] = {
+            **adoption_material,
+            "status": "verified",
+            "adopted_at": _utc_now(),
+            "contract_fingerprint": _fingerprint(adoption_material),
+        }
+        populate.pop("in_place_target_manager_pause", None)
+        checkpoint_writer()
+        return phase["in_place_target_manager_pause"]
+
+    if not isinstance(phase_pause, Mapping) or dict(phase_pause) != dict(successor):
+        raise RuntimeError(
+            "recovery-required: active bridge target-admission manager-pause successor "
+            "is not owned by the rolling service phase."
+        )
+    if recorded_adoption is not None:
+        if not isinstance(recorded_adoption, Mapping):
+            raise RuntimeError(
+                "recovery-required: active bridge target-admission manager-pause adoption "
+                "is malformed."
+            )
+        adoption_material = {
+            key: copy.deepcopy(to_plain_data(recorded_adoption.get(key)))
+            for key in (
+                "schema",
+                "source",
+                "target_ref",
+                "campaign_fingerprint",
+                "bridge_stage",
+                "bridge_authority_owner",
+                "bridge_authority_epoch",
+                "predecessor_role",
+                "predecessor_authority_fingerprint",
+                "predecessor_boundary",
+                "predecessor_pause_generation",
+                "successor_receipt_fingerprint",
+                "successor_authority_fingerprint",
+                "successor_pause_generation",
+                "manager_deployment_uid",
+                "original_replicas",
+                "spec_fingerprint",
+                "target_slurmcluster_uid",
+            )
+        }
+        if (
+            set(recorded_adoption)
+            != {*adoption_material, "status", "adopted_at", "contract_fingerprint"}
+            or adoption_material["schema"]
+            != _ACTIVE_BRIDGE_TARGET_ADMISSION_MANAGER_PAUSE_ADOPTION_SCHEMA
+            or adoption_material["source"] != "target-admission-post-switch-successor"
+            or adoption_material["target_ref"] != target_ref
+            or adoption_material["campaign_fingerprint"]
+            != str(checkpoint.get("campaign_fingerprint") or "").strip()
+            or not _active_bridge_target_admission_adoption_bridge_authority_is_exact(
+                recorded_adoption=recorded_adoption,
+                bridge=bridge,
+                bridge_stage=bridge_stage,
+                expected_bridge_owner=expected_bridge_owner,
+                bridge_epoch=bridge_epoch,
+            )
+            or adoption_material["predecessor_role"]
+            not in {"receipt-predecessor", "successor-sibling"}
+            or re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(adoption_material["predecessor_authority_fingerprint"] or ""),
+            )
+            is None
+            or adoption_material["predecessor_boundary"]
+            not in {"passive-slot-preparation", "active-slot-switch"}
+            or _positive_int(adoption_material["predecessor_pause_generation"], fallback=0)
+            != (
+                _positive_int(receipt_material.get("predecessor_pause_generation"), fallback=0)
+                if adoption_material["predecessor_role"] == "receipt-predecessor"
+                else _positive_int(successor_contract.get("pause_generation"), fallback=0)
+            )
+            or adoption_material["successor_receipt_fingerprint"] != receipt_fingerprint
+            or adoption_material["successor_authority_fingerprint"] != successor_fingerprint
+            or _positive_int(adoption_material["successor_pause_generation"], fallback=0)
+            != _positive_int(successor_contract.get("pause_generation"), fallback=0)
+            or adoption_material["manager_deployment_uid"]
+            != successor_contract.get("deployment_uid")
+            or _positive_int(adoption_material["original_replicas"], fallback=0)
+            != _positive_int(successor_contract.get("original_replicas"), fallback=0)
+            or adoption_material["spec_fingerprint"] != successor_contract.get("spec_fingerprint")
+            or adoption_material["target_slurmcluster_uid"]
+            != restore_authority.get("target_slurmcluster_uid")
+            or recorded_adoption.get("status") != "verified"
+            or not str(recorded_adoption.get("adopted_at") or "").strip()
+            or str(recorded_adoption.get("contract_fingerprint") or "")
+            != _fingerprint(adoption_material)
+        ):
+            raise RuntimeError(
+                "recovery-required: active bridge target-admission manager-pause adoption "
+                "changed after checkpointing."
+            )
+    if completed_operation_pause_reuse_material:
+        if checkpoint_writer is None:
+            raise SoperatorMigrationPhasePending(
+                "completed target-admission operation pause normalization requires a "
+                "durable checkpoint writer."
+            )
+        boundary = str(completed_operation_pause_reuse_material["boundary"])
+        next_reuses = copy.deepcopy(dict(operation_pause_reuse_records))
+        if recorded_operation_pause_reuse is None:
+            if len(next_reuses) >= 32:
+                raise RuntimeError(
+                    "recovery-required: completed target-admission operation pause reuse "
+                    "collection is exhausted."
+                )
+            reuse_receipt = {
+                **completed_operation_pause_reuse_material,
+                "status": "verified",
+                "verified_at": _utc_now(),
+                "contract_fingerprint": _fingerprint(completed_operation_pause_reuse_material),
+            }
+            if not _target_helm_admission_manager_pause_reuse_is_exact(
+                receipt=reuse_receipt,
+                checkpoint=checkpoint,
+                state=completed_operation_pause_reuse_state,
+                predecessor=phase_pause,
+                authority=populate_pause,
+            ):
+                raise RuntimeError(
+                    "recovery-required: completed target-admission operation pause reuse "
+                    "receipt could not be sealed."
+                )
+            next_reuses[boundary] = reuse_receipt
+        populate["target_helm_admission_manager_pause_reuses"] = next_reuses
+        populate.pop("in_place_target_manager_pause", None)
+        checkpoint_writer()
+    return dict(phase_pause)
+
+
 def _ensure_in_place_pre_service_controller_fence(
     *,
     checkpoint: dict[str, Any],
@@ -148884,6 +155514,21 @@ def _ensure_in_place_pre_service_controller_fence(
             }
             checkpoint_writer()
         phase_pause = phase.get("in_place_target_manager_pause")
+    target_admission_bridge_pause: dict[str, Any] = {}
+    if not direct_bridge_pause:
+        target_admission_bridge_pause = (
+            _reconcile_active_bridge_target_admission_manager_pause_successor(
+                checkpoint=checkpoint,
+                phase=phase,
+                bridge_stage=bridge_stage,
+                target_ref=target_ref,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                checkpoint_writer=checkpoint_writer,
+            )
+        )
+        if target_admission_bridge_pause:
+            phase_pause = phase.get("in_place_target_manager_pause")
     if not isinstance(phase_pause, dict) or not phase_pause:
         rearm_contract = _immutable_child_manager_restore_pause_rearm_contract(phase)
         if not rearm_contract:
@@ -148938,6 +155583,8 @@ def _ensure_in_place_pre_service_controller_fence(
         raise AssertionError("restored-manager pause rearm did not produce a mutable journal")
     if direct_bridge_pause:
         bridge_pause = direct_bridge_pause
+    elif target_admission_bridge_pause:
+        bridge_pause = target_admission_bridge_pause
     elif (
         isinstance(phase_pause, Mapping)
         and phase_pause.get("schema") == "nebius-cxcli/in-place-service-manager-pause-rearm/v1"
@@ -150391,6 +157038,7 @@ def _ensure_in_place_controller_gap_bridge_runtime(
             _in_place_completed_role_replacement_node_uids(phase, role="login")
         ),
         allowed_target_worker_pod_successors=_gpu_typed_gres_worker_pod_successors(checkpoint),
+        allowed_target_login_surge_removal=(_in_place_login_surge_client_removal_contract(phase)),
         allow_checkpointed_config_successor=True,
         allow_session_free_target_login_successor=True,
     )
@@ -154807,6 +161455,536 @@ def _rebind_gpu_typed_gres_target_ha_successor_projection(
     return True
 
 
+def _gpu_typed_gres_controller_process_identities(
+    *,
+    live_pods: Sequence[Mapping[str, Any]],
+    container_name: str,
+) -> list[dict[str, Any]]:
+    """Return the exact Ready controller process generation for two bridge Pods."""
+
+    identities: list[dict[str, Any]] = []
+    for pod in live_pods:
+        metadata = _mapping(pod.get("metadata"))
+        statuses = [
+            status
+            for status in _sequence_of_mappings(
+                _mapping(pod.get("status")).get("containerStatuses")
+            )
+            if str(status.get("name") or "") == container_name
+        ]
+        status = statuses[0] if len(statuses) == 1 else {}
+        running = _mapping(_mapping(status.get("state")).get("running"))
+        identity = {
+            "pod_name": str(metadata.get("name") or "").strip(),
+            "pod_uid": str(metadata.get("uid") or "").strip(),
+            "container_name": container_name,
+            "container_id": str(status.get("containerID") or "").strip(),
+            "image_id": str(status.get("imageID") or "").strip(),
+            "restart_count": _non_negative_int(status.get("restartCount"), fallback=-1),
+            "started_at": str(running.get("startedAt") or "").strip(),
+            "ready": status.get("ready") is True,
+        }
+        if (
+            metadata.get("deletionTimestamp")
+            or any(
+                not str(identity.get(key) or "")
+                for key in (
+                    "pod_name",
+                    "pod_uid",
+                    "container_name",
+                    "container_id",
+                    "image_id",
+                    "started_at",
+                )
+            )
+            or identity["restart_count"] < 0
+            or identity["ready"] is not True
+        ):
+            return []
+        identities.append(identity)
+    identities.sort(key=lambda item: (str(item["pod_name"]), str(item["pod_uid"])))
+    if (
+        len(identities) != 2
+        or len({str(item["pod_name"]) for item in identities}) != 2
+        or len({str(item["pod_uid"]) for item in identities}) != 2
+    ):
+        return []
+    return identities
+
+
+def _rebind_gpu_typed_gres_target_ha_controller_lineage(
+    *,
+    successor: Mapping[str, Any],
+    recovery: dict[str, Any],
+    immutable_successor: Mapping[str, Any],
+    handoff_preservation: Mapping[str, Any],
+    marker_repair: Mapping[str, Any],
+    controller_roles: Sequence[Mapping[str, Any]],
+    controller_process_identities: Sequence[Mapping[str, Any]],
+    current_config_sha256: str,
+    current_material_sha256: str,
+    target_config_sha256: str,
+    live_jailed_digests: Mapping[str, str],
+    expected_bridge_uids: set[str],
+    checkpoint_writer: Callable[[], None],
+) -> bool:
+    """Bind an accepted successor through the exact marker-repair Pod restart."""
+
+    changed_fields = {
+        key for key, value in immutable_successor.items() if successor.get(key) != value
+    }
+    if changed_fields != {"pod_identities"}:
+        return False
+
+    def pod_identities(
+        records: Sequence[Mapping[str, Any]],
+        *,
+        name_key: str,
+        uid_key: str,
+    ) -> list[dict[str, str]]:
+        return sorted(
+            (
+                {
+                    "name": str(record.get(name_key) or "").strip(),
+                    "uid": str(record.get(uid_key) or "").strip(),
+                }
+                for record in records
+            ),
+            key=lambda item: (item["name"], item["uid"]),
+        )
+
+    recorded_predecessor = pod_identities(
+        _sequence_of_mappings(successor.get("pod_identities")),
+        name_key="name",
+        uid_key="uid",
+    )
+    repaired_predecessor = pod_identities(
+        _sequence_of_mappings(marker_repair.get("predecessor_pods")),
+        name_key="name",
+        uid_key="uid",
+    )
+    successor_pods = pod_identities(
+        _sequence_of_mappings(immutable_successor.get("pod_identities")),
+        name_key="name",
+        uid_key="uid",
+    )
+    role_pods = pod_identities(
+        controller_roles,
+        name_key="pod_name",
+        uid_key="pod_uid",
+    )
+    old_immutable = {key: copy.deepcopy(successor.get(key)) for key in immutable_successor}
+    old_successor_fingerprint = _fingerprint(old_immutable)
+    queue_authority = _mapping(marker_repair.get("pre_slurm_queue_authority"))
+    reconfigure = _mapping(recovery.get("reconfigure"))
+    role_names = [item["name"] for item in role_pods]
+    role_uids = {item["uid"] for item in role_pods}
+    process_identities = [copy.deepcopy(dict(item)) for item in controller_process_identities]
+    process_pods = sorted(
+        (
+            {
+                "name": str(item.get("pod_name") or "").strip(),
+                "uid": str(item.get("pod_uid") or "").strip(),
+            }
+            for item in process_identities
+        ),
+        key=lambda item: (item["name"], item["uid"]),
+    )
+    recorded_uids = {item["uid"] for item in recorded_predecessor}
+    role_observed_at = [str(role.get("observed_at") or "") for role in controller_roles]
+    # A verified rebind receipt records the successor's post-repair re-acceptance,
+    # so acceptance chronology can only gate the first rebind.
+    raw_existing = recovery.get("controller_lineage_rebind")
+    if (
+        successor.get("status") != "accepted"
+        or recovery.get("schema") != _GPU_TYPED_GRES_TARGET_HA_CONFIG_RECOVERY_SCHEMA
+        or recovery.get("status") != "config-accepted"
+        or str(recovery.get("successor_fingerprint") or "") != old_successor_fingerprint
+        or reconfigure.get("status") != "intent"
+        or str(reconfigure.get("target_config_sha256") or "") != target_config_sha256
+        or handoff_preservation.get("schema")
+        != "nebius-cxcli/gpu-typed-gres-client-handoff-preservation-v1"
+        or handoff_preservation.get("status") != "verified"
+        or str(handoff_preservation.get("bridge_successor_fingerprint") or "")
+        != old_successor_fingerprint
+        or str(handoff_preservation.get("target_config_sha256") or "") != target_config_sha256
+        or marker_repair.get("schema") != _TARGET_BRIDGE_CLUSTER_ID_MARKER_REPAIR_SCHEMA
+        or marker_repair.get("status") != "verified"
+        or str(marker_repair.get("statefulset_uid") or "")
+        != str(immutable_successor.get("statefulset_uid") or "")
+        or queue_authority.get("status") != "verified"
+        or str(queue_authority.get("successor_fingerprint") or "") != old_successor_fingerprint
+        or recorded_predecessor != repaired_predecessor
+        or successor_pods != role_pods
+        or successor_pods != process_pods
+        or len(process_identities) != 2
+        or len(recorded_predecessor) != 2
+        or len(successor_pods) != 2
+        or any(not item["name"] or not item["uid"] for item in recorded_predecessor)
+        or any(not item["name"] or not item["uid"] for item in successor_pods)
+        or [item["name"] for item in recorded_predecessor] != role_names
+        or len(recorded_uids) != 2
+        or len(role_uids) != 2
+        or recorded_uids & role_uids
+        or {str(role.get("role") or "") for role in controller_roles} != {"active", "standby"}
+        or str(marker_repair.get("successor_roles_fingerprint") or "")
+        != _fingerprint(list(controller_roles))
+        or (
+            raw_existing is None
+            and not _timestamp_at_or_after(
+                marker_repair.get("intent_at"), successor.get("accepted_at")
+            )
+        )
+        or not _timestamp_at_or_after(marker_repair.get("intent_at"), reconfigure.get("intent_at"))
+        or not _timestamp_at_or_after(
+            marker_repair.get("restart_dispatched_at"), marker_repair.get("intent_at")
+        )
+        or any(
+            not _timestamp_at_or_after(observed_at, marker_repair.get("restart_dispatched_at"))
+            for observed_at in role_observed_at
+        )
+        or any(
+            not _timestamp_at_or_after(marker_repair.get("verified_at"), observed_at)
+            for observed_at in role_observed_at
+        )
+        or current_config_sha256 != target_config_sha256
+        or current_material_sha256 != str(immutable_successor.get("target_material_sha256") or "")
+        or expected_bridge_uids != role_uids
+        or set(live_jailed_digests) != role_uids
+        or set(live_jailed_digests.values()) != {target_config_sha256}
+    ):
+        return False
+
+    marker_projection = {
+        key: copy.deepcopy(marker_repair.get(key))
+        for key in (
+            "schema",
+            "status",
+            "statefulset_uid",
+            "predecessor_pods",
+            "successor_roles_fingerprint",
+            "intent_at",
+            "restart_dispatched_at",
+            "verified_at",
+        )
+    }
+    marker_projection["pre_slurm_successor_fingerprint"] = str(
+        queue_authority.get("successor_fingerprint") or ""
+    )
+    receipt = {
+        "schema": _GPU_TYPED_GRES_CONTROLLER_LINEAGE_REBIND_SCHEMA,
+        "status": "verified",
+        "previous_successor_fingerprint": old_successor_fingerprint,
+        "statefulset_uid": str(marker_repair.get("statefulset_uid") or ""),
+        "predecessor_pods": recorded_predecessor,
+        "successor_pod_identities": successor_pods,
+        "successor_process_identities": process_identities,
+        "successor_roles_fingerprint": str(marker_repair.get("successor_roles_fingerprint") or ""),
+        "marker_repair_fingerprint": _fingerprint(marker_projection),
+    }
+    if raw_existing is not None:
+        if not isinstance(raw_existing, Mapping):
+            return False
+        return (
+            set(raw_existing) == set(receipt) | {"verified_at"}
+            and all(raw_existing.get(key) == value for key, value in receipt.items())
+            and bool(str(raw_existing.get("verified_at") or "").strip())
+        )
+    recovery["controller_lineage_rebind"] = {**receipt, "verified_at": _utc_now()}
+    checkpoint_writer()
+    return True
+
+
+def _assert_gpu_typed_gres_target_ha_controller_lineage_fence(
+    *,
+    journal: Mapping[str, Any],
+    recovery: Mapping[str, Any],
+    namespace: str,
+    config_map_name: str,
+    config_map_uid: str,
+    config_key: str,
+    statefulset_uid: str,
+    expected_pod_identities: Sequence[Mapping[str, Any]],
+    expected_process_identities: Sequence[Mapping[str, Any]],
+    container_name: str,
+    target_config_sha256: str,
+    target_material_sha256: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> None:
+    """Re-read the admitted controller generation immediately before Slurm RPC."""
+
+    def normalized_identities(
+        records: Sequence[Mapping[str, Any]],
+        *,
+        name_key: str,
+        uid_key: str,
+    ) -> list[dict[str, str]]:
+        return sorted(
+            (
+                {
+                    "name": str(record.get(name_key) or "").strip(),
+                    "uid": str(record.get(uid_key) or "").strip(),
+                }
+                for record in records
+            ),
+            key=lambda item: (item["name"], item["uid"]),
+        )
+
+    expected = normalized_identities(
+        expected_pod_identities,
+        name_key="name",
+        uid_key="uid",
+    )
+    controller_roles = _sequence_of_mappings(journal.get("controller_roles"))
+    role_identities = normalized_identities(
+        controller_roles,
+        name_key="pod_name",
+        uid_key="pod_uid",
+    )
+    role_by_name = {str(role.get("pod_name") or "").strip(): role for role in controller_roles}
+    expected_processes = [copy.deepcopy(dict(item)) for item in expected_process_identities]
+    lineage_rebind = _mapping(recovery.get("controller_lineage_rebind"))
+    if lineage_rebind:
+        admitted = normalized_identities(
+            _sequence_of_mappings(lineage_rebind.get("successor_pod_identities")),
+            name_key="name",
+            uid_key="uid",
+        )
+        if (
+            lineage_rebind.get("schema") != _GPU_TYPED_GRES_CONTROLLER_LINEAGE_REBIND_SCHEMA
+            or lineage_rebind.get("status") != "verified"
+            or str(lineage_rebind.get("statefulset_uid") or "") != statefulset_uid
+            or str(lineage_rebind.get("successor_roles_fingerprint") or "")
+            != _fingerprint(list(controller_roles))
+            or admitted != expected
+            or lineage_rebind.get("successor_process_identities") != expected_processes
+        ):
+            raise RuntimeError(
+                "recovery-required: controller generation changed before typed-GRES reconfigure."
+            )
+    elif role_identities != expected:
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        )
+    if (
+        len(expected) != 2
+        or len({item["name"] for item in expected}) != 2
+        or len({item["uid"] for item in expected}) != 2
+        or any(not item["name"] or not item["uid"] for item in expected)
+        or set(role_by_name) != {item["name"] for item in expected}
+    ):
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        )
+
+    exists, statefulset = _kubectl_get_namespace_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=namespace,
+        resource="statefulset/cxcli-slurm-controller-bridge",
+    )
+    pods_payload = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            namespace,
+            "get",
+            "pods",
+            "-l",
+            f"{CONTROLLER_BRIDGE_LABEL}=true",
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+    )
+    live_pods = _sequence_of_mappings(pods_payload.get("items"))
+    live_identities = normalized_identities(
+        [_mapping(pod.get("metadata")) for pod in live_pods],
+        name_key="name",
+        uid_key="uid",
+    )
+    statefulset_metadata = _mapping(statefulset.get("metadata"))
+    if (
+        not exists
+        or str(statefulset_metadata.get("uid") or "") != statefulset_uid
+        or _resource_replicas(statefulset, default=-1) != 2
+        or live_identities != expected
+    ):
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        )
+    live_processes = _gpu_typed_gres_controller_process_identities(
+        live_pods=live_pods,
+        container_name=container_name,
+    )
+    if not expected_processes or live_processes != expected_processes:
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        )
+    for pod in live_pods:
+        metadata = _mapping(pod.get("metadata"))
+        pod_name = str(metadata.get("name") or "").strip()
+        role = _mapping(role_by_name.get(pod_name))
+        exact_owners = [
+            owner
+            for owner in _sequence_of_mappings(metadata.get("ownerReferences"))
+            if owner.get("controller") is True
+            and owner.get("kind") == "StatefulSet"
+            and owner.get("name") == "cxcli-slurm-controller-bridge"
+            and owner.get("uid") == statefulset_uid
+        ]
+        if (
+            metadata.get("deletionTimestamp")
+            or len(exact_owners) != 1
+            or str(_mapping(pod.get("spec")).get("nodeName") or "")
+            != str(role.get("node_name") or "")
+        ):
+            raise RuntimeError(
+                "recovery-required: controller generation changed before typed-GRES reconfigure."
+            )
+
+    try:
+        _revalidate_target_bridge_roles(
+            journal=journal,
+            pod_by_name={
+                str(_mapping(pod.get("metadata")).get("name") or ""): pod for pod in live_pods
+            },
+            target_container=container_name,
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+    except SoperatorMigrationPhasePending as error:
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        ) from error
+
+    live_config_map, live_metadata, live_data = _controller_bridge_live_config_map(
+        namespace=namespace,
+        name=config_map_name,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    live_config_sha256 = hashlib.sha256(
+        str(live_data.get(config_key) or "").encode("utf-8")
+    ).hexdigest()
+    live_jailed_digests = _controller_bridge_live_jailed_config_digests(
+        namespace=namespace,
+        container_name=container_name,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    if (
+        str(live_metadata.get("uid") or "") != config_map_uid
+        or live_config_sha256 != target_config_sha256
+        or _controller_bridge_material_fingerprint(live_config_map) != target_material_sha256
+        or set(live_jailed_digests) != {item["uid"] for item in expected}
+        or set(live_jailed_digests.values()) != {target_config_sha256}
+    ):
+        raise RuntimeError(
+            "recovery-required: controller generation changed before typed-GRES reconfigure."
+        )
+
+
+def _reconfigure_gpu_typed_gres_target_ha_with_lineage_fence(
+    *,
+    checkpoint: dict[str, Any],
+    journal: Mapping[str, Any],
+    recovery: Mapping[str, Any],
+    bridge_authority: Mapping[str, Any],
+    namespace: str,
+    config_map_name: str,
+    config_map_uid: str,
+    config_key: str,
+    statefulset_uid: str,
+    expected_pod_identities: Sequence[Mapping[str, Any]],
+    expected_process_identities: Sequence[Mapping[str, Any]],
+    container_name: str,
+    target_config_sha256: str,
+    target_material_sha256: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    checkpoint_writer: Callable[[], None],
+    mutation_guard: Callable[[], None] | None,
+) -> tuple[SoperatorMigrationCommandResult, SoperatorMigrationCommandResult]:
+    """Fence the controller child generation, then perform the Slurm reconfigure RPC."""
+
+    def mutation_fence() -> None:
+        if mutation_guard is not None:
+            mutation_guard()
+        _assert_gpu_typed_gres_target_ha_controller_lineage_fence(
+            journal=journal,
+            recovery=recovery,
+            namespace=namespace,
+            config_map_name=config_map_name,
+            config_map_uid=config_map_uid,
+            config_key=config_key,
+            statefulset_uid=statefulset_uid,
+            expected_pod_identities=expected_pod_identities,
+            expected_process_identities=expected_process_identities,
+            container_name=container_name,
+            target_config_sha256=target_config_sha256,
+            target_material_sha256=target_material_sha256,
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+        if mutation_guard is not None:
+            mutation_guard()
+
+    mutation_fence()
+    _reassert_controller_bridge_partition_pause_after_reconfigure(
+        journal=journal,
+        kube_context=kube_context,
+        command_runner=command_runner,
+        checkpoint_writer=checkpoint_writer,
+        checkpoint=checkpoint,
+        operation_label="typed-GRES target-HA pre-reconfigure",
+        inert_controller_bridge_authority=bridge_authority,
+    )
+    mutation_fence()
+    result = _kubectl_exec_login_once(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        args=("scontrol", "reconfigure"),
+        timeout_seconds=120,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "target-HA bridge did not accept the typed-GRES config reconfigure."
+        )
+    mutation_fence()
+    _reassert_controller_bridge_partition_pause_after_reconfigure(
+        journal=journal,
+        kube_context=kube_context,
+        command_runner=command_runner,
+        checkpoint_writer=checkpoint_writer,
+        checkpoint=checkpoint,
+        operation_label="typed-GRES target-HA post-reconfigure",
+        inert_controller_bridge_authority=bridge_authority,
+    )
+    ping = _kubectl_exec_login_once(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        args=("scontrol", "ping"),
+        timeout_seconds=120,
+    )
+    roles = _controller_bridge_ping_up_roles(ping.stdout)
+    if ping.returncode != 0 or sorted(role for role, _host in roles) != [
+        "backup",
+        "primary",
+    ]:
+        raise SoperatorMigrationPhasePending(
+            "typed-GRES target-HA reconfigure did not retain one primary and one backup."
+        )
+    mutation_fence()
+    return result, ping
+
+
 def _gpu_typed_gres_effective_rollover_chain(
     *,
     base_rollover: Mapping[str, Any],
@@ -155554,6 +162732,18 @@ def _ensure_gpu_typed_gres_target_ha_config_recovery(
     pod_identities = [
         {"name": name, "uid": uid} for _pod_namespace, name, uid in sorted(runtime_pods)
     ]
+    controller_process_identities = _gpu_typed_gres_controller_process_identities(
+        live_pods=_sequence_of_mappings(pods_payload.get("items")),
+        container_name=container_name,
+    )
+    if {
+        (str(item.get("pod_name") or ""), str(item.get("pod_uid") or ""))
+        for item in controller_process_identities
+    } != {(item["name"], item["uid"]) for item in pod_identities}:
+        raise SoperatorMigrationPhasePending(
+            "typed-GRES target-HA config recovery requires the exact Ready controller "
+            "process generation."
+        )
 
     successor_live = copy.deepcopy(live_config_map)
     successor_data = copy.deepcopy(dict(live_data))
@@ -155635,6 +162825,27 @@ def _ensure_gpu_typed_gres_target_ha_config_recovery(
         handoff_preservation = (
             raw_handoff_preservation if isinstance(raw_handoff_preservation, dict) else {}
         )
+        marker_repair = _mapping(
+            _mapping(journal.get("version_transition")).get("target_cluster_id_marker_repair")
+        )
+        if _rebind_gpu_typed_gres_target_ha_controller_lineage(
+            successor=successor,
+            recovery=recovery,
+            immutable_successor=immutable_successor,
+            handoff_preservation=handoff_preservation,
+            marker_repair=marker_repair,
+            controller_roles=_sequence_of_mappings(journal.get("controller_roles")),
+            controller_process_identities=controller_process_identities,
+            current_config_sha256=current_sha256,
+            current_material_sha256=_controller_bridge_material_fingerprint(live_config_map),
+            target_config_sha256=target_sha256,
+            live_jailed_digests=live_rebind_digests,
+            expected_bridge_uids={item["uid"] for item in pod_identities},
+            checkpoint_writer=checkpoint_writer,
+        ):
+            # The config successor keeps its intent-time Pod identities. The verified
+            # marker repair is the explicit child transition to the current generation.
+            immutable_successor["pod_identities"] = copy.deepcopy(successor.get("pod_identities"))
         _rebind_gpu_typed_gres_target_ha_worker_lineage(
             successor=successor,
             recovery=recovery,
@@ -156030,15 +163241,6 @@ def _ensure_gpu_typed_gres_target_ha_config_recovery(
     if not isinstance(reconfigure, dict):
         raise RuntimeError("Typed-GRES target-HA reconfigure journal must be mutable.")
     if reconfigure.get("status") != "verified":
-        _reassert_controller_bridge_partition_pause_after_reconfigure(
-            journal=journal,
-            kube_context=kube_context,
-            command_runner=command_runner,
-            checkpoint_writer=checkpoint_writer,
-            checkpoint=checkpoint,
-            operation_label="typed-GRES target-HA pre-reconfigure",
-            inert_controller_bridge_authority=bridge_authority,
-        )
         reconfigure.update(
             {
                 "status": "intent",
@@ -156047,43 +163249,57 @@ def _ensure_gpu_typed_gres_target_ha_config_recovery(
             }
         )
         checkpoint_writer()
-        if mutation_guard is not None:
-            mutation_guard()
-        result = _kubectl_exec_login_once(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            namespace=_SOPERATOR_NAMESPACE,
-            args=("scontrol", "reconfigure"),
-            timeout_seconds=120,
-        )
-        if result.returncode != 0:
-            raise SoperatorMigrationPhasePending(
-                "target-HA bridge did not accept the typed-GRES config reconfigure."
+        pre_slurm_queue_authority, marker_repair = (
+            _gpu_typed_gres_target_cluster_id_marker_replay_authority(
+                checkpoint=checkpoint,
+                phase=phase,
             )
-        _reassert_controller_bridge_partition_pause_after_reconfigure(
-            journal=journal,
+        )
+        if pre_slurm_queue_authority is None and marker_repair.get("status") != "verified":
+            raise SoperatorMigrationPhasePending(
+                "typed-GRES target-HA reconfigure lacks its exact checkpoint-paused "
+                "zero-allocation cluster-ID transition authority."
+            )
+        cluster_id_changed, _cluster_id_lines = _repair_target_bridge_cluster_id_marker(
+            checkpoint=checkpoint,
+            phase=topology_phase,
             kube_context=kube_context,
             command_runner=command_runner,
             checkpoint_writer=checkpoint_writer,
-            checkpoint=checkpoint,
-            operation_label="typed-GRES target-HA post-reconfigure",
-            inert_controller_bridge_authority=bridge_authority,
+            mutation_guard=mutation_guard,
+            pre_slurm_queue_authority=pre_slurm_queue_authority,
         )
-        ping = _kubectl_exec_login_once(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            namespace=_SOPERATOR_NAMESPACE,
-            args=("scontrol", "ping"),
-            timeout_seconds=120,
-        )
-        roles = _controller_bridge_ping_up_roles(ping.stdout)
-        if ping.returncode != 0 or sorted(role for role, _host in roles) != [
-            "backup",
-            "primary",
-        ]:
-            raise SoperatorMigrationPhasePending(
-                "typed-GRES target-HA reconfigure did not retain one primary and one backup."
+        if cluster_id_changed:
+            raise SoperatorMigrationCheckpointContinuation(
+                "Target cluster-ID marker repair restored exact 2/2 HA; resume typed-GRES "
+                "reconfigure from the rebound controller generation.",
+                boundary="target-cluster-id-marker-repaired",
+                progress_evidence=_mapping(
+                    _mapping(journal.get("version_transition")).get(
+                        "target_cluster_id_marker_repair"
+                    )
+                ),
             )
+        result, ping = _reconfigure_gpu_typed_gres_target_ha_with_lineage_fence(
+            checkpoint=checkpoint,
+            journal=journal,
+            recovery=recovery,
+            bridge_authority=bridge_authority,
+            namespace=namespace,
+            config_map_name=config_map_name,
+            config_map_uid=config_map_uid,
+            config_key=config_key,
+            statefulset_uid=statefulset_uid,
+            expected_pod_identities=pod_identities,
+            expected_process_identities=controller_process_identities,
+            container_name=container_name,
+            target_config_sha256=target_sha256,
+            target_material_sha256=immutable_successor["target_material_sha256"],
+            kube_context=kube_context,
+            command_runner=command_runner,
+            checkpoint_writer=checkpoint_writer,
+            mutation_guard=mutation_guard,
+        )
         reconfigure.update(
             {
                 "status": "verified",
@@ -157699,12 +164915,488 @@ def _in_place_compute_tail_resume_status(
 _TARGET_BRIDGE_CLUSTER_ID_MARKER_REPAIR_SCHEMA = (
     "nebius-cxcli/controller-cluster-id-marker-repair/v1"
 )
+_GPU_TYPED_GRES_TARGET_CLUSTER_ID_PRE_SLURM_QUEUE_SCHEMA = (
+    "nebius-cxcli/gpu-typed-gres-target-cluster-id-pre-slurm-queue/v1"
+)
+_GPU_TYPED_GRES_TARGET_CLUSTER_ID_ACCOUNTING_AUTHORITY_SCHEMA = (
+    "nebius-cxcli/gpu-typed-gres-target-cluster-id-accounting-authority/v1"
+)
+_TARGET_BRIDGE_CLUSTER_ID_MARKER_PREIMAGE_READER_SCHEMA = (
+    "nebius-cxcli/controller-cluster-id-marker-preimage-reader/v1"
+)
 _TARGET_BRIDGE_MOUNT_HELPER_RECOVERY_SCHEMA = (
     "nebius-cxcli/controller-bridge-mount-helper-recovery/v1"
 )
 _CONTROLLER_BRIDGE_SHARED_MOUNT_HELPER_RECOVERY_SCHEMA = (
     "nebius-cxcli/controller-bridge-shared-mount-helper-recovery/v1"
 )
+
+
+def _gpu_typed_gres_target_cluster_id_marker_replay_authority(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Select fresh authority only until the marker repair is durably verified."""
+
+    marker_repair = _mapping(
+        _mapping(_mapping(checkpoint.get("controller_bridge")).get("version_transition")).get(
+            "target_cluster_id_marker_repair"
+        )
+    )
+    if marker_repair.get("status") == "verified":
+        return None, marker_repair
+    return (
+        _gpu_typed_gres_target_cluster_id_pre_slurm_queue_authority(
+            checkpoint=checkpoint,
+            phase=phase,
+        ),
+        marker_repair,
+    )
+
+
+def _gpu_typed_gres_target_cluster_id_pre_slurm_queue_authority(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Bind the exact zero-allocation crash window before any Slurm RPC."""
+
+    recovery = _mapping(phase.get("gpu_typed_gres_target_ha_config_recovery"))
+    reconfigure = _mapping(recovery.get("reconfigure"))
+    if not recovery or reconfigure.get("status") != "intent":
+        return None
+    successor = _mapping(
+        _mapping(checkpoint.get("controller_bridge")).get(
+            "in_place_gpu_topology_bridge_config_successor"
+        )
+    )
+    expected_successor_keys = {
+        "accepted_at",
+        "authority_epoch",
+        "boundary",
+        "bridge_authority_fingerprint",
+        "config_key",
+        "config_map_name",
+        "config_map_uid",
+        "desired_values_fingerprint",
+        "helm_revision",
+        "intent_at",
+        "manager_pause_fingerprint",
+        "pod_identities",
+        "predecessor_client_handoff",
+        "predecessor_client_handoff_fingerprint",
+        "predecessor_config_sha256",
+        "predecessor_material_sha256",
+        "queue_observation_fingerprint",
+        "rollover_fingerprint",
+        "schema",
+        "source_uid",
+        "statefulset_uid",
+        "status",
+        "target_config_sha256",
+        "target_material_sha256",
+        "topology_fingerprint",
+        "worker_bindings_fingerprint",
+    }
+    immutable_successor = {
+        key: copy.deepcopy(value)
+        for key, value in successor.items()
+        if key not in {"status", "intent_at", "accepted_at"}
+    }
+    queue = _mapping(
+        _mapping(phase.get("gpu_topology_slurm_drain_recovery")).get("queue_observation")
+    )
+    queue_binding = {
+        key: copy.deepcopy(queue.get(key))
+        for key in (
+            "schema",
+            "status",
+            "active_allocation_count",
+            "pending_job_count",
+            "paused_partitions",
+            "pending_jobs_fingerprint",
+        )
+    }
+    queue_fingerprint = _fingerprint(queue_binding)
+    rolling_phase = _mapping(
+        _mapping(checkpoint.get("phase_state")).get("rolling-compute-migration")
+    )
+    try:
+        pause_records = _rolling_compute_checkpoint_pause_records(rolling_phase)
+        local_pause_records = _rolling_compute_checkpoint_pause_records(phase)
+    except RuntimeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "typed-GRES target cluster-ID repair lacks its exact config successor, "
+            "effective worker probes, and checkpoint-paused zero-allocation queue chain."
+        ) from exc
+    pause_by_partition = {record.partition: record for record in pause_records}
+    local_pause_by_partition = {record.partition: record for record in local_pause_records}
+    paused_partitions = {record.partition for record in pause_records}
+    workers = tuple(sorted(_string_sequence(recovery.get("workers"))))
+    probes = _mapping(recovery.get("effective_config_probes"))
+    target_sha256 = str(recovery.get("target_config_sha256") or "")
+    predecessor_sha256 = str(recovery.get("predecessor_config_sha256") or "")
+    staging_contracts = (
+        (
+            _mapping(recovery.get("jailed_config")),
+            "configmap",
+            "atomic-replace",
+        ),
+        (
+            _mapping(recovery.get("worker_jailed_config")),
+            "stdin",
+            "atomic-replace",
+        ),
+        (
+            _mapping(recovery.get("worker_jailed_config_preserve_inode")),
+            "stdin",
+            "preserve-inode",
+        ),
+    )
+    drain = _mapping(phase.get("gpu_topology_slurm_drain_recovery"))
+    if (
+        recovery.get("schema") != _GPU_TYPED_GRES_TARGET_HA_CONFIG_RECOVERY_SCHEMA
+        or recovery.get("status") != "config-accepted"
+        or set(successor) != expected_successor_keys
+        or successor.get("schema") != _IN_PLACE_GPU_TOPOLOGY_BRIDGE_SUCCESSOR_SCHEMA
+        or successor.get("status") != "accepted"
+        or successor.get("boundary") != "target-ha-typed-gres-registration"
+        or not workers
+        or len(workers) != len(set(workers))
+        or set(probes) != set(workers)
+        or not pause_records
+        or len(paused_partitions) != len(pause_records)
+        or not local_pause_records
+        or len(local_pause_by_partition) != len(local_pause_records)
+        or any(
+            pause_by_partition.get(partition) != record
+            for partition, record in local_pause_by_partition.items()
+        )
+        or any(record.applied_state != "DOWN" for record in pause_records)
+        or queue.get("schema") != "nebius-cxcli/gpu-topology-drain-queue-observation/v1"
+        or queue.get("status") not in {"empty", "paused-pending-only"}
+        or _non_negative_int(queue.get("active_allocation_count"), fallback=-1) != 0
+        or _non_negative_int(queue.get("pending_job_count"), fallback=-1) < 0
+        or set(_string_sequence(queue.get("paused_partitions"))) != paused_partitions
+        or re.fullmatch(r"[0-9a-f]{64}", str(queue.get("pending_jobs_fingerprint") or "")) is None
+        or not str(queue.get("observed_at") or "").strip()
+        or drain.get("schema") != "nebius-cxcli-soperator-gpu-topology-slurm-drain-recovery/v1"
+        or tuple(sorted(_string_sequence(drain.get("workers")))) != workers
+        or re.fullmatch(r"[0-9a-f]{64}", str(drain.get("topology_replay_fingerprint") or ""))
+        is None
+        or not re.fullmatch(r"[0-9a-f]{64}", target_sha256)
+        or not re.fullmatch(r"[0-9a-f]{64}", predecessor_sha256)
+        or target_sha256 == predecessor_sha256
+        or str(reconfigure.get("target_config_sha256") or "") != target_sha256
+        or str(successor.get("target_config_sha256") or "") != target_sha256
+        or str(successor.get("predecessor_config_sha256") or "") != predecessor_sha256
+        or str(successor.get("queue_observation_fingerprint") or "") != queue_fingerprint
+        or str(recovery.get("queue_observation_fingerprint") or "") != queue_fingerprint
+        or str(successor.get("worker_bindings_fingerprint") or "")
+        != str(recovery.get("worker_bindings_fingerprint") or "")
+        or str(recovery.get("successor_fingerprint") or "") != _fingerprint(immutable_successor)
+        or any(
+            _mapping(probes.get(worker)).get("config_sha256") != target_sha256
+            or re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(_mapping(probes.get(worker)).get("probe_sha256") or ""),
+            )
+            is None
+            for worker in workers
+        )
+        or any(
+            staging.get("state") != "accepted"
+            or str(staging.get("target_sha256") or "") != target_sha256
+            or str(staging.get("expected_preimage_sha256") or "") != predecessor_sha256
+            or staging.get("source_delivery") != delivery
+            or staging.get("target_update_mode") != update_mode
+            or re.fullmatch(r"[0-9a-f]{64}", str(staging.get("evidence_sha256") or "")) is None
+            or not str(staging.get("accepted_at") or "").strip()
+            for staging, delivery, update_mode in staging_contracts
+        )
+        or not str(recovery.get("effective_config_verified_at") or "").strip()
+        or not _timestamp_at_or_after(
+            reconfigure.get("intent_at"), recovery.get("effective_config_verified_at")
+        )
+        or not _timestamp_at_or_after(
+            recovery.get("effective_config_verified_at"),
+            _mapping(recovery.get("worker_jailed_config_preserve_inode")).get("accepted_at"),
+        )
+        or not _timestamp_at_or_after(successor.get("accepted_at"), queue.get("observed_at"))
+    ):
+        raise SoperatorMigrationPhasePending(
+            "typed-GRES target cluster-ID repair lacks its exact config successor, "
+            "effective worker probes, and checkpoint-paused zero-allocation queue chain."
+        )
+    authority = {
+        "schema": _GPU_TYPED_GRES_TARGET_CLUSTER_ID_PRE_SLURM_QUEUE_SCHEMA,
+        "status": "verified",
+        "workers": list(workers),
+        "target_config_sha256": target_sha256,
+        "successor_fingerprint": str(recovery["successor_fingerprint"]),
+        "queue_observation_fingerprint": queue_fingerprint,
+        "partition_pause_fingerprint": _fingerprint(
+            [record.as_payload() for record in pause_records]
+        ),
+        "queue_observation": copy.deepcopy(dict(queue)),
+        "effective_config_verified_at": str(recovery["effective_config_verified_at"]),
+        "reconfigure_intent_at": str(reconfigure["intent_at"]),
+    }
+    authority["proof_sha256"] = _fingerprint(authority)
+    return authority
+
+
+def _gpu_typed_gres_target_cluster_id_accounting_authority(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase: Mapping[str, Any],
+    journal: Mapping[str, Any],
+    binding: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> dict[str, Any]:
+    """Revalidate the exact target writer and DB before marker regeneration."""
+
+    accounting = _mapping(phase.get("accounting_handoff"))
+    bootstrap = _mapping(accounting.get("target_schema_bootstrap"))
+    target_binding = _accounting_handoff_target_binding(
+        phase=phase,
+        state=accounting,
+    )
+    target_database_identity = _mapping(accounting.get("target"))
+    bootstrap_database_identity = _mapping(bootstrap.get("target_database_identity"))
+    runtime = _mapping(
+        _mapping(
+            _mapping(phase.get("in_place_bridge_client_handoff")).get("worker_config_rollout")
+        ).get("accounting_munge_runtime_reload")
+    )
+    stable_runtime_keys = {
+        "accepted_at",
+        "accepted_effective_material_sha256",
+        "authority_epoch",
+        "bridge_pods",
+        "deployment_selector",
+        "deployment_uid",
+        "no_restart_required",
+        "probe",
+        "schema",
+        "service_name",
+        "service_uid",
+        "status",
+        "successor",
+        "target_ref",
+        "target_secret_name",
+        "target_secret_uid",
+        "target_uid",
+        "verified_at",
+    }
+    restarted_runtime_keys = stable_runtime_keys | {
+        "delete_accepted_at",
+        "intent_at",
+        "pre_delete_probe",
+        "queue_proof",
+        "source",
+    }
+    expected_runtime_keys = (
+        stable_runtime_keys
+        if runtime.get("no_restart_required") is True
+        else restarted_runtime_keys
+    )
+    probe = _mapping(runtime.get("probe"))
+    pre_delete_probe = _mapping(runtime.get("pre_delete_probe"))
+    source_writer = _mapping(runtime.get("source"))
+    successor_writer = _mapping(runtime.get("successor"))
+    stable_writer_keys = {
+        "created_at",
+        "munge_secret_name",
+        "name",
+        "node_name",
+        "replica_set_uid",
+        "uid",
+        "writer_container_id",
+        "writer_image",
+        "writer_image_id",
+        "writer_restart_count",
+        "writer_started_at",
+    }
+    bridge_pods = _sequence_of_mappings(runtime.get("bridge_pods"))
+    role_bindings = sorted(
+        (
+            {
+                "name": str(role.get("pod_name") or ""),
+                "namespace": str(journal.get("namespace") or ""),
+                "uid": str(role.get("pod_uid") or ""),
+            }
+            for role in _sequence_of_mappings(journal.get("controller_roles"))
+        ),
+        key=lambda item: (item["name"], item["uid"]),
+    )
+    runtime_bridge_pods = sorted(
+        (
+            {
+                "name": str(item.get("name") or ""),
+                "namespace": str(item.get("namespace") or ""),
+                "uid": str(item.get("uid") or ""),
+            }
+            for item in bridge_pods
+        ),
+        key=lambda item: (item["name"], item["uid"]),
+    )
+    rolling_pause_records = _rolling_compute_checkpoint_pause_records(phase)
+    queue_proof = _mapping(runtime.get("queue_proof"))
+    if (
+        accounting.get("status") not in {"target-enabled", "verified"}
+        or bootstrap.get("status") not in {"verified", "verified-existing"}
+        or target_database_identity != bootstrap_database_identity
+        or set(target_database_identity) != set(_ACCOUNTING_HANDOFF_DATABASE_IDENTITY_KEYS)
+        or set(runtime) != expected_runtime_keys
+        or runtime.get("schema") != _IN_PLACE_ACCOUNTING_MUNGE_RUNTIME_RELOAD_SCHEMA
+        or runtime.get("status") != "verified"
+        or not isinstance(runtime.get("no_restart_required"), bool)
+        or str(runtime.get("authority_epoch") or "")
+        != str(_mapping(journal.get("authority")).get("epoch") or "")
+        or str(runtime.get("target_ref") or "") != target_binding["name"]
+        or str(runtime.get("target_uid") or "") != target_binding["uid"]
+        or not re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(runtime.get("accepted_effective_material_sha256") or ""),
+        )
+        or not str(runtime.get("target_secret_name") or "")
+        or not str(runtime.get("target_secret_uid") or "")
+        or not str(runtime.get("deployment_uid") or "")
+        or not str(runtime.get("service_name") or "")
+        or not str(runtime.get("service_uid") or "")
+        or runtime_bridge_pods != role_bindings
+        or any(not all(item.values()) for item in runtime_bridge_pods)
+        or probe
+        != {
+            "schema": _IN_PLACE_ACCOUNTING_MUNGE_PROBE_SCHEMA,
+            "status": "authenticated",
+            "local_decode_count": 3,
+            "local_endpoint_count": 3,
+            "cross_decode_count": 4,
+            "cross_attempt_count": 4,
+        }
+        or set(successor_writer) != stable_writer_keys
+        or any(
+            not str(successor_writer.get(key) or "")
+            for key in stable_writer_keys - {"writer_restart_count"}
+        )
+        or _non_negative_int(successor_writer.get("writer_restart_count"), fallback=-1) != 0
+        or str(successor_writer.get("munge_secret_name") or "")
+        != str(runtime.get("target_secret_name") or "")
+        or not rolling_pause_records
+        or (
+            runtime.get("no_restart_required") is False
+            and (
+                set(source_writer) != stable_writer_keys | {"resource_version"}
+                or any(
+                    not str(source_writer.get(key) or "")
+                    for key in (stable_writer_keys | {"resource_version"})
+                    - {"writer_restart_count"}
+                )
+                or _non_negative_int(source_writer.get("writer_restart_count"), fallback=-1) != 0
+                or str(source_writer.get("munge_secret_name") or "")
+                != str(runtime.get("target_secret_name") or "")
+                or str(source_writer.get("uid") or "") == str(successor_writer.get("uid") or "")
+                or pre_delete_probe
+                != {
+                    "schema": _IN_PLACE_ACCOUNTING_MUNGE_PROBE_SCHEMA,
+                    "status": "isolated",
+                    "local_decode_count": 3,
+                    "local_endpoint_count": 3,
+                    "cross_decode_count": 0,
+                    "cross_attempt_count": 4,
+                }
+                or queue_proof
+                != {
+                    "schema": "nebius-cxcli/in-place-accounting-munge-queue-proof/v1",
+                    "status": "empty-paused",
+                    "partitions": sorted(record.partition for record in rolling_pause_records),
+                    "partition_pause_fingerprint": _fingerprint(
+                        [record.as_payload() for record in rolling_pause_records]
+                    ),
+                }
+                or not _timestamp_at_or_after(runtime.get("intent_at"), runtime.get("accepted_at"))
+                or not _timestamp_at_or_after(
+                    runtime.get("accepted_at"), source_writer.get("writer_started_at")
+                )
+                or not _timestamp_at_or_after(
+                    successor_writer.get("writer_started_at"), runtime.get("accepted_at")
+                )
+                or not _timestamp_at_or_after(
+                    runtime.get("delete_accepted_at"), runtime.get("intent_at")
+                )
+            )
+        )
+        or not _timestamp_at_or_after(
+            runtime.get("verified_at"),
+            runtime.get("delete_accepted_at")
+            if runtime.get("no_restart_required") is False
+            else runtime.get("accepted_at"),
+        )
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target bridge cluster-ID marker repair lacks the exact enabled target "
+            "accounting writer, authenticated runtime successor, and database identity."
+        )
+
+    _accounting_handoff_assert_target_writer_ready(
+        state=accounting,
+        phase=phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    live_writer = _in_place_accounting_munge_live_pod(
+        contract=runtime,
+        kube_context=kube_context,
+        command_runner=command_runner,
+        require_ready=True,
+    )
+    live_writer_projection = _in_place_accounting_munge_pod_projection(
+        live_writer,
+        include_resource_version=False,
+    )
+    if not live_writer or live_writer_projection != _mapping(runtime.get("successor")):
+        raise SoperatorMigrationPhasePending(
+            "target bridge cluster-ID marker repair found target accounting writer "
+            "runtime lineage drift."
+        )
+    observed_database_identity = _accounting_handoff_revalidate_target_mariadb_identity(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=str(target_database_identity.get("pod") or ""),
+        expected=target_database_identity,
+        target_binding=target_binding,
+    )
+    live_ids = _accounting_handoff_registered_cluster_ids(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=str(observed_database_identity.get("pod") or ""),
+    )
+    if (
+        live_ids.get(str(binding["source_cluster_name"])) != binding["new_source_cluster_id"]
+        or live_ids.get(str(binding["target_cluster_name"])) != binding["target_cluster_id"]
+    ):
+        raise SoperatorMigrationPhasePending(
+            "target bridge cluster-ID marker repair found accounting registration ID drift."
+        )
+    authority = {
+        "schema": _GPU_TYPED_GRES_TARGET_CLUSTER_ID_ACCOUNTING_AUTHORITY_SCHEMA,
+        "status": "verified",
+        "target_binding": copy.deepcopy(target_binding),
+        "database_identity": copy.deepcopy(observed_database_identity),
+        "registered_cluster_ids": {
+            str(binding["source_cluster_name"]): int(binding["new_source_cluster_id"]),
+            str(binding["target_cluster_name"]): int(binding["target_cluster_id"]),
+        },
+        "runtime_fingerprint": _fingerprint(runtime),
+        "writer_successor_fingerprint": _fingerprint(live_writer_projection),
+        "writer_verified_at": str(runtime["verified_at"]),
+    }
+    authority["proof_sha256"] = _fingerprint(authority)
+    return authority
 
 
 def _target_bridge_cluster_id_marker_repair_binding(
@@ -157850,6 +165542,255 @@ def _target_bridge_cluster_id_marker_live_pods(
     return _sequence_of_mappings(payload.get("items"))
 
 
+def _target_bridge_cluster_id_marker_crashloop_preimage(
+    *,
+    pod_by_name: Mapping[str, Mapping[str, Any]],
+    role_by_name: Mapping[str, Mapping[str, Any]],
+    workload_uid: str,
+    container_name: str,
+) -> dict[str, Any] | None:
+    """Bind the exact two-member fatal loop caused by the stale shared marker."""
+
+    if set(pod_by_name) != set(role_by_name) or len(pod_by_name) != 2:
+        return None
+    records: list[dict[str, Any]] = []
+    for name in sorted(pod_by_name):
+        pod = pod_by_name[name]
+        metadata = _mapping(pod.get("metadata"))
+        status = _mapping(pod.get("status"))
+        owners = [
+            item
+            for item in _sequence_of_mappings(metadata.get("ownerReferences"))
+            if item.get("controller") is True
+        ]
+        container_statuses = [
+            item
+            for item in _sequence_of_mappings(status.get("containerStatuses"))
+            if item.get("name") == container_name
+        ]
+        if len(container_statuses) != 1:
+            return None
+        container_status = container_statuses[0]
+        waiting = _mapping(_mapping(container_status.get("state")).get("waiting"))
+        terminated = _mapping(_mapping(container_status.get("lastState")).get("terminated"))
+        started_at = str(terminated.get("startedAt") or "")
+        finished_at = str(terminated.get("finishedAt") or "")
+        restart_count = _positive_int(container_status.get("restartCount"), fallback=0)
+        if (
+            metadata.get("deletionTimestamp")
+            or str(metadata.get("uid") or "") != str(role_by_name[name].get("pod_uid") or "")
+            or len(owners) != 1
+            or owners[0].get("kind") != "StatefulSet"
+            or owners[0].get("name") != "cxcli-slurm-controller-bridge"
+            or owners[0].get("uid") != workload_uid
+            or str(status.get("phase") or "") != "Running"
+            or _pod_is_ready(pod)
+            or container_status.get("ready") is not False
+            or waiting.get("reason") != "CrashLoopBackOff"
+            or terminated.get("reason") != "Error"
+            or _non_negative_int(terminated.get("exitCode"), fallback=-1) != 1
+            or restart_count <= 0
+            or not started_at
+            or not _timestamp_at_or_after(finished_at, started_at)
+        ):
+            return None
+        records.append(
+            {
+                "name": name,
+                "uid": str(metadata["uid"]),
+                "restart_count": restart_count,
+                "last_terminated_started_at": started_at,
+                "last_terminated_finished_at": finished_at,
+            }
+        )
+    preimage = {
+        "schema": "nebius-cxcli/controller-cluster-id-marker-dual-crashloop/v1",
+        "status": "verified",
+        "statefulset_uid": workload_uid,
+        "container_name": container_name,
+        "pods": records,
+    }
+    preimage["proof_sha256"] = _fingerprint(preimage)
+    return preimage
+
+
+def _target_bridge_cluster_id_marker_stager_binding(
+    pod: Mapping[str, Any],
+    *,
+    image: str,
+) -> dict[str, str] | None:
+    """Return the exact inert state-PVC reader binding without mutating it."""
+
+    metadata = _mapping(pod.get("metadata"))
+    spec = _mapping(pod.get("spec"))
+    containers = _sequence_of_mappings(spec.get("containers"))
+    if len(containers) != 1:
+        return None
+    container = containers[0]
+    state_mounts = [
+        item
+        for item in _sequence_of_mappings(container.get("volumeMounts"))
+        if item.get("name") == "state"
+        and item.get("mountPath") == "/shared"
+        and item.get("readOnly") is not True
+    ]
+    state_volumes = [
+        item
+        for item in _sequence_of_mappings(spec.get("volumes"))
+        if item.get("name") == "state"
+        and _mapping(item.get("persistentVolumeClaim")).get("claimName")
+        == "cxcli-controller-bridge-state"
+    ]
+    security = _mapping(container.get("securityContext"))
+    if (
+        not _pod_is_exact_inert_controller_bridge_stager(pod)
+        or container.get("image") != image
+        or len(state_mounts) != 1
+        or len(state_volumes) != 1
+        or security.get("allowPrivilegeEscalation") is not False
+        or _non_negative_int(security.get("runAsUser"), fallback=-1) != 0
+        or not _pod_is_ready(pod)
+        or any(not str(metadata.get(key) or "").strip() for key in ("uid", "resourceVersion"))
+    ):
+        return None
+    return {
+        "name": "cxcli-controller-bridge-stager",
+        "uid": str(metadata["uid"]),
+        "resource_version": str(metadata["resourceVersion"]),
+    }
+
+
+def _target_bridge_cluster_id_marker_preexisting_stager_image(
+    journal: Mapping[str, Any],
+) -> str:
+    """Return the immutable source image used by the campaign-owned stager."""
+
+    source_image = str(
+        _mapping(journal.get("source_binding")).get("slurm_image_digest") or ""
+    ).strip()
+    transition_source_image = str(
+        _mapping(journal.get("version_transition")).get("source_image") or ""
+    ).strip()
+    if (
+        source_image
+        and source_image == transition_source_image
+        and is_immutable_oci_image_reference(source_image)
+    ):
+        return source_image
+    return ""
+
+
+def _target_bridge_cluster_id_marker_preimage_reader_authority(
+    *,
+    stager: Mapping[str, str],
+    crashloop_preimage: Mapping[str, Any],
+    stager_image: str,
+    bridge_image: str,
+    workload_uid: str,
+) -> dict[str, Any]:
+    authority = {
+        "schema": _TARGET_BRIDGE_CLUSTER_ID_MARKER_PREIMAGE_READER_SCHEMA,
+        "status": "verified",
+        "mode": "inert-stager-after-dual-crashloop",
+        "namespace": CONTROLLER_BRIDGE_NAMESPACE,
+        "stager_image": stager_image,
+        "bridge_image": bridge_image,
+        "statefulset_uid": workload_uid,
+        "stager": copy.deepcopy(dict(stager)),
+        "bridge_preimage": copy.deepcopy(dict(crashloop_preimage)),
+        "verified_at": _utc_now(),
+    }
+    authority["proof_sha256"] = _fingerprint(authority)
+    return authority
+
+
+def _target_bridge_cluster_id_marker_preimage_reader_authority_is_exact(
+    authority: Mapping[str, Any],
+    *,
+    stager: Mapping[str, Any],
+    stager_image: str,
+    bridge_image: str,
+    workload_uid: str,
+) -> bool:
+    payload = dict(authority)
+    proof_sha256 = str(payload.pop("proof_sha256", "") or "")
+    preimage = _mapping(authority.get("bridge_preimage"))
+    preimage_payload = dict(preimage)
+    preimage_proof_sha256 = str(preimage_payload.pop("proof_sha256", "") or "")
+    records = _sequence_of_mappings(preimage.get("pods"))
+    verified_at = str(authority.get("verified_at") or "")
+    if (
+        set(authority)
+        != {
+            "schema",
+            "status",
+            "mode",
+            "namespace",
+            "stager_image",
+            "bridge_image",
+            "statefulset_uid",
+            "stager",
+            "bridge_preimage",
+            "verified_at",
+            "proof_sha256",
+        }
+        or authority.get("schema") != _TARGET_BRIDGE_CLUSTER_ID_MARKER_PREIMAGE_READER_SCHEMA
+        or authority.get("status") != "verified"
+        or authority.get("mode") != "inert-stager-after-dual-crashloop"
+        or authority.get("namespace") != CONTROLLER_BRIDGE_NAMESPACE
+        or authority.get("stager_image") != stager_image
+        or authority.get("bridge_image") != bridge_image
+        or not is_immutable_oci_image_reference(stager_image)
+        or not is_immutable_oci_image_reference(bridge_image)
+        or authority.get("statefulset_uid") != workload_uid
+        or _mapping(authority.get("stager")) != stager
+        or not verified_at
+        or not re.fullmatch(r"[0-9a-f]{64}", proof_sha256)
+        or proof_sha256 != _fingerprint(payload)
+        or set(preimage)
+        != {
+            "schema",
+            "status",
+            "statefulset_uid",
+            "container_name",
+            "pods",
+            "proof_sha256",
+        }
+        or preimage.get("schema") != "nebius-cxcli/controller-cluster-id-marker-dual-crashloop/v1"
+        or preimage.get("status") != "verified"
+        or preimage.get("statefulset_uid") != workload_uid
+        or not str(preimage.get("container_name") or "")
+        or len(records) != 2
+        or len({str(item.get("name") or "") for item in records}) != 2
+        or len({str(item.get("uid") or "") for item in records}) != 2
+        or not re.fullmatch(r"[0-9a-f]{64}", preimage_proof_sha256)
+        or preimage_proof_sha256 != _fingerprint(preimage_payload)
+    ):
+        return False
+    required_record_keys = {
+        "name",
+        "uid",
+        "restart_count",
+        "last_terminated_started_at",
+        "last_terminated_finished_at",
+    }
+    return all(
+        set(item) == required_record_keys
+        and str(item.get("name") or "")
+        and str(item.get("uid") or "")
+        and _positive_int(item.get("restart_count"), fallback=0) > 0
+        and _timestamp_at_or_after(
+            item.get("last_terminated_finished_at"),
+            item.get("last_terminated_started_at"),
+        )
+        and _timestamp_at_or_after(
+            verified_at,
+            item.get("last_terminated_finished_at"),
+        )
+        for item in records
+    )
+
+
 def _target_bridge_cluster_id_marker_stager(
     *,
     journal: Mapping[str, Any],
@@ -157885,35 +165826,13 @@ def _target_bridge_cluster_id_marker_stager(
         namespace=namespace,
         resource="pod/cxcli-controller-bridge-stager",
     )
-    metadata = _mapping(pod.get("metadata"))
-    spec = _mapping(pod.get("spec"))
-    containers = _sequence_of_mappings(spec.get("containers"))
-    state_volumes = [
-        item
-        for item in _sequence_of_mappings(spec.get("volumes"))
-        if item.get("name") == "state"
-        and _mapping(item.get("persistentVolumeClaim")).get("claimName")
-        == "cxcli-controller-bridge-state"
-    ]
-    if (
-        not exists
-        or not _pod_is_exact_inert_controller_bridge_stager(pod)
-        or len(containers) != 1
-        or containers[0].get("image") != image
-        or len(state_volumes) != 1
-        or not _pod_is_ready(pod)
-        or not str(metadata.get("uid") or "").strip()
-        or not str(metadata.get("resourceVersion") or "").strip()
-    ):
+    binding = _target_bridge_cluster_id_marker_stager_binding(pod, image=image)
+    if not exists or binding is None:
         raise SoperatorMigrationPhasePending(
             "target bridge cluster-ID marker repair stager is not the exact Ready inert "
             "Pod bound to the shared controller-state PVC."
         )
-    return {
-        "name": "cxcli-controller-bridge-stager",
-        "uid": str(metadata["uid"]),
-        "resource_version": str(metadata["resourceVersion"]),
-    }
+    return binding
 
 
 def _target_bridge_mount_helper_contract(
@@ -158952,6 +166871,7 @@ def _repair_target_bridge_cluster_id_marker(
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None,
     mutation_guard: Callable[[], None] | None,
+    pre_slurm_queue_authority: Mapping[str, Any] | None = None,
 ) -> tuple[bool, list[str]]:
     """Regenerate only the stale Slurm 25.11 cluster-ID state marker."""
 
@@ -158971,8 +166891,222 @@ def _repair_target_bridge_cluster_id_marker(
     if not isinstance(repair, dict):
         raise RuntimeError("Target bridge cluster-ID marker repair must be a mapping.")
     if repair.get("status") == "verified":
-        if repair.get("schema") != _TARGET_BRIDGE_CLUSTER_ID_MARKER_REPAIR_SCHEMA or any(
-            repair.get(key) != value for key, value in binding.items()
+        stored_queue_authority = _mapping(repair.get("pre_slurm_queue_authority"))
+        stored_accounting_authority = _mapping(repair.get("accounting_authority"))
+        stored_preexisting_stager = _mapping(repair.get("preexisting_stager"))
+        stored_preimage_reader = _mapping(repair.get("marker_preimage_reader"))
+        successor_accounting_probe = _mapping(repair.get("successor_accounting_probe"))
+        verified_roles = _sequence_of_mappings(journal.get("controller_roles"))
+        verified_images = {str(item.get("image") or "") for item in verified_roles}
+        verified_resources = _sequence_of_mappings(journal.get("kubernetes_resources"))
+        verified_workload = next(
+            (
+                item
+                for item in verified_resources
+                if item.get("kind") == "StatefulSet"
+                and item.get("name") == "cxcli-slurm-controller-bridge"
+            ),
+            {},
+        )
+        verified_workload_uid = str(verified_workload.get("uid") or "")
+        verified_image = next(iter(verified_images), "") if len(verified_images) == 1 else ""
+        verified_preexisting_stager_image = (
+            _target_bridge_cluster_id_marker_preexisting_stager_image(journal)
+        )
+        queue_payload = dict(stored_queue_authority)
+        queue_proof_sha256 = str(queue_payload.pop("proof_sha256", "") or "")
+        accounting_payload = dict(stored_accounting_authority)
+        accounting_proof_sha256 = str(accounting_payload.pop("proof_sha256", "") or "")
+        stored_queue_observation = _mapping(stored_queue_authority.get("queue_observation"))
+        stored_queue_binding = {
+            key: copy.deepcopy(stored_queue_observation.get(key))
+            for key in (
+                "schema",
+                "status",
+                "active_allocation_count",
+                "pending_job_count",
+                "paused_partitions",
+                "pending_jobs_fingerprint",
+            )
+        }
+        stored_target_binding = _mapping(stored_accounting_authority.get("target_binding"))
+        stored_database_identity = _mapping(stored_accounting_authority.get("database_identity"))
+        if (
+            repair.get("schema") != _TARGET_BRIDGE_CLUSTER_ID_MARKER_REPAIR_SCHEMA
+            or any(repair.get(key) != value for key, value in binding.items())
+            or not verified_image
+            or not verified_workload_uid
+            or repair.get("statefulset_uid") != verified_workload_uid
+            or bool(stored_queue_authority) != bool(stored_accounting_authority)
+            or bool(stored_preexisting_stager) != bool(stored_preimage_reader)
+            or (
+                stored_preexisting_stager
+                and (
+                    set(stored_preexisting_stager) != {"name", "uid", "resource_version"}
+                    or stored_preexisting_stager.get("name") != "cxcli-controller-bridge-stager"
+                    or any(not str(value or "") for value in stored_preexisting_stager.values())
+                    or _mapping(repair.get("stager")) != stored_preexisting_stager
+                    or not _target_bridge_cluster_id_marker_preimage_reader_authority_is_exact(
+                        stored_preimage_reader,
+                        stager=stored_preexisting_stager,
+                        stager_image=verified_preexisting_stager_image,
+                        bridge_image=verified_image,
+                        workload_uid=verified_workload_uid,
+                    )
+                )
+            )
+            or (
+                stored_queue_authority
+                and (
+                    set(stored_queue_authority)
+                    != {
+                        "schema",
+                        "status",
+                        "workers",
+                        "target_config_sha256",
+                        "successor_fingerprint",
+                        "queue_observation_fingerprint",
+                        "partition_pause_fingerprint",
+                        "queue_observation",
+                        "effective_config_verified_at",
+                        "reconfigure_intent_at",
+                        "proof_sha256",
+                    }
+                    or stored_queue_authority.get("schema")
+                    != _GPU_TYPED_GRES_TARGET_CLUSTER_ID_PRE_SLURM_QUEUE_SCHEMA
+                    or stored_queue_authority.get("status") != "verified"
+                    or not _string_sequence(stored_queue_authority.get("workers"))
+                    or len(_string_sequence(stored_queue_authority.get("workers")))
+                    != len(set(_string_sequence(stored_queue_authority.get("workers"))))
+                    or any(
+                        re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            str(stored_queue_authority.get(key) or ""),
+                        )
+                        is None
+                        for key in (
+                            "target_config_sha256",
+                            "successor_fingerprint",
+                            "queue_observation_fingerprint",
+                            "partition_pause_fingerprint",
+                        )
+                    )
+                    or set(stored_queue_observation)
+                    != {
+                        "schema",
+                        "status",
+                        "active_allocation_count",
+                        "pending_job_count",
+                        "paused_partitions",
+                        "pending_jobs_fingerprint",
+                        "observed_at",
+                    }
+                    or stored_queue_observation.get("schema")
+                    != "nebius-cxcli/gpu-topology-drain-queue-observation/v1"
+                    or stored_queue_observation.get("status")
+                    not in {"empty", "paused-pending-only"}
+                    or _non_negative_int(
+                        stored_queue_observation.get("active_allocation_count"),
+                        fallback=-1,
+                    )
+                    != 0
+                    or _non_negative_int(
+                        stored_queue_observation.get("pending_job_count"),
+                        fallback=-1,
+                    )
+                    < 0
+                    or not _string_sequence(stored_queue_observation.get("paused_partitions"))
+                    or len(_string_sequence(stored_queue_observation.get("paused_partitions")))
+                    != len(set(_string_sequence(stored_queue_observation.get("paused_partitions"))))
+                    or (
+                        stored_queue_observation.get("status") == "empty"
+                        and _non_negative_int(
+                            stored_queue_observation.get("pending_job_count"),
+                            fallback=-1,
+                        )
+                        != 0
+                    )
+                    or (
+                        stored_queue_observation.get("status") == "paused-pending-only"
+                        and _non_negative_int(
+                            stored_queue_observation.get("pending_job_count"),
+                            fallback=-1,
+                        )
+                        <= 0
+                    )
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        str(stored_queue_observation.get("pending_jobs_fingerprint") or ""),
+                    )
+                    is None
+                    or str(stored_queue_authority.get("queue_observation_fingerprint") or "")
+                    != _fingerprint(stored_queue_binding)
+                    or not str(stored_queue_authority.get("effective_config_verified_at") or "")
+                    or not _timestamp_at_or_after(
+                        stored_queue_authority.get("reconfigure_intent_at"),
+                        stored_queue_authority.get("effective_config_verified_at"),
+                    )
+                    or not re.fullmatch(r"[0-9a-f]{64}", queue_proof_sha256)
+                    or queue_proof_sha256 != _fingerprint(queue_payload)
+                    or set(stored_accounting_authority)
+                    != {
+                        "schema",
+                        "status",
+                        "target_binding",
+                        "database_identity",
+                        "registered_cluster_ids",
+                        "runtime_fingerprint",
+                        "writer_successor_fingerprint",
+                        "writer_verified_at",
+                        "proof_sha256",
+                    }
+                    or stored_accounting_authority.get("schema")
+                    != _GPU_TYPED_GRES_TARGET_CLUSTER_ID_ACCOUNTING_AUTHORITY_SCHEMA
+                    or stored_accounting_authority.get("status") != "verified"
+                    or set(stored_target_binding) != {"namespace", "name", "uid"}
+                    or any(not str(value or "") for value in stored_target_binding.values())
+                    or stored_target_binding.get("namespace") != _SOPERATOR_NAMESPACE
+                    or stored_target_binding.get("name") != binding["target_cluster_name"]
+                    or set(stored_database_identity)
+                    != set(_ACCOUNTING_HANDOFF_DATABASE_IDENTITY_KEYS)
+                    or any(
+                        not str(stored_database_identity.get(key) or "")
+                        for key in _ACCOUNTING_HANDOFF_DATABASE_IDENTITY_KEYS
+                    )
+                    or stored_database_identity.get("slurmcluster")
+                    != stored_target_binding.get("name")
+                    or stored_database_identity.get("slurmcluster_uid")
+                    != stored_target_binding.get("uid")
+                    or _mapping(stored_accounting_authority.get("registered_cluster_ids"))
+                    != {
+                        str(binding["source_cluster_name"]): int(binding["new_source_cluster_id"]),
+                        str(binding["target_cluster_name"]): int(binding["target_cluster_id"]),
+                    }
+                    or any(
+                        re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            str(stored_accounting_authority.get(key) or ""),
+                        )
+                        is None
+                        for key in (
+                            "runtime_fingerprint",
+                            "writer_successor_fingerprint",
+                        )
+                    )
+                    or not str(stored_accounting_authority.get("writer_verified_at") or "")
+                    or not re.fullmatch(r"[0-9a-f]{64}", accounting_proof_sha256)
+                    or accounting_proof_sha256 != _fingerprint(accounting_payload)
+                    or successor_accounting_probe
+                    != {
+                        "schema": _IN_PLACE_ACCOUNTING_MUNGE_PROBE_SCHEMA,
+                        "status": "authenticated",
+                        "local_decode_count": 3,
+                        "local_endpoint_count": 3,
+                        "cross_decode_count": 4,
+                        "cross_attempt_count": 4,
+                    }
+                )
+            )
         ):
             raise RuntimeError(
                 "recovery-required: verified target bridge cluster-ID marker binding changed."
@@ -158992,6 +167126,42 @@ def _repair_target_bridge_cluster_id_marker(
     if checkpoint_writer is None:
         raise RuntimeError(
             "Target bridge cluster-ID marker repair requires durable checkpoint writes."
+        )
+
+    stored_queue_authority = _mapping(repair.get("pre_slurm_queue_authority"))
+    early_queue_boundary = pre_slurm_queue_authority is not None or bool(stored_queue_authority)
+    exact_queue_authority: dict[str, Any] = {}
+    accounting_authority: dict[str, Any] = {}
+    if early_queue_boundary:
+        populate_phase = _mapping(
+            _mapping(checkpoint.get("phase_state")).get(POPULATE_JAIL_REFRESH_PHASE_ID)
+        )
+        derived_queue_authority = _gpu_typed_gres_target_cluster_id_pre_slurm_queue_authority(
+            checkpoint=checkpoint,
+            phase=populate_phase,
+        )
+        supplied_queue_authority = dict(
+            _mapping(pre_slurm_queue_authority)
+            if pre_slurm_queue_authority is not None
+            else stored_queue_authority
+        )
+        if (
+            derived_queue_authority is None
+            or supplied_queue_authority != derived_queue_authority
+            or (stored_queue_authority and stored_queue_authority != derived_queue_authority)
+        ):
+            raise SoperatorMigrationPhasePending(
+                "target bridge cluster-ID marker repair lost its exact checkpoint-paused "
+                "pre-Slurm queue authority."
+            )
+        exact_queue_authority = derived_queue_authority
+        accounting_authority = _gpu_typed_gres_target_cluster_id_accounting_authority(
+            checkpoint=checkpoint,
+            phase=phase,
+            journal=journal,
+            binding=binding,
+            kube_context=kube_context,
+            command_runner=command_runner,
         )
 
     namespace = str(journal.get("namespace") or "")
@@ -159021,11 +167191,19 @@ def _repair_target_bridge_cluster_id_marker(
             "target bridge cluster-ID marker repair lacks one exact HA workload and image."
         )
     image = next(iter(images))
+    preexisting_stager_image = _target_bridge_cluster_id_marker_preexisting_stager_image(journal)
     expected_repair = {
         "schema": _TARGET_BRIDGE_CLUSTER_ID_MARKER_REPAIR_SCHEMA,
         **binding,
         "statefulset_uid": workload_uid,
     }
+    if early_queue_boundary:
+        expected_repair.update(
+            {
+                "pre_slurm_queue_authority": exact_queue_authority,
+                "accounting_authority": accounting_authority,
+            }
+        )
     if repair:
         if any(repair.get(key) != value for key, value in expected_repair.items()):
             raise RuntimeError(
@@ -159042,47 +167220,59 @@ def _repair_target_bridge_cluster_id_marker(
             kube_context=kube_context,
             command_runner=command_runner,
         )
-        accounting = _mapping(phase.get("accounting_handoff"))
-        continuity = _mapping(
-            _mapping(_mapping(phase.get("in_place_service_role_health")).get("accounting")).get(
-                "accounting_continuity"
+        if early_queue_boundary:
+            queue_observation = copy.deepcopy(
+                dict(_mapping(exact_queue_authority.get("queue_observation")))
             )
-        )
-        writer_identity = _mapping(_mapping(continuity.get("observed")).get("writer_identity"))
-        target_binding = _accounting_handoff_target_binding(
-            phase=phase,
-            state=accounting,
-        )
-        _accounting_handoff_revalidate_target_mariadb_identity(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            pod_name=str(writer_identity.get("pod") or ""),
-            expected=writer_identity,
-            target_binding=target_binding,
-        )
-        live_ids = _accounting_handoff_registered_cluster_ids(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            pod_name=str(writer_identity.get("pod") or ""),
-        )
-        if (
-            live_ids.get(str(binding["source_cluster_name"])) != binding["new_source_cluster_id"]
-            or live_ids.get(str(binding["target_cluster_name"])) != binding["target_cluster_id"]
-        ):
-            raise SoperatorMigrationPhasePending(
-                "target bridge cluster-ID marker repair found accounting registration ID drift."
+            paused_partitions = set(_string_sequence(queue_observation.get("paused_partitions")))
+            if not paused_partitions:
+                raise SoperatorMigrationPhasePending(
+                    "target bridge cluster-ID marker repair lost its exact checkpoint-"
+                    "paused partition set."
+                )
+        else:
+            accounting = _mapping(phase.get("accounting_handoff"))
+            continuity = _mapping(
+                _mapping(_mapping(phase.get("in_place_service_role_health")).get("accounting")).get(
+                    "accounting_continuity"
+                )
             )
-        smoke_gate = _mapping(phase.get("in_place_gpu_smoke_scheduling_gate"))
-        paused_partitions = {
-            str(item.get("partition") or "").strip()
-            for item in _sequence_of_mappings(smoke_gate.get("partitions"))
-            if str(item.get("status") or "") == "down"
-        }
-        if smoke_gate.get("status") != "passed" or not paused_partitions:
-            raise SoperatorMigrationPhasePending(
-                "target bridge cluster-ID marker repair requires the passed exact paused-"
-                "partition scheduling gate."
+            writer_identity = _mapping(_mapping(continuity.get("observed")).get("writer_identity"))
+            target_binding = _accounting_handoff_target_binding(
+                phase=phase,
+                state=accounting,
             )
+            _accounting_handoff_revalidate_target_mariadb_identity(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                pod_name=str(writer_identity.get("pod") or ""),
+                expected=writer_identity,
+                target_binding=target_binding,
+            )
+            live_ids = _accounting_handoff_registered_cluster_ids(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                pod_name=str(writer_identity.get("pod") or ""),
+            )
+            if (
+                live_ids.get(str(binding["source_cluster_name"]))
+                != binding["new_source_cluster_id"]
+                or live_ids.get(str(binding["target_cluster_name"])) != binding["target_cluster_id"]
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "target bridge cluster-ID marker repair found accounting registration ID drift."
+                )
+            smoke_gate = _mapping(phase.get("in_place_gpu_smoke_scheduling_gate"))
+            paused_partitions = {
+                str(item.get("partition") or "").strip()
+                for item in _sequence_of_mappings(smoke_gate.get("partitions"))
+                if str(item.get("status") or "") == "down"
+            }
+            if smoke_gate.get("status") != "passed" or not paused_partitions:
+                raise SoperatorMigrationPhasePending(
+                    "target bridge cluster-ID marker repair requires the passed exact "
+                    "paused-partition scheduling gate."
+                )
         exists, statefulset = _kubectl_get_namespace_resource(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -159107,45 +167297,88 @@ def _repair_target_bridge_cluster_id_marker(
                 != str(role_by_name[name].get("pod_uid") or "")
                 for name in role_by_name
             )
-            or not ready_names
         ):
             raise SoperatorMigrationPhasePending(
                 "target bridge cluster-ID marker repair preflight lost the exact two-Pod "
-                "workload or every serving bridge member."
+                "workload binding."
             )
         container = _controller_bridge_container_name(statefulset, expected_image=image)
-        queue = command_runner(
-            [
-                "kubectl",
-                "--context",
-                kube_context,
-                "-n",
-                namespace,
-                "exec",
-                sorted(ready_names)[0],
-                "-c",
-                container,
-                "--",
-                "timeout",
-                "30s",
-                "squeue",
-                "-h",
-                "-o",
-                "%i|%T|%N|%P|%r",
-            ],
-            check=False,
-            timeout_seconds=60,
-        )
-        if queue.returncode == 0:
-            queue_observation = _gpu_topology_drain_queue_observation(
-                queue.stdout,
-                paused_partitions=paused_partitions,
+        marker_reader_name = sorted(ready_names)[0] if ready_names else ""
+        marker_reader_container = container
+        preexisting_stager: dict[str, str] = {}
+        marker_preimage_reader: dict[str, Any] = {}
+        if not ready_names:
+            crashloop_preimage = (
+                _target_bridge_cluster_id_marker_crashloop_preimage(
+                    pod_by_name=pod_by_name,
+                    role_by_name=role_by_name,
+                    workload_uid=workload_uid,
+                    container_name=container,
+                )
+                if early_queue_boundary
+                else None
             )
-        else:
-            queue_observation = _target_bridge_cluster_id_marker_sealed_queue_fallback(
-                phase=phase,
-                paused_partitions=paused_partitions,
+            stager_exists, stager_pod = _kubectl_get_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                namespace=namespace,
+                resource="pod/cxcli-controller-bridge-stager",
             )
+            preexisting_stager = (
+                _target_bridge_cluster_id_marker_stager_binding(
+                    stager_pod,
+                    image=preexisting_stager_image,
+                )
+                if (stager_exists and crashloop_preimage is not None and preexisting_stager_image)
+                else None
+            ) or {}
+            if crashloop_preimage is None or not preexisting_stager:
+                raise SoperatorMigrationPhasePending(
+                    "target bridge cluster-ID marker repair has no serving bridge member and "
+                    "lacks the exact dual-CrashLoop plus inert state-PVC reader preimage."
+                )
+            marker_preimage_reader = _target_bridge_cluster_id_marker_preimage_reader_authority(
+                stager=preexisting_stager,
+                crashloop_preimage=crashloop_preimage,
+                stager_image=preexisting_stager_image,
+                bridge_image=image,
+                workload_uid=workload_uid,
+            )
+            marker_reader_name = str(preexisting_stager["name"])
+            marker_reader_container = "stager"
+        if not early_queue_boundary:
+            queue = command_runner(
+                [
+                    "kubectl",
+                    "--context",
+                    kube_context,
+                    "-n",
+                    namespace,
+                    "exec",
+                    sorted(ready_names)[0],
+                    "-c",
+                    container,
+                    "--",
+                    "timeout",
+                    "30s",
+                    "squeue",
+                    "-h",
+                    "-o",
+                    "%i|%T|%N|%P|%r",
+                ],
+                check=False,
+                timeout_seconds=60,
+            )
+            if queue.returncode == 0:
+                queue_observation = _gpu_topology_drain_queue_observation(
+                    queue.stdout,
+                    paused_partitions=paused_partitions,
+                )
+            else:
+                queue_observation = _target_bridge_cluster_id_marker_sealed_queue_fallback(
+                    phase=phase,
+                    paused_partitions=paused_partitions,
+                )
         marker_result = command_runner(
             [
                 "kubectl",
@@ -159154,9 +167387,9 @@ def _repair_target_bridge_cluster_id_marker(
                 "-n",
                 namespace,
                 "exec",
-                sorted(ready_names)[0],
+                marker_reader_name,
                 "-c",
-                container,
+                marker_reader_container,
                 "--",
                 "cat",
                 "/var/spool/slurmctld/clustername",
@@ -159188,20 +167421,70 @@ def _repair_target_bridge_cluster_id_marker(
                     }
                     for name in sorted(pod_by_name)
                 ],
+                **(
+                    {
+                        "preexisting_stager": preexisting_stager,
+                        "marker_preimage_reader": marker_preimage_reader,
+                    }
+                    if preexisting_stager
+                    else {}
+                ),
             }
         )
         checkpoint_writer()
 
     status = str(repair.get("status") or "")
     stager = _mapping(repair.get("stager"))
-    if status == "intent":
-        stager = _target_bridge_cluster_id_marker_stager(
-            journal=journal,
-            image=image,
-            kube_context=kube_context,
-            command_runner=command_runner,
-            mutation_guard=mutation_guard,
+    preexisting_stager = _mapping(repair.get("preexisting_stager"))
+    marker_preimage_reader = _mapping(repair.get("marker_preimage_reader"))
+    if bool(preexisting_stager) != bool(marker_preimage_reader) or (
+        preexisting_stager
+        and not (
+            set(preexisting_stager) == {"name", "uid", "resource_version"}
+            and preexisting_stager.get("name") == "cxcli-controller-bridge-stager"
+            and all(str(value or "") for value in preexisting_stager.values())
+            and _target_bridge_cluster_id_marker_preimage_reader_authority_is_exact(
+                marker_preimage_reader,
+                stager=preexisting_stager,
+                stager_image=preexisting_stager_image,
+                bridge_image=image,
+                workload_uid=workload_uid,
+            )
         )
+    ):
+        raise RuntimeError(
+            "recovery-required: target bridge cluster-ID marker preimage reader binding changed."
+        )
+    if status == "intent":
+        if preexisting_stager:
+            exists, stager_pod = _kubectl_get_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                namespace=namespace,
+                resource="pod/cxcli-controller-bridge-stager",
+            )
+            live_stager = (
+                _target_bridge_cluster_id_marker_stager_binding(
+                    stager_pod,
+                    image=preexisting_stager_image,
+                )
+                if exists
+                else None
+            )
+            if live_stager != preexisting_stager:
+                raise SoperatorMigrationPhasePending(
+                    "target bridge cluster-ID marker repair lost its exact preexisting inert "
+                    "state-PVC reader after intent."
+                )
+            stager = preexisting_stager
+        else:
+            stager = _target_bridge_cluster_id_marker_stager(
+                journal=journal,
+                image=image,
+                kube_context=kube_context,
+                command_runner=command_runner,
+                mutation_guard=mutation_guard,
+            )
         repair.update({"status": "stager-ready", "stager": stager})
         checkpoint_writer()
         status = "stager-ready"
@@ -159212,12 +167495,15 @@ def _repair_target_bridge_cluster_id_marker(
             namespace=namespace,
             resource="pod/cxcli-controller-bridge-stager",
         )
-        if (
-            not exists
-            or not _pod_is_exact_inert_controller_bridge_stager(stager_pod)
-            or str(_mapping(stager_pod.get("metadata")).get("uid") or "")
-            != str(stager.get("uid") or "")
-        ):
+        live_stager = (
+            _target_bridge_cluster_id_marker_stager_binding(
+                stager_pod,
+                image=preexisting_stager_image if preexisting_stager else image,
+            )
+            if exists
+            else None
+        )
+        if live_stager != stager:
             raise SoperatorMigrationPhasePending(
                 "target bridge cluster-ID marker repair lost its exact inert stager."
             )
@@ -159608,6 +167894,31 @@ def _repair_target_bridge_cluster_id_marker(
         kube_context=kube_context,
         command_runner=command_runner,
     )
+    if early_queue_boundary:
+        runtime = _mapping(
+            _mapping(
+                _mapping(phase.get("in_place_bridge_client_handoff")).get("worker_config_rollout")
+            ).get("accounting_munge_runtime_reload")
+        )
+        successor_accounting_probe = _in_place_accounting_munge_probe(
+            accounting_pod=str(_mapping(runtime.get("successor")).get("name") or ""),
+            bridge_pods=tuple(
+                {
+                    "namespace": namespace,
+                    "name": str(role.get("pod_name") or ""),
+                    "uid": str(role.get("pod_uid") or ""),
+                }
+                for role in rebound_roles
+            ),
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+        if successor_accounting_probe.get("status") != "authenticated":
+            raise SoperatorMigrationPhasePending(
+                "target bridge cluster-ID marker repair restarted HA but the successor "
+                "controllers do not authenticate with the exact target accounting writer."
+            )
+        repair["successor_accounting_probe"] = successor_accounting_probe
     _prove_journaled_controller_bridge_exclusivity(
         journal=journal,
         proof_label="target bridge cluster-ID marker repair",
@@ -172185,7 +180496,8 @@ def execute_soperator_migration(
         active_nebius_api = nebius_api or attached_nebius_api
         if active_nebius_api is None:
             owned_nebius_api = _SdkSoperatorMigrationNebiusApi(
-                project_id=_nebius_project_id(payload)
+                project_id=_nebius_project_id(payload),
+                require_renewable_auth=True,
             )
             active_nebius_api = owned_nebius_api
         try:
@@ -172378,6 +180690,19 @@ def _execute_soperator_migration_unlocked(
         "verifying onboarding, live source contract, checkpoint, and accepted compute plan.",
     )
     onboarding = _target_onboarding(payload, normalized_target)
+    active_campaign_segment = _external_node_template_campaign_segment(onboarding=onboarding)
+    active_segment_id = str(active_campaign_segment.get("id") or "").strip()
+    active_target_k8s_version = str(active_campaign_segment.get("target_k8s_version") or "").strip()
+    if active_segment_id != str(campaign_segment_id or "").strip():
+        raise RuntimeError(
+            "External Soperator command-start analysis resolved a campaign segment that "
+            "differs from the config-owned execution segment."
+        )
+    if not active_target_k8s_version:
+        raise RuntimeError(
+            "External Soperator command-start analysis requires the active v6 campaign "
+            "segment to pin target_k8s_version."
+        )
     source_snapshot, report = _source_report_payload(source_report)
     source_report_fingerprint = _source_report_checkpoint_fingerprint(source_report)
     expected_source_version = _expected_source_version(onboarding=onboarding, report=report)
@@ -172485,6 +180810,7 @@ def _execute_soperator_migration_unlocked(
         pinned_chart_version=target_version,
         pinned_app_version=target_version,
         source_version_override=expected_source_version,
+        target_k8s_version=active_target_k8s_version,
     )
     live_source_version = normalize_soperator_release_version(live_report.source_version)
     allowed_source_versions = {expected_source_version} if expected_source_version else set()
@@ -172893,6 +181219,33 @@ def _execute_soperator_migration_unlocked(
         if str(phase or "").strip()
     )
     completed_phases.add("discovery-and-plan")
+    phase_lines: list[str] = []
+
+    def _checkpoint_progress_unlocked() -> None:
+        _refresh_upgrade_timing()
+        checkpoint["completed_phases"] = _ordered_phase_list(completed_phases, phase_ids)
+        checkpoint["compensation_obligations"] = _checkpoint_runtime_compensation_obligations(
+            checkpoint
+        )
+        checkpoint["updated_at"] = _utc_now()
+        _write_checkpoint(checkpoint_path, checkpoint)
+
+    # Worker-group replacement runs concurrently in in-place mode. Every
+    # provider-operation callback therefore uses the same execution-scoped
+    # writer so journal mutation and durable snapshots cannot interleave.
+    _checkpoint_progress: Callable[[], None] = _ExecutionCheckpointWriter(
+        _checkpoint_progress_unlocked
+    )
+
+    if effective_approval or mutating_progress_started:
+        phase_lines.extend(
+            _reconcile_controller_bridge_node_group_create_operations(
+                checkpoint=checkpoint,
+                nebius_api=active_nebius_api,
+                checkpoint_writer=_checkpoint_progress,
+            )
+        )
+
     persistent_copy_boundary_active = _persistent_mount_copy_failure_boundary_active(checkpoint)
     rolling_compute_provider_boundary_active = _rolling_compute_provider_boundary_active(checkpoint)
     controller_singleton_handoff_boundary_active = _controller_singleton_handoff_boundary_active(
@@ -173082,26 +181435,8 @@ def _execute_soperator_migration_unlocked(
             )
 
     mutation_performed = False
-    phase_lines: list[str] = []
     pending_phase = ""
     pending_reason = ""
-
-    def _checkpoint_progress_unlocked() -> None:
-        _refresh_upgrade_timing()
-        checkpoint["completed_phases"] = _ordered_phase_list(completed_phases, phase_ids)
-        checkpoint["compensation_obligations"] = _checkpoint_runtime_compensation_obligations(
-            checkpoint
-        )
-        checkpoint["updated_at"] = _utc_now()
-        _write_checkpoint(checkpoint_path, checkpoint)
-
-    # Worker-group replacement runs concurrently in in-place mode.  Every
-    # provider-operation callback must therefore use the same execution-scoped
-    # writer so its journal mutation and durable snapshot cannot interleave
-    # with another group's accepted-operation evidence.
-    _checkpoint_progress: Callable[[], None] = _ExecutionCheckpointWriter(
-        _checkpoint_progress_unlocked
-    )
 
     controller_bridge_finalization_due = _checkpoint_controller_bridge_finalization_due(checkpoint)
     if not pending_phase and effective_approval and controller_bridge_finalization_due:

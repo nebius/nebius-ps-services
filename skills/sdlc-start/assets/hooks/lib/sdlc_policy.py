@@ -548,6 +548,18 @@ def gh_pr_create_head_matches(words: list[str], branch: str) -> bool:
     return matched
 
 
+def is_commit_transaction_command(words: list[str]) -> bool:
+    """Recognize the canonical direct-commit helper as commit-sensitive."""
+
+    return (
+        len(words) >= 3
+        and re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)*)?", Path(words[0]).name)
+        is not None
+        and Path(words[1]).name == "commit_transaction.py"
+        and words[2] in {"prepare", "execute", "review"}
+    )
+
+
 def gh_pr_create_base_matches(words: list[str], base: str) -> bool:
     matched = False
     index = 3
@@ -664,6 +676,12 @@ def git_policy_reason(
     branch = detect_current_branch(project_root)
     default_branch = detect_default_branch(project_root)
     protected = {default_branch} if default_branch else set()
+    commit_transaction = is_commit_transaction_command(words)
+    if commit_transaction and active:
+        return (
+            "Blocked: an active Agentic SDLC run owns commit authorization for "
+            "this repository; use sdlc-commit instead of the direct $commit transaction."
+        )
     if not default_branch and any(
         (
             is_git_command(words, "commit"),
@@ -676,7 +694,8 @@ def git_policy_reason(
     ):
         return "Blocked: the symbolic origin default branch cannot be resolved."
     sensitive_execution_git = (
-        is_git_command(words, "commit")
+        commit_transaction
+        or is_git_command(words, "commit")
         or is_git_command(words, "merge")
         or (
             is_git_command(words, "branch")

@@ -24,14 +24,14 @@ def _parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--project-root", type=Path, required=True)
     inspect_parser.add_argument(
         "--spec-owner",
-        choices=("task-implementer", "agentic-sdlc"),
+        choices=("maintain-project-specs",),
         required=True,
     )
     inspect_parser.add_argument("--requirements", default="docs/requirements.md")
     inspect_parser.add_argument("--design", default="docs/design.md")
     inspect_parser.add_argument("--spec-receipt", type=Path, required=True)
     inspect_parser.add_argument("--runtime-config", type=Path, required=True)
-    inspect_parser.add_argument("--codex-home", type=Path)
+    inspect_parser.add_argument("--codex-home", type=Path, required=True)
     inspect_parser.add_argument("--private-root", type=Path, required=True)
     inspect_parser.add_argument("--output", type=Path, required=True)
     apply_parser = subparsers.add_parser(
@@ -42,6 +42,15 @@ def _parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--ownership", type=Path, required=True)
     apply_parser.add_argument("--state", type=Path, required=True)
     apply_parser.add_argument("--private-root", type=Path, required=True)
+    render_parser = subparsers.add_parser(
+        "render",
+        help="Render a receipt-bound decision without mutating the repository.",
+    )
+    render_parser.add_argument("--manifest", type=Path, required=True)
+    render_parser.add_argument("--decision", type=Path, required=True)
+    render_parser.add_argument("--private-root", type=Path, required=True)
+    render_parser.add_argument("--output", type=Path, required=True)
+    render_parser.add_argument("--state", type=Path, required=True)
     verify_parser = subparsers.add_parser(
         "verify", help="Verify one final private decision state."
     )
@@ -85,6 +94,14 @@ def main(argv: list[str]) -> int:
                 "project_root": result["project_root"],
                 "target": result["target"],
             }
+        elif args.command == "render":
+            output = workflow.render_decision(
+                args.manifest,
+                args.decision,
+                args.output,
+                args.state,
+                args.private_root,
+            )
         elif args.command == "apply":
             output = workflow.apply_decision(
                 args.manifest,

@@ -1,6 +1,6 @@
 interface:
   display_name: "Troubleshoot"
-  short_description: "Prove failures with bounded repairs"
-  default_prompt: "Use $troubleshoot to investigate this failure causally. In active Agentic SDLC, preserve the exact failed commit and criteria, make no committed product fix, remove temporary instrumentation, emit diagnosis-v1, and return only through sdlc-classify-failure. Outside SDLC, keep localized repairs here and route system-contract-changing remediation through design only after causal proof. Enforce bounded evidence, hypotheses, observability, retries, and stop reporting."
+  short_description: "Discover stacks, correlate logs, and prove causes"
+  default_prompt: "$troubleshoot Discover the deployed stack and official architecture, verify every component and dependency, correlate bounded logs across relevant layers, test falsifiable hypotheses, debug real code paths when relevant, and gate completion on evidence. In active Agentic SDLC, preserve the exact failed commit and criteria, make no committed product fix, remove temporary instrumentation, emit diagnosis-v1, and return only through sdlc-classify-failure. Outside SDLC, keep localized repairs here and route system-contract-changing remediation through design only after causal proof."
 policy:
   allow_implicit_invocation: true

@@ -69,6 +69,8 @@ _COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
+    "NEBIUS_IAM_TOKEN",
+    "CXCLI_NEBIUS_DELEGATE_ID",
     "NEBIUS_SA_ID",
     "NEBIUS_AUTH_PUBLIC_KEY_ID",
     "NEBIUS_AUTH_PRIVATE_KEY_FILE",
@@ -77,7 +79,32 @@ _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_S3_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
+    cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV,
 )
+_REAL_ENSURE_RUNTIME_AUTH_MATERIAL = cli._ensure_runtime_auth_material
+_REAL_LOAD_SOURCE_PAYLOAD = cli._load_source_payload
+_REAL_LOAD_CONFIG_PAYLOAD = cli._load_config_payload
+
+
+def _load_source_payload_without_auth(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ValueError(f"Config file not found: {path}")
+    if path.is_dir():
+        raise ValueError(
+            "Expected a project config.yaml file path, but got a directory: "
+            f"{path}. Pass <tenant-folder>/<project-folder>/config.yaml."
+        )
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("config.yaml root must be a mapping")
+    return payload
+
+
+def _load_config_payload_without_auth(path: Path) -> dict[str, Any]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise RuntimeError("config.yaml root must be a mapping")
+    return payload
 
 
 def _bundled_tool_versions() -> tuple[str, str]:
@@ -121,9 +148,7 @@ def test_action_confirmations_never_default_to_no() -> None:
         default = keywords.get("default")
         if function_name == "typer.confirm":
             direct_confirm_defaults.append(
-                default.value
-                if isinstance(default, ast.Constant)
-                else "<missing-or-dynamic>"
+                default.value if isinstance(default, ast.Constant) else "<missing-or-dynamic>"
             )
         elif (
             function_name == "_wizard_continue_phase"
@@ -422,6 +447,16 @@ def test_soperator_upgrade_top_level_stage_groups_known_phases(
 def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
+    # Most command tests exercise a boundary below project authentication. Keep
+    # those tests hermetic; the dedicated authentication tests restore and
+    # exercise the real implementation explicitly.
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_material", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_load_source_payload",
+        _load_source_payload_without_auth,
+    )
+    monkeypatch.setattr(cli, "_load_config_payload", _load_config_payload_without_auth)
 
     class _TestClusterLease:
         def __init__(self, **_kwargs: object) -> None:
@@ -480,6 +515,7 @@ def _help_contains_option(help_text: str, option: str) -> bool:
 def _clear_runtime_auth_env() -> None:
     for name in _RUNTIME_AUTH_ENV_KEYS:
         os.environ.pop(name, None)
+    cli._RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
 
 
 def _fake_paths(tmp_path: Path) -> ProjectPaths:
@@ -2148,6 +2184,15 @@ def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_value
     paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "client_info": {
+                    "client_name": "test-client",
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                },
                 "infra": {
                     "components": [
                         {
@@ -2378,6 +2423,15 @@ def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
     paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "client_info": {
+                    "client_name": "test-client",
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                },
                 "infra": {
                     "components": [
                         {
@@ -4110,7 +4164,7 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "helm-ready",
     ]
@@ -4238,7 +4292,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "render",
@@ -4246,7 +4300,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "render",
@@ -4254,7 +4308,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
@@ -8616,7 +8670,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "live-activechecks-suspend",
@@ -8626,7 +8680,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "render",
@@ -8634,7 +8688,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "render",
@@ -8642,7 +8696,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
@@ -8651,7 +8705,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
     ]
@@ -9230,7 +9284,7 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
     ]
@@ -9394,7 +9448,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         "live-activechecks-suspend",
@@ -9404,7 +9458,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
@@ -9413,7 +9467,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
     ]
@@ -9568,7 +9622,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
         (
             "flux-apply",
             (paths.generated_dir,),
-            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+            {"target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
     ]
@@ -11985,20 +12039,18 @@ def test_render_command_points_migration_required_soperator_to_migrate(
         ),
     )
 
-    result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
+    result = runner.invoke(
+        cli.app,
+        ["render", str(fake_paths.config_path)],
+        terminal_width=1000,
+    )
 
     assert result.exit_code == 0, result.output
     plain_output = _plain_output(result.output)
     normalized_output = " ".join(plain_output.split())
-    config_arg = str(fake_paths.config_path.resolve())
-    lines = plain_output.splitlines()
-    assert (
-        f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --dry-run"
-    ) in lines
-    assert (
-        f"nebius-cxcli ext-soperator upgrade {config_arg} "
-        "--target external-cluster --execute --approve"
-    ) in lines
+    assert "nebius-cxcli ext-soperator upgrade" in normalized_output
+    assert "--target external-cluster --dry-run" in normalized_output
+    assert "--target external-cluster --execute --approve" in normalized_output
     assert "Accepted onboarding actions:" in plain_output
     if "upgrade-soperator" in actions:
         assert "Soperator chart upgrade" in plain_output
@@ -12007,7 +12059,7 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in (
         normalized_output
     )
-    assert f"nebius-cxcli deploy {config_arg}" not in lines
+    assert "nebius-cxcli deploy" not in normalized_output
 
 
 def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
@@ -12143,11 +12195,23 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     }
     captured: dict[str, Any] = {}
     events: list[str] = []
+    renewable_handoff_modes: list[bool] = []
     rich_console = cli.Console(record=True, width=300)
 
     @contextmanager
     def _no_status(_message: str):
         yield
+
+    @contextmanager
+    def _execute_payload(
+        source_payload: Mapping[str, Any],
+        *,
+        target_ref: str,
+        require_renewable_auth: bool = False,
+    ) -> Iterator[Mapping[str, Any]]:
+        assert target_ref == "external-cluster"
+        renewable_handoff_modes.append(require_renewable_auth)
+        yield source_payload
 
     monkeypatch.setattr(cli, "_is_tty_session", lambda: tty)
     monkeypatch.setattr(soperator_migration, "_external_upgrade_is_tty_session", lambda: False)
@@ -12171,6 +12235,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
         lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
     )
     monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(cli, "_soperator_migration_execute_payload", _execute_payload)
     monkeypatch.setattr(cli, "console", rich_console)
     monkeypatch.setattr(
         cli,
@@ -12257,6 +12322,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     assert captured["login_session_policy"] == "target-ready"
     assert captured["login_session_drain_timeout_seconds"] == 0
     assert events == ["backup", "execute"]
+    assert renewable_handoff_modes == [True, True]
 
 
 def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
@@ -12343,6 +12409,19 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
     )
     monkeypatch.setattr(cli, "soperator_onboarding_target", _target)
     monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_cluster_handoff_spec_for_identity",
+        lambda **_kwargs: cli._Mk8sKubeconfigSpec(
+            cluster_entry_name="generated-cluster",
+            user_entry_name="generated-user",
+            context_name="generated-context",
+            server="https://mk8s.example.invalid",
+            ca_pem="FAKE-CA",
+            exec_command=sys.executable,
+            exec_args=("-m", "nebius_cxcli", "mk8s-token", "--require-renewable-auth"),
+        ),
+    )
     monkeypatch.setattr(cli, "_soperator_migration_status_emitter", _status_emitter)
     monkeypatch.setattr(
         cli,
@@ -12719,7 +12798,7 @@ def test_validate_generated_command_portable_checks_module_sources(
         ),
     )
     monkeypatch.setattr(
-        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
+        cli, "_ensure_terraform_backend_ready", lambda config: None
     )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_init", lambda infra_dir, *, extra_env=None: None)
@@ -12770,7 +12849,7 @@ def test_validate_generated_command_requires_manifest_module_sources_metadata(
         lambda *_args, **_kwargs: _empty_quota_report(),
     )
     monkeypatch.setattr(
-        cli, "_ensure_terraform_backend_ready", lambda config, *, auto_auth_bootstrap: None
+        cli, "_ensure_terraform_backend_ready", lambda config: None
     )
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
     monkeypatch.setattr(cli, "terraform_init", lambda infra_dir, *, extra_env=None: None)
@@ -14166,7 +14245,7 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     assert not any(fake_paths.project_dir.glob(".generated-staging-*"))
 
 
-def test_deploy_command_passes_auto_auth_flag(
+def test_deploy_command_uses_single_canonical_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -14181,20 +14260,11 @@ def test_deploy_command_passes_auto_auth_flag(
             AssertionError("deploy must not bootstrap CI workflow")
         ),
     )
-    monkeypatch.setattr(
-        cli,
-        "_auto_bootstrap_ci_auth_and_secrets",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("deploy must not bootstrap GitHub CI auth/secrets")
-        ),
-    )
-
     def _fake_deploy_generated_artifacts(
         config: object,
         paths: object,
         loaded_manifest: object,
         *,
-        auto_auth_bootstrap: bool,
         skip_validations: bool,
         skip_validation_kinds: set[str],
         requested_target_ref: str | None = None,
@@ -14208,7 +14278,6 @@ def test_deploy_command_passes_auto_auth_flag(
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
-        captured["auto_auth_bootstrap"] = auto_auth_bootstrap
         captured["skip_validations"] = skip_validations
         captured["skip_validation_kinds"] = skip_validation_kinds
         captured["requested_target_ref"] = requested_target_ref
@@ -14224,7 +14293,7 @@ def test_deploy_command_passes_auto_auth_flag(
 
     result = runner.invoke(
         cli.app,
-        ["deploy", str(fake_paths.config_path), "--auto-auth-bootstrap"],
+        ["deploy", str(fake_paths.config_path)],
     )
 
     assert result.exit_code == 0, result.output
@@ -14242,7 +14311,6 @@ def test_deploy_command_passes_auto_auth_flag(
         "config": "cfg",
         "paths": fake_paths,
         "manifest": manifest,
-        "auto_auth_bootstrap": True,
         "skip_validations": False,
         "skip_validation_kinds": set(),
         "requested_target_ref": None,
@@ -16130,7 +16198,6 @@ def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
             {},
             fake_paths,
             manifest,
-            auto_auth_bootstrap=False,
             skip_validations=skip_validations,
             skip_validation_kinds=set(),
             requested_target_ref="mk8s",
@@ -16229,20 +16296,18 @@ def test_destroy_command_passes_auto_auth_flag(
         paths: object,
         loaded_manifest: object,
         *,
-        auto_auth_bootstrap: bool,
         yes: bool = False,
     ) -> None:
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
-        captured["auto_auth_bootstrap"] = auto_auth_bootstrap
         captured["yes"] = yes
 
     monkeypatch.setattr(cli, "_destroy_generated_artifacts", _fake_destroy_generated_artifacts)
 
     result = runner.invoke(
         cli.app,
-        ["destroy", str(fake_paths.config_path), "--auto-auth-bootstrap", "--yes"],
+        ["destroy", str(fake_paths.config_path), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
@@ -16252,7 +16317,6 @@ def test_destroy_command_passes_auto_auth_flag(
         "config": "cfg",
         "paths": fake_paths,
         "manifest": manifest,
-        "auto_auth_bootstrap": True,
         "yes": True,
     }
 
@@ -16448,8 +16512,8 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
+        lambda config: calls.append(
+            ("backend", config)
         ),
     )
     monkeypatch.setattr(
@@ -16480,14 +16544,13 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
     assert calls == [
         ("strict", config, False),
         ("mk8s", config),
-        ("backend", config, True),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16542,8 +16605,8 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
+        lambda config: calls.append(
+            ("backend", config)
         ),
     )
     monkeypatch.setattr(
@@ -16562,7 +16625,6 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
@@ -16570,7 +16632,7 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
         ("strict", config, False),
         ("mk8s", config),
         ("gpu-stack", config),
-        ("backend", config, True),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16614,8 +16676,8 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: calls.append(
-            ("backend", config, auto_auth_bootstrap)
+        lambda config: calls.append(
+            ("backend", config)
         ),
     )
     monkeypatch.setattr(
@@ -16646,14 +16708,13 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=False,
         manifest={"render": {"module_sources": []}},
     )
 
     assert calls == [
         ("strict", config, False),
         ("mk8s", config),
-        ("backend", config, False),
+        ("backend", config),
         ("runtime_env", config),
         (
             "quota",
@@ -16831,7 +16892,6 @@ def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
         cli._run_deploy_preflight(
             config,
             fake_paths,
-            auto_auth_bootstrap=True,
             manifest={"render": {"module_sources": []}},
         )
 
@@ -16890,7 +16950,7 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: events.append(("backend", auto_auth_bootstrap)),
+        lambda config: events.append("backend"),
     )
     monkeypatch.setattr(
         cli,
@@ -16921,7 +16981,6 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     returned_env = cli._run_deploy_preflight(
         config,
         fake_paths,
-        auto_auth_bootstrap=True,
         manifest={"render": {"module_sources": []}},
     )
 
@@ -17331,8 +17390,8 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17389,13 +17448,12 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17558,8 +17616,8 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17607,14 +17665,13 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert ("apply_with_status",) not in calls
     assert calls[:3] == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("inventory", config, fake_paths),
         ("kube_env", _external_mk8s_target(fake_paths)),
     ]
@@ -17634,8 +17691,8 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: (
-            calls.append(("preflight", auto_auth_bootstrap, manifest)) or {}
+        lambda config, paths, *, manifest=None: (
+            calls.append(("preflight", manifest)) or {}
         ),
     )
 
@@ -17656,13 +17713,12 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
 
     assert calls == [
-        ("preflight", True, manifest),
+        ("preflight", manifest),
         (
             "apply",
             {
@@ -17765,8 +17821,8 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17823,13 +17879,12 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17862,8 +17917,8 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(
@@ -17913,13 +17968,12 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
     assert calls == [
-        ("preflight", config, fake_paths, True, manifest),
+        ("preflight", config, fake_paths, manifest),
         ("apply_with_status", config, fake_paths, False, False),
         ("inventory", config, fake_paths),
         (
@@ -17965,8 +18019,8 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        lambda config, paths, *, manifest=None: calls.append(
+            ("preflight", config, paths, manifest)
         ),
     )
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
@@ -18011,12 +18065,11 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
 
-    assert ("preflight", config, fake_paths, True, manifest) in calls
+    assert ("preflight", config, fake_paths, manifest) in calls
     assert (
         "kube_env",
         _mk8s_target(fake_paths, target_ref="cluster1"),
@@ -18058,7 +18111,7 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
         lambda _config: ("deploy warning only once",),
     )
 
-    def _fake_preflight(config, paths, *, auto_auth_bootstrap, manifest=None):
+    def _fake_preflight(config, paths, *, manifest=None):
         cli._print_mk8s_gpu_validation_warnings(config)
         return {}
 
@@ -18080,7 +18133,6 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18227,7 +18279,6 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18418,7 +18469,6 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18534,7 +18584,6 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -18867,7 +18916,6 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19075,7 +19123,6 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19097,7 +19144,6 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19209,7 +19255,6 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19299,7 +19344,6 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19402,7 +19446,6 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
         requested_target_ref="cluster2",
@@ -19512,7 +19555,6 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=True,
         skip_validation_kinds=set(),
     )
@@ -19608,7 +19650,6 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         skip_validations=False,
         skip_validation_kinds=set(),
     )
@@ -19703,7 +19744,6 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             skip_validations=False,
             skip_validation_kinds=set(),
         )
@@ -19803,9 +19843,7 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda current_config, *, auto_auth_bootstrap: calls.append(
-            ("backend", current_config, auto_auth_bootstrap)
-        ),
+        lambda current_config: calls.append(("backend", current_config)),
     )
     monkeypatch.setattr(
         cli,
@@ -19817,13 +19855,12 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
             calls.append(
                 (
                     "destroy_tf",
                     current_config,
                     paths,
-                    auto_auth_bootstrap,
                     yes,
                     initialize,
                     status_watchers,
@@ -19836,18 +19873,16 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
     assert calls == [
-        ("backend", config, True),
+        ("backend", config),
         ("destroy_flux", config, fake_paths, manifest, {"all_targets": True}),
         (
             "destroy_tf",
             config,
             fake_paths,
-            True,
             True,
             True,
             [
@@ -19960,7 +19995,6 @@ def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
@@ -20163,7 +20197,6 @@ def test_destroy_generated_artifacts_external_target_skips_terraform_destroy(
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
@@ -20194,7 +20227,6 @@ def test_destroy_generated_artifacts_external_target_flux_failure_is_fatal(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             yes=True,
         )
 
@@ -20220,13 +20252,12 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
             captured.setdefault(
                 "destroy",
                 {
                     "config": current_config,
                     "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
                     "yes": yes,
                     "initialize": initialize,
                     "status_watchers": status_watchers,
@@ -20243,7 +20274,6 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
             config,
             fake_paths,
             manifest,
-            auto_auth_bootstrap=True,
             yes=True,
         )
 
@@ -20287,14 +20317,13 @@ def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_dest
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
             calls.append("destroy_terraform"),
             captured.setdefault(
                 "destroy",
                 {
                     "config": current_config,
                     "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
                     "yes": yes,
                     "initialize": initialize,
                     "status_watchers": status_watchers,
@@ -20310,14 +20339,12 @@ def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_dest
         config,
         fake_paths,
         manifest,
-        auto_auth_bootstrap=True,
         yes=True,
     )
 
     assert captured["destroy"] == {
         "config": config,
         "paths": fake_paths,
-        "auto_auth_bootstrap": True,
         "yes": True,
         "initialize": True,
         "status_watchers": None,
@@ -22982,11 +23009,8 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
     )
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23024,14 +23048,11 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "plan", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["terraform", "plan", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -23075,11 +23096,8 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
     )
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23118,14 +23136,11 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["terraform", "apply", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -23159,11 +23174,8 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     )
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
-    def _fake_ensure_terraform_backend_ready(config: object, *, auto_auth_bootstrap: bool) -> None:
-        captured["backend"] = {
-            "config": config,
-            "auto_auth_bootstrap": auto_auth_bootstrap,
-        }
+    def _fake_ensure_terraform_backend_ready(config: object) -> None:
+        captured["backend"] = config
 
     monkeypatch.setattr(
         cli, "_ensure_terraform_backend_ready", _fake_ensure_terraform_backend_ready
@@ -23171,13 +23183,12 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
-        lambda config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+        lambda config, paths, *, yes, initialize=True, status_watchers=None: (
             captured.setdefault(
                 "destroy",
                 {
                     "config": config,
                     "paths": paths,
-                    "auto_auth_bootstrap": auto_auth_bootstrap,
                     "yes": yes,
                     "initialize": initialize,
                     "status_watchers": status_watchers,
@@ -23188,19 +23199,15 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
 
     result = runner.invoke(
         cli.app,
-        ["terraform", "destroy", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--yes"],
+        ["terraform", "destroy", str(tmp_path / "generated"), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
     assert "Terraform destroy completed from" in _plain_output(result.output)
-    assert captured["backend"] == {
-        "config": "cfg",
-        "auto_auth_bootstrap": True,
-    }
+    assert captured["backend"] == "cfg"
     assert captured["destroy"] == {
         "config": "cfg",
         "paths": fake_paths,
-        "auto_auth_bootstrap": True,
         "yes": True,
         "initialize": True,
         "status_watchers": None,
@@ -23252,9 +23259,7 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: (
-            calls.append(("unlock", auto_auth_bootstrap, force)) or lock_info
-        ),
+        lambda config, paths, *, force: calls.append(("unlock", force)) or lock_info,
     )
     monkeypatch.setattr(
         cli,
@@ -23266,7 +23271,6 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
     cli._run_terraform_destroy_with_recovery(
         "cfg",
         fake_paths,
-        auto_auth_bootstrap=True,
         yes=True,
         initialize=True,
         status_watchers=None,
@@ -23274,7 +23278,7 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
 
     assert calls == [
         ("destroy", True, None),
-        ("unlock", True, False),
+        ("unlock", False),
         ("destroy", True, None),
     ]
 
@@ -23297,7 +23301,6 @@ def test_terraform_unlock_non_force_rejects_blank_lock_owner(
         cli._unlock_terraform_state_lock(
             "cfg",
             fake_paths,
-            auto_auth_bootstrap=True,
             force=False,
         )
 
@@ -23326,7 +23329,6 @@ def test_run_terraform_destroy_with_recovery_deletes_stuck_mk8s_node_group_and_r
     cli._run_terraform_destroy_with_recovery(
         "cfg",
         fake_paths,
-        auto_auth_bootstrap=True,
         yes=True,
         initialize=True,
         status_watchers=[
@@ -23395,7 +23397,7 @@ def test_terraform_unlock_command_reports_when_no_lock_is_present(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: None,
+        lambda config, paths, *, force: None,
     )
     monkeypatch.setattr(
         cli,
@@ -23430,7 +23432,7 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, auto_auth_bootstrap, force: lock_info,
+        lambda config, paths, *, force: lock_info,
     )
 
     result = runner.invoke(
@@ -23460,12 +23462,10 @@ def test_flux_bootstrap_command_invokes_flux_ops(
         config: object,
         *,
         need_terraform: bool,
-        auto_bootstrap: bool,
     ) -> None:
         captured["auth"] = {
             "config": config,
             "need_terraform": need_terraform,
-            "auto_bootstrap": auto_bootstrap,
         }
 
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _fake_ensure_runtime_auth_material)
@@ -23480,7 +23480,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "bootstrap", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
@@ -23488,7 +23488,6 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
-        "auto_bootstrap": True,
     }
     assert captured["inventory"] == {"config": "cfg", "paths": fake_paths}
 
@@ -23897,7 +23896,7 @@ def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
     assert captured["closed"] is True
 
 
-def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
+def test_mk8s_cluster_handoff_spec_loads_renewable_auth_despite_static_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[object] = []
@@ -23919,19 +23918,22 @@ def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
             )
         ),
     )
+    request_kwargs: dict[str, object] = {}
 
     class FakeClusterServiceClient:
         def __init__(self, sdk: object) -> None:
             pass
 
-        def get(self, request: object) -> object:
+        def get(self, request: object, **kwargs: object) -> object:
+            request_kwargs.update(kwargs)
             return SimpleNamespace(wait=lambda: cluster)
 
     v1_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
     v1_module.ClusterServiceClient = FakeClusterServiceClient
     v1_module.GetClusterRequest = FakeGetClusterRequest
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", v1_module)
-    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_renewable_runtime_auth_env_available", lambda: False)
     monkeypatch.setattr(
         cli,
         "_runtime_auth_cache_load",
@@ -23940,17 +23942,48 @@ def test_mk8s_cluster_handoff_spec_loads_runtime_auth_before_sdk_init(
     monkeypatch.setattr(
         cli,
         "init_nebius_sdk",
-        lambda **_kwargs: calls.append("sdk") or FakeSdk(),
+        lambda **kwargs: calls.append(("sdk", kwargs)) or FakeSdk(),
     )
 
-    cli._mk8s_cluster_handoff_spec_for_identity(
+    spec = cli._mk8s_cluster_handoff_spec_for_identity(
         project_id="project-456",
         client_name="client-a",
         cluster_id="mk8scluster-123",
         access="external",
+        require_renewable_auth=True,
     )
 
-    assert calls[:2] == [("project-456", "client-a"), "sdk"]
+    assert calls[:2] == [
+        ("project-456", "client-a"),
+        (
+            "sdk",
+            {
+                "parent_id": "project-456",
+                "endpoint": None,
+                "context": "MK8s cluster handoff",
+                "require_renewable_auth": True,
+            },
+        ),
+    ]
+    assert spec.exec_args[-1] == "--require-renewable-auth"
+    assert request_kwargs["auth_options"] == {
+        "token_renew_synchronous": "true",
+        "token_renew_request_timeout": "20.0",
+    }
+
+
+def test_renewable_runtime_auth_env_does_not_accept_static_or_stale_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "static-token")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("NEBIUS_SA_ID", "service-account")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "public-key")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(tmp_path / "missing.pem"))
+
+    assert cli._runtime_auth_env_available() is True  # noqa: SLF001
+    assert cli._renewable_runtime_auth_env_available() is False  # noqa: SLF001
 
 
 def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_local_copy(
@@ -24661,7 +24694,13 @@ def test_persist_cluster_handoff_kubeconfig_replaces_duplicate_named_entries(
     assert persisted["current-context"] == "context-entry"
 
 
+@pytest.mark.parametrize(
+    ("renewable_args", "expected_renewable"),
+    [([], False), (["--require-renewable-auth"], True)],
+)
 def test_mk8s_token_command_emits_exec_credential_from_sdk(
+    renewable_args: list[str],
+    expected_renewable: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -24689,8 +24728,18 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     monkeypatch.setattr(
         cli,
         "init_nebius_sdk",
-        lambda *, parent_id, endpoint, context: (
-            captured.update({"sdk_init": (parent_id, endpoint, context)}) or _FakeSDK()
+        lambda *, parent_id, endpoint, context, require_renewable_auth: (
+            captured.update(
+                {
+                    "sdk_init": (
+                        parent_id,
+                        endpoint,
+                        context,
+                        require_renewable_auth,
+                    )
+                }
+            )
+            or _FakeSDK()
         ),
     )
 
@@ -24704,13 +24753,19 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
             "client-a",
             "--endpoint",
             "api.example.invalid",
+            *renewable_args,
         ],
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert captured["cache_load"] == ("project-456", "client-a")
-    assert captured["sdk_init"] == ("project-456", "api.example.invalid", "MK8s exec auth")
+    assert captured["sdk_init"] == (
+        "project-456",
+        "api.example.invalid",
+        "MK8s exec auth",
+        expected_renewable,
+    )
     assert captured["timeout"] == cli._MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS
     assert captured["close_timeout"] == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
     assert captured["closed"] is True
@@ -24718,6 +24773,31 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     assert payload["kind"] == "ExecCredential"
     assert payload["status"]["token"] == "token-123"
     assert payload["status"]["expirationTimestamp"] == "2026-01-02T03:04:05Z"
+
+
+def test_renewable_mk8s_exec_command_reuses_current_python_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _command: "/stale/bin/nebius-cxcli")
+
+    command, args = cli._mk8s_token_exec_command(  # noqa: SLF001
+        project_id="project-456",
+        client_name="client-a",
+        endpoint=None,
+        require_renewable_auth=True,
+    )
+
+    assert command == sys.executable
+    assert args == (
+        "-m",
+        "nebius_cxcli",
+        "mk8s-token",
+        "--project-id",
+        "project-456",
+        "--client-name",
+        "client-a",
+        "--require-renewable-auth",
+    )
 
 
 def test_mk8s_exec_credential_cache_reuses_one_exchange_across_process_calls(
@@ -24756,6 +24836,49 @@ def test_mk8s_exec_credential_cache_reuses_one_exchange_across_process_calls(
     assert json.loads(first.stdout)["status"] == json.loads(second.stdout)["status"]
     assert exchanges == 1
     assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_mk8s_exec_credential_cache_renews_repeatedly_across_token_lifetimes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_datetime = cli.datetime
+    clock = {"now": real_datetime(2026, 1, 1, tzinfo=cli.UTC)}
+    calls: list[bool] = []
+
+    class _ClockedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            current = clock["now"]
+            return current if tz is None else current.astimezone(tz)
+
+    def acquire(**kwargs: Any) -> dict[str, str]:
+        calls.append(kwargs["require_renewable_auth"])
+        expiration = clock["now"] + timedelta(hours=12)
+        return {
+            "token": f"token-{len(calls)}",
+            "expirationTimestamp": expiration.isoformat().replace("+00:00", "Z"),
+        }
+
+    cache_file = tmp_path / "exec-credential-cache.json"
+    monkeypatch.setattr(cli, "datetime", _ClockedDateTime)
+    monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", acquire)
+
+    def status() -> dict[str, str]:
+        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+            project_id="project-456",
+            client_name="client-a",
+            endpoint=None,
+            cache_file=cache_file,
+            require_renewable_auth=True,
+        )
+
+    assert status()["token"] == "token-1"
+    clock["now"] += timedelta(hours=11, minutes=56)
+    assert status()["token"] == "token-2"
+    clock["now"] += timedelta(hours=11, minutes=56)
+    assert status()["token"] == "token-3"
+    assert calls == [True, True, True]
 
 
 def test_mk8s_exec_credential_cache_rejects_non_owner_only_directory(
@@ -25372,9 +25495,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25442,11 +25563,11 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "bootstrap", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "bootstrap", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoff"] == (
         fake_config,
@@ -25521,9 +25642,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25584,12 +25703,12 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap"],
+        ["flux", "apply", str(tmp_path / "generated")],
     )
 
     assert result.exit_code == 0, result.output
     assert "Flux applied from" in _plain_output(result.output)
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoff"] == (
         fake_config,
@@ -25659,9 +25778,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25708,11 +25825,11 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
 
     result = runner.invoke(
         cli.app,
-        ["flux", "apply", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--all-targets"],
+        ["flux", "apply", str(tmp_path / "generated"), "--all-targets"],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoffs"] == [
         (
@@ -25787,9 +25904,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_ensure_terraform_backend_ready",
-        lambda config, *, auto_auth_bootstrap: captured.update(
-            {"backend": (config, auto_auth_bootstrap)}
-        ),
+        lambda config: captured.update({"backend": config}),
     )
     monkeypatch.setattr(
         cli,
@@ -25801,12 +25916,12 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
 
     result = runner.invoke(
         cli.app,
-        ["flux", "destroy", str(tmp_path / "generated"), "--auto-auth-bootstrap", "--yes"],
+        ["flux", "destroy", str(tmp_path / "generated"), "--yes"],
     )
 
     assert result.exit_code == 0, result.output
     assert "Flux resources deleted from" in _plain_output(result.output)
-    assert captured["backend"] == (fake_config, True)
+    assert captured["backend"] == fake_config
     assert captured["destroy_flux"] == (
         fake_config,
         fake_paths,
@@ -26098,7 +26213,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--drain-timeout" in upgrade_node_template_help
     assert "--disruption-policy" not in upgrade_node_template_help
     assert "allow-unavailable" not in upgrade_node_template_help
-    assert "--auto-auth-bootstrap" in upgrade_node_template_help
+    assert "--auto-auth-bootstrap" not in upgrade_node_template_help
     assert "--skip-validations" in upgrade_node_template_help
     assert "--skip-validation" in upgrade_node_template_help
     assert f"guided wizard: | nebius-cxcli upgrade node-template {upgrade_example_config}" in (
@@ -27257,9 +27372,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--approve-backup-recovery --no-approve-backup-recovery" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "missing or corrupt campaign-owned backup" in (
-        normalized_ext_soperator_upgrade_help
-    )
+    assert "missing or corrupt campaign-owned backup" in (normalized_ext_soperator_upgrade_help)
     assert "never authorizes another segment until a replacement is verified" in (
         normalized_ext_soperator_upgrade_help
     )
@@ -27522,10 +27635,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "validate-generated [OPTIONS] GENERATED_PATH" in validate_generated_help
     assert "generated-bundle readiness" in normalized_validate_generated_help
     assert "portability" in normalized_validate_generated_help
-    assert "--auto-auth-bootstrap" in validate_generated_help
-    assert "--no-auto-auth" in validate_generated_help
-    assert "backend/terraform" in normalized_validate_generated_help
-    assert "validation when env" in normalized_validate_generated_help
+    assert "--auto-auth-bootstrap" not in validate_generated_help
+    assert "--no-auto-auth" not in validate_generated_help
+    assert "canonical project authentication" in normalized_validate_generated_help
+    assert "before generated artifacts are readied" in normalized_validate_generated_help
     normalized_deploy_help = " ".join(deploy_help.split()).lower()
     assert "--skip-validations" in deploy_help
     assert "--skip-validation" in deploy_help
@@ -27658,11 +27771,10 @@ def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
     output = " ".join(plain_output.split()).lower()
 
     assert "--force" not in output
-    assert "--auth-bootstrap" in output
-    assert "--no-auth-bootstrap" in output
+    assert "--auth-bootstrap" not in output
+    assert "--no-auth-bootstrap" not in output
     assert "--cli-ref" in output
     assert "CLI-managed customer GitHub workflow" in plain_output
-    assert "[default: auth-bootstrap]" in plain_output
     assert "[default: GH_TOKEN]" in plain_output
 
 
@@ -27678,7 +27790,7 @@ def test_auth_help_reflects_sdk_auth_contract() -> None:
     assert "across all cached profiles for validate-only runs" in normalized_output
     assert "do not pass both" in plain_output
     assert "Valid only" in normalized_output
-    assert "with --project-id; required" in normalized_output
+    assert "with --project-id; the canonical runtime cache" in normalized_output
     assert "Nebius CLI profile name used by Nebius SDK" not in plain_output
     assert "Nebius SDK/CLI config file" not in plain_output
 
@@ -27875,7 +27987,7 @@ def test_top_level_help_has_single_auth_command_surface() -> None:
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
-    assert "Manage runtime auth profile" in output
+    assert "canonical project authentication" in output
     assert "auth-runtime-profile" not in output
     assert re.search(r"\bauth\b", output) is not None
 
@@ -27983,7 +28095,7 @@ def test_auth_help_has_no_subcommand_layer() -> None:
     assert "auth [OPTIONS]" in output
     assert "COMMAND [ARGS]" not in output
     assert "--validate-profile" in output
-    assert "--create" in output
+    assert "--create" not in output
     assert "--recreate" in output
     assert "--bootstrap-ci" in output
 
@@ -28004,6 +28116,21 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         wrote_workflow=True,
         replaced_workflow=False,
     )
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    material_with_s3 = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
 
     captured: dict[str, Any] = {}
 
@@ -28022,11 +28149,33 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         "_ensure_ci_workflow_for_deployments_root",
         lambda *, deployments_root, cli_ref: captured.update({"cli_ref": cli_ref}) or fake_workflow,
     )
-
-    def _fake_auto_bootstrap(**kwargs: object) -> None:
-        captured.update(kwargs)
-
-    monkeypatch.setattr(cli, "_auto_bootstrap_ci_auth_and_secrets", _fake_auto_bootstrap)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_deployments_gitignore",
+        lambda **_kwargs: SimpleNamespace(path=None, wrote=False),
+    )
+    monkeypatch.setattr(cli, "_load_local_email_settings", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(
+        cli,
+        "_runtime_auth_cache_material",
+        lambda **kwargs: captured.update({"cache_lookup": kwargs}) or material,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda value: captured.update({"s3_input": value}) or material_with_s3,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_export_runtime_auth_material",
+        lambda value: captured.update({"exported": value}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_sync_runtime_auth_profile_to_ci_environment",
+        lambda **kwargs: captured.update({"auth_sync": kwargs})
+        or ("owner/repo", "client-a-project-123", ["NEBIUS_SA_ID"]),
+    )
     monkeypatch.setattr(
         cli,
         "_sync_github_email_settings",
@@ -28043,7 +28192,6 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         [
             "bootstrap-ci",
             str(tmp_path / "config.yaml"),
-            "--auth-bootstrap",
             "--github-repo",
             "owner/repo",
             "--github-token-env",
@@ -28053,17 +28201,20 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
 
     assert result.exit_code == 0, result.output
     assert "CI bootstrap completed." in _plain_output(result.output)
-    assert captured["project_id"] == "project-123"
-    assert captured["github_environment"] == "client-a-project-123"
-    assert captured["github_repo"] == "owner/repo"
-    assert captured["github_token_env"] == "MY_GH_TOKEN"
+    assert captured["cache_lookup"] == {
+        "project_id": "project-123",
+        "client_name": "client-a",
+    }
+    assert captured["s3_input"] == material
+    assert captured["exported"] == material_with_s3
+    assert captured["auth_sync"] == {
+        "material": material_with_s3,
+        "client_name": "client-a",
+        "github_repo": "owner/repo",
+        "github_token_env": "MY_GH_TOKEN",
+        "repo_root_hint": tmp_path,
+    }
     assert captured["cli_ref"] == cli.default_cli_ref()
-
-
-def test_auth_requires_action_flag() -> None:
-    result = runner.invoke(cli.app, ["auth", "--project-id", "project-123"])
-    assert result.exit_code == 1
-    assert "Select at least one action" in _plain_output(result.output)
 
 
 def test_auth_rejects_mixed_project_config_and_project_id() -> None:
@@ -28117,7 +28268,7 @@ def test_auth_rejects_client_name_without_target() -> None:
     assert "--client-name requires --project-id" in _plain_output(result.output)
 
 
-def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_target_ensures_profile_automatically(monkeypatch: pytest.MonkeyPatch) -> None:
     material = cli.RuntimeAuthCacheMaterial(
         project_id="project-123",
         client_name="client-a",
@@ -28133,10 +28284,12 @@ def test_auth_create_warns_if_profile_exists(monkeypatch: pytest.MonkeyPatch) ->
         "_create_or_recreate_runtime_auth_profile",
         lambda **_kwargs: (material, False),
     )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
         cli.app,
-        ["auth", "--project-id", "project-123", "--client-name", "client-a", "--create"],
+        ["auth", "--project-id", "project-123", "--client-name", "client-a"],
     )
 
     assert result.exit_code == 0, result.output
@@ -28159,6 +28312,8 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
         "_create_or_recreate_runtime_auth_profile",
         lambda **_kwargs: (material, True),
     )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
 
     result = runner.invoke(
         cli.app,
@@ -28169,6 +28324,123 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     assert "Recreated runtime auth profile for project 'project-123'" in _plain_output(
         result.output
     )
+
+
+def test_load_context_authenticates_before_normalized_config_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    fake_config = SimpleNamespace()
+    fake_paths = _fake_paths(tmp_path)
+    events: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda path, *, persist_normalized: (
+            events.append(("load", path, persist_normalized)) or fake_config
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_material",
+        lambda config, *, need_terraform: events.append(
+            ("auth", config, need_terraform)
+        ),
+    )
+    monkeypatch.setattr(cli, "to_plain_data", lambda _config: {})
+    monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: fake_paths)
+    monkeypatch.setattr(
+        cli,
+        "validate_path_alignment",
+        lambda config, paths: events.append(("alignment", config, paths)),
+    )
+
+    config, paths = cli._load_context(config_path)
+
+    assert (config, paths) == (fake_config, fake_paths)
+    assert events[:3] == [
+        ("load", config_path, False),
+        ("auth", fake_config, False),
+        ("load", config_path, True),
+    ]
+
+
+def test_manifest_context_authenticates_before_tfvars_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    fake_config = SimpleNamespace()
+    events: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "load_generated_manifest",
+        lambda path: events.append(("manifest", path)) or manifest,
+    )
+    monkeypatch.setattr(cli, "_apply_generated_tool_version_overrides", lambda _manifest: None)
+    monkeypatch.setattr(cli, "runtime_config_from_manifest", lambda _manifest: fake_config)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_material",
+        lambda config, *, need_terraform: events.append(
+            ("auth", config, need_terraform)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_materialize_generated_terraform_tfvars",
+        lambda paths, loaded_manifest: events.append(
+            ("tfvars", paths, loaded_manifest)
+        ),
+    )
+
+    returned = cli._load_manifest_backed_context(fake_paths)
+
+    assert returned == (fake_config, fake_paths, manifest)
+    assert events == [
+        ("manifest", fake_paths.generated_dir),
+        ("auth", fake_config, False),
+        ("tfvars", fake_paths, manifest),
+    ]
+
+
+def test_source_payload_authenticates_after_exact_project_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "client_info": {
+                    "client_name": "client-a",
+                    "nebius": {
+                        "tenant_id": "tenant-123",
+                        "project_id": "project-123",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(cli, "_load_source_payload", _REAL_LOAD_SOURCE_PAYLOAD)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_project_auth_identity",
+        lambda **kwargs: calls.append(dict(kwargs)),
+    )
+
+    payload = cli._load_source_payload(config_path)
+
+    assert payload["client_info"]["nebius"]["project_id"] == "project-123"
+    assert calls == [{"project_id": "project-123", "client_name": "client-a"}]
 
 
 def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failure(
@@ -28190,6 +28462,65 @@ def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failur
     assert not list(tmp_path.glob(f".{cli._RUNTIME_AUTH_CACHE_FILE}.*.tmp"))
 
 
+def test_runtime_auth_cache_material_repr_redacts_secret_values(tmp_path: Path) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE-SECRET-VALUE",
+        s3_access_key_id="access-key-id",
+        s3_secret_access_key="S3-SECRET-VALUE",
+    )
+
+    rendered = repr(material)
+
+    assert "PRIVATE-SECRET-VALUE" not in rendered
+    assert "S3-SECRET-VALUE" not in rendered
+    assert "serviceaccount-123" in rendered
+    assert "publickey-123" in rendered
+
+
+def test_runtime_auth_cache_rotation_keeps_previous_key_on_metadata_commit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-old",
+        private_key_pem="OLD-PRIVATE-KEY",
+    )
+    original_replace = cli.os.replace
+
+    def _fail_metadata_commit(src: object, dst: object) -> None:
+        if Path(str(dst)).name == cli._RUNTIME_AUTH_CACHE_FILE:
+            raise RuntimeError("metadata commit failed")
+        original_replace(src, dst)
+
+    monkeypatch.setattr(cli.os, "replace", _fail_metadata_commit)
+
+    with pytest.raises(RuntimeError, match="metadata commit failed"):
+        cli._runtime_auth_cache_write(
+            project_id="project-123",
+            client_name="client-a",
+            service_account_id="serviceaccount-123",
+            auth_public_key_id="publickey-new",
+            private_key_pem="NEW-PRIVATE-KEY",
+        )
+
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    assert material.auth_public_key_id == "publickey-old"
+    assert material.private_key_pem == "OLD-PRIVATE-KEY"
+
+
 def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -28207,16 +28538,384 @@ def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
     )
 
     cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
-    private_key_file = cache_dir / "auth-private.pem"
+    assert cache_dir == cli._runtime_auth_cache_dir(
+        project_id="project-123", client_name="different-client"
+    )
     metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    private_key_file = cache_dir / metadata["private_key_file"]
 
     assert oct(cache_dir.stat().st_mode & 0o777) == "0o700"
     assert private_key_file.read_text(encoding="utf-8") == "PRIVATE-KEY\n"
     assert oct(private_key_file.stat().st_mode & 0o777) == "0o600"
     assert oct(metadata_file.stat().st_mode & 0o777) == "0o600"
-    assert json.loads(metadata_file.read_text(encoding="utf-8"))["s3_secret_access_key"] == (
-        "secret-key"
+    assert metadata["schema"] == cli._RUNTIME_AUTH_CACHE_SCHEMA
+    assert metadata["service_account_name"] == "nebius-cxcli-sa"
+    assert metadata["s3_secret_access_key"] == "secret-key"
+
+
+def test_runtime_auth_cache_rejects_legacy_identity_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    cache_dir.mkdir(parents=True)
+    cache_dir.chmod(0o700)
+    key_file = cache_dir / "auth-private.pem"
+    key_file.write_text("KEY\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata_file.write_text(
+        json.dumps(
+            {
+                "schema": cli._RUNTIME_AUTH_CACHE_SCHEMA,
+                "state": cli._RUNTIME_AUTH_CACHE_STATE_READY,
+                "project_id": "project-123",
+                "client_name": "client-a",
+                "service_account_name": "nebius-cxcli-tf-sa",
+                "service_account_id": "legacy-sa",
+                "auth_public_key_id": "legacy-key",
+                "private_key_file": key_file.name,
+            }
+        ),
+        encoding="utf-8",
     )
+    metadata_file.chmod(0o600)
+
+    with pytest.raises(RuntimeError, match="canonical nebius-cxcli-sa identity"):
+        cli._runtime_auth_cache_material(project_id="project-123", client_name="client-a")
+
+
+def test_runtime_auth_cache_rejects_symlinked_private_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    metadata = json.loads(
+        (cache_dir / cli._RUNTIME_AUTH_CACHE_FILE).read_text(encoding="utf-8")
+    )
+    private_key_file = cache_dir / metadata["private_key_file"]
+    alternate_key_file = cache_dir / "alternate.pem"
+    alternate_key_file.write_text("ALTERNATE-KEY\n", encoding="utf-8")
+    alternate_key_file.chmod(0o600)
+    private_key_file.unlink()
+    private_key_file.symlink_to(alternate_key_file.name)
+
+    with pytest.raises(RuntimeError, match="private key file must not be a symlink"):
+        cli._runtime_auth_cache_material(project_id="project-123", client_name="client-a")
+
+
+def test_runtime_auth_profile_status_reports_unsafe_file_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    private_key_file = cache_dir / metadata["private_key_file"]
+    metadata_file.chmod(0o644)
+    private_key_file.chmod(0o644)
+    monkeypatch.setattr(cli, "auth_public_key_exists", lambda **_kwargs: True)
+
+    status = cli._runtime_auth_profile_status(
+        project_id="project-123",
+        client_name="client-a",
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert "runtime-auth metadata file permissions must be 0600" in status.issues
+    assert "private key file permissions must be 0600" in status.issues
+
+
+def test_runtime_auth_key_intent_resumes_without_duplicate_cloud_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("PRIVATE", "PUBLIC"),
+    )
+    cli._runtime_auth_create_key_intent(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(service_account_id="sa-123"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("key-existing",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_service_account_auth_public_key",
+        lambda **_kwargs: pytest.fail("recovered intent must not upload a duplicate key"),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is True
+    assert material.service_account_id == "sa-123"
+    assert material.auth_public_key_id == "key-existing"
+    assert material.s3_access_key_id is None
+    assert not (
+        material.private_key_file.parent / cli._RUNTIME_AUTH_KEY_INTENT_FILE
+    ).exists()
+
+
+def test_runtime_auth_imports_exact_canonical_ci_environment_without_new_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path / "cache"))
+    private_key_file = tmp_path / "ci-auth-private.pem"
+    private_key_file.write_text("CI-PRIVATE-KEY\n", encoding="utf-8")
+    private_key_file.chmod(0o600)
+    monkeypatch.setenv("NEBIUS_SA_ID", "serviceaccount-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "publickey-123")
+    monkeypatch.setenv(cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV, "project-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_PEM", "CI-PRIVATE-KEY")
+    monkeypatch.setenv("NEBIUS_S3_ACCESS_KEY_ID", "s3-access")
+    monkeypatch.setenv("NEBIUS_S3_SECRET_ACCESS_KEY", "s3-secret")
+    identity_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "service_account_id_by_name",
+        lambda **_kwargs: "serviceaccount-123",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **kwargs: (
+            identity_calls.append(kwargs)
+            or SimpleNamespace(service_account_id="serviceaccount-123")
+        ),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: pytest.fail("canonical CI credentials must not create another key"),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is False
+    assert material.service_account_id == "serviceaccount-123"
+    assert material.auth_public_key_id == "publickey-123"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+    assert len(identity_calls) == 1
+    assert identity_calls[0]["prefer_operator_auth"] is False
+    assert identity_calls[0]["allow_mutation"] is False
+    assert identity_calls[0]["allow_cli_token"] is False
+
+
+def test_runtime_auth_cached_profile_is_returned_before_iam_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+    )
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: pytest.fail(
+            "cached key validity must be checked before any IAM reconciliation"
+        ),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=False,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert created is False
+    assert material.service_account_id == "serviceaccount-123"
+    assert material.auth_public_key_id == "publickey-123"
+
+
+def test_runtime_auth_recreate_uses_operator_credentials_not_stale_cached_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_runtime_auth_env()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-stale",
+        private_key_pem="STALE-PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setenv(cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV, "project-123")
+    monkeypatch.setenv("NEBIUS_SA_ID", "serviceaccount-123")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "publickey-stale")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(tmp_path / "stale.pem"))
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_PEM", "STALE-PRIVATE-KEY")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    captured: dict[str, str | None] = {}
+
+    def _ensure_identity(**_kwargs: object) -> SimpleNamespace:
+        captured.update(
+            {
+                "service_account_id": os.environ.get("NEBIUS_SA_ID"),
+                "public_key_id": os.environ.get("NEBIUS_AUTH_PUBLIC_KEY_ID"),
+                "private_key_file": os.environ.get("NEBIUS_AUTH_PRIVATE_KEY_FILE"),
+                "iam_token": os.environ.get("NEBIUS_IAM_TOKEN"),
+            }
+        )
+        return SimpleNamespace(service_account_id="serviceaccount-123")
+
+    monkeypatch.setattr(cli, "ensure_ci_service_account_identity", _ensure_identity)
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("FRESH-PRIVATE-KEY", "FRESH-PUBLIC-KEY"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("publickey-fresh",),
+    )
+
+    material, created = cli._create_or_recreate_runtime_auth_profile(
+        project_id="project-123",
+        client_name="client-a",
+        recreate=True,
+        profile=None,
+        endpoint=None,
+        sdk_config_file=None,
+    )
+
+    assert captured == {
+        "service_account_id": None,
+        "public_key_id": None,
+        "private_key_file": None,
+        "iam_token": "operator-token",
+    }
+    assert created is True
+    assert material.auth_public_key_id == "publickey-fresh"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+
+
+def test_automatic_runtime_auth_rotation_preserves_cached_s3_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-stale",
+        private_key_pem="STALE-PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    monkeypatch.setattr(
+        cli,
+        "ensure_ci_service_account_identity",
+        lambda **_kwargs: SimpleNamespace(service_account_id="serviceaccount-123"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "generate_service_account_auth_key_pair",
+        lambda: ("FRESH-PRIVATE-KEY", "FRESH-PUBLIC-KEY"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "service_account_auth_public_key_ids_by_description",
+        lambda **_kwargs: ("publickey-fresh",),
+    )
+    wait_calls: list[str] = []
+
+    def _wait(material: cli.RuntimeAuthCacheMaterial) -> None:
+        wait_calls.append(material.auth_public_key_id)
+        if material.auth_public_key_id == "publickey-stale":
+            raise RuntimeError("Public Key not exists; JwtKeyNotExists")
+
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", _wait)
+    monkeypatch.setattr(
+        cli,
+        "issue_service_account_object_storage_access_key",
+        lambda **_kwargs: pytest.fail("authorized-key rotation must not issue another S3 key"),
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        ),
+        need_terraform=True,
+    )
+
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    assert wait_calls == ["publickey-stale", "publickey-fresh"]
+    assert material.auth_public_key_id == "publickey-fresh"
+    assert material.s3_access_key_id == "s3-access"
+    assert material.s3_secret_access_key == "s3-secret"
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "s3-access"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "s3-secret"
+    _clear_runtime_auth_env()
 
 
 def test_mysterybox_eso_credentials_json_uses_subject_credentials_format() -> None:
@@ -28282,6 +28981,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28316,7 +29016,10 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
     assert captured["service_account_name"] == "mysterybox-sa"
     assert captured["role_ids"] == ["mysterybox.payload-viewer"]
     assert captured["allow_cli_token"] is True
-    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert captured["runtime_auth_env"] == {
+        **{key: None for key in runtime_env if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV},
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+    }
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
     assert "access_key_description" not in captured
     assert credentials == cli.MysteryBoxEsoCredentials(
@@ -28336,6 +29039,7 @@ def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28362,7 +29066,10 @@ def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
     assert captured["service_account_name"] == "mysterybox-sa"
     assert captured["role_ids"] == ["mysterybox.payload-viewer"]
     assert captured["allow_cli_token"] is True
-    assert captured["runtime_auth_env"] == {key: None for key in runtime_env}
+    assert captured["runtime_auth_env"] == {
+        **{key: None for key in runtime_env if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV},
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+    }
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
 
 
@@ -28386,6 +29093,7 @@ def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
         "NEBIUS_AUTH_PRIVATE_KEY_FILE": "/tmp/runtime-tf-key.pem",
         "NEBIUS_AUTH_PRIVATE_KEY_PEM": "RUNTIME-TF-PRIVATE-KEY",
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
     }
     for key, value in runtime_env.items():
         monkeypatch.setenv(key, value)
@@ -28435,12 +29143,20 @@ def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
             "key": "credentials.json",
         },
         extra_env=None,
-        auto_auth_bootstrap=True,
         fresh_credentials=None,
     )
 
     assert fresh is None
-    assert auth_key_checks == [{key: None for key in runtime_env}]
+    assert auth_key_checks == [
+        {
+            **{
+                key: None
+                for key in runtime_env
+                if key != cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV
+            },
+            cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+        }
+    ]
     assert {key: os.environ.get(key) for key in runtime_env} == runtime_env
     assert rendered_messages == [
         "Reused ESO MysteryBox credential Secret external-secrets/nebius-mysterybox-shared-creds for native provider."
@@ -28507,7 +29223,6 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
             "key": "credentials.json",
         },
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-        auto_auth_bootstrap=True,
         fresh_credentials=None,
     )
 
@@ -28525,7 +29240,7 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
     assert not any("is invalid; replacing it" in message for message in rendered_messages)
 
 
-def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_missing(
+def test_ensure_mysterybox_eso_credentials_secret_converges_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
@@ -28534,25 +29249,37 @@ def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_m
             nebius=SimpleNamespace(project_id="project-123"),
         )
     )
-    monkeypatch.setattr(cli, "_kubectl_read_secret_key", lambda **_kwargs: None)
-
-    with pytest.raises(RuntimeError) as exc_info:
-        cli._ensure_mysterybox_eso_credentials_secret(
-            fake_config,
-            spec={
-                "namespace": "external-secrets",
-                "name": "nebius-mysterybox-shared-creds",
-                "key": "credentials.json",
-            },
-            extra_env=None,
-            auto_auth_bootstrap=False,
-            fresh_credentials=None,
-        )
-
-    assert (
-        "credential Secret external-secrets/nebius-mysterybox-shared-creds:credentials.json is missing"
-        in str(exc_info.value)
+    credentials = cli.MysteryBoxEsoCredentials(
+        service_account_id="serviceaccount-mysterybox",
+        auth_public_key_id="publickey-mysterybox",
+        private_key_pem="MYSTERYBOX-PRIVATE-KEY",
     )
+    applied: list[dict[str, object]] = []
+    monkeypatch.setattr(cli, "_kubectl_read_secret_key", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_create_mysterybox_eso_credentials",
+        lambda *, project_id: credentials,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_mysterybox_eso_credentials_secret",
+        lambda **kwargs: applied.append(dict(kwargs)),
+    )
+
+    returned = cli._ensure_mysterybox_eso_credentials_secret(
+        fake_config,
+        spec={
+            "namespace": "external-secrets",
+            "name": "nebius-mysterybox-shared-creds",
+            "key": "credentials.json",
+        },
+        extra_env=None,
+        fresh_credentials=None,
+    )
+
+    assert returned == credentials
+    assert applied[0]["credentials"] == credentials
 
 
 def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
@@ -28615,7 +29342,6 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
     cli._ensure_mysterybox_eso_runtime_before_flux(
         fake_config,
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
-        auto_auth_bootstrap=True,
     )
 
     assert len(applied) == 1
@@ -28724,7 +29450,6 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
     cli._ensure_mysterybox_eso_runtime_before_flux(
         fake_config,
         extra_env=None,
-        auto_auth_bootstrap=True,
     )
 
     assert len(applied) == 2
@@ -28916,298 +29641,371 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
-            client_info=SimpleNamespace(
-                client_name="client-a",
-                nebius=SimpleNamespace(project_id="project-123"),
-            )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
-        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
-        stale_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    fake_config = SimpleNamespace(
+        client_info=SimpleNamespace(
             client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=False,
-            cloud_check_error=None,
-            issues=(
-                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
-            ),
+            nebius=SimpleNamespace(project_id="project-123"),
         )
-        refreshed_material = cli.RuntimeAuthCacheMaterial(
-            project_id="project-123",
-            client_name="client-a",
-            service_account_id="sa-fresh",
-            auth_public_key_id="auth-key-fresh",
-            private_key_file=refreshed_private_key,
-            private_key_pem="FRESH-KEY-DATA",
-            s3_access_key_id="fresh-access",
-            s3_secret_access_key="fresh-secret",
-        )
+    )
+    stale_key = tmp_path / "stale.pem"
+    fresh_key = tmp_path / "fresh.pem"
+    stale_key.write_text("STALE", encoding="utf-8")
+    fresh_key.write_text("FRESH", encoding="utf-8")
+    stale = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-stale",
+        auth_public_key_id="key-stale",
+        private_key_file=stale_key,
+        private_key_pem="STALE",
+        s3_access_key_id="s3",
+        s3_secret_access_key="secret",
+    )
+    fresh = replace(
+        stale,
+        service_account_id="sa-fresh",
+        auth_public_key_id="key-fresh",
+        private_key_file=fresh_key,
+        private_key_pem="FRESH",
+    )
+    recreate_calls: list[bool] = []
+    wait_calls: list[str] = []
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
+    def _profile(**kwargs: object) -> tuple[cli.RuntimeAuthCacheMaterial, bool]:
+        recreate = bool(kwargs["recreate"])
+        recreate_calls.append(recreate)
+        return (fresh if recreate else stale), recreate
 
-        recreate_calls: list[bool] = []
-        rendered_messages: list[str] = []
+    def _wait(material: cli.RuntimeAuthCacheMaterial) -> None:
+        wait_calls.append(material.auth_public_key_id)
+        if material is stale:
+            raise RuntimeError("Public Key not exists; JwtKeyNotExists")
 
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
-        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: (
-                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
-            ),
-        )
-        monkeypatch.setattr(
-            cli.console,
-            "print",
-            lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
-        )
+    monkeypatch.setattr(cli, "_create_or_recreate_runtime_auth_profile", _profile)
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", _wait)
 
-        cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
-        )
+    cli._ensure_runtime_auth_material(fake_config, need_terraform=False)
 
-        assert recreate_calls == [True]
-        assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
-        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
-        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] == str(
-            refreshed_material.private_key_file
-        )
-        assert os.environ["NEBIUS_AUTH_PRIVATE_KEY_PEM"] == "FRESH-KEY-DATA"
-        assert os.environ["AWS_ACCESS_KEY_ID"] == "fresh-access"
-        assert os.environ["AWS_SECRET_ACCESS_KEY"] == "fresh-secret"
-        assert any(
-            "Cached runtime auth profile is stale; recreating because" in message
-            for message in rendered_messages
-        )
-    finally:
-        _clear_runtime_auth_env()
+    assert recreate_calls == [False, True]
+    assert wait_calls == ["key-stale", "key-fresh"]
+    assert os.environ["NEBIUS_SA_ID"] == "sa-fresh"
+    assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "key-fresh"
+    _clear_runtime_auth_env()
 
 
-def test_ensure_runtime_auth_material_fails_fast_for_stale_cached_public_key_without_auto_bootstrap(
+def test_ensure_runtime_auth_material_does_not_duplicate_new_key_on_propagation_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "new.pem"
+    key_file.write_text("NEW", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-new",
+        auth_public_key_id="key-new",
+        private_key_file=key_file,
+        private_key_pem="NEW",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    recreate_calls: list[bool] = []
+
+    def _profile(**kwargs: object) -> tuple[cli.RuntimeAuthCacheMaterial, bool]:
+        recreate_calls.append(bool(kwargs["recreate"]))
+        return material, True
+
+    monkeypatch.setattr(cli, "_create_or_recreate_runtime_auth_profile", _profile)
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_runtime_auth_token_ready",
+        lambda _material: (_ for _ in ()).throw(
+            RuntimeError("Public Key not exists; JwtKeyNotExists after propagation timeout")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="propagation timeout"):
+        cli._ensure_runtime_auth_material(
+            SimpleNamespace(
+                client_info=SimpleNamespace(
+                    client_name="client-a",
+                    nebius=SimpleNamespace(project_id="project-123"),
+                )
+            ),
+            need_terraform=False,
+        )
+
+    assert recreate_calls == [False]
+    _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_replaces_inherited_snapshot_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "canonical.pem"
+    key_file.write_text("CANONICAL", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="canonical-sa",
+        auth_public_key_id="canonical-key",
+        private_key_file=key_file,
+        private_key_pem="CANONICAL",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "snapshot-token")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(tmp_path / "human.json"))
+    monkeypatch.setenv("NEBIUS_SA_ID", "inherited-sa")
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
             client_info=SimpleNamespace(
                 client_name="client-a",
                 nebius=SimpleNamespace(project_id="project-123"),
             )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        stale_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=False,
-            cloud_check_error=None,
-            issues=(
-                "auth_public_key_id 'auth-key-stale' does not exist (or is not accessible) in Nebius",
-            ),
-        )
+        ),
+        need_terraform=False,
+    )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
-
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(cli, "_runtime_auth_profile_status", lambda **_kwargs: stale_status)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **_kwargs: pytest.fail(
-                "stale cached profile should fail before recreate when auto bootstrap is disabled"
-            ),
-        )
-
-        with pytest.raises(RuntimeError) as exc_info:
-            cli._ensure_runtime_auth_material(
-                fake_config,
-                need_terraform=True,
-                auto_bootstrap=False,
-            )
-
-        message = str(exc_info.value)
-        assert "Cached runtime auth profile is stale" in message
-        assert "--recreate" in message
-        assert "--auto-auth-bootstrap" in message
-    finally:
-        _clear_runtime_auth_env()
+    assert os.environ["NEBIUS_SA_ID"] == "canonical-sa"
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert "NEBIUS_AUTH_CREDENTIALS_FILE" not in os.environ
+    _clear_runtime_auth_env()
 
 
 def test_ensure_runtime_auth_material_does_not_recreate_on_cloud_verification_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
-            client_info=SimpleNamespace(
-                client_name="client-a",
-                nebius=SimpleNamespace(project_id="project-123"),
-            )
-        )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        verification_error_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=None,
-            cloud_check_error="temporary sdk failure",
-            issues=("failed Nebius auth public key verification: temporary sdk failure",),
-        )
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **kwargs: (calls.append(bool(kwargs["recreate"])) or (material, False)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_runtime_auth_token_ready",
+        lambda _material: (_ for _ in ()).throw(RuntimeError("temporary sdk failure")),
+    )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
-
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(
-            cli, "_runtime_auth_profile_status", lambda **_kwargs: verification_error_status
-        )
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **_kwargs: pytest.fail(
-                "cloud verification errors should not auto-recreate runtime auth material"
-            ),
-        )
-
+    with pytest.raises(RuntimeError, match="temporary sdk failure"):
         cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
+            SimpleNamespace(
+                client_info=SimpleNamespace(
+                    client_name="client-a",
+                    nebius=SimpleNamespace(project_id="project-123"),
+                )
+            ),
+            need_terraform=False,
         )
-    finally:
-        _clear_runtime_auth_env()
+    assert calls == [False]
+    _clear_runtime_auth_env()
 
 
-def test_ensure_runtime_auth_material_recreates_on_deleted_key_cloud_error(
+def test_ensure_runtime_auth_material_issues_s3_only_for_terraform(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _RUNTIME_AUTH_ENV_KEYS:
-        monkeypatch.delenv(name, raising=False)
-    try:
-        fake_config = SimpleNamespace(
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    api_only = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    with_s3 = replace(
+        api_only,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    s3_calls: list[cli.RuntimeAuthCacheMaterial] = []
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (api_only, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda material: (s3_calls.append(material) or with_s3),
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
             client_info=SimpleNamespace(
                 client_name="client-a",
                 nebius=SimpleNamespace(project_id="project-123"),
             )
+        ),
+        need_terraform=True,
+    )
+
+    assert s3_calls == [api_only]
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "s3-access"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "s3-secret"
+    _clear_runtime_auth_env()
+
+
+def test_ensure_runtime_auth_material_preserves_operator_auth_until_s3_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL
+    )
+    _clear_runtime_auth_env()
+    cli._RUNTIME_AUTH_READY_PROJECTS.clear()
+    key_file = tmp_path / "key.pem"
+    key_file.write_text("KEY", encoding="utf-8")
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa",
+        auth_public_key_id="key",
+        private_key_file=key_file,
+        private_key_pem="KEY",
+        s3_access_key_id=None,
+        s3_secret_access_key=None,
+    )
+    with_s3 = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    observed_operator_tokens: list[str | None] = []
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_runtime_auth_s3_material",
+        lambda _material: (
+            observed_operator_tokens.append(os.environ.get("NEBIUS_IAM_TOKEN")) or with_s3
+        ),
+    )
+
+    cli._ensure_runtime_auth_material(
+        SimpleNamespace(
+            client_info=SimpleNamespace(
+                client_name="client-a",
+                nebius=SimpleNamespace(project_id="project-123"),
+            )
+        ),
+        need_terraform=True,
+    )
+
+    assert observed_operator_tokens == ["operator-token"]
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert os.environ["NEBIUS_SA_ID"] == "sa"
+    _clear_runtime_auth_env()
+
+
+def test_runtime_auth_s3_issuance_uses_captured_operator_not_canonical_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_runtime_auth_env()
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path / "cache"))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token")
+    cli._capture_runtime_auth_operator_environment()
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="runtime-sa",
+        auth_public_key_id="runtime-key",
+        private_key_pem="RUNTIME-PRIVATE-KEY",
+    )
+    material = cli._runtime_auth_cache_material(
+        project_id="project-123",
+        client_name="client-a",
+    )
+    assert material is not None
+    cli._export_runtime_auth_material(material)
+    observed: list[dict[str, object]] = []
+
+    def _issue(**kwargs: object) -> SimpleNamespace:
+        observed.append(
+            {
+                "iam_token": os.environ.get("NEBIUS_IAM_TOKEN"),
+                "service_account_env": os.environ.get("NEBIUS_SA_ID"),
+                "allow_cli_token": kwargs["allow_cli_token"],
+            }
         )
-        stale_private_key = tmp_path / "auth-private-stale.pem"
-        stale_private_key.write_text("STALE-KEY", encoding="utf-8")
-        refreshed_private_key = tmp_path / "auth-private-fresh.pem"
-        refreshed_private_key.write_text("FRESH-KEY", encoding="utf-8")
-        deleted_key_status = cli.RuntimeAuthProfileStatus(
-            project_id="project-123",
-            client_name="client-a",
-            cache_dir=Path("/tmp/nebius-cxcli/client-a-project-123"),
-            metadata_file=Path("/tmp/nebius-cxcli/client-a-project-123/runtime-auth.json"),
-            metadata_exists=True,
-            service_account_id="sa-stale",
-            auth_public_key_id="auth-key-stale",
-            private_key_file=stale_private_key,
-            private_key_exists=True,
-            cloud_public_key_exists=None,
-            cloud_check_error=(
-                "Request error INVALID_ARGUMENT: Public Key not exists, expired or deactivated: "
-                "'auth-key-stale'; Caused by error: JwtKeyNotExists"
-            ),
-            issues=("failed Nebius auth public key verification",),
-        )
-        refreshed_material = cli.RuntimeAuthCacheMaterial(
-            project_id="project-123",
-            client_name="client-a",
-            service_account_id="sa-fresh",
-            auth_public_key_id="auth-key-fresh",
-            private_key_file=refreshed_private_key,
-            private_key_pem="FRESH-KEY-DATA",
-            s3_access_key_id="fresh-access",
-            s3_secret_access_key="fresh-secret",
+        return SimpleNamespace(
+            s3_access_key_id="s3-access",
+            s3_secret_access_key="s3-secret",
         )
 
-        def _fake_cache_load(**_kwargs: object) -> bool:
-            os.environ["NEBIUS_SA_ID"] = "sa-stale"
-            os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] = "auth-key-stale"
-            os.environ["NEBIUS_AUTH_PRIVATE_KEY_FILE"] = str(stale_private_key)
-            os.environ["AWS_ACCESS_KEY_ID"] = "stale-access"
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "stale-secret"
-            return True
+    monkeypatch.setattr(cli, "issue_service_account_object_storage_access_key", _issue)
 
-        recreate_calls: list[bool] = []
+    updated = cli._ensure_runtime_auth_s3_material(material)
 
-        monkeypatch.setattr(cli, "_runtime_auth_cache_load", _fake_cache_load)
-        monkeypatch.setattr(
-            cli, "_runtime_auth_profile_status", lambda **_kwargs: deleted_key_status
-        )
-        monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
-        monkeypatch.setattr(
-            cli,
-            "_create_or_recreate_runtime_auth_profile",
-            lambda **kwargs: (
-                recreate_calls.append(bool(kwargs["recreate"])) or (refreshed_material, True)
-            ),
-        )
-
-        cli._ensure_runtime_auth_material(
-            fake_config,
-            need_terraform=True,
-            auto_bootstrap=True,
-        )
-
-        assert recreate_calls == [True]
-        assert os.environ["NEBIUS_AUTH_PUBLIC_KEY_ID"] == "auth-key-fresh"
-    finally:
-        _clear_runtime_auth_env()
+    assert observed == [
+        {
+            "iam_token": "operator-token",
+            "service_account_env": None,
+            "allow_cli_token": True,
+        }
+    ]
+    assert updated.s3_access_key_id == "s3-access"
+    assert updated.s3_secret_access_key == "s3-secret"
+    assert "NEBIUS_IAM_TOKEN" not in os.environ
+    assert os.environ["NEBIUS_SA_ID"] == "runtime-sa"
+    _clear_runtime_auth_env()
 
 
 def test_wait_for_runtime_auth_token_ready_retries_until_token_service_accepts(
@@ -29269,7 +30067,19 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
         s3_access_key_id=None,
         s3_secret_access_key=None,
     )
-    monkeypatch.setattr(cli, "_runtime_auth_cache_material", lambda **_kwargs: material)
+    synced_material = replace(
+        material,
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_create_or_recreate_runtime_auth_profile",
+        lambda **_kwargs: (material, False),
+    )
+    monkeypatch.setattr(cli, "_wait_for_runtime_auth_token_ready", lambda _material: None)
+    monkeypatch.setattr(cli, "_export_runtime_auth_material", lambda _material: None)
+    monkeypatch.setattr(cli, "_ensure_runtime_auth_s3_material", lambda _material: synced_material)
     monkeypatch.setattr(
         cli,
         "_sync_runtime_auth_profile_to_ci_environment",
@@ -29294,6 +30104,52 @@ def test_auth_bootstrap_ci_syncs_runtime_profile(monkeypatch: pytest.MonkeyPatch
     output = _plain_output(result.output)
     assert "Synced GitHub environment secrets to owner/repo/client-a-project-123" in output
     assert "2" in output
+
+
+def test_runtime_auth_ci_sync_includes_exact_project_binding_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    material = cli.RuntimeAuthCacheMaterial(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="sa-123",
+        auth_public_key_id="auth-key-123",
+        private_key_file=tmp_path / "auth-private.pem",
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id="s3-access",
+        s3_secret_access_key="s3-secret",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "read_github_token", lambda **_kwargs: "github-token")
+    monkeypatch.setattr(cli, "_resolve_github_repo_slug", lambda **_kwargs: "owner/repo")
+    monkeypatch.setattr(cli, "ensure_github_environment", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_sync_github_ci_secrets",
+        lambda **kwargs: captured.update(kwargs) or sorted(kwargs["ci_secrets"]),
+    )
+
+    repo_slug, github_environment, updated = (
+        cli._sync_runtime_auth_profile_to_ci_environment(
+            material=material,
+            client_name="client-a",
+            github_repo="owner/repo",
+            github_token_env="GH_TOKEN",
+            repo_root_hint=tmp_path,
+        )
+    )
+
+    assert repo_slug == "owner/repo"
+    assert github_environment == "client-a-project-123"
+    assert cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV in updated
+    assert captured["ci_secrets"] == {
+        cli._RUNTIME_AUTH_ACTIVE_PROJECT_ENV: "project-123",
+        "NEBIUS_SA_ID": "sa-123",
+        "NEBIUS_AUTH_PUBLIC_KEY_ID": "auth-key-123",
+        "NEBIUS_AUTH_PRIVATE_KEY_PEM": "PRIVATE-KEY",
+        "NEBIUS_S3_ACCESS_KEY_ID": "s3-access",
+        "NEBIUS_S3_SECRET_ACCESS_KEY": "s3-secret",
+    }
 
 
 def test_auth_validate_profile_ok(monkeypatch: pytest.MonkeyPatch) -> None:

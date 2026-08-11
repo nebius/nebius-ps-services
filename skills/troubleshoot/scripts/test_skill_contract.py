@@ -51,8 +51,8 @@ class TroubleshootContractTest(unittest.TestCase):
             normalized,
         )
         handoff = skill.index("use `design` after causal proof")
-        self.assertLess(skill.index("7. **PROVEN**"), handoff)
-        self.assertLess(handoff, skill.index("8. **REMEDIATED**"))
+        self.assertLess(skill.index("8. **PROVEN**"), handoff)
+        self.assertLess(handoff, skill.index("9. **REMEDIATED**"))
         self.assertIn(
             "If a design-scale remediation is required but `design` is unavailable",
             normalized,
@@ -141,6 +141,10 @@ class TroubleshootContractTest(unittest.TestCase):
             skill,
         )
         self.assertIn(
+            "including its new `blocker_key` and a public-safe `blocker_summary`",
+            skill,
+        )
+        self.assertIn(
             "Every canonical attempt's `blocker_key` must exactly match the marker's "
             "top-level `blocker_key`",
             reference,
@@ -159,8 +163,26 @@ class TroubleshootContractTest(unittest.TestCase):
             hook_readme,
         )
         self.assertIn(
+            "Pending feedback reports a precise bounded missing-marker, "
+            "invalid-marker, or invalid-transition reason",
+            hook_readme,
+        )
+        self.assertIn(
+            "A deleted resize marker remains fail-closed",
+            hook_readme,
+        )
+        self.assertIn(
             "Expect the hook to reject that mixed state as invalid and request "
             "marker repair",
+            process_cases,
+        )
+        self.assertIn(
+            "UserPromptSubmit, PreToolUse, and Stop to report the exact bounded "
+            "validation or transition reason",
+            process_cases,
+        )
+        self.assertIn(
+            "bounded sidecar metadata cannot reconstruct the prior marker",
             process_cases,
         )
 
@@ -191,13 +213,38 @@ class TroubleshootContractTest(unittest.TestCase):
         )
         self.assertIn("hard 10/180 maxima", hook_readme)
         self.assertIn("terminal lock", hook_readme)
+        self.assertIn("prior terminal marker", hook_readme)
         self.assertIn("Deleting `current.md` remains fail-closed", hook_readme)
         self.assertIn(
             "After exhaustion, the next user instruction is required whether",
             reference,
         )
 
-    def test_remediation_hook_registers_prompt_tool_and_stop_boundaries(
+    def test_every_explicit_invocation_has_a_terminal_report_obligation(
+        self,
+    ) -> None:
+        surfaces = {
+            "SKILL.md": self.read(TROUBLESHOOT / "SKILL.md"),
+            "README.md": self.read(TROUBLESHOOT / "README.md"),
+            "hook README": self.read(TROUBLESHOOT / "assets" / "hooks" / "README.md"),
+            "reporting reference": self.read(
+                TROUBLESHOOT / "references" / "verification-and-reporting.md"
+            ),
+            "budget reference": self.read(
+                TROUBLESHOOT / "references" / "remediation-budget.md"
+            ),
+            "process cases": self.read(TROUBLESHOOT / "evals" / "process-cases.md"),
+        }
+        for name, value in surfaces.items():
+            with self.subTest(surface=name):
+                normalized = " ".join(value.split()).casefold()
+                self.assertIn("every explicit `$troubleshoot` invocation", normalized)
+                self.assertIn("troubleshoot-report-obligation.json", normalized)
+                self.assertIn("current workflow state: reported", normalized)
+                self.assertIn("bounded ui fallback", normalized)
+                self.assertIn("same session", normalized)
+
+    def test_remediation_hook_registers_prompt_tool_and_arbitrated_stop_boundaries(
         self,
     ) -> None:
         hooks = json.loads(self.read(TROUBLESHOOT / "assets" / "hooks.json.template"))
@@ -208,10 +255,19 @@ class TroubleshootContractTest(unittest.TestCase):
             for hook in group["hooks"]
             if "remediation_attempt_guard.py" in hook["command"]
         ]
-        self.assertEqual(len(remediation_events), 3)
-        self.assertEqual(
-            set(remediation_events), {"UserPromptSubmit", "PreToolUse", "Stop"}
+        self.assertEqual(len(remediation_events), 2)
+        self.assertEqual(set(remediation_events), {"UserPromptSubmit", "PreToolUse"})
+        stop_hook = hooks["hooks"]["Stop"][0]["hooks"][0]
+        self.assertIn("stop_lifecycle_arbiter.py", stop_hook["command"])
+        stop_arbiter = self.read(
+            TROUBLESHOOT / "assets" / "hooks" / "stop_lifecycle_arbiter.py"
         )
+        self.assertIn('"remediation_attempt_guard.py"', stop_arbiter)
+        for owner in ("maintain-project-specs", "prompt-session-intake", "sdlc-start"):
+            candidate = ROOT / owner / "assets" / "hooks" / "stop_lifecycle_arbiter.py"
+            if candidate.exists():
+                with self.subTest(shared_arbiter_owner=owner):
+                    self.assertEqual(stop_arbiter, self.read(candidate))
         prompt_hook = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]
         self.assertEqual(prompt_hook["additionalContextLimit"], 800)
         self.assertEqual(prompt_hook["timeout"], 30)
@@ -258,9 +314,7 @@ class TroubleshootContractTest(unittest.TestCase):
             "A design change counts only after it is implemented and deployed",
             reference,
         )
-        self.assertIn(
-            "action-specific approval in every environment", reference
-        )
+        self.assertIn("action-specific approval in every environment", reference)
         self.assertIn(
             "must precede the earliest product divergence or the first "
             "contaminated boundary, whichever came first",
@@ -271,9 +325,7 @@ class TroubleshootContractTest(unittest.TestCase):
             "quiescent",
             reference,
         )
-        self.assertIn(
-            "When the criterion is idempotent reconciliation", reference
-        )
+        self.assertIn("When the criterion is idempotent reconciliation", reference)
         self.assertIn(
             "successful exit, healthy final state, or idempotent no-op after manual "
             "pre-satisfaction does not prove the product fixed",
@@ -297,6 +349,118 @@ class TroubleshootContractTest(unittest.TestCase):
         self.assertIn("stale writer", process_cases)
         self.assertIn("harness-owned connectivity defect", process_cases)
         self.assertIn("cached telemetry", process_cases)
+
+    def test_stack_discovery_component_logs_and_completion_are_mandatory(
+        self,
+    ) -> None:
+        skill = " ".join(self.read(TROUBLESHOOT / "SKILL.md").split())
+        protocol = " ".join(
+            self.read(TROUBLESHOOT / "references" / "investigation-protocol.md").split()
+        )
+        reporting = " ".join(
+            self.read(
+                TROUBLESHOOT / "references" / "verification-and-reporting.md"
+            ).split()
+        )
+
+        self.assertIn("INTAKE -> DISCOVERY -> BASELINE", skill)
+        self.assertIn("technologies, exact versions, deployment model", skill)
+        self.assertIn("official vendor architecture and configuration", skill)
+        self.assertIn("component verification matrix", skill)
+        self.assertIn("service manager, OS and kernel, network and firewall", skill)
+        self.assertIn("expected supporting and falsifying evidence", skill)
+        self.assertIn("indefinite `tail -f`", skill)
+        self.assertIn("## Stack And Architecture Inventory", protocol)
+        self.assertIn("## Layered Log-Coverage Ledger", protocol)
+        self.assertIn("Timeout or output bound", protocol)
+        self.assertIn("restart history and recent changes", protocol.casefold())
+        self.assertIn("authentication, and DNS", protocol)
+        self.assertIn("exactly these eight rows", protocol)
+        self.assertIn("not subject to Grafana provider-admission gates", protocol)
+        for heading in (
+            "## Architecture Verdict",
+            "## Component Verification Matrix",
+            "## Incident Timeline",
+            "## Logs Examined",
+            "## Code Debugging",
+            "## Completion Gate",
+            "## Remaining Unknowns And Residual Risks",
+        ):
+            self.assertIn(heading, reporting)
+        for field in (
+            "- Included system boundary:",
+            "- Excluded system boundary:",
+            "- Exercised control and data paths:",
+            "- Incident-window start:",
+            "- Incident-window end:",
+        ):
+            self.assertIn(field, reporting)
+        for layer in (
+            "Component",
+            "Application or job",
+            "Container or orchestrator",
+            "Service manager",
+            "OS and kernel",
+            "Network and firewall",
+            "Storage",
+            "GPU or hardware",
+        ):
+            self.assertIn(f"| {layer} |", reporting)
+        self.assertIn("each of the eight canonical log layers exactly once", reporting)
+        self.assertIn("Dependencies, authentication, and DNS", reporting)
+        self.assertIn("Restart history and recent changes", reporting)
+        for criterion in (
+            "Design",
+            "Infrastructure",
+            "Connectivity",
+            "Configuration",
+            "Runtime health",
+            "Logs",
+            "Relevant code paths",
+        ):
+            self.assertIn(f"| {criterion} | PASS / FAIL / UNKNOWN |", reporting)
+        self.assertIn("`VERIFIED_FIXED` is invalid unless all seven", reporting)
+
+    def test_technology_playbooks_are_present_and_vendor_anchored(self) -> None:
+        expected = {
+            "slurm.md": ("SlurmctldLogFile", "SlurmdLogFile", "slurmdbd", "MUNGE"),
+            "soperator.md": ("ActiveCheck", "CronJob", "slurm_jobs/", "task_prolog/"),
+            "kubernetes.md": ("previous container", "kubelet", "CNI", "CSI"),
+            "nebius.md": ("Managed Kubernetes", "VPC", "quota", "IAM"),
+            "linux.md": ("systemd", "kernel", "cgroup", "clock sync"),
+            "network.md": ("DNS", "firewall", "Packet capture", "InfiniBand"),
+            "storage.md": ("CSI", "filesystem", "object", "corruption"),
+            "gpu.md": ("Xid", "DCGM", "NCCL", "RDMA"),
+            "code-debugging.md": (
+                "stack traces",
+                "core dumps",
+                "focused",
+                "instrumentation",
+            ),
+        }
+        for name, terms in expected.items():
+            with self.subTest(playbook=name):
+                value = self.read(TROUBLESHOOT / "references" / name)
+                self.assertIn("## Official Sources", value)
+                for term in terms:
+                    self.assertIn(term, value)
+
+    def test_soperator_distinguishes_dedicated_and_workload_coupled_checks(
+        self,
+    ) -> None:
+        value = " ".join(
+            self.read(TROUBLESHOOT / "references" / "soperator.md").split()
+        )
+        self.assertIn("ActiveChecks are dedicated diagnostic jobs", value)
+        self.assertIn("complete or exclusive GPU allocation", value)
+        self.assertIn(
+            "Do not describe them as safely running inside a customer's existing "
+            "training allocation",
+            value,
+        )
+        self.assertIn("workload-coupled or passive Soperator checks", value)
+        self.assertIn("prolog, epilog, task hooks, or `HealthCheckProgram`", value)
+        self.assertIn("collector shipping and centralized retention", value)
 
     def test_design_accepts_proven_handoff_without_reopening_diagnosis(self) -> None:
         skill = self.read(DESIGN / "SKILL.md")
@@ -336,6 +500,7 @@ class TroubleshootContractTest(unittest.TestCase):
         normalized_readme = " ".join(readme.split())
         normalized_prompts = " ".join(trigger_prompts.split())
 
+        self.assertIn('default_prompt: "$troubleshoot ', metadata)
         self.assertIn(
             "route system-contract-changing remediation through design only after "
             "causal proof",

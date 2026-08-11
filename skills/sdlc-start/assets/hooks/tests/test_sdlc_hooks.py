@@ -1008,6 +1008,22 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_denied(result, "commit authorization")
 
+    def test_pretool_denies_direct_commit_transaction_during_active_sdlc(self) -> None:
+        self.switch_feature()
+        self.active_run()
+        for action in ("prepare", "execute", "review"):
+            command = (
+                "python3 /Users/example/.agents/skills/commit/scripts/"
+                f"commit_transaction.py {action} --private canonical"
+            )
+            with self.subTest(action=action):
+                result = run_hook(
+                    PRE_TOOL,
+                    self.pre_payload("Bash", command),
+                    self.codex_home,
+                )
+                self.assert_denied(result, "use sdlc-commit")
+
     def test_pretool_detects_registered_integration_outside_project(self) -> None:
         _run_dir, integration = self.registered_integration()
         (integration / "feature.py").write_text("value = 1\n", encoding="utf-8")

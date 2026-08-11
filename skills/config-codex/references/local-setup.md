@@ -46,10 +46,17 @@ Use `--require-task-implementer-workspace` only after the user explicitly
 opts in to private prompt-workspace access. The default preflight must remain
 independent of that optional directory.
 
-When local policy blocks an otherwise safe patch, do not work around the
-guard. Report the blocked file, the smallest intended edit, and the manual
-out-of-band action. The report should also name files that are already aligned
-and should not be touched.
+When a repo-owned guard blocks an otherwise safe patch, prove its exact
+registration, canonical source, installed provenance, and documented ownership
+boundary. If the request authorizes repair, reproduce the false denial in a
+focused test, repair canonical source first, validate it, sync through the
+documented installer, report the restart/trust boundary, and retry the
+identical authorized edit. Never use an alternate writer, shell redirection,
+an installed-only edit, a working directory escape, or an attempt to disable
+or unregister the guard. For an external or unrepairable OS, sandbox,
+enterprise, unknown-provenance, conflicting, or out-of-authority denial,
+report the blocked file, smallest intended edit, and narrow manual out-of-band
+action. Also name aligned files that should not be touched.
 
 ## Backup
 
@@ -397,8 +404,10 @@ changes:
 ```text
 Aligned: <surface and evidence>
 Not aligned: <surface and exact drift>
-Blocked: <surface Codex could not patch because of local guard policy>
-Manual action: <narrow edit the user can apply after review>
+Repo-owned guard repair pending: <owner, provenance, source/install/restart status>
+Blocked external or unrepairable: <surface and external policy owner>
+Manual out-of-band action: <narrow edit only for an external or unrepairable block>
+Identical authorized edit retry: <passed, failed, or pending after owner repair>
 Leave untouched: <aligned local files that should not be changed>
 ```
 
@@ -542,10 +551,11 @@ Expected evidence:
 - Normal startup remains lazy. Compaction and the first complex prompt create
   only an empty `0600` scaffold below private `0700` directories; the parent
   writes and updates all semantic content.
-- Sandbox configuration and any installed PreToolUse write guard allow
-  `$CODEX_HOME/task-state` so the parent agent can update the
-  advertised `current.md`, while broader runtime paths such as
-  `$CODEX_HOME/hooks` remain protected unless deliberately synced.
+- Sandbox configuration permits the intended local writes. A selected-project
+  lifecycle guard does not treat task state, config, hooks, installed skills,
+  or other user files as its control plane; fixed external writes pass through
+  to the operating system, Codex permissions, destructive-action safeguards,
+  and any owning domain policy.
 
 Do not run complex synthetic hook probes against a live `$CODEX_HOME`: the
 first complex prompt intentionally creates an empty private scaffold. Prefer

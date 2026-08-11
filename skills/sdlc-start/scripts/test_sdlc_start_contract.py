@@ -23,7 +23,7 @@ class SdlcStartContractTests(unittest.TestCase):
     def test_public_interface_is_mirrored(self) -> None:
         terms = [
             "$sdlc-start workspace init [project-folder]",
-            "$sdlc-start run <prompt-path-or-unique-filename>",
+            "$sdlc-start run <prompt-ref-or-file>",
         ]
         for relative in (
             "sdlc-start/SKILL.md",
@@ -39,7 +39,7 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/references/prompt-workspace.md",
             [
-                "agentic-sdlc/prompt-v2",
+                "agentic-sdlc/prompt-v3",
                 "agentic-sdlc/prompt-binding-v2",
                 "ALREADY_COMPLETE",
                 "private FIFO",
@@ -79,7 +79,7 @@ class SdlcStartContractTests(unittest.TestCase):
             "sdlc-start/agents/openai.yaml",
             [
                 "workspace init [project-folder]",
-                "run <prompt-path-or-unique-filename>",
+                "run <prompt-ref-or-file>",
                 "allow_implicit_invocation: false",
             ],
         )
@@ -89,9 +89,9 @@ class SdlcStartContractTests(unittest.TestCase):
             "sdlc-start/SKILL.md",
             [
                 "`scripts/validate_project_specs.py`",
-                "project-agent-instructions.spec-validation.v2",
+                "project-agent-instructions.spec-validation.v3",
                 "`project-agent-instructions` before auto-steering",
-                "`agentic-sdlc` ownership",
+                "`maintain-project-specs` ownership",
                 "`reload_required: true`",
                 "`project-agent-instructions-change`",
             ],
@@ -108,7 +108,7 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-prepare-execution/SKILL.md",
             [
-                "ownership-receipted v2 selected-project",
+                "ownership-receipted v3 selected-project",
                 "Reject an\n   unverified, reload-pending, edited, or human-owned `AGENTS.md`",
             ],
         )

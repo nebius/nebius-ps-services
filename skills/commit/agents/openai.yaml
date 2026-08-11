@@ -1,6 +1,6 @@
 interface:
   display_name: "Commit"
   short_description: "Create fast local whole-repo commits"
-  default_prompt: "Use $commit to safely inspect and commit all current repository changes without pushing, including one exact local commit when a fresh explicit $worktree integrate delegates it."
+  default_prompt: "Use $commit to safely inspect and commit the complete current repository diff across all changed project folders without pushing; use the exact delegated path when a fresh explicit $worktree integrate owns a commit."
 policy:
   allow_implicit_invocation: false

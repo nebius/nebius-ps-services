@@ -41,5 +41,5 @@ matter?".
   diligence on one focal technology or recommendation-changing claim to either
   workflow.
 - `system-design-rules` owns checklist-style review of an existing proposal.
-- `$sdlc-start run <prompt>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
+- `$sdlc-start run <prompt-ref-or-file>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
   and committed SDLC artifacts.

@@ -17,12 +17,13 @@ validation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
 
 
-REQUIREMENTS = """---
-schema: agentic-sdlc.requirements.v1
+REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+---
+schema: maintain-project-specs/requirements-v1
 project: Example
 status: ready
-created_by_skill: sdlc-create-requirements
-updated_by_skill: sdlc-create-requirements
+created_by_skill: maintain-project-specs
+updated_by_skill: maintain-project-specs
 ---
 
 # Requirements
@@ -55,14 +56,16 @@ Unit and integration tests.
 Manual review.
 
 <!-- /REQUIREMENT: REQ-001 -->
+<!-- maintain-project-specs:requirements:end -->
 """
 
-DESIGN = """---
-schema: agentic-sdlc.design.v1
+DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+---
+schema: maintain-project-specs/design-v1
 project: Example
 status: ready
-created_by_skill: sdlc-create-design
-updated_by_skill: sdlc-create-design
+created_by_skill: maintain-project-specs
+updated_by_skill: maintain-project-specs
 source_requirements: docs/requirements.md
 ---
 
@@ -120,6 +123,7 @@ Adopt and retire only with exact-digest approval.
 Requirements mapped and checks passing.
 
 <!-- /FEATURE: FEAT-001 -->
+<!-- maintain-project-specs:design:end -->
 """
 
 
@@ -129,8 +133,19 @@ class SpecValidationTests(unittest.TestCase):
         self.project = Path(self.temporary.name) / "project"
         (self.project / "docs").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=self.project,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=self.project, check=True
+        )
         self.write(REQUIREMENTS, DESIGN)
         subprocess.run(["git", "add", "docs"], cwd=self.project, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "baseline"], cwd=self.project, check=True
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -143,7 +158,7 @@ class SpecValidationTests(unittest.TestCase):
 
     def test_valid_specs_emit_full_file_and_traceability_receipt(self) -> None:
         receipt = validation.validate(self.project)
-        self.assertEqual(receipt["owner"], "agentic-sdlc")
+        self.assertEqual(receipt["owner"], "maintain-project-specs")
         self.assertEqual(receipt["project_scope"], ".")
         self.assertRegex(receipt["traceability_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(receipt["requirements"]["sha256"], r"^[0-9a-f]{64}$")
@@ -188,7 +203,7 @@ class SpecValidationTests(unittest.TestCase):
 
         receipt = validation.validate(self.project)
 
-        self.assertEqual(receipt["validator_version"], 2)
+        self.assertEqual(receipt["validator_version"], 1)
 
     def test_requirements_covered_must_match_feature_marker(self) -> None:
         self.write(REQUIREMENTS, DESIGN.replace("- REQ-001", "- REQ-999"))

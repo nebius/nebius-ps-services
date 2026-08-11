@@ -14,10 +14,28 @@ _NEBIUS_REQUEST_RETRIES = 0
 _NEBIUS_OPERATION_POLL_RETRIES = 2
 
 
+def renewable_nebius_auth_options(*, timeout_seconds: float) -> dict[str, str]:
+    """Require bounded synchronous refresh when the SDK marks renewal due."""
+
+    from nebius.aio.token.renewable import (
+        OPTION_RENEW_REQUEST_TIMEOUT,
+        OPTION_RENEW_SYNCHRONOUS,
+    )
+
+    renewal_timeout = min(
+        max(float(timeout_seconds), 1.0),
+        _NEBIUS_REQUEST_PER_RETRY_TIMEOUT_SECONDS,
+    )
+    return {
+        OPTION_RENEW_SYNCHRONOUS: "true",
+        OPTION_RENEW_REQUEST_TIMEOUT: str(renewal_timeout),
+    }
+
+
 def bounded_nebius_request_kwargs(
     *,
     timeout_seconds: float = _NEBIUS_REQUEST_TIMEOUT_SECONDS,
-) -> dict[str, float | int]:
+) -> dict[str, object]:
     """Return finite time and retry bounds for one synchronous SDK request."""
 
     timeout = max(float(timeout_seconds), 1.0)
@@ -25,6 +43,7 @@ def bounded_nebius_request_kwargs(
         "timeout": timeout,
         "per_retry_timeout": min(timeout, _NEBIUS_REQUEST_PER_RETRY_TIMEOUT_SECONDS),
         "auth_timeout": min(timeout, _NEBIUS_REQUEST_TIMEOUT_SECONDS),
+        "auth_options": renewable_nebius_auth_options(timeout_seconds=timeout),
         "retries": _NEBIUS_REQUEST_RETRIES,
     }
 
@@ -108,6 +127,9 @@ def wait_nebius_operation(
             auth_timeout=min(
                 max(float(timeout_seconds), 1.0),
                 _NEBIUS_REQUEST_TIMEOUT_SECONDS,
+            ),
+            auth_options=renewable_nebius_auth_options(
+                timeout_seconds=max(float(timeout_seconds), 1.0),
             ),
         )
     except TimeoutError as exc:

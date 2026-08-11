@@ -40,6 +40,7 @@ def _project_folder_name(project_id: str = "project-456") -> str:
 @pytest.fixture(autouse=True)
 def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
+    monkeypatch.setattr(cli_module, "_ensure_project_auth_identity", lambda **_kwargs: None)
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
         lambda **kwargs: (kwargs["tenant_id"], kwargs["project_id"]),

@@ -1,6 +1,6 @@
 ---
 name: project-agent-instructions
-description: "Use only when explicitly routed by Task Implementer or Agentic SDLC after that workflow has issued a validation receipt for current requirements and design; conditionally create, refresh, adopt, or retire a concise selected-project AGENTS.md with deterministic rules, explicit ownership, and fail-closed recovery."
+description: "Use only when explicitly routed by maintain-project-specs with its current canonical requirements/design receipt; conditionally render, create, refresh, adopt, or retire a concise selected-project AGENTS.md with deterministic rules, explicit ownership, deferred terminal sealing, and fail-closed recovery."
 ---
 
 # Project Agent Instructions
@@ -33,22 +33,24 @@ when determining whether a project-specific rule is redundant.
 
 ## Invocation Policy
 
-Use only when Task Implementer or `sdlc-start` explicitly routes here. Keep
+Use only when `maintain-project-specs` explicitly routes here with its current
+canonical receipt. Task Implementer and Agentic SDLC are outer consumers and
+must route through that owner instead of invoking this skill directly. Keep
 `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. Do not expose
 a standalone public workflow command.
 
 ## When To Use
 
-- Task Implementer has issued a current managed-spec receipt and routes the
-  selected project here before locking its coordinator contract.
-- Agentic SDLC has issued a current spec-validation receipt and routes here
-  before auto-steering, planning, or execution.
+- `maintain-project-specs` has issued its current canonical receipt and routes
+  the selected project here before implementation opens.
+- Task Implementer or Agentic SDLC needs a project-instructions decision and
+  has routed through `maintain-project-specs` as the sole direct owner.
 - Specs, selected-project identity, relevant evidence, effective Codex config,
   ancestor instructions, renderer, target, or prior decision changed.
 
 ## When Not To Use
 
-- Do not invoke directly outside either coordinator.
+- Do not invoke directly outside `maintain-project-specs`.
 - Do not run from marker checks or unvalidated specification files.
 - Do not create generic guidance, task state, architecture prose, reusable
   procedures, or recursive instruction files.
@@ -61,8 +63,10 @@ a standalone public workflow command.
 - Owner-issued mode-`0600` spec-validation receipt in a caller-owned private
   mode-`0700` directory outside Git.
 - Active Codex profile and discovery-relevant CLI overrides, encoded in the
-  required private runtime-config declaration. Use explicit `null` and `{}`
-  values when neither applies.
+  required `<lifecycle-session>/runtime-config.json` declaration. Use explicit
+  `null` and `{}` values when neither applies.
+- Explicit active Codex home passed to `inspect`; lifecycle routing never
+  relies on the helper's environment fallback.
 - Applicable global, ancestor, and selected-project instruction files.
 - Only the tracked project evidence needed to support candidate rules.
 
@@ -76,10 +80,14 @@ a standalone public workflow command.
 
 ## Writes
 
-- Private manifest, decision, ownership receipt, and final state under the
-  caller-owned workflow directory.
-- `<selected-project-root>/AGENTS.md` only through the helper and only for an
-  authorized v2 transition.
+- Caller-authored `runtime-config.json` beside the workflow directory and
+  `decision.json` directly within it; the lifecycle hook admits only these
+  exact non-authoritative inputs for the current session.
+- Coordinator-authored manifest, render state, ownership receipt, and final
+  state under the caller-owned workflow directory.
+- The managed tail region of `<selected-project-root>/AGENTS.md` only through
+  the helper and only for an authorized v3 transition. Human-authored prefix
+  bytes remain outside skill ownership.
 
 The selected-project file is committed product truth. Private receipts and
 state must never be committed.
@@ -96,23 +104,32 @@ state must never be committed.
    `$CODEX_HOME/PROFILE.config.toml` profile format before trusted project
    config and runtime overrides. Treat the resulting selected project, layered
    config, instruction chain, target classification, and recovery check as
-   authoritative.
+   authoritative. Run lifecycle-owned inspection as one uncomposed command
+   with explicit `--codex-home` and absolute current-session receipt, runtime,
+   private-root, and output paths.
 3. Keep a rule only when it is durable, project-specific, actionable,
    public-safe, and supported by a tracked evidence record with an exact
    locator. Requirements and design are inputs, not sufficient justification.
-4. Store a `project-agent-instructions.decision.v2` decision. For `needed`,
+4. Store the `project-agent-instructions.decision.v3` decision as the exact
+   private `decision.json` input. For `needed`,
    provide structured rules; the helper renders all Markdown deterministically.
    For the other dispositions, provide no rules.
 5. Use exact-digest `adopt` approval before taking ownership of an unreceipted
-   intact v2 file. Use exact-digest `retire` approval before deleting an intact
-   managed file that is no longer needed. Never migrate v1 automatically.
-6. Run `apply`, then `verify`. Never write or delete `AGENTS.md` directly.
-7. If state reports `reload_required: true`, stop the current execution
+   intact v3 region. Use exact-digest `retire` approval before removing an
+   intact managed region that is no longer needed. Never migrate v1 or v2
+   markers automatically.
+6. Before implementation, run `render` and pass its exact private rules file
+   to `maintain-project-specs plan`. Do not mutate the repository yet.
+7. After final requirements/design reconciliation, run `apply`, then `verify`
+   as the terminal seal mutation. Never write or delete `AGENTS.md` directly.
+8. If state reports `reload_required: true`, stop the current execution
    boundary. Start a fresh Codex session, rerun inspection and verification,
    and explicitly read the active selected-project instructions before any
    planning, contract lock, auto-steering, or worker dispatch.
-8. Return the outcome, decision fingerprint, target digest, evidence paths,
-   reload status, and any blocker to the caller.
+9. Return the outcome, decision fingerprint, target digest, evidence paths,
+   reload status, file effect, and any blocker to the caller. For
+   `not-needed`, state explicitly that no file was created or changed and that
+   a missing target remains absent.
 
 ## Decision Rules
 
@@ -121,12 +138,18 @@ state must never be committed.
   marker list disables parent traversal and treats the selected directory as
   the project root.
 - `not-needed` is correct when no meaningful durable project rule remains.
+- A missing `AGENTS.md` is not evidence that one is needed. Missing plus
+  `not-needed` is a verified successful no-file outcome, not a creation
+  failure.
 - Rules use only the six renderer-owned sections and stay within 8 preferred,
   12 hard; each rule is at most 256 UTF-8 bytes.
 - Prefer at most 2 KiB of generated body. A larger body requires a compact
   justification and may never exceed 4 KiB or effective Codex capacity.
 - Verify commands from current scripts, config, task runners, or CI.
-- An unmarked or edited file is human-owned and preserved byte-for-byte.
+- An unmarked file is human-owned. When rules are needed, attach one managed
+  tail region while preserving every existing byte as its human prefix.
+- Human edits to the prefix remain human-owned and do not transfer managed
+  region ownership. Any marker or managed-body edit fails closed.
 - A same-directory override or configured fallback is the active human-owned
   instruction source and blocks generation when necessary rules are missing.
 - Reject ignored targets and untracked or ignored ancestor/human-owned project
@@ -139,17 +162,20 @@ state must never be committed.
 
 ## Ownership and Recovery
 
-- The v2 marker binds the input manifest, decision, and rendered body digests.
-  A separate private ownership receipt binds the exact target bytes.
-- Human edits transfer ownership immediately.
+- The v3 tail marker binds the input manifest, decision, and rendered body
+  digests. A separate private ownership receipt binds that exact region and
+  project path; it does not claim the human-authored prefix.
+- Human prefix edits remain allowed. Edits inside the managed tail transfer
+  that region out of automation ownership immediately.
 - Any lock or backup artifact blocks inspect, create, refresh, adoption,
   retirement, and no-write state recording with `RECOVERY_REQUIRED`.
-- Create is exclusive. Refresh and retirement compare exact bytes under a lock
-  and preserve a recoverable backup on an interrupted final boundary.
+- Create is exclusive. Attach, refresh, and retirement compare exact whole-file
+  bytes under a lock, preserve the prefix byte-for-byte, and retain a
+  recoverable backup on an interrupted final boundary.
 - Retirement is explicit, guarded, and receipt-recorded; it is never inferred
   from `not-needed` alone.
-- A v1 marker returns `LEGACY_GENERATED_FILE`; resolve it manually rather than
-  adding a compatibility path.
+- A v1 or v2 marker returns `LEGACY_GENERATED_FILE`; resolve it manually rather
+  than adding a compatibility path.
 
 ## Idempotency
 
@@ -188,8 +214,10 @@ or remove recovery evidence automatically.
 ## Completion Criteria
 
 - The exact specs and effective discovery context are receipt-bound.
-- The result is `created`, `refreshed`, `adopted`, `retired`,
+- The result is `created`, `attached`, `refreshed`, `adopted`, `retired`,
   `existing-sufficient`, `not-needed`, or a structured blocker.
+- The result reports the exact file effect; `not-needed` never implies that a
+  missing file should have been created.
 - Any generated file is deterministic, concise, public-safe, evidence-backed,
   provenance-valid, and at the selected project root.
 - Verification passes and any required session reload finishes before the
@@ -207,5 +235,7 @@ URLs, customer data, raw logs, or one-off local state.
 ## Output Contract
 
 Return selected project, active instruction source, outcome, decision and
-target digests, evidence paths, `reload_required`, and any blocker. Do not print
-raw private rationale, prompts, credentials, or environment values.
+target digests, evidence paths, exact file effect, `reload_required`, and any
+blocker. For `not-needed`, say that no file was created or changed and that a
+missing target remains absent. Do not print raw private rationale, prompts,
+credentials, or environment values.

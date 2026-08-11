@@ -89,7 +89,7 @@ All `sdlc-*` skills set `allow_implicit_invocation: false` in
 `agents/openai.yaml`. The external `sdlc-workflow-test` verifier is the sole
 non-phase exception to the prefix convention. Operators and continuation
 prompts enter the workflow explicitly through
-`$sdlc-start run <prompt-path-or-unique-filename>`, and the coordinator records the next
+`$sdlc-start run <prompt-ref-or-file>`, and the coordinator records the next
 recommended phase skill in local state. This keeps workflow phases from being
 selected by ordinary prompt matching outside an active Agentic SDLC run.
 
@@ -141,12 +141,16 @@ through exactly two public coordinator actions:
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
-Managed prompts use `agentic-sdlc/prompt-v2`. Only `## Ask` is required in
-addition to generated metadata; all structured and custom headings are
-optional. The coordinator compiles the Ask into full product requirements,
+Managed prompts use `agentic-sdlc/prompt-v3`. The full prompt ID remains
+authoritative; a collision-safe five-character prompt reference is stored in
+metadata and prefixed to its filename, extending when a new ID collides. A
+one-time initialization migration upgrades editable v2 prompts and mutable
+source pointers while leaving immutable revision bytes unchanged. Only
+`## Ask` is required in addition to generated metadata; all structured and
+custom headings are optional. The coordinator compiles the Ask into full product requirements,
 inspects discoverable facts first, and persists stable private clarification
 questions only for material ambiguity. Editing the same active prompt and
 repeating `run` is the steering path; there is no bare `$sdlc-start` resume
@@ -162,8 +166,19 @@ advance to design until a private refinement gate binds the latest accepted
 prompt identity and intent to the exact current `docs/requirements.md`. Exact
 manual renames preserve identity and update the run mirror when normalized
 intent is unchanged, while rename plus intent edits and stale/duplicate prompt
-copies fail closed. Execution state
-lives under:
+copies fail closed.
+
+An explicitly invoked init or run also binds that Codex session to this exact
+workflow and project. The separate `prompt-session-intake` UserPromptSubmit
+hook may then secret-scan and privately stage later safe direct turns with
+exact session/turn provenance. It remains capture-only: the current agent owns
+classification and lossless refinement, the SDLC adapter owns compare-and-set
+prompt creation or append with an exact-once operation marker, and `sdlc-start`
+owns the single canonical run or resume transition. Conversation, status, and control turns do not mutate or
+execute work. Filesystem edits and saves never trigger execution; they still
+require explicit `run`.
+
+Execution state lives under:
 
 ```text
 ~/.codex/sdlc-runs/<project-id>/<run-id>/
@@ -570,7 +585,8 @@ The preflight must verify and record:
   malformed configuration, a non-canonical configured entrypoint, source/
   payload mismatch, or unsafe behavior is FAIL
 - preservation of non-SDLC hook boundaries such as `SessionStart` and
-  `UserPromptSubmit`
+  global-context `UserPromptSubmit` behavior plus the capture-only,
+  explicitly bound `prompt-session-intake` registration
 - PreToolUse allow and deny fixture cases
 - registered integration/worker worktree detection, identity-drift denial, and
   exact action-scoped execution authorization
@@ -727,7 +743,7 @@ Repeated standalone destroy returns `ALREADY_DESTROYED`.
 
 Create first runs the unchanged deterministic preflight. It then prepares one
 owned project and uses only `$sdlc-start workspace init <project-folder>` and
-`$sdlc-start run <prompt-path-or-unique-filename>` to build a task-board
+`$sdlc-start run <prompt-ref-or-file>` to build a task-board
 application through the normal phase skills. The logical tiers are a browser
 GUI, Django/Gunicorn web/API server, and PostgreSQL database. Exactly two Docker
 Compose containers run the web and database services. Docker assigns the web

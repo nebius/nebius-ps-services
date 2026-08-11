@@ -409,6 +409,32 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 text = (SKILL_ROOT / relative).read_text(encoding="utf-8")
                 self.assertIn("codex --strict-config exec", text)
 
+    def test_guard_denial_contract_repairs_repo_owned_owner_without_evasion(
+        self,
+    ) -> None:
+        required_phrases = (
+            "repo-owned guard",
+            "canonical source",
+            "installed provenance",
+            "alternate writer",
+            "shell redirection",
+            "disable or unregister",
+            "working directory",
+            "identical authorized edit",
+            "external or unrepairable",
+            "manual out-of-band",
+            "restart",
+        )
+        for relative in ("SKILL.md", "README.md", "references/local-setup.md"):
+            with self.subTest(relative=relative):
+                text = re.sub(
+                    r"\s+",
+                    " ",
+                    (SKILL_ROOT / relative).read_text(encoding="utf-8").casefold(),
+                )
+                for phrase in required_phrases:
+                    self.assertIn(phrase, text)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.codex_home = Path(self.tmp.name) / "codex"

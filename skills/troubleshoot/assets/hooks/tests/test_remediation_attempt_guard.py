@@ -20,7 +20,32 @@ guard = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = guard
 SPEC.loader.exec_module(guard)
 
+ARBITER = HOOK.with_name("stop_lifecycle_arbiter.py")
+ARBITER_SPEC = importlib.util.spec_from_file_location("stop_lifecycle_arbiter", ARBITER)
+assert ARBITER_SPEC and ARBITER_SPEC.loader
+arbiter = importlib.util.module_from_spec(ARBITER_SPEC)
+sys.modules[ARBITER_SPEC.name] = arbiter
+ARBITER_SPEC.loader.exec_module(arbiter)
+
 BLOCKER_KEY = "component|operation|error-class|boundary"
+EXPECTED_LOG_LAYERS = (
+    "Component",
+    "Application or job",
+    "Container or orchestrator",
+    "Service manager",
+    "OS and kernel",
+    "Network and firewall",
+    "Storage",
+    "GPU or hardware",
+)
+
+
+def expected_log_rows(status: str = "examined") -> list[str]:
+    return [
+        f"| {layer} | bounded local evidence | fixture incident window | "
+        f"scoped layer state was reviewed | {status} |"
+        for layer in EXPECTED_LOG_LAYERS
+    ]
 
 
 def attempt(
@@ -77,6 +102,24 @@ def legacy_state_data(**updates: object) -> dict[str, object]:
     return data
 
 
+def completion_gate_rows(verdict: str) -> list[str]:
+    gap = (
+        guard.PASS_NO_GAP
+        if verdict == "PASS"
+        else "Acquire criterion-specific evidence before closure."
+    )
+    return [
+        "| Criterion | Verdict | Evidence | Gap or next action |",
+        "| --- | --- | --- | --- |",
+        *[
+            f"| {criterion} | {verdict} | "
+            f"{guard.PASS_EVIDENCE_BY_CRITERION[criterion] if verdict == 'PASS' else 'Focused criterion evidence was recorded.'} | "
+            f"{gap} |"
+            for criterion in guard.COMPLETION_CRITERIA
+        ],
+    ]
+
+
 def complete_report(
     *,
     stop_trigger: str = "attempt_limit",
@@ -106,22 +149,175 @@ def complete_report(
         ] or ["The active-time ledger reached the configured limit."]
     return "\n".join(
         [
-            guard.REPORT_MARKER,
-            f"Stop trigger: {stop_trigger}",
+            "# Troubleshooting Report",
             "## Outcome",
-            "UNRESOLVED after the bounded remediation tranche.",
-            "## Blocking Error",
-            "Blocker: The same bounded operation still fails.",
-            "## Source",
-            "Blocker key: component|operation|error-class|boundary",
-            "## Attempts",
+            "- Classification: UNRESOLVED",
+            "- Current workflow state: REPORTED",
+            f"- {guard.REPORT_MARKER}",
+            f"- Stop trigger: {stop_trigger}",
+            "- Confidence: the blocker remains unresolved after bounded attempts.",
+            "- Current impact: no further remediation is authorized in this tranche.",
+            "- Stabilization status: no additional state change is authorized.",
+            "## Failure Contract",
+            "- Expected: the bounded operation completes without the recorded blocker.",
+            "- Actual: the same bounded operation still fails after each attempt.",
+            "- Scope and signature: the stable blocker and its private attempt ledger.",
+            "- Reproduction or characterization: the recorded verification still fails.",
+            "- Success criteria and constraints: remove the blocker without exceeding authority.",
+            "- Target, environment, blast radius, and allowed mutations: the bounded target remains frozen.",
+            "- Included system boundary: the stable blocker and recorded remediation ledger.",
+            "- Excluded system boundary: unrecorded components and unexercised paths.",
+            "- Exercised control and data paths: marker attempts and verifications only.",
+            "- Incident-window start: the bounded tranche start from the marker.",
+            "- Incident-window end: the marker exhaustion event for this report.",
+            "## Architecture Verdict",
+            "- Observed technologies, versions, and deployment model: evidence is incomplete at exhaustion.",
+            "- Configuration authorities: the decisive configuration authority is not proven.",
+            "- Components, dependencies, ports, protocols, and authentication: coverage is incomplete.",
+            "- Control and data flows: the decisive failing flow remains unresolved.",
+            "- Official vendor architecture comparison and verdict: comparison remains incomplete.",
+            "## Component Verification Matrix",
+            "| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| unresolved component | version evidence unavailable | active configuration unproven | runtime health unproven | dependency, authentication, and DNS evidence incomplete | resource and clock evidence incomplete | restart and change evidence incomplete | bounded marker evidence only |",
+            "## Incident Timeline",
+            "| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |",
+            "| --- | --- | --- | --- | --- |",
+            "| bounded incident window | clock basis unavailable | blocker key correlation | attempts remained unsuccessful | marker-derived attempt order only |",
+            "## Logs Examined",
+            "| Layer | Source | Window and filters | Finding | Coverage status |",
+            "| --- | --- | --- | --- | --- |",
+            *expected_log_rows("unavailable"),
+            "## Hypotheses And Experiments",
+            "| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |",
+            "| --- | --- | --- | --- | --- |",
+            "| recorded attempt hypotheses | marker prediction summaries only | bounded remediation verification | blocker remained present | unresolved at exhaustion |",
+            "## Code Debugging",
+            "- Reproduction and execution or data path: relevant path evidence is incomplete.",
+            "- Stack trace, core dump, or equivalent runtime evidence: decisive artifact is unavailable.",
+            "- Configuration, environment, and data inputs: input coverage remains incomplete.",
+            "- Recent changes and affected or unaffected comparison: comparison is unavailable.",
+            "- Focused tests, static or dynamic analysis, and instrumentation: coverage is incomplete.",
+            "- Instrumentation cleanup and limitations: no cleanup state is inferred by this report.",
+            "## Root Cause",
+            "- Blocker: The same bounded operation still fails.",
+            "- Blocker key: component|operation|error-class|boundary",
+            "- Earliest divergence: decisive divergence remains unproven.",
+            "- Causal chain: the marker proves persistence, not a complete causal chain.",
+            "- Counterfactual and reintroduction: decisive counterfactual evidence is unavailable.",
+            "- Alternatives eliminated: competing alternatives remain unresolved.",
+            "- Confidence: unresolved after bounded remediation attempts.",
+            "## Remediation",
             *attempt_lines,
-            "## Evidence",
+            "- Design classification and handoff: no additional handoff is inferred.",
+            "- Changes made: only the marker-recorded attempts are represented.",
+            "- Authority and safety basis: another attempt requires a new instruction.",
+            "- Rollback or recovery state: rollback state is unavailable to this report.",
+            "## Post-Fix Validation",
             *evidence_lines,
-            "## Current State",
-            "No additional remediation was attempted after exhaustion.",
-            "## Next Action",
-            "User review is required before a fresh bounded tranche.",
+            "- Original reproducer: the stable blocker still reproduces.",
+            "- Regression oracle: the blocker verification remained unsuccessful.",
+            "- Targeted and boundary checks: complete boundary evidence is unavailable.",
+            "- Repeated or dynamic diagnostics: only marker-recorded evidence is represented.",
+            "- Live trial status and claim scope: no verified live-fix claim is made.",
+            "- Candidate, target, checkpoint, and replay range: exact lineage is unavailable.",
+            "- Intervention ledger and first contaminated boundary: intervention state is unknown.",
+            "- Product-owned transitions and independent postconditions: not proven at exhaustion.",
+            "## Completion Gate",
+            *completion_gate_rows("UNKNOWN"),
+            "## Remaining Unknowns And Residual Risks",
+            "- Unknowns and coverage gaps: decisive evidence is still missing for required criteria.",
+            "- Residual risks: the stable blocker remains unresolved.",
+            "- Exact next action: user review before a fresh bounded tranche.",
+        ]
+    )
+
+
+def complete_general_report(
+    classification: str = "VERIFIED_FIXED",
+    *,
+    current_impact: str = "The reported local failure no longer reproduces.",
+    completion_verdict: str | None = None,
+) -> str:
+    verdict = completion_verdict or (
+        "PASS" if classification == "VERIFIED_FIXED" else "UNKNOWN"
+    )
+    return "\n".join(
+        [
+            "# Troubleshooting Report",
+            "## Outcome",
+            f"- Classification: {classification}",
+            "- Current workflow state: REPORTED",
+            "- Confidence: high confidence from focused local verification.",
+            f"- Current impact: {current_impact}",
+            "- Stabilization status: no separate stabilization was required.",
+            "## Failure Contract",
+            "- Expected: the bounded operation completes without the reported error.",
+            "- Actual: the original invocation failed at the recorded boundary.",
+            "- Scope and signature: one local workflow and its stable error signature.",
+            "- Reproduction or characterization: the focused oracle reproduced the denial.",
+            "- Success criteria and constraints: restore the owner contract without policy drift.",
+            "- Target, environment, blast radius, and allowed mutations: local fixture with bounded edits.",
+            "- Included system boundary: local report hook and its arbiter dependency.",
+            "- Excluded system boundary: installed runtime and external targets.",
+            "- Exercised control and data paths: prompt through report validation.",
+            "- Incident-window start: 2026-01-01T00:00:00Z.",
+            "- Incident-window end: 2026-01-01T00:05:00Z.",
+            "## Architecture Verdict",
+            "- Observed technologies, versions, and deployment model: PASS: local Python hook fixture.",
+            "- Configuration authorities: PASS: the canonical hook source owns the evaluated policy.",
+            "- Components, dependencies, ports, protocols, and authentication: PASS: local dependencies verified.",
+            "- Control and data flows: PASS: prompt, guard, arbiter, and report flow were traced.",
+            "- Official vendor architecture comparison and verdict: PASS: observed flow matches the supported contract.",
+            "## Component Verification Matrix",
+            "| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| report guard | PASS: source revision verified | PASS: canonical settings active | PASS: focused path passed | PASS: local arbiter dependency, authentication, and DNS passed | PASS: no pressure and synchronized fixture | PASS: restart and change history reviewed | PASS: focused unit evidence recorded |",
+            "## Incident Timeline",
+            "| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |",
+            "| --- | --- | --- | --- | --- |",
+            "| fixture incident window | synchronized local test clock | report-turn identifier | first denial localized | direct unit evidence recorded |",
+            "## Logs Examined",
+            "| Layer | Source | Window and filters | Finding | Coverage status |",
+            "| --- | --- | --- | --- | --- |",
+            *expected_log_rows(),
+            "## Hypotheses And Experiments",
+            "| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |",
+            "| --- | --- | --- | --- | --- |",
+            "| owner policy mismatch | predicts denial until owner repair | focused before and after oracle | denial cleared after repair | supported and repaired |",
+            "## Code Debugging",
+            "- Reproduction and execution or data path: PASS: the exact guard path reproduced and was traced.",
+            "- Stack trace, core dump, or equivalent runtime evidence: PASS: deterministic return evidence replaced crash data.",
+            "- Configuration, environment, and data inputs: PASS: bounded fixture inputs and settings were compared.",
+            "- Recent changes and affected or unaffected comparison: PASS: changed and protected cases were compared.",
+            "- Focused tests, static or dynamic analysis, and instrumentation: PASS: unit and static checks passed.",
+            "- Instrumentation cleanup and limitations: PASS: no temporary instrumentation remains.",
+            "## Root Cause",
+            "- Earliest divergence: the owner applied a broader policy than its contract.",
+            "- Causal chain: broad classification denied the otherwise authorized operation.",
+            "- Counterfactual and reintroduction: focused faulty and repaired states separated the cause.",
+            "- Alternatives eliminated: startup and unrelated policy failures were eliminated.",
+            "- Confidence: high confidence from the deterministic regression oracle.",
+            "## Remediation",
+            "- Design classification and handoff: localized invariant restoration required no design handoff.",
+            "- Changes made: repaired the canonical owner and preserved unrelated policy.",
+            "- Authority and safety basis: the user authorized the bounded local repair.",
+            "- Rollback or recovery state: no residual runtime or repository recovery is required.",
+            "## Post-Fix Validation",
+            "- Original reproducer: PASS: the formerly denied operation passed the focused oracle.",
+            "- Regression oracle: PASS: protected owner state remained denied in the companion case.",
+            "- Targeted and boundary checks: PASS: guard and arbiter boundaries passed focused checks.",
+            "- Repeated or dynamic diagnostics: PASS: deterministic repetitions produced the expected result.",
+            "- Live trial status and claim scope: PASS: source-only local fixture validation completed.",
+            "- Candidate, target, checkpoint, and replay range: PASS: exact local revision and fixture were used.",
+            "- Intervention ledger and first contaminated boundary: PASS: the fixture had a clean evidence lineage.",
+            "- Product-owned transitions and independent postconditions: PASS: independent unit assertions passed.",
+            "## Completion Gate",
+            *completion_gate_rows(verdict),
+            "## Remaining Unknowns And Residual Risks",
+            "- Unknowns and coverage gaps: no remaining gap within the scoped local fixture.",
+            "- Residual risks: fresh installed-runtime activation remains a separate rollout claim.",
+            "- Exact next action: use the existing regression oracle for future changes.",
         ]
     )
 
@@ -180,6 +376,570 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertEqual(authorization.kind, "valid")
         assert authorization.data is not None
         return authorization.data
+
+    def report_obligation_data(self) -> dict[str, object]:
+        obligation = guard.load_report_obligation_state(self.payload)
+        self.assertEqual(obligation.kind, "valid")
+        assert obligation.data is not None
+        return obligation.data
+
+    def evaluate_stop_with_arbiter(self) -> dict[str, object]:
+        return arbiter.evaluate(self.payload, HOOK.parent)
+
+    def test_explicit_invocation_without_marker_requires_and_accepts_report(
+        self,
+    ) -> None:
+        output = self.evaluate_prompt(
+            "$troubleshoot diagnose the failure", turn_id="report-turn"
+        )
+        self.assertIn(
+            "structured terminal report",
+            output["hookSpecificOutput"]["additionalContext"],
+        )
+        obligation = self.report_obligation_data()
+        self.assertEqual(obligation["status"], "active")
+        self.assertEqual(obligation["corrections"], 0)
+        obligation_file = guard.report_obligation_file_for_payload(self.payload)
+        assert obligation_file is not None
+        self.assertEqual(obligation_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(obligation_file.parent.stat().st_mode & 0o777, 0o700)
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The operation is fixed.",
+                "stop_hook_active": False,
+            }
+        )
+        incomplete = self.evaluate_stop_with_arbiter()
+        self.assertEqual(incomplete["decision"], "block")
+        self.assertIn("structured troubleshooting report", incomplete["reason"])
+        self.assertEqual(self.report_obligation_data()["corrections"], 1)
+
+        self.payload["last_assistant_message"] = complete_general_report()
+        complete = self.evaluate_stop_with_arbiter()
+        self.assertTrue(complete["continue"])
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+    def test_general_report_accepts_every_terminal_classification(self) -> None:
+        for index, classification in enumerate(guard.GENERAL_REPORT_OUTCOMES):
+            with self.subTest(classification=classification):
+                turn_id = f"classification-{index}"
+                self.evaluate_prompt("$troubleshoot", turn_id=turn_id)
+                self.payload.update(
+                    {
+                        "hook_event_name": "Stop",
+                        "turn_id": turn_id,
+                        "last_assistant_message": complete_general_report(
+                            classification,
+                            current_impact=(
+                                "The operation remains blocked after a tool error."
+                                if classification == "UNRESOLVED"
+                                else "The bounded investigation reached its terminal state."
+                            ),
+                        ),
+                        "stop_hook_active": False,
+                    }
+                )
+                output = self.evaluate_stop_with_arbiter()
+                self.assertTrue(output["continue"])
+                self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+    def test_verified_fixed_requires_all_completion_criteria_to_pass(self) -> None:
+        valid = complete_general_report()
+        logs_row = next(
+            line for line in valid.splitlines() if line.startswith("| Logs |")
+        )
+        report = valid.replace(
+            logs_row,
+            "| Logs | UNKNOWN | Incident logs remain unavailable. | "
+            "Acquire the incident log window before closure. |",
+        )
+        complete, issue = guard._general_report_complete(report)
+        self.assertFalse(complete)
+        self.assertIn("VERIFIED_FIXED requires PASS for: Logs", issue)
+
+    def test_pass_rows_reject_claimed_evidence_gaps(self) -> None:
+        valid = complete_general_report()
+        logs_row = next(
+            line for line in valid.splitlines() if line.startswith("| Logs |")
+        )
+        cases = (
+            "Verified: log evidence is unavailable for this incident.",
+            "Verified: the relevant logs remain unproven.",
+            "Verified: the required log check was not run.",
+            "Verified: the required diagnostic remains unrun.",
+            "Verified: no log evidence was available for this incident.",
+            "Verified: logs were never collected for this incident.",
+        )
+        for evidence in cases:
+            with self.subTest(evidence=evidence):
+                report = valid.replace(
+                    logs_row,
+                    f"| Logs | PASS | {evidence} | {guard.PASS_NO_GAP} |",
+                )
+                complete, issue = guard._general_report_complete(report)
+                self.assertFalse(complete)
+                self.assertIn("must be `Verified: Logs Examined.`", issue)
+
+    def test_pass_rows_require_structured_evidence_and_no_gap_sentinel(self) -> None:
+        valid = complete_general_report()
+        logs_row = next(
+            line for line in valid.splitlines() if line.startswith("| Logs |")
+        )
+        cases = (
+            valid.replace(
+                logs_row,
+                f"| Logs | PASS | Logs were examined for the incident. | "
+                f"{guard.PASS_NO_GAP} |",
+            ),
+            valid.replace(
+                guard.PASS_NO_GAP,
+                "Acquire more evidence before closure.",
+                1,
+            ),
+        )
+        for report in cases:
+            with self.subTest(report=report):
+                self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_pass_rows_cross_validate_referenced_report_evidence(self) -> None:
+        valid = complete_general_report()
+        valid_negative_finding = valid.replace(
+            "scoped layer state was reviewed",
+            "no evidence of the original failure remained in the incident window",
+        )
+        self.assertEqual(
+            guard._general_report_complete(valid_negative_finding),
+            (True, ""),
+        )
+        cases = {
+            "design": valid.replace(
+                "- Official vendor architecture comparison and verdict: PASS:",
+                "- Official vendor architecture comparison and verdict: UNKNOWN:",
+            ),
+            "infrastructure": valid.replace(
+                "PASS: source revision verified",
+                "UNKNOWN: source revision unavailable",
+            ),
+            "connectivity": valid.replace(
+                "PASS: local arbiter dependency, authentication, and DNS passed",
+                "UNKNOWN: dependency, authentication, and DNS evidence unavailable",
+            ),
+            "configuration": valid.replace(
+                "PASS: canonical settings active",
+                "UNKNOWN: active settings unavailable",
+            ),
+            "runtime": valid.replace(
+                "PASS: focused path passed",
+                "UNKNOWN: runtime path unverified",
+            ),
+            "logs": valid.replace("| examined |", "| unavailable |"),
+            "code": valid.replace(
+                "- Reproduction and execution or data path: PASS:",
+                "- Reproduction and execution or data path: UNKNOWN:",
+            ),
+            "architecture-contradiction": valid.replace(
+                "PASS: observed flow matches the supported contract.",
+                "PASS: official architecture was not checked.",
+            ),
+            "component-contradiction": valid.replace(
+                "PASS: source revision verified",
+                "PASS: version evidence unavailable",
+            ),
+            "component-evidence-contradiction": valid.replace(
+                "PASS: focused unit evidence recorded",
+                "PASS: component evidence is missing",
+            ),
+            "log-source-contradiction": valid.replace(
+                "bounded local evidence",
+                "log source unavailable",
+                1,
+            ),
+            "log-finding-contradiction": valid.replace(
+                "scoped layer state was reviewed",
+                "log evidence was never collected",
+                1,
+            ),
+            "code-contradiction": valid.replace(
+                "PASS: deterministic return evidence replaced crash data.",
+                "PASS: runtime evidence was not checked.",
+            ),
+            "post-fix-contradiction": valid.replace(
+                "PASS: source-only local fixture validation completed.",
+                "PASS: live trial evidence unavailable.",
+            ),
+        }
+        for name, report in cases.items():
+            with self.subTest(name=name):
+                complete, issue = guard._general_report_complete(report)
+                self.assertFalse(complete)
+                self.assertTrue(issue)
+
+    def test_general_report_accepts_public_vendor_and_artifact_identities(self) -> None:
+        report = complete_general_report().replace(
+            "- Official vendor architecture comparison and verdict: PASS: observed flow matches the supported contract.",
+            "\n".join(
+                [
+                    "- Official vendor architecture comparison and verdict: PASS: observed flow matches the supported contract.",
+                    "- Vendor docs: https://kubernetes.io/docs/concepts/architecture/",
+                    "- Public host: kubernetes.io",
+                    "- Candidate commit: 0123456789abcdef0123456789abcdef01234567",
+                    "- Image digest: sha256:"
+                    + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                ]
+            ),
+        )
+        self.assertEqual(guard._general_report_complete(report), (True, ""))
+
+    def test_general_report_rejects_single_label_host_identity(self) -> None:
+        report = complete_general_report().replace(
+            "- Official vendor architecture comparison and verdict: PASS: observed flow matches the supported contract.",
+            "\n".join(
+                [
+                    "- Official vendor architecture comparison and verdict: PASS: observed flow matches the supported contract.",
+                    "- Target host: worker-one",
+                ]
+            ),
+        )
+        complete, issue = guard._general_report_complete(report)
+        self.assertFalse(complete)
+        self.assertIn("sensitive value", issue)
+
+    def test_general_report_requires_structured_tables_and_labeled_fields(
+        self,
+    ) -> None:
+        valid = complete_general_report()
+        component_row = (
+            "| report guard | PASS: source revision verified | PASS: canonical "
+            "settings active | PASS: focused path passed | PASS: local arbiter dependency, "
+            "authentication, and DNS passed | PASS: no pressure and synchronized fixture | "
+            "PASS: restart and change history reviewed | PASS: focused unit evidence recorded |"
+        )
+        cases = {
+            "missing-component-row": valid.replace(component_row, ""),
+            "missing-code-debug-field": valid.replace(
+                "- Reproduction and execution or data path:",
+                "- Execution path summary:",
+            ),
+            "malformed-log-table": valid.replace(
+                "| Layer | Source | Window and filters | Finding | Coverage status |",
+                "| Layer | Finding |",
+            ),
+        }
+        for name, report in cases.items():
+            with self.subTest(name=name):
+                complete, issue = guard._general_report_complete(report)
+                self.assertFalse(complete)
+                self.assertTrue(issue)
+
+    def test_logs_examined_requires_each_canonical_layer_exactly_once(self) -> None:
+        valid = complete_general_report("UNRESOLVED", completion_verdict="UNKNOWN")
+        rows = expected_log_rows()
+        self.assertEqual(guard._general_report_complete(valid), (True, ""))
+        for layer, row in zip(EXPECTED_LOG_LAYERS, rows, strict=True):
+            cases = {
+                "missing": valid.replace(row, "", 1),
+                "duplicate": valid.replace(row, f"{row}\n{row}", 1),
+                "case-alias": valid.replace(
+                    row, row.replace(f"| {layer} |", f"| {layer.casefold()} |"), 1
+                ),
+            }
+            for name, report in cases.items():
+                with self.subTest(layer=layer, case=name):
+                    complete, issue = guard._general_report_complete(report)
+                    self.assertFalse(complete)
+                    self.assertTrue(issue)
+        reordered = valid.replace(f"{rows[0]}\n{rows[1]}", f"{rows[1]}\n{rows[0]}")
+        self.assertFalse(guard._general_report_complete(reordered)[0])
+        unsupported = valid.replace(
+            rows[0], rows[0].replace("| Component |", "| Component runtime |"), 1
+        )
+        self.assertFalse(guard._general_report_complete(unsupported)[0])
+
+    def test_log_coverage_statuses_are_canonical(self) -> None:
+        valid = complete_general_report("UNRESOLVED", completion_verdict="UNKNOWN")
+        for status in ("unavailable", "unsafe", "not applicable"):
+            with self.subTest(accepted=status):
+                report = valid.replace("| examined |", f"| {status} |", 1)
+                self.assertEqual(guard._general_report_complete(report), (True, ""))
+        verified = complete_general_report()
+        for status in ("unavailable", "unsafe"):
+            with self.subTest(verified_fixed_rejected=status):
+                report = verified.replace("| examined |", f"| {status} |", 1)
+                self.assertFalse(guard._general_report_complete(report)[0])
+        for status in ("UNKNOWN", "Examined", "not-applicable"):
+            with self.subTest(rejected=status):
+                report = valid.replace("| examined |", f"| {status} |", 1)
+                self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_report_requires_explicit_boundary_and_incident_window_fields(
+        self,
+    ) -> None:
+        required_fields = (
+            "- Included system boundary: local report hook and its arbiter dependency.",
+            "- Excluded system boundary: installed runtime and external targets.",
+            "- Exercised control and data paths: prompt through report validation.",
+            "- Incident-window start: 2026-01-01T00:00:00Z.",
+            "- Incident-window end: 2026-01-01T00:05:00Z.",
+        )
+        valid = complete_general_report()
+        self.assertEqual(guard._general_report_complete(valid), (True, ""))
+        for field in required_fields:
+            with self.subTest(field=field):
+                prefix = field.split(":", 1)[0] + ":"
+                cases = (
+                    valid.replace(f"{field}\n", ""),
+                    valid.replace(field, f"{field}\n{field}"),
+                    valid.replace(field, prefix),
+                )
+                for report in cases:
+                    self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_component_matrix_requires_dns_and_restart_history_headers(self) -> None:
+        former_header = (
+            "| Component | Version and existence | Active configuration | Runtime health | "
+            "Dependencies and authentication | Resources and time sync | Recent changes | "
+            "Evidence |"
+        )
+        expected_header = (
+            "| Component | Version and existence | Active configuration | Runtime health | "
+            "Dependencies, authentication, and DNS | Resources and time sync | "
+            "Restart history and recent changes | Evidence |"
+        )
+        report = complete_general_report()
+        self.assertEqual(guard._general_report_complete(report), (True, ""))
+        self.assertFalse(
+            guard._general_report_complete(
+                report.replace(expected_header, former_header)
+            )[0]
+        )
+
+    def test_evidence_tables_reject_placeholder_cells(self) -> None:
+        unresolved = complete_general_report("UNRESOLVED", completion_verdict="UNKNOWN")
+        cases = {
+            "component-evidence": unresolved.replace(
+                "PASS: source revision verified", "n", 1
+            ),
+            "log-source": unresolved.replace("bounded local evidence", "n", 1),
+            "log-window": unresolved.replace(
+                expected_log_rows()[0],
+                expected_log_rows()[0].replace("fixture incident window", "n"),
+                1,
+            ),
+            "log-finding": unresolved.replace(
+                "scoped layer state was reviewed", "n", 1
+            ),
+            "pass-detail": complete_general_report().replace(
+                "PASS: source revision verified", "PASS: n", 1
+            ),
+        }
+        for name, report in cases.items():
+            with self.subTest(name=name):
+                self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_component_identity_rejects_placeholders_but_allows_short_names(
+        self,
+    ) -> None:
+        valid = complete_general_report()
+        self.assertEqual(
+            guard._general_report_complete(
+                valid.replace("| report guard |", "| api |", 1)
+            ),
+            (True, ""),
+        )
+        for placeholder in ("n", "none", "placeholder", "-", "?", "..."):
+            with self.subTest(placeholder=placeholder):
+                report = valid.replace("| report guard |", f"| {placeholder} |", 1)
+                self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_completion_gate_rejects_missing_duplicate_and_invalid_rows(self) -> None:
+        valid = complete_general_report("UNRESOLVED")
+        logs_row = next(
+            line for line in valid.splitlines() if line.startswith("| Logs |")
+        )
+        cases = {
+            "missing": "\n".join(
+                line for line in valid.splitlines() if line != logs_row
+            ),
+            "duplicate": valid.replace(logs_row, f"{logs_row}\n{logs_row}"),
+            "invalid": valid.replace("| Logs | UNKNOWN |", "| Logs | MAYBE |"),
+            "missing-header": valid.replace(
+                "| Criterion | Verdict | Evidence | Gap or next action |\n", ""
+            ),
+            "duplicate-separator": valid.replace(
+                "| Criterion | Verdict | Evidence | Gap or next action |\n"
+                "| --- | --- | --- | --- |",
+                "| Criterion | Verdict | Evidence | Gap or next action |\n"
+                "| --- | --- | --- | --- |\n| --- | --- | --- | --- |",
+            ),
+            "extra-invalid": valid.replace(
+                "## Remaining Unknowns And Residual Risks",
+                "| Surprise | MAYBE | Extra evidence here. | Review it next. |\n"
+                "## Remaining Unknowns And Residual Risks",
+            ),
+        }
+        for name, report in cases.items():
+            with self.subTest(name=name):
+                self.assertFalse(guard._general_report_complete(report)[0])
+
+    def test_exhaustion_marker_must_be_inside_outcome(self) -> None:
+        report = complete_report().replace(
+            f"- {guard.REPORT_MARKER}",
+            "- Exhaustion marker is recorded in another section.",
+        )
+        report = report.replace(
+            "## Failure Contract",
+            f"## Failure Contract\n{guard.REPORT_MARKER}",
+        )
+        state = guard.GuardState(
+            kind="valid",
+            state_file=None,
+            data=state_data(
+                attempts=default_failed_attempts(),
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            ),
+            exhausted=True,
+            stop_trigger="attempt_limit",
+        )
+        complete, issue = guard._report_complete(report, state)
+        self.assertFalse(complete)
+        self.assertIn("Outcome requires exactly one", issue)
+
+    def test_general_report_retry_is_bounded_and_emits_structured_fallback(
+        self,
+    ) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="fallback-turn")
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "No report was returned.",
+                "stop_hook_active": False,
+            }
+        )
+        self.assertEqual(self.evaluate_stop_with_arbiter()["decision"], "block")
+
+        self.payload["stop_hook_active"] = True
+        fallback_output = self.evaluate_stop_with_arbiter()
+        self.assertFalse(fallback_output["continue"])
+        fallback = fallback_output["systemMessage"]
+        self.assertIn("# Troubleshooting Report", fallback)
+        self.assertIn("- Classification: UNRESOLVED", fallback)
+        self.assertEqual(guard._general_report_complete(fallback), (True, ""))
+        self.assertEqual(self.report_obligation_data()["status"], "fallback")
+
+    def test_interrupted_obligation_survives_later_turn_until_reported(
+        self,
+    ) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="interrupted-turn")
+        self.payload.update(
+            {
+                "hook_event_name": "PreToolUse",
+                "turn_id": "resumed-turn",
+                "tool_name": "Bash",
+                "tool_input": {"command": "run-check"},
+            }
+        )
+        self.assertEqual(guard.evaluate(self.payload), {})
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_general_report(
+                    "UNRESOLVED",
+                    current_impact=(
+                        "The earlier turn was interrupted before it could report completion."
+                    ),
+                ),
+                "stop_hook_active": False,
+            }
+        )
+        delivered = self.evaluate_stop_with_arbiter()
+        self.assertTrue(delivered["continue"])
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+    def test_report_delivery_waits_for_other_stop_policy_continuations(self) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="composed-stop")
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_general_report(),
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+
+        def with_project_block(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            if path.name == "project_specs_lifecycle.py":
+                return {
+                    "decision": "block",
+                    "reason": "Project reconciliation remains required.",
+                }
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=with_project_block):
+            blocked = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(blocked["decision"], "block")
+        self.assertIn("Project reconciliation", blocked["reason"])
+        self.assertEqual(self.report_obligation_data()["status"], "active")
+
+        def without_block(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=without_block):
+            completed = arbiter.evaluate(self.payload, hook_dir)
+        self.assertTrue(completed["continue"])
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
+
+    def test_report_delivery_finalizes_before_terminal_peer_result(self) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="terminal-peer")
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_general_report(),
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "terminal-peer-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+        terminal = {
+            "continue": False,
+            "stopReason": "A peer Stop policy ended the host turn.",
+        }
+
+        def with_terminal_peer(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            if path.name == "project_specs_lifecycle.py":
+                return terminal
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=with_terminal_peer):
+            result = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(result, terminal)
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
 
     def test_missing_marker_and_missing_session_fail_open(self) -> None:
         self.assertEqual(self.evaluate_pre_tool(), {})
@@ -408,6 +1168,245 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertIn("remains pending", second["stopReason"])
         self.assertIn("Before another tool call", second["systemMessage"])
 
+    def test_pending_resize_invalid_marker_gives_atomic_restore_guidance(self) -> None:
+        recorded = [attempt(1)]
+        self.write_state(state_data(attempts=recorded, active_seconds=60))
+        self.evaluate_prompt("$troubleshoot --attempt-limit=10", turn_id="resize")
+        pending = self.authorization_data()["pending"]
+        assert isinstance(pending, dict)
+
+        invalid = state_data(
+            attempts=recorded,
+            active_seconds=60,
+            attempt_limit=10,
+            budget_authorization_id=pending["authorization_id"],
+        )
+        invalid.pop("blocker_summary")
+        self.write_state(invalid)
+
+        prompt = self.evaluate_prompt(
+            "Continue after repairing the resize.", turn_id="resize-invalid"
+        )
+        prompt_context = prompt["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("missing: blocker_summary", prompt_context)
+        self.assertIn("Restore every non-profile field", prompt_context)
+        self.assertIn("apply the authorized profile change atomically", prompt_context)
+
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn("missing: blocker_summary", denied["permissionDecisionReason"])
+        self.assertIn(
+            "do not reset or invent blocker state",
+            denied["permissionDecisionReason"],
+        )
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The resize marker still needs repair.",
+                "stop_hook_active": False,
+            }
+        )
+        first = guard.evaluate(self.payload)
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("Restore every non-profile field", first["reason"])
+
+        self.payload["stop_hook_active"] = True
+        second = guard.evaluate(self.payload)
+        self.assertFalse(second["continue"])
+        self.assertIn("missing: blocker_summary", second["systemMessage"])
+
+        self.write_state(
+            state_data(
+                attempts=recorded,
+                active_seconds=60,
+                attempt_limit=10,
+                budget_authorization_id=pending["authorization_id"],
+            )
+        )
+        self.payload.update(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "run-check"},
+                "stop_hook_active": False,
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+        self.assertIsNone(self.authorization_data()["pending"])
+
+    def test_pending_resize_missing_marker_reports_safe_recovery_boundary(self) -> None:
+        state_file = self.write_state(state_data(attempts=[attempt(1)]))
+        self.evaluate_prompt("$troubleshoot --attempt-limit=10", turn_id="resize")
+        state_file.unlink()
+
+        prompt = self.evaluate_prompt(
+            "Continue after restoring the marker.", turn_id="resize-missing"
+        )
+        prompt_context = prompt["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("marker is missing from current.md", prompt_context)
+        self.assertIn("cannot reconstruct a deleted marker", prompt_context)
+        self.assertIn("fresh user-authorized troubleshoot session", prompt_context)
+
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn(
+            "restore the exact pre-resize canonical marker",
+            denied["permissionDecisionReason"],
+        )
+
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Add File: {state_file}",
+                            "+restored marker",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The resize marker is missing.",
+                "stop_hook_active": False,
+            }
+        )
+        first = guard.evaluate(self.payload)
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("cannot reconstruct a deleted marker", first["reason"])
+
+        self.payload["stop_hook_active"] = True
+        second = guard.evaluate(self.payload)
+        self.assertFalse(second["continue"])
+        self.assertIn(
+            "fresh user-authorized troubleshoot session", second["systemMessage"]
+        )
+
+    def test_pending_invalid_marker_surfaces_validation_reason(self) -> None:
+        self.write_state(
+            state_data(
+                attempts=default_failed_attempts(),
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        self.evaluate_prompt("Continue troubleshooting.", turn_id="next-tranche")
+        pending = self.authorization_data()["pending"]
+        assert isinstance(pending, dict)
+
+        invalid = state_data(
+            tranche=2,
+            started_at="2026-01-02T00:00:00Z",
+            budget_authorization_id=pending["authorization_id"],
+            override_summary="The user requested another bounded tranche.",
+        )
+        invalid.pop("blocker_summary")
+        state_file = self.write_state(invalid)
+
+        prompt = self.evaluate_prompt(
+            "Continue after the marker update.", turn_id="pending-invalid"
+        )
+        prompt_context = prompt["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("remediation marker is invalid", prompt_context)
+        self.assertIn("missing: blocker_summary", prompt_context)
+
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn("missing: blocker_summary", denied["permissionDecisionReason"])
+        self.assertIn("complete canonical", denied["permissionDecisionReason"])
+
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Update File: {state_file}",
+                            "@@",
+                            "-old",
+                            "+new",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "tool_name": "Bash",
+                "tool_input": {"command": "run-check"},
+                "last_assistant_message": "The marker still needs repair.",
+                "stop_hook_active": False,
+            }
+        )
+        first = guard.evaluate(self.payload)
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("missing: blocker_summary", first["reason"])
+
+        self.payload["stop_hook_active"] = True
+        second = guard.evaluate(self.payload)
+        self.assertFalse(second["continue"])
+        self.assertIn("missing: blocker_summary", second["systemMessage"])
+
+    def test_pending_invalid_transition_surfaces_transition_reason(self) -> None:
+        self.write_state(
+            state_data(
+                attempts=default_failed_attempts(),
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
+        )
+        self.evaluate_prompt("Continue troubleshooting.", turn_id="next-tranche")
+        pending = self.authorization_data()["pending"]
+        assert isinstance(pending, dict)
+
+        self.write_state(
+            state_data(
+                blocker_key="other-component|other-operation|other-error|other-boundary",
+                blocker_summary="A causally independent operation now fails.",
+                tranche=2,
+                started_at="2026-01-02T00:00:00Z",
+                budget_authorization_id=pending["authorization_id"],
+                override_summary="The user requested another bounded tranche.",
+            )
+        )
+
+        prompt = self.evaluate_prompt(
+            "Continue after the marker update.", turn_id="pending-transition"
+        )
+        prompt_context = prompt["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("causally independent blocker requires", prompt_context)
+
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn(
+            "causally independent blocker requires tranche 1",
+            denied["permissionDecisionReason"],
+        )
+
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": "The transition still needs repair.",
+                "stop_hook_active": False,
+            }
+        )
+        stopped = guard.evaluate(self.payload)
+        self.assertEqual(stopped["decision"], "block")
+        self.assertIn("causally independent blocker requires", stopped["reason"])
+
     def test_resize_boundaries_allow_four_of_five_and_nine_of_ten(self) -> None:
         self.write_state(
             state_data(
@@ -605,11 +1604,45 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         )
         output = self.evaluate_prompt("continue", turn_id="continue-turn")
         self.assertIn(
-            "fresh active state", output["hookSpecificOutput"]["additionalContext"]
+            "complete canonical fresh active marker",
+            output["hookSpecificOutput"]["additionalContext"],
         )
+        pending_context = output["hookSpecificOutput"]["additionalContext"]
+        for field in (
+            "blocker_key",
+            "blocker_summary",
+            "attempts",
+            "active_seconds",
+            "started_at",
+            "status",
+            "stop_trigger",
+            "tranche",
+            "override_summary",
+        ):
+            self.assertIn(field, pending_context)
         pending = self.authorization_data()["pending"]
         assert isinstance(pending, dict)
         self.assertEqual(pending["mode"], "next_tranche")
+        state_file = guard.state_file_for_payload(self.payload)
+        assert state_file is not None
+        self.payload.update(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": "\n".join(
+                        [
+                            "*** Begin Patch",
+                            f"*** Update File: {state_file}",
+                            "@@",
+                            "-old",
+                            "+new",
+                            "*** End Patch",
+                        ]
+                    )
+                },
+            }
+        )
+        self.assertEqual(self.evaluate_pre_tool(), {})
         self.write_state(
             state_data(
                 tranche=2,
@@ -618,6 +1651,44 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 override_summary="The user requested another bounded tranche.",
             )
         )
+        self.assertEqual(self.evaluate_pre_tool(), {})
+        authorization = self.authorization_data()
+        self.assertIsNone(authorization["pending"])
+        self.assertIsNone(authorization["terminal"])
+
+    def test_resolved_marker_new_independent_blocker_promotes_pending_authorization(
+        self,
+    ) -> None:
+        self.write_state(
+            state_data(
+                attempts=[attempt(1, result="succeeded")],
+                status="resolved",
+            )
+        )
+
+        output = self.evaluate_prompt("$troubleshoot", turn_id="resolved-next")
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("prior terminal marker", context)
+        self.assertNotIn("exhausted marker", context)
+
+        denied = self.evaluate_pre_tool()["hookSpecificOutput"]
+        self.assertEqual(denied["permissionDecision"], "deny")
+        self.assertIn("prior terminal marker", denied["permissionDecisionReason"])
+
+        pending = self.authorization_data()["pending"]
+        assert isinstance(pending, dict)
+        self.assertEqual(pending["mode"], "next_tranche")
+        self.write_state(
+            state_data(
+                blocker_key=(
+                    "other-component|other-operation|other-error|other-boundary"
+                ),
+                blocker_summary="A causally independent operation now fails.",
+                started_at="2026-01-02T00:00:00Z",
+                budget_authorization_id=pending["authorization_id"],
+            )
+        )
+
         self.assertEqual(self.evaluate_pre_tool(), {})
         authorization = self.authorization_data()
         self.assertIsNone(authorization["pending"])
@@ -643,7 +1714,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         state = guard.load_guard_state(self.payload)
         report = guard._fallback_report(state, "missing report")
         self.assertIn("attempt-10", report)
-        self.assertLess(len(report), 5000)
+        self.assertLess(len(report), guard.MAX_FALLBACK_PREVIEW_CHARS)
         self.assertTrue(guard._report_complete(report, state)[0])
 
     def test_new_user_turn_releases_terminal_lock_after_task_state_is_removed(
@@ -1506,10 +2577,10 @@ class RemediationAttemptGuardTest(unittest.TestCase):
         self.assertIn("fallback report was emitted", second["stopReason"])
         fallback = second["systemMessage"]
         self.assertIn(guard.REPORT_MARKER, fallback)
-        self.assertIn("## Blocking Error", fallback)
+        self.assertIn("## Completion Gate", fallback)
         self.assertIn("attempt-1", fallback)
         self.assertIn("attempt-5", fallback)
-        self.assertLess(len(fallback), 2500)
+        self.assertLess(len(fallback), guard.MAX_FALLBACK_PREVIEW_CHARS)
         state = guard.load_guard_state(self.payload)
         self.assertEqual(guard._report_complete(fallback, state), (True, ""))
 
@@ -1586,7 +2657,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             attempt_count=guard.HISTORICAL_MAX_ATTEMPT_LIMIT,
             legacy_evidence=True,
         )
-        delivered = guard.evaluate(self.payload)
+        delivered = self.evaluate_stop_with_arbiter()
         self.assertFalse(delivered["continue"])
         self.assertIn("report delivered", delivered["stopReason"])
 
@@ -1677,14 +2748,16 @@ class RemediationAttemptGuardTest(unittest.TestCase):
             }
         )
         correction = guard.evaluate(self.payload)["reason"]
-        self.assertLess(len(correction), 2500)
+        self.assertLess(len(correction), guard.MAX_FALLBACK_PREVIEW_CHARS)
         self.assertIn("attempt-5", correction)
 
         self.payload["stop_hook_active"] = True
         fallback_output = guard.evaluate(self.payload)
         fallback = fallback_output["systemMessage"]
-        self.assertLess(len(fallback), 2500)
-        self.assertLess(len(json.dumps(fallback_output)), 2500)
+        self.assertLess(len(fallback), guard.MAX_FALLBACK_PREVIEW_CHARS)
+        self.assertLess(
+            len(json.dumps(fallback_output)), guard.MAX_FALLBACK_PREVIEW_CHARS
+        )
         self.assertIn("attempt-5", fallback)
 
     def test_longest_report_issue_keeps_full_correction_below_preview_limit(
@@ -1721,12 +2794,12 @@ class RemediationAttemptGuardTest(unittest.TestCase):
 
         correction = guard.evaluate(self.payload)
         self.assertIn(
-            "Attempts requires substantive Remediation, Verification, and Result "
+            "Remediation requires substantive Remediation, Verification, and Result "
             "fields for attempt-5",
             correction["reason"],
         )
-        self.assertLess(len(correction["reason"]), 2500)
-        self.assertLess(len(json.dumps(correction)), 2500)
+        self.assertLess(len(correction["reason"]), guard.MAX_FALLBACK_PREVIEW_CHARS)
+        self.assertLess(len(json.dumps(correction)), guard.MAX_FALLBACK_PREVIEW_CHARS)
 
     def test_stop_requests_marker_repair_without_exhaustion_report(self) -> None:
         self.write_state({}, raw="{")
@@ -1757,7 +2830,7 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 "hook_event_name": "Stop",
                 "last_assistant_message": complete_report(
                     stop_trigger="time_limit", attempt_count=0
-                ).replace("## Source", "## Source Details"),
+                ).replace("## Root Cause", "## Root Cause Details"),
                 "stop_hook_active": False,
             }
         )
@@ -1875,51 +2948,51 @@ class RemediationAttemptGuardTest(unittest.TestCase):
 
         missing = "\n".join(
             "The blocking section remains intentionally substantive."
-            if line.startswith("Blocker: ")
+            if line.startswith("- Blocker: ")
             else line
             for line in complete.splitlines()
         )
         self.assertEqual(
             guard._report_complete(missing, state)[1],
-            "Blocking Error requires one substantive `Blocker:` line",
+            "Root Cause requires one substantive `- Blocker:` line",
         )
 
         paraphrased = "\n".join(
-            "Blocker: A different substantive summary of the same failure."
-            if line.startswith("Blocker: ")
+            "- Blocker: A different substantive summary of the same failure."
+            if line.startswith("- Blocker: ")
             else line
             for line in complete.splitlines()
         )
         self.assertEqual(
             guard._report_complete(paraphrased, state)[1],
-            "Blocking Error `Blocker:` line must exactly match the bounded "
+            "Root Cause `- Blocker:` line must exactly match the bounded "
             "marker-derived value",
         )
 
         missing_source = "\n".join(
             "The source section remains intentionally substantive."
-            if line.startswith("Blocker key: ")
+            if line.startswith("- Blocker key: ")
             else line
             for line in complete.splitlines()
         )
         self.assertEqual(
             guard._report_complete(missing_source, state)[1],
-            "Source requires one substantive `Blocker key:` line",
+            "Root Cause requires one substantive `- Blocker key:` line",
         )
 
         paraphrased_source = "\n".join(
-            "Blocker key: another|substantive|source|boundary"
-            if line.startswith("Blocker key: ")
+            "- Blocker key: another|substantive|source|boundary"
+            if line.startswith("- Blocker key: ")
             else line
             for line in complete.splitlines()
         )
         self.assertEqual(
             guard._report_complete(paraphrased_source, state)[1],
-            "Source `Blocker key:` line must exactly match the bounded "
+            "Root Cause `- Blocker key:` line must exactly match the bounded "
             "marker-derived value",
         )
 
-    def test_complete_report_stops_even_when_other_stop_hooks_might_continue(
+    def test_complete_exhausted_report_waits_for_other_stop_hooks(
         self,
     ) -> None:
         self.write_state(
@@ -1936,17 +3009,88 @@ class RemediationAttemptGuardTest(unittest.TestCase):
                 "stop_hook_active": False,
             }
         )
-        output = guard.evaluate(self.payload)
-        self.assertFalse(output["continue"])
-        self.assertIn("report delivered", output["stopReason"])
+        ready = guard.evaluate(self.payload)
+        self.assertTrue(ready["continue"])
+        self.assertTrue(ready[guard.REPORT_READY_FIELD])
 
-        self.payload["last_assistant_message"] = complete_report().replace(
-            "No additional remediation was attempted after exhaustion.",
-            "The local test was not rerun after budget exhaustion.",
+        hook_dir = Path(self.tmp.name) / "exhausted-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+
+        def with_project_block(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            if path.name == "project_specs_lifecycle.py":
+                return {
+                    "decision": "block",
+                    "reason": "Project reconciliation remains required.",
+                }
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=with_project_block):
+            blocked = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(blocked["decision"], "block")
+        self.assertIn("Project reconciliation", blocked["reason"])
+
+        def without_block(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=without_block):
+            delivered = arbiter.evaluate(self.payload, hook_dir)
+        self.assertFalse(delivered["continue"])
+        self.assertIn("report delivered", delivered["stopReason"])
+
+    def test_exhausted_report_finalizes_before_terminal_peer_result(self) -> None:
+        self.evaluate_prompt("$troubleshoot", turn_id="exhausted-terminal-peer")
+        self.write_state(
+            state_data(
+                attempts=default_failed_attempts(),
+                status="exhausted",
+                stop_trigger="attempt_limit",
+            )
         )
-        prose_output = guard.evaluate(self.payload)
-        self.assertFalse(prose_output["continue"])
-        self.assertIn("report delivered", prose_output["stopReason"])
+        self.payload.update(
+            {
+                "hook_event_name": "Stop",
+                "last_assistant_message": complete_report(),
+                "stop_hook_active": False,
+            }
+        )
+        hook_dir = Path(self.tmp.name) / "exhausted-terminal-peer-hooks"
+        hook_dir.mkdir()
+        for delegate in arbiter.DELEGATES:
+            (hook_dir / delegate).write_text("# test delegate\n", encoding="utf-8")
+        terminal = {
+            "continue": False,
+            "stopReason": "A peer Stop policy ended the host turn.",
+        }
+
+        def with_terminal_peer(
+            path: Path,
+            payload: dict[str, object],
+            _deadline: float,
+        ) -> dict[str, object]:
+            if path.name == "remediation_attempt_guard.py":
+                return guard.evaluate(payload)
+            if path.name == "project_specs_lifecycle.py":
+                return terminal
+            return {"continue": True}
+
+        with patch.object(arbiter, "_run_delegate", side_effect=with_terminal_peer):
+            result = arbiter.evaluate(self.payload, hook_dir)
+        self.assertEqual(result, terminal)
+        self.assertEqual(self.report_obligation_data()["status"], "delivered")
 
     def test_fresh_continuation_tranche_is_allowed(self) -> None:
         self.write_state(

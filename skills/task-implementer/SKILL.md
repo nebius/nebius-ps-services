@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Requires explicit invocation to create or reuse a persistent per-project Git worktree lane, run durable brownfield implementations through dependency waves, integrate pending generations to their named source branch, or safely remove an idle lane while preserving private prompt history. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
+description: "Requires explicit invocation to create or reuse a persistent per-project Git worktree lane, run durable brownfield implementations through dependency waves, integrate pending generations, or remove an idle lane; after explicit session binding, also owns hook-routed accepted direct-prompt continuation. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
 ---
 
 # Task Implementer
@@ -28,8 +28,10 @@ wave atomically, and continues until the run is done or blocked.
 
 ## Invocation Policy
 
-Requires explicit invocation. Keep `policy.allow_implicit_invocation: false`
-in `agents/openai.yaml`.
+Public entry requires explicit invocation. Keep
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`. After
+`workspace init` or explicit `run` binds the current session, only a current
+`prompt-session-intake` hook receipt may route a direct prompt internally.
 
 ## Public Interface
 
@@ -37,13 +39,14 @@ Expose exactly these four actions:
 
 ```text
 $task-implementer workspace init [project-folder]
-$task-implementer run <prompt-path-or-unique-filename>
+$task-implementer run <prompt-ref-or-file>
 $task-implementer integrate [project-folder]
 $task-implementer workspace remove [project-folder]
 ```
 
 - `workspace init` defaults to the exact current directory.
-- `run` accepts one managed absolute path or one unique managed filename.
+- `run` accepts one exact unique prompt ref, full prompt ID, managed absolute
+  path, or managed filename.
 - `integrate` defaults to the exact current project and consumes every pending
   released generation for that lane.
 - `workspace remove` defaults to the exact current project and removes only an
@@ -59,6 +62,8 @@ $task-implementer workspace remove [project-folder]
 ## When To Use
 
 - The user explicitly invokes one of the four actions.
+- The prompt-session-intake hook routes the exact current accepted turn for a
+  session already bound by one of those explicit actions.
 - A brownfield request benefits from durable steering, dependency ordering,
   isolated worker commits, combined validation, and resumable integration.
 - Independent tasks have complete, disjoint ownership and can run in parallel.
@@ -84,7 +89,11 @@ $task-implementer workspace remove [project-folder]
 - Source-checkout dirt is permitted during initialization and runs, is excluded
   from the committed lane baseline, and is never copied or mutated. The lane
   itself must be clean before a run. Integration requires both source checkout
-  and lane to be completely clean.
+  and lane to be completely clean. If the primary source is dirty at
+  integration time, stop with one actionable handoff: the user invokes a fresh
+  explicit `$commit` in that primary checkout to review and commit the complete
+  repository diff, then repeats `integrate`. Never auto-commit source dirt and
+  never narrow it to the selected project.
 - Complete task dependencies, exact or directory-prefix write claims, keyed
   conflict domains, validation, and done criteria.
 
@@ -102,7 +111,7 @@ $task-implementer workspace remove [project-folder]
   state, managed requirements, and managed design records.
 - After managed requirements and design are valid, explicitly route to
   `$project-agent-instructions` with the exact `spec-inspect` receipt. Verify
-  its final v2 state and read any active selected-project instruction file
+  its final v3 state and read any active selected-project instruction file
   before locking the coordinator contract.
 - Use `brainstorm` and `design` when their routing conditions apply.
 - Every worker uses `code-review` and exactly one `$commit`; the coordinator
@@ -183,9 +192,9 @@ and private result record.
 5. Return workspace and lane paths plus prompt metadata. Stop without queuing
    work.
 
-### `run <prompt-path-or-unique-filename>`
+### `run <prompt-ref-or-file>`
 
-1. Invoke private `intake`; validate prompt-v2, acquire the scope lock, and
+1. Invoke private `intake`; validate prompt-v3, acquire the scope lock, and
    snapshot the accepted intent once. If another prompt owns active work,
    persist this explicit run request in the private FIFO queue and stop this
    invocation with its queue position. Saving or creating a prompt never
@@ -240,6 +249,13 @@ and private result record.
    pending generations can accumulate before `integrate`. After finalization
    releases the active generation, activate the unchanged FIFO queue head
    automatically; never overtake blocked active work or reorder the queue.
+7. When the current explicit invocation carried a prompt-session binding
+   receipt and owns an active objective transition, register the authoritative
+   prompt identity/digest through the internal prompt-session objective
+   transition. Mark it terminal only after `ALREADY_COMPLETE` or successful
+   finalization. Do not register the newly queued prompt as active while
+   another prompt still owns the scope. A hook-routed material turn passes the
+   same terminal fact when consuming its exact event.
 
 ### `integrate [project-folder]`
 
@@ -308,26 +324,24 @@ For each wave:
    validator can issue a Git-bound receipt. Every non-superseded requirement
    must be covered by a current design record.
    Explicitly invoke `$project-agent-instructions` with spec owner
-   `task-implementer`. Persist the exact receipt emitted for that integration
+   `maintain-project-specs`. Persist the exact receipt emitted for that integration
    selected-project root by the private spec validator as mode `0600`, pass it
    to `inspect`, and keep manifest, decision, ownership, and state under
-   private orchestration. Stop on any structured blocker. If `reload_required`
-   is true, stop this execution
-   boundary, start a fresh coordinator session, rerun and verify the unchanged
-   decision, then read the active selected-project instruction file.
-4. Require verified project-agent-instructions v2 state with current full-file
-   spec digests and `reload_required: false`. Commit the locked contract only
-   if tracked coordinator files changed. A
-   created or refreshed selected-project `AGENTS.md` is permitted in that one
-   coordinator-owned commit; that commit is every worker base. An
-   `existing-sufficient`, `adopted`, or `not-needed` outcome changes only
-   private state. Explicit guarded retirement may remove the managed file in
-   the coordinator-owned commit.
+   private orchestration. Render the exact decision bytes and inject them for
+   worker guidance, but defer repository `AGENTS.md` mutation.
+   Commit-mode `spec-inspect` is historical blob metadata only and returns no
+   authoritative project-agent receipt; only the shared current-checkout
+   validator may issue that receipt.
+4. Require the shared v3 spec receipt plus the exact rendered-rule digest
+   before dispatch. After final promoted implementation reconciliation, apply
+   and verify the project-instruction decision once as the terminal seal
+   mutation. If it reports `reload_required: true`, require a fresh session
+   before later managed work.
 5. Invoke private `wave-dispatch`. After proving the exact clean integration
    `contract_commit`, it revalidates that checkout's current managed-spec
    receipt against the committed blobs, proves the active and ancestor project
    instructions belong to that commit, and invokes the shared
-   project-agent state verifier; stale, missing, or reload-pending v2 state
+   project-agent state verifier; stale, missing, or reload-pending v3 state
    blocks dispatch. It then creates a unique validated branch and
    locked full-repository worktree only for the active capacity batch, plus an
    immutable v7 assignment with absolute scope cwd, exact helper/workspace
@@ -356,7 +370,10 @@ For each wave:
 7. Every worker first verifies its real worktree root, branch, base SHA, and
    absolute cwd, then invokes `task-start` with the embedded helper/workspace
    paths, embedded digest, and coordinator-issued start lease unchanged. The
-   helper verifies the canonical assignment digest and exact current lease. It next
+   helper verifies the canonical assignment digest and exact current lease and
+   returns private authorization and claim paths for one direct-child `$commit`,
+   bound to that assignment, running task plane, worker session, branch, and
+   base SHA. It next
    verifies the incoming-handoff digest and claims; starts from a
    worker session never used by another task in the run; implements one task; validates; runs
    `code-review`; fixes scoped findings; creates exactly one direct-child
@@ -439,7 +456,7 @@ For each wave:
   branches, worktrees, commits, merges, or revisions.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
-- Reuse only a verified v2 project-agent-instructions state whose owner receipt,
+- Reuse only a verified v3 project-agent-instructions state whose owner receipt,
   full-file spec receipt, effective config, evidence, and target still match.
   Any drift requires a fresh decision at a safe wave boundary before dispatch.
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
@@ -501,6 +518,8 @@ For each wave:
 ## Completion Criteria
 
 - The public interface remains exactly four explicit-only actions.
+- Hook-routed direct turns are an internal continuation of an explicit session
+  binding, not an additional public action or implicit skill selection.
 - Every task belongs to a deterministic wave and has locked ownership.
 - Every promoted task has one verified worker commit, ordered merge evidence,
   combined validation/review evidence, and handoff status updated after

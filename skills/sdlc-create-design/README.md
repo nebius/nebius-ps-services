@@ -1,12 +1,13 @@
 # Create Design
 
-`sdlc-create-design` is an Agentic SDLC skill. It is authored in this repository and is
+`sdlc-create-design` is an Agentic SDLC authoring adapter to
+`maintain-project-specs`. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
 Convert requirements and gathered context into evidence-backed architecture
-and feature designs in `docs/design.md`. The skill maps stable `REQ-*` blocks
+and feature designs in the canonical managed region of `docs/design.md`. The adapter maps stable `REQ-*` blocks
 to stable `FEAT-*` blocks, records selected and rejected design options, and
 defines vertical end-to-end feature flow, layer boundaries, implementation,
 validation, test, evaluation, rollout, and rollback boundaries before planning

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Maintain Project Specs"
+  short_description: "Keep project requirements and design current"
+  default_prompt: "Use $maintain-project-specs to reconcile the selected project requirements and design through the canonical owner lifecycle."
+
+policy:
+  allow_implicit_invocation: true

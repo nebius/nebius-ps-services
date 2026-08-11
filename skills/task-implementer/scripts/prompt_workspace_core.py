@@ -20,15 +20,19 @@ import uuid
 
 
 WORKSPACE_SCHEMA = "task-implementer/workspace-v2"
-PROMPT_SCHEMA = "task-implementer/prompt-v2"
+PROMPT_SCHEMA = "task-implementer/prompt-v3"
+MIGRATION_PROMPT_SCHEMA = "task-implementer/prompt-v2"
+PROMPT_V3_MIGRATION_SCHEMA = "task-implementer/prompt-v3-migration-v1"
 LEGACY_PROMPT_SCHEMA = "task-implementer/prompt-v1"
 RUN_SCHEMA = "task-implementer/run-manifest-v1"
 MAX_PROMPT_BYTES = 256 * 1024
 TERMINAL_RUN_STATUSES = {"done", "superseded", "abandoned"}
 PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
+PROMPT_REF_RE = re.compile(r"[0-9a-f]{5,32}\Z")
 RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 REVISION_RE = re.compile(r"r([0-9]{4})\Z")
-FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
+FRONTMATTER_KEYS = {"schema", "prompt_id", "prompt_ref", "title", "created_at"}
+MIGRATION_FRONTMATTER_KEYS = {"schema", "prompt_id", "title", "created_at"}
 REQUIRED_SECTIONS = ("Ask",)
 OPTIONAL_SECTIONS = (
     "Outcome",
@@ -78,6 +82,7 @@ class PromptDocument:
     raw: bytes
     text: str
     prompt_id: str
+    prompt_ref: str
     title: str
     created_at: datetime
     sections: dict[str, str]
@@ -561,12 +566,18 @@ def ensure_prompt_hub(prompt_root: Path) -> Path:
 def render_prompt(
     ask: str,
     prompt_id: str,
+    prompt_ref: str,
     created_at: datetime,
     *,
     title: str | None = None,
     draft: bool = False,
+    ask_body: str | None = None,
 ) -> bytes:
-    rendered_ask = ask
+    if draft and ask_body is not None:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "draft prompts cannot carry a session Ask body"
+        )
+    rendered_ask = ask_body if ask_body is not None else ask
     rendered_title = title or ask
     if draft:
         rendered_ask = "<!-- Required: replace this comment with your Ask. -->"
@@ -574,6 +585,7 @@ def render_prompt(
     template = template_path().read_text(encoding="utf-8")
     replacements = {
         "{{PROMPT_ID}}": prompt_id,
+        "{{PROMPT_REF}}": prompt_ref,
         "{{TITLE_JSON}}": json.dumps(rendered_title, ensure_ascii=False),
         "{{CREATED_AT}}": iso_seconds(created_at),
         "{{TITLE}}": rendered_title,
@@ -1195,7 +1207,7 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
             raise PromptWorkspaceError(
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter repeats key {key}"
             )
-        if key not in FRONTMATTER_KEYS:
+        if key not in FRONTMATTER_KEYS | MIGRATION_FRONTMATTER_KEYS:
             raise PromptWorkspaceError(
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter key is unsupported: {key}"
             )
@@ -1219,8 +1231,13 @@ def parse_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
                 "PROMPT_INPUT_INVALID", f"prompt frontmatter value is empty: {key}"
             )
         values[key] = value
-    if set(values) != FRONTMATTER_KEYS:
-        missing = sorted(FRONTMATTER_KEYS - set(values))
+    required_keys = (
+        MIGRATION_FRONTMATTER_KEYS
+        if values.get("schema") in {MIGRATION_PROMPT_SCHEMA, LEGACY_PROMPT_SCHEMA}
+        else FRONTMATTER_KEYS
+    )
+    if set(values) != required_keys:
+        missing = sorted(required_keys - set(values))
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID",
             f"prompt frontmatter is missing required keys: {', '.join(missing)}",
@@ -1357,6 +1374,7 @@ def read_prompt(
     *,
     require_content: bool,
     allow_legacy: bool = False,
+    allow_migration_history: bool = False,
 ) -> PromptDocument:
     requested = path.expanduser()
     if requested.is_symlink():
@@ -1400,12 +1418,22 @@ def read_prompt(
     lines = text.splitlines()
     frontmatter, body_start = parse_frontmatter(lines)
     legacy = frontmatter["schema"] == LEGACY_PROMPT_SCHEMA
+    migration = frontmatter["schema"] == MIGRATION_PROMPT_SCHEMA
     if legacy and not allow_legacy:
         raise PromptWorkspaceError(
             "WORKFLOW_UPGRADE_REQUIRED",
-            "prompt-v1 is read-only history; create a new prompt-v2 file",
+            "prompt-v1 is read-only history; create a new prompt-v3 file",
         )
-    if frontmatter["schema"] != PROMPT_SCHEMA and not (allow_legacy and legacy):
+    if migration and not allow_migration_history:
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "prompt-v2 requires one-time workspace initialization migration to prompt-v3",
+        )
+    if (
+        frontmatter["schema"] != PROMPT_SCHEMA
+        and not (allow_legacy and legacy)
+        and not (allow_migration_history and migration)
+    ):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt schema is unsupported"
         )
@@ -1413,6 +1441,19 @@ def read_prompt(
     if not PROMPT_ID_RE.fullmatch(prompt_id):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "prompt_id does not match the generated format"
+        )
+    prompt_ref = frontmatter.get("prompt_ref", "")
+    if not legacy and not migration and (
+        not PROMPT_REF_RE.fullmatch(prompt_ref)
+        or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
+        or (
+            prompt_root.name == "prompts"
+            and not canonical.name.startswith(f"{prompt_ref}--")
+        )
+    ):
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID",
+            "prompt_ref is invalid or missing from the filename prefix",
         )
     title = frontmatter["title"].strip()
     if (
@@ -1450,6 +1491,7 @@ def read_prompt(
         raw=raw,
         text=text,
         prompt_id=prompt_id,
+        prompt_ref=prompt_ref,
         title=title,
         created_at=created_at,
         sections=sections,
@@ -1462,27 +1504,49 @@ def resolve_prompt_reference(
     *,
     require_content: bool,
 ) -> PromptDocument:
-    """Resolve an absolute prompt path or one flat-workspace filename."""
+    """Resolve an absolute path, exact filename, full prompt ID, or exact ref."""
 
     manifest = verify_workspace(manifest_path)
     prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
-    reference = Path(prompt_reference).expanduser()
+    reference_text = str(prompt_reference)
+    reference = Path(reference_text).expanduser()
     if reference.is_absolute():
-        candidate = reference
+        candidates = [reference]
     else:
         if len(reference.parts) != 1 or reference.name in {"", ".", ".."}:
             raise PromptWorkspaceError(
                 "PROMPT_PATH_INVALID",
-                "prompt reference must be an absolute path or one prompt filename",
+                "prompt reference must be an absolute path, filename, full prompt ID, or prompt ref",
             )
-        candidate = prompt_root / reference.name
-    document = read_prompt(candidate, prompt_root, require_content=require_content)
+        direct = prompt_root / reference.name
+        if direct.exists() or direct.is_symlink():
+            candidates = [direct]
+        else:
+            candidates = []
+            for candidate in sorted(prompt_root.glob("*.md")):
+                if candidate.name == HUB_FILENAME:
+                    continue
+                try:
+                    document = read_prompt(
+                        candidate, prompt_root, require_content=require_content
+                    )
+                except PromptWorkspaceError:
+                    continue
+                if reference_text in {document.prompt_id, document.prompt_ref}:
+                    candidates.append(document.path)
+            if len(candidates) != 1:
+                raise PromptWorkspaceError(
+                    "PROMPT_PATH_AMBIGUOUS" if candidates else "PROMPT_PATH_INVALID",
+                    "prompt reference must match exactly one managed prompt",
+                )
+    document = read_prompt(candidates[0], prompt_root, require_content=require_content)
     ensure_unique_prompt_id(document, prompt_root)
     return document
 
 
 def ensure_unique_prompt_id(document: PromptDocument, prompt_root: Path) -> None:
-    matches: list[Path] = []
+    id_matches: list[Path] = []
+    ref_matches: list[Path] = []
     for candidate in sorted(prompt_root.glob("*.md")):
         if candidate.name == HUB_FILENAME:
             continue
@@ -1499,11 +1563,328 @@ def ensure_unique_prompt_id(document: PromptDocument, prompt_root: Path) -> None
             metadata.get("schema") == PROMPT_SCHEMA
             and metadata.get("prompt_id") == document.prompt_id
         ):
-            matches.append(candidate.resolve())
-    if len(matches) != 1 or matches[0] != document.path:
+            id_matches.append(candidate.resolve())
+        if (
+            metadata.get("schema") == PROMPT_SCHEMA
+            and metadata.get("prompt_ref") == document.prompt_ref
+        ):
+            ref_matches.append(candidate.resolve())
+    if len(id_matches) != 1 or id_matches[0] != document.path:
         raise PromptWorkspaceError(
             "PROMPT_CONFLICT", "prompt_id is duplicated within this prompt workspace"
         )
+    if len(ref_matches) != 1 or ref_matches[0] != document.path:
+        raise PromptWorkspaceError(
+            "PROMPT_CONFLICT", "prompt_ref is duplicated within this prompt workspace"
+        )
+
+
+def prompt_ref_for_id(prompt_id: str, other_prompt_ids: list[str]) -> str:
+    if not PROMPT_ID_RE.fullmatch(prompt_id):
+        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt ID is invalid")
+    suffix = prompt_id.removeprefix("prompt-")
+    others = [value.removeprefix("prompt-") for value in other_prompt_ids]
+    if len(others) != len(set(others)) or suffix in others:
+        raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
+    for length in range(5, 33):
+        candidate = suffix[:length]
+        if all(not other.startswith(candidate) for other in others):
+            return candidate
+    raise PromptWorkspaceError("PROMPT_CONFLICT", "could not allocate a prompt ref")
+
+
+def allocate_prompt_ref(prompt_root: Path, prompt_id: str) -> str:
+    prompt_ids: list[str] = []
+    refs: set[str] = set()
+    for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME or candidate.is_symlink():
+            continue
+        try:
+            raw = candidate.read_bytes()
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (OSError, UnicodeDecodeError, PromptWorkspaceError):
+            continue
+        existing_id = metadata.get("prompt_id")
+        if isinstance(existing_id, str) and PROMPT_ID_RE.fullmatch(existing_id):
+            prompt_ids.append(existing_id)
+        existing_ref = metadata.get("prompt_ref")
+        if isinstance(existing_ref, str):
+            refs.add(existing_ref)
+    suffix = prompt_id.removeprefix("prompt-")
+    if prompt_id in prompt_ids:
+        raise PromptWorkspaceError("PROMPT_CONFLICT", "generated prompt ID already exists")
+    for length in range(5, 33):
+        candidate = suffix[:length]
+        if candidate not in refs and all(
+            not existing.removeprefix("prompt-").startswith(candidate)
+            for existing in prompt_ids
+        ):
+            return candidate
+    raise PromptWorkspaceError("PROMPT_CONFLICT", "could not allocate a prompt ref")
+
+
+def _render_migrated_prompt(raw: bytes, prompt_ref: str) -> bytes:
+    text = raw.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "prompt migration frontmatter is invalid"
+        )
+    output: list[str] = []
+    inserted = False
+    frontmatter_closed = False
+    for index, line in enumerate(lines):
+        content = line.rstrip("\r\n")
+        ending = line[len(content) :]
+        if index > 0 and not frontmatter_closed and content == "---":
+            frontmatter_closed = True
+            output.append(line)
+            continue
+        if not frontmatter_closed and content.split(":", 1)[0].strip() == "schema":
+            output.append(f"schema: {PROMPT_SCHEMA}{ending}")
+            continue
+        output.append(line)
+        if (
+            not frontmatter_closed
+            and content.split(":", 1)[0].strip() == "prompt_id"
+        ):
+            output.append(f"prompt_ref: {prompt_ref}{ending}")
+            inserted = True
+    if not inserted or not frontmatter_closed:
+        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt migration metadata is invalid")
+    return "".join(output).encode("utf-8")
+
+
+def _validated_prompt_v3_migrations(
+    value: object, prompt_root: Path
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+        )
+    required_keys = {
+        "prompt_id",
+        "prompt_ref",
+        "old_name",
+        "new_name",
+        "old_sha256",
+        "new_sha256",
+    }
+    migrations: list[dict[str, str]] = []
+    names: set[str] = set()
+    old_names: set[str] = set()
+    ids: set[str] = set()
+    for raw_item in value:
+        if not isinstance(raw_item, dict) or set(raw_item) != required_keys:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        item = {str(key): str(value) for key, value in raw_item.items()}
+        prompt_id = item["prompt_id"]
+        prompt_ref = item["prompt_ref"]
+        old_name = item["old_name"]
+        new_name = item["new_name"]
+        expected_name = (
+            old_name if old_name.startswith(f"{prompt_ref}--") else f"{prompt_ref}--{old_name}"
+        )
+        if (
+            not PROMPT_ID_RE.fullmatch(prompt_id)
+            or not PROMPT_REF_RE.fullmatch(prompt_ref)
+            or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
+            or Path(old_name).name != old_name
+            or Path(new_name).name != new_name
+            or old_name in {"", ".", "..", HUB_FILENAME}
+            or new_name in {"", ".", "..", HUB_FILENAME}
+            or not old_name.endswith(".md")
+            or not new_name.endswith(".md")
+            or new_name != expected_name
+            or not re.fullmatch(r"[0-9a-f]{64}", item["old_sha256"])
+            or not re.fullmatch(r"[0-9a-f]{64}", item["new_sha256"])
+            or prompt_id in ids
+            or new_name in names
+            or old_name in old_names
+        ):
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        if (prompt_root / new_name).parent != prompt_root:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker escapes its prompt root"
+            )
+        ids.add(prompt_id)
+        names.add(new_name)
+        old_names.add(old_name)
+        migrations.append(item)
+    return migrations
+
+
+def _recover_prompt_v3_migration_files(
+    prompt_root: Path, migrations: list[dict[str, str]]
+) -> None:
+    """Finish a journaled per-file migration after any interrupted process."""
+
+    for item in migrations:
+        old = prompt_root / item["old_name"]
+        target = prompt_root / item["new_name"]
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file() or target.stat().st_nlink != 1:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration target is unsafe"
+                )
+            require_mode(target, 0o600, "prompt migration target")
+            target_raw = target.read_bytes()
+            target_digest = hashlib.sha256(target_raw).hexdigest()
+            if target_digest == item["new_sha256"]:
+                if old != target and (old.exists() or old.is_symlink()):
+                    if old.is_symlink() or not old.is_file() or old.stat().st_nlink != 1:
+                        raise PromptWorkspaceError(
+                            "WORKSPACE_STATE_INVALID", "prompt migration source is unsafe"
+                        )
+                    require_mode(old, 0o600, "prompt migration source")
+                    if hashlib.sha256(old.read_bytes()).hexdigest() != item["old_sha256"]:
+                        raise PromptWorkspaceError(
+                            "WORKSPACE_STATE_INVALID", "prompt migration source drifted"
+                        )
+                    old.unlink()
+                continue
+            if old != target or target_digest != item["old_sha256"]:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID",
+                    "prompt migration target does not match its recovery marker",
+                )
+            source_raw = target_raw
+        else:
+            if old.is_symlink() or not old.is_file() or old.stat().st_nlink != 1:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration source is unavailable"
+                )
+            require_mode(old, 0o600, "prompt migration source")
+            source_raw = old.read_bytes()
+            if hashlib.sha256(source_raw).hexdigest() != item["old_sha256"]:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_STATE_INVALID", "prompt migration source drifted"
+                )
+        migrated = _render_migrated_prompt(source_raw, item["prompt_ref"])
+        if hashlib.sha256(migrated).hexdigest() != item["new_sha256"]:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration rendering is not reproducible"
+            )
+        write_atomic(target, migrated)
+        if old != target:
+            old.unlink()
+
+
+def migrate_prompt_files_v2(prompt_root: Path) -> list[dict[str, str]]:
+    """Rewrite direct v2 prompts and leave a recovery marker for pointer repair."""
+
+    journal_path = prompt_root.parent / "prompt-v3-migration.json"
+    if journal_path.exists() or journal_path.is_symlink():
+        if journal_path.is_symlink() or not journal_path.is_file():
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is unsafe"
+            )
+        require_mode(journal_path, 0o600, "prompt migration marker")
+        journal = load_json_object(journal_path, "prompt migration marker")
+        if set(journal) != {"schema", "migrations"} or journal.get(
+            "schema"
+        ) != PROMPT_V3_MIGRATION_SCHEMA or not isinstance(
+            journal.get("migrations"), list
+        ):
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
+            )
+        recovered = _validated_prompt_v3_migrations(
+            journal["migrations"], prompt_root
+        )
+        _recover_prompt_v3_migration_files(prompt_root, recovered)
+        return recovered
+
+    records: list[tuple[Path, bytes, dict[str, str]]] = []
+    all_ids: list[str] = []
+    for candidate in sorted(prompt_root.glob("*.md")):
+        if candidate.name == HUB_FILENAME:
+            continue
+        if candidate.is_symlink() or not candidate.is_file():
+            raise PromptWorkspaceError("PROMPT_PATH_INVALID", "prompt migration input is unsafe")
+        require_mode(candidate, 0o600, "prompt file")
+        raw = candidate.read_bytes()
+        try:
+            metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
+        except (UnicodeDecodeError, PromptWorkspaceError) as error:
+            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt migration input is invalid") from error
+        schema = metadata.get("schema")
+        if schema not in {PROMPT_SCHEMA, MIGRATION_PROMPT_SCHEMA, LEGACY_PROMPT_SCHEMA}:
+            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt schema is unsupported")
+        if schema == LEGACY_PROMPT_SCHEMA:
+            continue
+        prompt_id = metadata.get("prompt_id", "")
+        if not PROMPT_ID_RE.fullmatch(prompt_id):
+            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt ID is invalid")
+        all_ids.append(prompt_id)
+        records.append((candidate, raw, metadata))
+    if len(all_ids) != len(set(all_ids)):
+        raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt ID is duplicated")
+    migrations: list[dict[str, str]] = []
+    targets: set[Path] = set()
+    for path, raw, metadata in records:
+        if metadata["schema"] == PROMPT_SCHEMA:
+            continue
+        prompt_id = metadata["prompt_id"]
+        prompt_ref = prompt_ref_for_id(
+            prompt_id, [value for value in all_ids if value != prompt_id]
+        )
+        target = path.with_name(
+            path.name if path.name.startswith(f"{prompt_ref}--") else f"{prompt_ref}--{path.name}"
+        )
+        if target in targets or (target != path and (target.exists() or target.is_symlink())):
+            raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt migration target conflicts")
+        targets.add(target)
+        migrated = _render_migrated_prompt(raw, prompt_ref)
+        migrations.append(
+            {
+                "prompt_id": prompt_id,
+                "prompt_ref": prompt_ref,
+                "old_name": path.name,
+                "new_name": target.name,
+                "old_sha256": hashlib.sha256(raw).hexdigest(),
+                "new_sha256": hashlib.sha256(migrated).hexdigest(),
+                "content": migrated.decode("utf-8"),
+            }
+        )
+    if not migrations:
+        return []
+    journal_migrations = [
+        {key: value for key, value in item.items() if key != "content"}
+        for item in migrations
+    ]
+    write_atomic(
+        journal_path,
+        stable_json(
+            {
+                "schema": PROMPT_V3_MIGRATION_SCHEMA,
+                "migrations": journal_migrations,
+            }
+        ),
+    )
+    for item in migrations:
+        item.pop("content", None)
+    recovered = _validated_prompt_v3_migrations(migrations, prompt_root)
+    _recover_prompt_v3_migration_files(prompt_root, recovered)
+    return recovered
+
+
+def complete_prompt_files_v3_migration(prompt_root: Path) -> None:
+    """Remove the recovery marker only after all mutable pointers are repaired."""
+
+    journal_path = prompt_root.parent / "prompt-v3-migration.json"
+    if not journal_path.exists():
+        return
+    if journal_path.is_symlink() or not journal_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt migration marker is unsafe"
+        )
+    require_mode(journal_path, 0o600, "prompt migration marker")
+    journal_path.unlink()
 
 
 def create_prompt(
@@ -1513,6 +1894,7 @@ def create_prompt(
     clock: Callable[[], datetime] = now_local,
     id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
     draft: bool = False,
+    ask_body: str | None = None,
 ) -> dict[str, object]:
     manifest = verify_workspace(manifest_path)
     prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
@@ -1527,15 +1909,22 @@ def create_prompt(
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "generated prompt ID has an invalid format"
         )
-    prefix = created_at.strftime("%Y-%m-%d_%H%M")
-    stem = f"{prefix}--{prompt_slug(ask)}"
+    prompt_ref = allocate_prompt_ref(prompt_root, prompt_id)
+    timestamp = created_at.strftime("%Y-%m-%d_%H%M")
+    stem = f"{prompt_ref}--{timestamp}--{prompt_slug(ask)}"
     content = render_prompt(
         ask,
         prompt_id,
+        prompt_ref,
         created_at,
         title="Untitled prompt" if draft else None,
         draft=draft,
+        ask_body=ask_body,
     )
+    if len(content) > MAX_PROMPT_BYTES:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", f"prompt exceeds {MAX_PROMPT_BYTES} bytes"
+        )
     for number in range(1, 1000):
         suffix = "" if number == 1 else f"--{number:02d}"
         prompt_path = prompt_root / f"{stem}{suffix}.md"
@@ -1546,6 +1935,7 @@ def create_prompt(
         return {
             "path": str(prompt_path),
             "prompt_id": prompt_id,
+            "prompt_ref": prompt_ref,
             "title": ask,
             "created_at": iso_seconds(created_at),
         }

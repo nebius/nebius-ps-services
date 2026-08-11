@@ -57,6 +57,7 @@ from prompt_workspace_runs import (  # noqa: E402
     initialize_project_workspace,
     load_run_manifests,
     manifest_revisions,
+    merge_session_refinement,
     prompt_rows,
     queue_rows,
     scope_lock,
@@ -93,6 +94,7 @@ __all__ = [
     "finalize_run",
     "heartbeat_task",
     "integrate_wave",
+    "merge_session_refinement",
     "plan_waves",
     "prepare_wave",
     "promote_wave",
@@ -220,6 +222,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     new_parser.add_argument(
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
+    session_merge = subparsers.add_parser(
+        "session-merge", help="Internal: merge one accepted bound-session refinement."
+    )
+    add_common_workspace(session_merge)
+    session_merge.add_argument("--refined-file", type=Path, required=True)
+    session_merge.add_argument("--prompt")
+    session_merge.add_argument("--expected-sha256")
+    session_merge.add_argument("--new-objective", action="store_true")
+    session_merge.add_argument("--operation-id", required=True)
 
     list_parser = subparsers.add_parser(
         "list", help="Internal: list prompt metadata without bodies."
@@ -444,6 +455,7 @@ def emit(value: object, json_output: bool) -> None:
                 "starter_created",
                 "action",
                 "prompt",
+                "prompt_ref",
                 "last_invoked_at",
                 "status",
                 "outcome",
@@ -500,6 +512,15 @@ def main(argv: list[str]) -> int:
             result = create_prompt(args.workspace, args.ask)
             if args.open:
                 open_in_editor(args.editor, Path(str(result["path"])), workspace=False)
+        elif args.command == "session-merge":
+            result = merge_session_refinement(
+                args.workspace,
+                args.refined_file,
+                prompt_reference=args.prompt,
+                expected_sha256=args.expected_sha256,
+                new_objective=args.new_objective,
+                operation_id=args.operation_id,
+            )
         elif args.command == "list":
             result = prompt_rows(args.workspace, args.query, args.date)
         elif args.command == "queue-list":

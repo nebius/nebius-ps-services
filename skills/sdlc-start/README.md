@@ -37,7 +37,7 @@ redesign.
 
 ```text
 $sdlc-start workspace init [project-folder]
-$sdlc-start run <prompt-path-or-unique-filename>
+$sdlc-start run <prompt-ref-or-file>
 ```
 
 Initialization preserves prompt and run history and creates one starter prompt
@@ -58,7 +58,18 @@ rename plus intent edit or duplicate copies fail closed so prompt history and
 Stop continuation cannot drift.
 There is no bare `$sdlc-start` resume action.
 
-Before design or planning, the requirements owner records the compiled
+After initialization or an explicit run binds the Codex session, safe direct
+prompts can be staged by `prompt-session-intake`, losslessly refined by the
+agent, merged with compare-and-set and one operation ID, and routed through the
+same run path once. An exact interrupted retry resolves the applied operation
+instead of creating or appending again. A new objective publishes its complete
+marker-bearing Ask in one exclusive create, and refined user content cannot use
+the reserved operation-marker namespace.
+Explicit bound runs register the authoritative active prompt for unambiguous
+fresh-session attachment and close it only after verified terminal completion.
+Manual prompt-file edits still require explicit `run`.
+
+Before design or planning, the requirements adapter records the compiled
 `docs/requirements.md` digest in private refinement state. A private mechanical
 gate verifies that it belongs to the latest accepted prompt revision and still
 matches the exact requirements file; ambiguity or later drift returns to
@@ -88,10 +99,11 @@ worktree.
 - `docs/requirements.md`.
 - `docs/design.md` when present.
 - The active selected-project instruction file and latest private
-  `project-agent-instructions` spec receipt, decision, ownership receipt, and
+  shared-owner `project-agent-instructions` spec receipt, decision, ownership receipt, and
   verified state when present.
 - Existing local run state when present.
-- One managed `agentic-sdlc/prompt-v2` file and its accepted immutable revision.
+- One managed `agentic-sdlc/prompt-v3` file, its full authoritative prompt ID,
+  collision-safe filename-prefixed ref, and its accepted immutable revision.
 - Optional live experiment environment details to route through requirements.
 - Active `STEERING.md` and `steering/auto-steering.json` when present.
 
@@ -101,7 +113,7 @@ worktree.
 - Current feature and next skill are explicit.
 - Steering is refreshed or routed through `sdlc-auto-steering` when pending.
 - Agentic SDLC validates tracked complete specs, total status-aware feature
-  coverage, and feature marker/body agreement into a private v2 receipt, then
+  coverage, and feature marker/body agreement into a private v3 receipt, then
   verifies the conditional project-instruction decision and ownership after
   design and before auto-steering or planning. A project-file change requires a
   fresh Codex session before the workflow continues.
@@ -116,13 +128,14 @@ runtime hooks:
 
 - `pre_tool_use_sdlc_policy.py`
 - `stop_sdlc_continue.py`
+- `stop_lifecycle_arbiter.py`
 - `lib/__init__.py`
 - `lib/sdlc_policy.py`
 - `lib/sdlc_state.py`
 - `tests/test_sdlc_hooks.py`
 
 Patch these source files before touching installed runtime copies under
-`$CODEX_HOME/hooks`. The Stop hook must emit prompt-bound continuation prompts
+`$CODEX_HOME/hooks`. The SDLC Stop evaluator must emit prompt-bound continuation prompts
 for `sdlc-start run` and canonical `sdlc-*` skill
 names, while still accepting short phase aliases as input. It validates the
 managed `prompt.json` binding and fails closed if an optional `run.json` prompt
@@ -165,7 +178,8 @@ To intentionally sync the source bundle into a local Codex runtime:
 The all-hooks form syncs every reviewed hook-only bundle under the source skills
 folder. The single-source form copies only SDLC hook files into
 `${CODEX_HOME:-$HOME/.codex}/hooks`. Add `--register-hooks` when the installer
-should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`. Add
+should merge the SDLC `PreToolUse` and shared Stop-arbiter entries into
+`hooks.json`. Add
 `--replace-hooks-json` only when intentionally replacing `hooks.json` with a
 clean file built from the selected source manifests. Hook payload sync records
 local provenance hashes; differing existing hook files are backed up under
@@ -175,5 +189,5 @@ Registration is preflighted before payload sync, idempotent, does not trust
 hooks, refuses duplicate Python hook files within the same hook event, and
 reports extra installed hook files or `hooks.json` entries for manual review
 instead of removing them by default.
-Restart Codex and review the PreToolUse and Stop entries in `/hooks` after
-syncing.
+Restart Codex and review the PreToolUse and single Stop-arbiter entries in
+`/hooks` after syncing.

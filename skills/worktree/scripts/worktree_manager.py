@@ -4053,7 +4053,9 @@ def task_lane_integrate(
             if source_dirty:
                 raise WorktreeError(
                     "source checkout must be completely clean before Task Implementer "
-                    "integration: "
+                    "integration; run one fresh explicit $commit in the primary "
+                    "checkout, review and commit the complete repository diff, then "
+                    "repeat integrate. Dirty paths: "
                     + ", ".join(source_dirty)
                 )
             if child_dirty:

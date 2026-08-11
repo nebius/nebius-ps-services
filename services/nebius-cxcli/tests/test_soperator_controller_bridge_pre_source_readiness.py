@@ -84,10 +84,32 @@ def _journal() -> dict[str, Any]:
     )
     for index, group in enumerate(journal["node_groups"]):
         group_id = f"bridge-node-group-{index}"
+        intended_postcondition = {
+            "cluster_id": "cluster-1",
+            "name": group["name"],
+            "fixed_node_count": 1,
+            "version": "1.31",
+            "bridge_slot": index,
+            "excluded_from_provider_upgrade": True,
+        }
         group.update(
             {
                 "id": group_id,
                 "created": True,
+                "operation": {
+                    "operation_kind": "mk8s-node-group-create",
+                    "resource_id": f"cluster-1/node-groups/{group['name']}",
+                    "resource_uid": group_id,
+                    "resource_version": 0,
+                    "intended_postcondition": intended_postcondition,
+                    "provider_operation_id": f"operation-create-{group_id}",
+                    "idempotency_key": str(index + 1) * 64,
+                    "attempt_state": "provider-terminal",
+                    "verified_postcondition": {
+                        **intended_postcondition,
+                        "node_group_id": group_id,
+                    },
+                },
                 "scheduling_failure_domain": {
                     "topology_key": "nebius.com/node-group-id",
                     "node_group_id": group_id,
@@ -736,6 +758,68 @@ def _live_bridge_node_groups(plan: migration.BridgePlan) -> dict[str, dict[str, 
     return live
 
 
+def _pending_bridge_create_checkpoint(
+    *,
+    created: bool,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
+    journal = _journal()
+    live = _live_bridge_node_groups(_plan())
+    record = journal["node_groups"][0]
+    operation = record["operation"]
+    operation.update(
+        {
+            "resource_uid": record["name"],
+            "provider_operation_id": f"operation-create-node-group-{record['name']}",
+            "attempt_state": "provider-pending",
+        }
+    )
+    operation.pop("verified_postcondition")
+    if not created:
+        record["id"] = ""
+        record["created"] = False
+        record["scheduling_failure_domain"]["node_group_id"] = ""
+    operations = [copy.deepcopy(item["operation"]) for item in journal["node_groups"]]
+    checkpoint = {
+        "controller_bridge": journal,
+        "operation_intent": {
+            "attempt_state": "provider-pending",
+            "provider_operations": operations,
+        },
+    }
+    return checkpoint, journal, live
+
+
+class _TerminalBridgeCreateApi:
+    def __init__(self, live: Mapping[str, Mapping[str, Any]]) -> None:
+        self.live = live
+        self.calls: list[tuple[str, str]] = []
+
+    def get_provider_operation(
+        self,
+        *,
+        operation_id: str,
+        operation_kind: str,
+    ) -> migration.SoperatorProviderOperationObservation:
+        self.calls.append(("operation.get", operation_id))
+        name = operation_id.removeprefix("operation-create-node-group-")
+        node_group_id = next(
+            str(item["metadata"]["id"])
+            for item in self.live.values()
+            if item["metadata"]["name"] == name
+        )
+        assert operation_kind == "mk8s-node-group-create"
+        return migration.SoperatorProviderOperationObservation(
+            operation_id=operation_id,
+            resource_id=node_group_id,
+            terminal=True,
+            successful=True,
+            status="OK",
+        )
+
+    def create_node_group(self, **_kwargs: Any) -> Mapping[str, Any]:
+        raise AssertionError("resume must not dispatch another node-group create")
+
+
 def test_pre_source_canary_pod_is_tokenless_and_runtime_hardened() -> None:
     pod = migration._bridge_mount_canary_pod(  # noqa: SLF001
         namespace=migration.CONTROLLER_BRIDGE_NAMESPACE,
@@ -971,9 +1055,17 @@ def test_reused_bridge_groups_preserve_proven_runtime_scheduling_bindings(
         lambda **kwargs: str(kwargs["node_group"]["metadata"]["id"]),
     )
     checkpoint_calls: list[str] = []
+    checkpoint = {
+        "phase_state": {},
+        "operation_intent": {
+            "provider_operations": [
+                copy.deepcopy(record["operation"]) for record in journal["node_groups"]
+            ]
+        },
+    }
 
     mutated, lines = migration._create_controller_bridge_node_groups(  # noqa: SLF001
-        checkpoint={"phase_state": {}},
+        checkpoint=checkpoint,
         journal=journal,
         plan=plan,
         nebius_api=object(),  # type: ignore[arg-type]
@@ -998,13 +1090,7 @@ def test_reused_bridge_groups_bind_checkpointed_version_after_control_plane_hop(
     provider_groups: list[dict[str, Any]] = []
     for record in journal["node_groups"]:
         group_id = str(record["id"])
-        record["operation"] = {
-            "verified_postcondition": {
-                "name": record["name"],
-                "node_group_id": group_id,
-                "version": "1.31",
-            }
-        }
+        record["operation"]["verified_postcondition"]["version"] = "1.31"
         provider_groups.append({"metadata": {"id": group_id, "name": record["name"]}})
 
     monkeypatch.setattr(migration, "_list_node_groups", lambda **_kwargs: provider_groups)
@@ -1026,9 +1112,17 @@ def test_reused_bridge_groups_bind_checkpointed_version_after_control_plane_hop(
         "_validate_reused_controller_bridge_quota_group",
         validate,
     )
+    checkpoint = {
+        "phase_state": {},
+        "operation_intent": {
+            "provider_operations": [
+                copy.deepcopy(record["operation"]) for record in journal["node_groups"]
+            ]
+        },
+    }
 
     mutated, _lines = migration._create_controller_bridge_node_groups(  # noqa: SLF001
-        checkpoint={"phase_state": {}},
+        checkpoint=checkpoint,
         journal=journal,
         plan=plan,
         nebius_api=object(),  # type: ignore[arg-type]
@@ -1040,6 +1134,69 @@ def test_reused_bridge_groups_bind_checkpointed_version_after_control_plane_hop(
         ("1.31", "bridge-node-group-0"),
         ("1.31", "bridge-node-group-1"),
     ]
+
+
+def test_controller_bridge_create_resume_seals_provider_proof_before_created_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, journal, live = _pending_bridge_create_checkpoint(created=False)
+    api = _TerminalBridgeCreateApi(live)
+    monkeypatch.setattr(migration, "_list_node_groups", lambda **_kwargs: list(live.values()))
+    monkeypatch.setattr(
+        migration,
+        "_node_group_payload_by_id",
+        lambda **kwargs: live[kwargs["node_group_id"]],
+    )
+    checkpoints: list[dict[str, Any]] = []
+
+    mutated, lines = migration._create_controller_bridge_node_groups(  # noqa: SLF001
+        checkpoint=checkpoint,
+        journal=journal,
+        plan=_plan(),
+        nebius_api=api,  # type: ignore[arg-type]
+        checkpoint_writer=lambda: checkpoints.append(copy.deepcopy(checkpoint)),
+    )
+
+    record = journal["node_groups"][0]
+    mirrored = checkpoint["operation_intent"]["provider_operations"][0]
+    assert mutated is False
+    assert len(lines) == 2
+    assert api.calls == [("operation.get", f"operation-create-node-group-{record['name']}")]
+    assert record["created"] is True
+    assert record["id"] == "bridge-node-group-0"
+    assert record["operation"]["attempt_state"] == "provider-terminal"
+    assert record["operation"]["verified_postcondition"]["node_group_id"] == record["id"]
+    assert mirrored == record["operation"]
+    assert checkpoints
+
+
+def test_completed_bridge_phase_reconciles_historical_pending_create_without_redispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint, journal, live = _pending_bridge_create_checkpoint(created=True)
+    api = _TerminalBridgeCreateApi(live)
+    monkeypatch.setattr(
+        migration,
+        "_node_group_payload_by_id",
+        lambda **kwargs: live[kwargs["node_group_id"]],
+    )
+
+    lines = migration._reconcile_controller_bridge_node_group_create_operations(  # noqa: SLF001
+        checkpoint=checkpoint,
+        nebius_api=api,  # type: ignore[arg-type]
+        checkpoint_writer=lambda: None,
+    )
+
+    record = journal["node_groups"][0]
+    mirrored = checkpoint["operation_intent"]["provider_operations"][0]
+    assert len(lines) == 1
+    assert "without dispatching another mutation" in lines[0]
+    assert api.calls == [("operation.get", f"operation-create-node-group-{record['name']}")]
+    assert migration._controller_bridge_node_group_create_terminal_proof_is_exact(  # noqa: SLF001
+        journal=journal,
+        record=record,
+    )
+    assert mirrored == record["operation"]
 
 
 def test_managed_bridge_binds_existing_domains_without_provider_create(

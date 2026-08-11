@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-requirements
-description: "Use only as part of the Agentic SDLC workflow; use when the user provides a product idea, ticket, rough prompt, user story, change request, feature request, or optional live experiment environment details and needs `docs/requirements.md` created or updated. This Agentic SDLC skill owns requirements.md and preserves stable REQ IDs."
+description: "Use only as the Agentic SDLC requirements-authoring adapter to maintain-project-specs; use when user intent must create or update canonical REQ records in docs/requirements.md. Preserve stable REQ IDs and return validation to the shared owner."
 ---
 
 # Create Requirements
@@ -141,8 +141,9 @@ Convert user intent into durable, testable product requirements in `docs/require
 ## SDLC Invariants
 
 - Treat `docs/requirements.md` and `docs/design.md` as committed product truth.
-- Only `sdlc-create-requirements` writes `docs/requirements.md`; only `sdlc-create-design`
-  writes `docs/design.md`. Other skills route spec changes to those owners.
+- `maintain-project-specs` owns both canonical documents. This skill may write
+  requirements only while routed as its Agentic SDLC authoring adapter;
+  `sdlc-create-design` has the corresponding design adapter boundary.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `~/.codex/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.

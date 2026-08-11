@@ -12,26 +12,23 @@
 
 ## Prerequisite receipts
 
-The workflow owner validates both complete spec files before inspection. The
+The `maintain-project-specs` owner validates both complete spec files before inspection. The
 mode-`0600` receipt uses schema
-`project-agent-instructions.spec-validation.v2` and binds:
+`project-agent-instructions.spec-validation.v3` and binds:
 
 - owner, validator, and validator version;
 - exact selected project, Git root, and project scope;
 - relative requirements/design paths and full-file SHA-256 digests; and
 - a deterministic traceability-validation digest.
 
-Task Implementer issues this object from private `spec-inspect` only when both
-managed files are tracked, their managed regions validate, and every
-non-superseded requirement is covered by current design. Agentic SDLC issues it
-with `sdlc-start/scripts/validate_project_specs.py` after validating tracked
-owner files, managed blocks, required fields, ready-feature completeness,
-feature marker/body agreement, and total non-superseded requirement coverage.
-During every inspection and replay, the shared helper reruns the fixed validator
-selected by `owner` and requires its complete output to equal the supplied
+Task Implementer and Agentic SDLC are authoring adapters. They invoke the same
+shared validator after checking their workflow-specific refinement or phase
+contracts. During every inspection and replay, the helper reruns the fixed
+`maintain-project-specs` validator and requires its complete output to equal the supplied
 receipt. Marker presence or a caller-named validator is never sufficient.
 
-The receipt stays in the caller's private workflow directory outside Git. Any
+The receipt is atomically written by the owner coordinator in the caller's
+private workflow directory outside Git. Any
 path, digest, owner, validator, or scope mismatch is
 `SPEC_VALIDATION_REQUIRED`.
 
@@ -72,13 +69,13 @@ decisions.
 
 ## Decision schema
 
-Store the exact decision outside Git:
+Store the exact decision as `<private-root>/decision.json` outside Git:
 
 <!-- markdownlint-disable MD013 -->
 
 ```json
 {
-  "schema": "project-agent-instructions.decision.v2",
+  "schema": "project-agent-instructions.decision.v3",
   "manifest_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "disposition": "needed",
   "rationale": "The project has one durable verification rule not supplied by ancestor project instructions.",
@@ -109,6 +106,11 @@ Store the exact decision outside Git:
 - `not-needed`: no rules because no durable project delta remains; or
 - `existing-sufficient`: no rules because an active human-owned project file
   already supplies the contract.
+
+A missing target plus `not-needed` is a complete, verified no-file decision:
+render emits empty rules, apply writes final private state only, and verify
+confirms the target remains absent. Coordinators must report that outcome
+explicitly instead of describing it as pending or failed `AGENTS.md` creation.
 
 Every disposition needs non-empty tracked evidence. Each evidence record binds
 a canonical project-relative path, full-file digest, and one exact single-line
@@ -152,54 +154,61 @@ The generated marker is:
 <!-- markdownlint-disable MD013 -->
 
 ```text
-<!-- project-agent-instructions:managed-v2 manifest-sha256=DIGEST decision-sha256=DIGEST body-sha256=DIGEST -->
+<!-- project-agent-instructions:managed-v3 manifest-sha256=DIGEST decision-sha256=DIGEST body-sha256=DIGEST -->
 ```
 
 <!-- markdownlint-enable MD013 -->
 
 The marker digests are deterministic projections of repository-portable spec,
 scope, evidence, and rendered-decision inputs. Absolute paths, private receipt
-locations, personal global instructions, and rationale never change committed
-bytes. The full private manifest and decision retain those runtime bindings. A
-separate private `project-agent-instructions.ownership.v2` receipt binds the
-exact target digest and marker fields. Marker-only ownership is insufficient.
+locations, personal global instructions, human-authored prefix, and rationale
+never change managed-region bytes. The full private manifest and decision
+retain runtime bindings. A separate private
+`project-agent-instructions.ownership.v3` receipt binds the exact region
+marker fields and project path. Marker-only ownership is insufficient.
 
 Transitions are:
 
 - missing plus `needed` -> exclusive `created` and active ownership receipt;
-- receipted intact v2 plus identical rules and current portable marker
+- tracked human-owned `AGENTS.md` plus `needed` -> guarded `attached`, with the
+  original bytes retained exactly as the human prefix;
+- receipted intact v3 region plus identical rules and current portable marker
   projections -> `existing-sufficient`, no project write;
-- receipted intact v2 plus changed spec, renderer, or evidence projection ->
-  guarded `refreshed`, even when the rendered body is unchanged;
-- receipted intact v2 plus changed rules -> guarded `refreshed` and new receipt;
-- unreceipted intact v2 plus exact `adopt` approval -> `adopted`, or guarded
+- receipted intact v3 region plus changed spec, renderer, or evidence
+  projection -> guarded `refreshed`, even when the rendered body is unchanged;
+- receipted intact v3 region plus changed rules -> guarded `refreshed` and new
+  receipt;
+- unreceipted intact v3 region plus exact `adopt` approval -> `adopted`, or guarded
   `refreshed` when rules changed;
-- intact v2 plus `not-needed` and exact `retire` approval -> guarded `retired`
-  and a retired receipt;
+- intact v3 region plus `not-needed` and exact `retire` approval -> guarded
+  `retired`, restoring the exact human prefix or removing the file when no
+  prefix exists, and recording a retired receipt;
 - missing plus `not-needed` -> private state only;
 - active human-owned file plus `existing-sufficient` -> private state only.
 
-An edited marker/body mismatch is human-owned. Human-owned files are never
-overwritten or deleted. An intact v1 marker returns `LEGACY_GENERATED_FILE`;
-there is no migration or compatibility shim.
+Human prefix edits remain allowed and are preserved by later refreshes. An
+edited marker/body mismatch transfers the managed region out of automation
+ownership. An intact v1 or v2 marker returns `LEGACY_GENERATED_FILE`; there is
+no migration or compatibility shim.
 
 ## Recovery and reload
 
 Create is exclusive and rechecks lock/backup absence at its descriptor-anchored
-mutation boundary. Refresh and retirement compare the exact inspected bytes
-under a mode-`0600` lock. Mutations are anchored to the inspected project-root
-directory identity so a parent-directory swap cannot redirect them. Refresh
-and retirement retain and fsync a same-directory backup until ownership and
-final state are durable; only then is the backup removed and the directory
-fsynced again. A surviving lock or backup blocks all later actions until a
-human inspects the exact files and resolves the artifact; automation never
-removes it speculatively.
+mutation boundary. Attach, refresh, and retirement compare the exact inspected
+whole-file bytes under a mode-`0600` lock while preserving the human prefix.
+Mutations are anchored to the inspected project-root directory identity so a
+parent-directory swap cannot redirect them. These transitions retain and fsync
+a same-directory backup until ownership and final state are durable; only then
+is the backup removed and the directory fsynced again. A surviving lock or
+backup blocks all later actions until a human inspects the exact files and
+resolves the artifact; automation never removes it speculatively.
 
-Final state uses `project-agent-instructions.state.v2` and binds the manifest,
+Final state uses `project-agent-instructions.state.v3` and binds the manifest,
 decision, ownership receipt, current target, active instruction, and outcome.
 `verify` replays discovery and all final postconditions.
 
-`created`, `refreshed`, and `retired` report `reload_required: true`. Because
+`created`, `attached`, `refreshed`, and `retired` report
+`reload_required: true`. Because
 Codex discovers project instructions once per run, the coordinator must stop
 that execution boundary, start a fresh session, rerun/verify the decision, and
 read the active instruction file before continuing. Adoption changes private
@@ -207,32 +216,51 @@ ownership only and does not require reload.
 
 ## Helper commands
 
-Use the installed skill path and caller-owned private paths:
+Use the installed skill path and absolute caller-owned private paths. For the
+placeholders below, `LIFECYCLE_SESSION`, `PRIVATE_PROJECT_AGENT_DIR`,
+`SELECTED_PROJECT`, `CODEX_HOME`, and `INSTALLED_SKILLS_ROOT` are absolute:
+
+<!-- markdownlint-disable MD013 -->
 
 ```text
-python3 scripts/project_agent_instructions.py inspect \
+python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_instructions.py inspect \
   --project-root SELECTED_PROJECT \
-  --spec-owner task-implementer \
+  --spec-owner maintain-project-specs \
   --requirements docs/requirements.md \
   --design docs/design.md \
-  --spec-receipt SPEC_RECEIPT.json \
-  --runtime-config RUNTIME_CONFIG.json \
+  --spec-receipt LIFECYCLE_SESSION/spec-receipt.json \
+  --runtime-config LIFECYCLE_SESSION/runtime-config.json \
+  --codex-home CODEX_HOME \
   --private-root PRIVATE_PROJECT_AGENT_DIR \
-  --output manifest.json
+  --output PRIVATE_PROJECT_AGENT_DIR/manifest.json
 
-python3 scripts/project_agent_instructions.py apply \
+python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_instructions.py render \
   --private-root PRIVATE_PROJECT_AGENT_DIR \
-  --manifest manifest.json \
-  --decision decision.json \
-  --ownership ownership.json \
-  --state state.json
+  --manifest PRIVATE_PROJECT_AGENT_DIR/manifest.json \
+  --decision PRIVATE_PROJECT_AGENT_DIR/decision.json \
+  --output PRIVATE_PROJECT_AGENT_DIR/rules.md \
+  --state PRIVATE_PROJECT_AGENT_DIR/render-state.json
 
-python3 scripts/project_agent_instructions.py verify \
+python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_instructions.py apply \
   --private-root PRIVATE_PROJECT_AGENT_DIR \
-  --state state.json
+  --manifest PRIVATE_PROJECT_AGENT_DIR/manifest.json \
+  --decision PRIVATE_PROJECT_AGENT_DIR/decision.json \
+  --ownership PRIVATE_PROJECT_AGENT_DIR/ownership.json \
+  --state PRIVATE_PROJECT_AGENT_DIR/state.json
+
+python3 INSTALLED_SKILLS_ROOT/project-agent-instructions/scripts/project_agent_instructions.py verify \
+  --private-root PRIVATE_PROJECT_AGENT_DIR \
+  --state PRIVATE_PROJECT_AGENT_DIR/state.json
 ```
 
-Use `--spec-owner agentic-sdlc` for that coordinator. The runtime declaration
+<!-- markdownlint-enable MD013 -->
+
+The lifecycle hook requires this exact inspect shape: explicit `--codex-home`,
+the current session's canonical private members, and no shell composition.
+Relative private paths and environment fallback are not canonical coordinator
+inputs and fail at the CLI or lifecycle-hook boundary.
+
+Both Task Implementer and Agentic SDLC use the same spec owner. The runtime declaration
 is always required so that the active profile and discovery-sensitive CLI
 overrides are explicit. Declare the base profile and no overrides as:
 
@@ -247,7 +275,12 @@ overrides are explicit. Declare the base profile and no overrides as:
 The helper private root is a dedicated initially empty mode-`0700` directory
 outside every Git worktree. Manifest, decision, ownership, and state are direct
 children with mode `0600`. The owner-issued spec receipt and required runtime
-declaration are mode-`0600` caller inputs outside Git and may sit beside that
-directory so the helper can initialize its ownership marker safely. The helper
+declaration are mode-`0600` caller inputs outside Git and sit beside that
+directory. The lifecycle guard permits only the exact current-session
+`runtime-config.json` and direct-child `decision.json` caller inputs. It may
+also admit one exact, uncomposed numeric mode-`0600` tightening command for one
+of those existing regular files; broader modes, directories, symlinks, sibling
+sessions, and authoritative state remain denied. Every authoritative receipt
+and state file remains coordinator-owned. The helper
 prints bounded JSON; a nonzero result with `status: blocked` is authoritative
 and must not be bypassed with direct editing.

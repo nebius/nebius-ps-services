@@ -38,9 +38,12 @@ def _generated_content(
     body: bytes,
     manifest_sha256: str,
     decision_sha256: str,
+    prefix: bytes = b"",
 ) -> bytes:
     return (
-        _generated_marker(
+        prefix
+        + (b"\n\n" if prefix else b"")
+        + _generated_marker(
             manifest_sha256,
             decision_sha256,
             _sha256_bytes(body),
@@ -66,8 +69,7 @@ def _open_parent(path: Path, expected: Optional[ParentIdentity]) -> int:
             "UNSAFE_TARGET", "project AGENTS.md parent could not be anchored"
         ) from error
     if not stat.S_ISDIR(metadata.st_mode) or (
-        expected is not None
-        and (metadata.st_dev, metadata.st_ino) != expected
+        expected is not None and (metadata.st_dev, metadata.st_ino) != expected
     ):
         os.close(descriptor)
         raise ProjectInstructionsError(
@@ -253,13 +255,18 @@ def _guarded_replace(
                 "a preserved project AGENTS.md refresh backup requires recovery",
             )
         before = _name_stat(parent, path.name)
-        if before is None or stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(
-            before.st_mode
+        if (
+            before is None
+            or stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
         ):
             raise ProjectInstructionsError(
                 "UNSAFE_TARGET", "project AGENTS.md target became unsafe"
             )
-        if _sha256_bytes(_read_name(parent, path.name, "project AGENTS.md")) != expected_sha256:
+        if (
+            _sha256_bytes(_read_name(parent, path.name, "project AGENTS.md"))
+            != expected_sha256
+        ):
             raise ProjectInstructionsError(
                 "CONCURRENT_MODIFICATION", "project AGENTS.md changed before refresh"
             )
@@ -284,7 +291,10 @@ def _guarded_replace(
             src_dir_fd=parent,
             dst_dir_fd=parent,
         )
-        if _sha256_bytes(_read_name(parent, backup_name, "refresh backup")) != expected_sha256:
+        if (
+            _sha256_bytes(_read_name(parent, backup_name, "refresh backup"))
+            != expected_sha256
+        ):
             _restore_backup(parent, backup_name, path.name)
             raise ProjectInstructionsError(
                 "CONCURRENT_MODIFICATION",
@@ -310,9 +320,10 @@ def _guarded_replace(
             os.unlink(backup_name, dir_fd=parent)
         os.fsync(parent)
     except OSError as error:
-        if _name_stat(parent, backup_name) is not None and _name_stat(
-            parent, path.name
-        ) is None:
+        if (
+            _name_stat(parent, backup_name) is not None
+            and _name_stat(parent, path.name) is None
+        ):
             try:
                 _restore_backup(parent, backup_name, path.name)
             except OSError:
@@ -324,7 +335,10 @@ def _guarded_replace(
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if temporary_name is not None and _name_stat(parent, temporary_name) is not None:
+        if (
+            temporary_name is not None
+            and _name_stat(parent, temporary_name) is not None
+        ):
             os.unlink(temporary_name, dir_fd=parent)
         if lock_identity is not None:
             _remove_owned_name(parent, lock_name, lock_identity)
@@ -359,13 +373,18 @@ def _guarded_delete(
                 "a preserved project AGENTS.md backup requires recovery",
             )
         before = _name_stat(parent, path.name)
-        if before is None or stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(
-            before.st_mode
+        if (
+            before is None
+            or stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
         ):
             raise ProjectInstructionsError(
                 "UNSAFE_TARGET", "project AGENTS.md target became unsafe"
             )
-        if _sha256_bytes(_read_name(parent, path.name, "project AGENTS.md")) != expected_sha256:
+        if (
+            _sha256_bytes(_read_name(parent, path.name, "project AGENTS.md"))
+            != expected_sha256
+        ):
             raise ProjectInstructionsError(
                 "CONCURRENT_MODIFICATION", "project AGENTS.md changed before retirement"
             )
@@ -387,7 +406,10 @@ def _guarded_delete(
             src_dir_fd=parent,
             dst_dir_fd=parent,
         )
-        if _sha256_bytes(_read_name(parent, backup_name, "retirement backup")) != expected_sha256:
+        if (
+            _sha256_bytes(_read_name(parent, backup_name, "retirement backup"))
+            != expected_sha256
+        ):
             _restore_backup(parent, backup_name, path.name)
             raise ProjectInstructionsError(
                 "CONCURRENT_MODIFICATION",
@@ -404,9 +426,10 @@ def _guarded_delete(
             os.unlink(backup_name, dir_fd=parent)
         os.fsync(parent)
     except OSError as error:
-        if _name_stat(parent, backup_name) is not None and _name_stat(
-            parent, path.name
-        ) is None:
+        if (
+            _name_stat(parent, backup_name) is not None
+            and _name_stat(parent, path.name) is None
+        ):
             try:
                 _restore_backup(parent, backup_name, path.name)
             except OSError:
@@ -440,19 +463,14 @@ def _complete_retained_backup(
             or not stat.S_ISREG(backup.st_mode)
             or _sha256_bytes(_read_name(parent, backup_name, "transition backup"))
             != backup_sha256
-            or (
-                target_sha256 is None
-                and target is not None
-            )
+            or (target_sha256 is None and target is not None)
             or (
                 target_sha256 is not None
                 and (
                     target is None
                     or stat.S_ISLNK(target.st_mode)
                     or not stat.S_ISREG(target.st_mode)
-                    or _sha256_bytes(
-                        _read_name(parent, path.name, "project AGENTS.md")
-                    )
+                    or _sha256_bytes(_read_name(parent, path.name, "project AGENTS.md"))
                     != target_sha256
                 )
             )

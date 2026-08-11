@@ -55,48 +55,99 @@ intervening when it can alter criterion-relevant state or execution.
   experiment capability is missing; exact next evidence is named.
 - `UNRESOLVED`: competing hypotheses remain without a decisive next result.
 
+`VERIFIED_FIXED` additionally requires all seven completion criteria below to
+be `PASS`. Other classifications may contain honest `FAIL` or `UNKNOWN` rows.
+Passing tests alone cannot establish Design, Infrastructure, Logs, or Relevant
+code paths as `PASS`.
+
 ## Report Template
+
+Every explicit `$troubleshoot` invocation uses this report, including success,
+blocking, tool or coordination error, ordinary early stop, and unresolved work.
+The optional hook records the duty in
+`troubleshoot-report-obligation.json`, retains an undelivered duty across a
+resumed turn in the same session, and validates
+`Current workflow state: REPORTED`. It requests one correction and then emits
+an honest bounded UI fallback rather than looping. If the host terminates
+before Stop, no local hook can create an assistant response; the next resumed
+same-session turn must report the interruption.
 
 ```markdown
 # Troubleshooting Report
 
 ## Outcome
 - Classification:
+- Current workflow state: REPORTED
 - Confidence:
 - Current impact:
+- Stabilization status:
 
 ## Failure Contract
 - Expected:
 - Actual:
 - Scope and signature:
 - Reproduction or characterization:
-- Timeline:
 - Success criteria and constraints:
 - Target, environment, blast radius, and allowed mutations:
+- Included system boundary:
+- Excluded system boundary:
+- Exercised control and data paths:
+- Incident-window start:
+- Incident-window end:
 
-## Evidence And Model
-- Observed facts:
-- Derived inferences:
-- Unknowns:
-- Affected and unaffected comparisons:
-- Relevant execution and boundary path:
+## Architecture Verdict
+- Observed technologies, versions, and deployment model:
+- Configuration authorities:
+- Components, dependencies, ports, protocols, and authentication:
+- Control and data flows:
+- Official vendor architecture comparison and verdict:
 
-## Hypotheses And Experiments
-| Hypothesis | Prediction | Experiment | Observation | Status |
+## Component Verification Matrix
+| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+## Incident Timeline
+| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |
 | --- | --- | --- | --- | --- |
 
-## Cause
+## Logs Examined
+| Layer | Source | Window and filters | Finding | Coverage status |
+| --- | --- | --- | --- | --- |
+| Component | | | | examined / unavailable / unsafe / not applicable |
+| Application or job | | | | examined / unavailable / unsafe / not applicable |
+| Container or orchestrator | | | | examined / unavailable / unsafe / not applicable |
+| Service manager | | | | examined / unavailable / unsafe / not applicable |
+| OS and kernel | | | | examined / unavailable / unsafe / not applicable |
+| Network and firewall | | | | examined / unavailable / unsafe / not applicable |
+| Storage | | | | examined / unavailable / unsafe / not applicable |
+| GPU or hardware | | | | examined / unavailable / unsafe / not applicable |
+
+## Hypotheses And Experiments
+| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |
+| --- | --- | --- | --- | --- |
+
+## Code Debugging
+- Reproduction and execution or data path:
+- Stack trace, core dump, or equivalent runtime evidence:
+- Configuration, environment, and data inputs:
+- Recent changes and affected or unaffected comparison:
+- Focused tests, static or dynamic analysis, and instrumentation:
+- Instrumentation cleanup and limitations:
+
+## Root Cause
 - Earliest divergence:
 - Causal chain:
 - Counterfactual and reintroduction:
 - Alternatives eliminated:
+- Confidence:
 
-## Mitigation Or Repair
+## Remediation
+- Design classification and handoff:
 - Changes made:
 - Authority and safety basis:
 - Rollback or recovery state:
 
-## Verification
+## Post-Fix Validation
 - Original reproducer:
 - Regression oracle:
 - Targeted and boundary checks:
@@ -106,27 +157,71 @@ intervening when it can alter criterion-relevant state or execution.
 - Intervention ledger and first contaminated boundary:
 - Product-owned transitions and independent postconditions:
 
-## Residual Uncertainty And Next Action
+## Completion Gate
+| Criterion | Verdict | Evidence | Gap or next action |
+| --- | --- | --- | --- |
+| Design | PASS / FAIL / UNKNOWN | | |
+| Infrastructure | PASS / FAIL / UNKNOWN | | |
+| Connectivity | PASS / FAIL / UNKNOWN | | |
+| Configuration | PASS / FAIL / UNKNOWN | | |
+| Runtime health | PASS / FAIL / UNKNOWN | | |
+| Logs | PASS / FAIL / UNKNOWN | | |
+| Relevant code paths | PASS / FAIL / UNKNOWN | | |
+
+## Remaining Unknowns And Residual Risks
+- Unknowns and coverage gaps:
+- Residual risks:
+- Exact next action:
 ```
 
-For remediation-budget exhaustion, add `REMEDIATION_BUDGET_EXHAUSTED`, the
-`attempt_limit` or `time_limit` stop trigger, and use these exact report section
-names so the optional Stop hook can validate delivery: `## Outcome`,
-`## Blocking Error`, `## Source`, `## Attempts`, `## Evidence`,
-`## Current State`, and `## Next Action`. List all counted attempts and the
-highest-information action available to the user or a later authorized tranche.
-Use `Blocker: ...` under `## Blocking Error` and `Blocker key: ...` under
-`## Source`. For every positional attempt, use
-`- attempt-N | Remediation: ... | Verification: ... | Result: ...` and
-`- attempt-N | Evidence: ...`. Include the exact redacted error class, code,
-message excerpt, and failing operation when known; identify its component,
-command, test, service, or bounded log location under `## Source`.
-When the optional guard is active, use its bounded, redacted marker-derived
-summaries in those fields; generic filler or detected sensitive values do not
-satisfy report delivery.
+The completion table must contain exactly one row for each named criterion and
+only `PASS`, `FAIL`, or `UNKNOWN`. Every row needs evidence and a substantive
+gap or next action. A `PASS` row uses the exact evidence cell below and exactly
+`None after scoped verification.` in the final cell:
+
+| Criterion | Exact `PASS` evidence cell | Cross-validated proof state |
+| --- | --- | --- |
+| Design | `Verified: Architecture Verdict.` | Every Architecture Verdict value starts `PASS:` |
+| Infrastructure | `Verified: Component Verification Matrix.` | Version/existence, resources/time, and evidence cells start `PASS:` for every row |
+| Connectivity | `Verified: Component Verification Matrix.` | Dependencies/authentication/DNS and evidence cells start `PASS:` for every row |
+| Configuration | `Verified: Component Verification Matrix.` | Active-configuration and evidence cells start `PASS:` for every row |
+| Runtime health | `Verified: Component Verification Matrix.` | Runtime-health, restart/recent-change, and evidence cells start `PASS:` for every row |
+| Logs | `Verified: Logs Examined.` | Sources and findings are affirmative; coverage is `examined` or `not applicable` |
+| Relevant code paths | `Verified: Code Debugging and Post-Fix Validation.` | Every Code Debugging and Post-Fix Validation value starts `PASS:` |
+
+A `FAIL` or `UNKNOWN` row must name a real gap or next action instead of using
+the no-gap sentinel. Free-text evidence cannot override the referenced
+structured state, and a structured token cannot override referenced detail that
+explicitly reports absent, missing, unavailable, unexamined, unverified,
+unproven, unknown, incomplete, insufficient, or uncollected evidence.
+`VERIFIED_FIXED` is invalid unless all seven verdicts are `PASS`. An unavailable
+source is `UNKNOWN`, not `PASS`. A "no issue found" result remains `UNRESOLVED`
+or `BLOCKED_MISSING_EVIDENCE` unless every required criterion is supported;
+name all coverage gaps.
+
+The report validator requires each of the eight canonical log layers exactly
+once, in the order shown, with one lower-case canonical coverage status. It
+rejects missing, duplicate, unknown, or reordered layers even when the
+completion verdict is not `PASS`. Scope every conclusion to the declared
+included components and dependencies, exercised paths, and incident window;
+do not generalize beyond that boundary or observed period.
+Every evidence-bearing component and log cell must be substantive on its own;
+other cells in the row cannot make a placeholder count as evidence. Text after
+`PASS:` must also be substantive before the structured state can pass.
+
+For remediation-budget exhaustion, keep this same canonical envelope. Add
+`REMEDIATION_BUDGET_EXHAUSTED` and `- Stop trigger: attempt_limit` or
+`- Stop trigger: time_limit` under `## Outcome`; add `- Blocker: ...` and
+`- Blocker key: ...` under `## Root Cause`; list every marker-derived
+`- attempt-N | Remediation: ... | Verification: ... | Result: ...` under
+`## Remediation`; and list every `- attempt-N | Evidence: ...` under
+`## Post-Fix Validation`. Include the highest-information next action and mark
+completion criteria `FAIL` or `UNKNOWN` as the evidence supports. The optional
+guard uses bounded, redacted marker-derived summaries; filler or sensitive
+values do not satisfy report delivery.
 
 If a retry stops earlier because no new evidence or genuinely new hypothesis is
-available, use the same structured investigation content without
+available, use the same canonical report without
 `REMEDIATION_BUDGET_EXHAUSTED`. Classify the outcome as
 `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`, state which retry-admission gate
 failed, and identify the highest-information evidence needed next.
@@ -137,7 +232,7 @@ stop boundary, including failed attempts, residual uncertainty, and rollback or
 runtime state where applicable.
 
 The optional Stop hook requests one correction when the report is missing a
-required section or marker-bound attempt and includes a bounded, redacted
+required section, completion row, or marker-bound attempt and includes a bounded, redacted
 minimum report for the assistant to return verbatim as the whole response. Do
 not prefix, enrich, or paraphrase its exact marker-derived fields. If the
 continued response is still

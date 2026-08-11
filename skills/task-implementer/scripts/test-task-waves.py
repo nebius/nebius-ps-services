@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -54,6 +55,9 @@ class WorktreeWaveTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "workspace with spaces"
         self.root.mkdir()
+        self.previous_codex_home = os.environ.get("CODEX_HOME")
+        self.codex_home = self.root / "codex home"
+        os.environ["CODEX_HOME"] = str(self.codex_home.resolve(strict=False))
         self.origin = self.root / "origin.git"
         git("init", "--bare", "-q", str(self.origin), cwd=self.root)
         self.repo = self.root / "repo"
@@ -88,7 +92,6 @@ class WorktreeWaveTest(unittest.TestCase):
             cwd=self.repo,
         )
         git("switch", "-qc", "wave-feature", cwd=self.repo)
-        self.codex_home = self.root / "codex home"
         lane = lanes.ensure_project_lane(self.scope)
         lane_root = Path(str(lane["worktree"]))
         initialized = pw.init_workspace(
@@ -148,6 +151,10 @@ class WorktreeWaveTest(unittest.TestCase):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if self.previous_codex_home is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = self.previous_codex_home
         self.temporary.cleanup()
 
     def _write_handoff(self) -> None:
@@ -211,6 +218,7 @@ class WorktreeWaveTest(unittest.TestCase):
             + "\n\n## Steering\n\nChange the planned behavior before resources exist.\n",
             encoding="utf-8",
         )
+
         self.prompt.chmod(0o600)
         routed = pw.route_project_prompt(
             self.scope,
@@ -237,6 +245,20 @@ class WorktreeWaveTest(unittest.TestCase):
         )
         self.assertEqual(wave["status"], "planned")
         self.assertFalse(Path(str(wave["integration_worktree"])).exists())
+
+    def test_commit_authorization_rejects_private_symlink_escape(self) -> None:
+        root = self.root / "authorization-root"
+        root.mkdir(mode=0o700)
+        escape = self.root / "authorization-escape"
+        escape.mkdir()
+        (root / "commit-transactions").symlink_to(escape, target_is_directory=True)
+        with self.assertRaisesRegex(
+            pw.PromptWorkspaceError, "must not be a symlink"
+        ):
+            waves._ensure_commit_authorization_parent(
+                root,
+                root / "commit-transactions" / "repo" / "session",
+            )
 
     def test_replan_revalidates_current_requirements_contract(self) -> None:
         planned = pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
@@ -294,7 +316,7 @@ class WorktreeWaveTest(unittest.TestCase):
         pw.arm_task(self.workspace, self.run_id, task_id, clock=lambda: FIXED)
         os.chdir(scope_cwd)
         try:
-            pw.start_task(
+            started = pw.start_task(
                 self.workspace,
                 self.run_id,
                 task_id,
@@ -305,6 +327,14 @@ class WorktreeWaveTest(unittest.TestCase):
             )
         finally:
             os.chdir(previous)
+        authorization_path = Path(str(started["commit_authorization"]))
+        authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
+        self.assertEqual(authorization["state"], "AUTHORIZED")
+        self.assertEqual(authorization["owner"], "task-implementer")
+        self.assertEqual(
+            authorization["session_sha256"],
+            hashlib.sha256(f"session-{task_id}".encode()).hexdigest(),
+        )
         (scope_cwd / filename).write_text(f"{task_id}\n", encoding="utf-8")
         git("add", "-A", cwd=worktree)
         git("commit", "-qm", f"Implement {task_id}", cwd=worktree)
@@ -1536,6 +1566,13 @@ class WorktreeWaveTest(unittest.TestCase):
             os.chdir(previous)
         self.assertEqual(recovered["observed_head"], self.initial)
         self.assertEqual(recovered["changed_paths"], ["services/example/one.txt"])
+        recovered_authorization = Path(str(recovered["commit_authorization"]))
+        self.assertEqual(
+            json.loads(recovered_authorization.read_text(encoding="utf-8"))[
+                "session_sha256"
+            ],
+            hashlib.sha256(b"replacement-worker").hexdigest(),
+        )
         plane = json.loads(
             (
                 self.run_dir / "orchestration" / "tasks" / "wave-001" / "task-1.json"

@@ -245,9 +245,10 @@ Hooks do not implement the task. Normal startup remains lazy; compaction and
 the first complex prompt create only an empty `0600` scaffold below `0700`
 directories. The parent agent owns all semantic updates when continuity is
 useful. The config template allows sandbox writes under
-`$CODEX_HOME/task-state`; any installed PreToolUse guard should allow that
-same path while continuing to protect unrelated runtime files such as
-`$CODEX_HOME/hooks`.
+`$CODEX_HOME/task-state`. A selected-project lifecycle guard must not treat
+task state, config, hooks, installed skills, or other user files as its control
+plane; fixed external writes pass through to the operating system, Codex
+permissions, destructive-action safeguards, and any owning domain policy.
 The task-state file is a compact continuation record: replace stale or
 superseded details with the latest validated state, keep only the objective,
 constraints, decisions, changed files, validation status, risks, and next
@@ -442,12 +443,19 @@ setup.
    render the recovery template and create the local file with mode `0600`;
    do not create a backup for a file that did not exist.
 
-6. If a local guard blocks a safe patch, stop rather than bypassing it. Report
-   the blocked surface, the exact intended change, and the manual out-of-band
-   action. Keep the recommendation narrow. For example, if only the
-   `Context Management` bullet in `$CODEX_HOME/AGENTS.md` is stale, tell the
-   user to patch only that bullet and leave `config.toml`, hooks, hook policy,
-   agent TOMLs, and `hooks.json` untouched.
+6. If a repo-owned guard blocks a safe patch, prove its exact registration,
+   canonical source, installed provenance, and ownership boundary. When the
+   request authorizes repair, reproduce the denial in a focused test, repair
+   canonical source first, validate it, sync through the documented installer,
+   report the restart/trust boundary, and retry the identical authorized edit.
+   Never use an alternate writer, shell redirection, an installed-only edit, a
+   working directory escape, or an attempt to disable or unregister the guard.
+   For an external or unrepairable OS, sandbox, enterprise, unknown-provenance,
+   conflicting, or out-of-authority denial, report the narrow manual
+   out-of-band action instead. For example, if only the `Context Management`
+   bullet in `$CODEX_HOME/AGENTS.md` is stale and its guard cannot be repaired
+   in scope, tell the user to patch only that bullet and leave `config.toml`,
+   hooks, hook policy, agent TOMLs, and `hooks.json` untouched.
 
 7. Validate the rendered setup:
 

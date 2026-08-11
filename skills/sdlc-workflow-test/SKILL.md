@@ -187,7 +187,7 @@ remotes.
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.
 6. Verify rerun and change-request behavior.
-   Repeat `$sdlc-start run <prompt-path-or-unique-filename>` with no prompt
+   Repeat `$sdlc-start run <prompt-ref-or-file>` with no prompt
    changes, then edit the same prompt with the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,
    scoped changes, refreshed evidence, and no duplicate commits.
@@ -272,7 +272,7 @@ Use this process only after explicit `--create`, `--create --keep`, or
    first run `$sdlc-start workspace init <project-folder>`, then use
    `scripts/render_three_tier_prompt.py` to replace the generated starter body
    while preserving its managed identity, and finally run
-   `$sdlc-start run <prompt-path-or-unique-filename>`. Follow the returned phase
+   `$sdlc-start run <prompt-ref-or-file>`. Follow the returned phase
    skill; do not make the lifecycle helper or hooks orchestrate phases.
 4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
    and PostgreSQL. Run exactly two labelled Compose containers, dynamically

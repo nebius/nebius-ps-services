@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable v2 contract tests for project_agent_instructions.py."""
+"""Disposable v3 contract tests for project_agent_instructions.py."""
 
 from __future__ import annotations
 
@@ -25,12 +25,13 @@ SCRIPT = Path(__file__).resolve().with_name("project_agent_instructions.py")
 AGENTIC_VALIDATOR = (
     SCRIPT.parents[2] / "sdlc-start" / "scripts" / "validate_project_specs.py"
 )
-REQUIREMENTS = """---
-schema: agentic-sdlc.requirements.v1
+REQUIREMENTS = """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+---
+schema: maintain-project-specs/requirements-v1
 project: Example
 status: ready
-created_by_skill: sdlc-create-requirements
-updated_by_skill: sdlc-create-requirements
+created_by_skill: maintain-project-specs
+updated_by_skill: maintain-project-specs
 ---
 
 # Requirements
@@ -63,13 +64,15 @@ Unit and integration tests.
 Manual review.
 
 <!-- /REQUIREMENT: REQ-001 -->
+<!-- maintain-project-specs:requirements:end -->
 """
-DESIGN = """---
-schema: agentic-sdlc.design.v1
+DESIGN = """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+---
+schema: maintain-project-specs/design-v1
 project: Example
 status: ready
-created_by_skill: sdlc-create-design
-updated_by_skill: sdlc-create-design
+created_by_skill: maintain-project-specs
+updated_by_skill: maintain-project-specs
 source_requirements: docs/requirements.md
 ---
 
@@ -127,13 +130,14 @@ Adopt and retire only with exact-digest approval.
 Requirements mapped and checks passing.
 
 <!-- /FEATURE: FEAT-001 -->
+<!-- maintain-project-specs:design:end -->
 """
 
 
 class ProjectAgentInstructionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
-            prefix="project-agent-instructions-v2-"
+            prefix="project-agent-instructions-v3-"
         )
         self.root = Path(self.temporary.name).resolve()
         self.repo = self.root / "repo"
@@ -150,10 +154,19 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         (self.repo / "docs" / "requirements.md").write_text(
             REQUIREMENTS, encoding="utf-8"
         )
-        (self.repo / "docs" / "design.md").write_text(
-            DESIGN, encoding="utf-8"
-        )
+        (self.repo / "docs" / "design.md").write_text(DESIGN, encoding="utf-8")
         subprocess.run(["git", "add", "docs"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(["git", "commit", "-qm", "baseline"], cwd=self.repo, check=True)
         private_state._ensure_private_root(self.private, self.repo)
         self.receipt_path = self.private / "spec-receipt.json"
         self.write_json("spec-receipt.json", self.receipt())
@@ -197,7 +210,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
     ) -> dict[str, object]:
         return discovery._manifest(
             project or self.repo,
-            "agentic-sdlc",
+            "maintain-project-specs",
             "docs/requirements.md",
             "docs/design.md",
             self.codex_home,
@@ -256,7 +269,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.private,
         )
 
-    def test_missing_target_is_created_with_v2_provenance_and_verified(self) -> None:
+    def test_missing_target_is_created_with_v3_provenance_and_verified(self) -> None:
         manifest = self.inspect()
         state = self.apply(manifest, self.decision(manifest, "needed"))
         target = self.repo / "AGENTS.md"
@@ -267,11 +280,39 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         )
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
         ownership = json.loads((self.private / "ownership.json").read_text())
-        self.assertEqual(ownership["target_sha256"], state["target_sha256"])
+        parsed = contracts._parse_generated(target.read_bytes())
+        assert parsed is not None
+        self.assertEqual(ownership["body_sha256"], parsed["body_sha256"])
         self.assertEqual(
             workflow.verify_state(self.private / "state.json", self.private)["outcome"],
             "created",
         )
+
+    def test_missing_target_not_needed_records_verified_no_file_outcome(self) -> None:
+        manifest = self.inspect()
+        decision = self.decision(manifest, "not-needed")
+        rendered = workflow.render_decision(
+            self.write_json("manifest.json", manifest),
+            self.write_json("decision.json", decision),
+            self.private / "rules.md",
+            self.private / "render-state.json",
+            self.private,
+        )
+
+        self.assertEqual(rendered["disposition"], "not-needed")
+        self.assertFalse(rendered["repository_mutated"])
+        self.assertEqual((self.private / "rules.md").read_bytes(), b"")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+
+        state = self.apply(manifest, decision)
+        self.assertEqual(state["outcome"], "not-needed")
+        self.assertIsNone(state["target_sha256"])
+        self.assertFalse(state["reload_required"])
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        verified = workflow.verify_state(self.private / "state.json", self.private)
+        self.assertEqual(verified["outcome"], "not-needed")
+        self.assertIsNone(verified["target_sha256"])
+        self.assertFalse(verified["reload_required"])
 
     def test_render_is_deterministic_and_does_not_copy_global_instructions(
         self,
@@ -296,17 +337,33 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             target_io._generated_content(
                 body1,
                 contracts._generation_manifest_sha256(manifest),
-                contracts._generation_decision_sha256(
-                    "needed", body1, self.evidence()
-                ),
+                contracts._generation_decision_sha256("needed", body1, self.evidence()),
             ),
             target_io._generated_content(
                 body2,
                 contracts._generation_manifest_sha256(without_global),
-                contracts._generation_decision_sha256(
-                    "needed", body2, self.evidence()
-                ),
+                contracts._generation_decision_sha256("needed", body2, self.evidence()),
             ),
+        )
+
+    def test_render_prepares_exact_rules_without_repository_mutation(self) -> None:
+        manifest = self.inspect()
+        result = workflow.render_decision(
+            self.write_json("manifest.json", manifest),
+            self.write_json("decision.json", self.decision(manifest, "needed")),
+            self.private / "rules.md",
+            self.private / "render-state.json",
+            self.private,
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["repository_mutated"])
+        self.assertFalse((self.repo / "AGENTS.md").exists())
+        rendered = (self.private / "rules.md").read_bytes()
+        self.assertEqual(result["rules_sha256"], contracts._sha256_bytes(rendered))
+        self.assertIn(b"Run the focused contract tests", rendered)
+        render_state = json.loads((self.private / "render-state.json").read_text())
+        self.assertEqual(
+            render_state["schema"], "project-agent-instructions.render-state.v1"
         )
 
     def test_same_managed_body_with_receipt_preserves_target(self) -> None:
@@ -363,7 +420,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             "refreshed",
         )
 
-    def test_human_edit_transfers_ownership_and_blocks_refresh(self) -> None:
+    def test_managed_region_edit_transfers_ownership_and_blocks_refresh(self) -> None:
         first = self.inspect()
         self.apply(first, self.decision(first, "needed"))
         target = self.repo / "AGENTS.md"
@@ -375,7 +432,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.apply(current, self.decision(current, "needed"))
         self.assertEqual(caught.exception.code, "STALE_GENERATED_FILE")
 
-    def test_unreceipted_v2_file_requires_exact_adoption(self) -> None:
+    def test_unreceipted_v3_region_requires_exact_adoption(self) -> None:
         initial = self.inspect()
         decision = self.decision(initial, "needed")
         _, body, _, _ = workflow._validate_decision(decision, initial)
@@ -384,9 +441,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             target_io._generated_content(
                 body,
                 contracts._generation_manifest_sha256(initial),
-                contracts._generation_decision_sha256(
-                    "needed", body, self.evidence()
-                ),
+                contracts._generation_decision_sha256("needed", body, self.evidence()),
             )
         )
         current = self.inspect()
@@ -505,9 +560,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.repo.rename(original)
         self.repo.mkdir()
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
-            target_io._exclusive_create(
-                self.repo / "AGENTS.md", b"content\n", identity
-            )
+            target_io._exclusive_create(self.repo / "AGENTS.md", b"content\n", identity)
         self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
         self.assertFalse((self.repo / "AGENTS.md").exists())
         self.assertFalse((original / "AGENTS.md").exists())
@@ -543,6 +596,77 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             target.read_text(), "# Human instructions\n\n- Preserve this file.\n"
         )
 
+    def test_needed_rules_attach_to_human_file_and_preserve_prefix(self) -> None:
+        target = self.repo / "AGENTS.md"
+        human = b"# Human instructions\r\n\r\n- Preserve these exact bytes.\r\n"
+        target.write_bytes(human)
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+
+        manifest = self.inspect()
+        state = self.apply(manifest, self.decision(manifest, "needed"))
+
+        self.assertEqual(state["outcome"], "attached")
+        parsed = contracts._parse_generated(target.read_bytes())
+        assert parsed is not None
+        self.assertEqual(parsed["prefix"], human)
+        self.assertEqual(parsed["version"], 3)
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "attached",
+        )
+
+    def test_human_prefix_edit_preserves_managed_region_ownership(self) -> None:
+        target = self.repo / "AGENTS.md"
+        original = b"# Human instructions\n\n- Original.\n"
+        target.write_bytes(original)
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        parsed = contracts._parse_generated(target.read_bytes())
+        assert parsed is not None
+        generated = target.read_bytes()
+        managed_body = generated[generated.find(contracts.GENERATED_MARKER_PREFIX) :]
+
+        changed = b"# Human instructions\n\n- Edited by the project.\n"
+        target.write_bytes(changed + b"\n\n" + managed_body)
+        current = self.inspect()
+        self.assertEqual(current["target"]["file_status"], "managed")
+
+        state = self.apply(current, self.decision(current, "needed"))
+
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        final = contracts._parse_generated(target.read_bytes())
+        assert final is not None
+        self.assertEqual(final["prefix"], changed)
+
+    def test_retirement_removes_only_managed_region(self) -> None:
+        target = self.repo / "AGENTS.md"
+        human = b"# Human instructions\n\n- Keep me exactly.\n"
+        target.write_bytes(human)
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        current = self.inspect()
+
+        state = self.apply(
+            current,
+            self.decision(
+                current,
+                "not-needed",
+                approval={
+                    "action": "retire",
+                    "target_sha256": str(current["target"]["sha256"]),
+                },
+            ),
+        )
+
+        self.assertEqual(state["outcome"], "retired")
+        self.assertEqual(target.read_bytes(), human)
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "retired",
+        )
+
     def test_untracked_human_instruction_source_is_rejected(self) -> None:
         (self.repo / "AGENTS.md").write_text(
             "# Human instructions\n\n- Preserve this file.\n", encoding="utf-8"
@@ -566,20 +690,54 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.apply(current, self.decision(current, "existing-sufficient"))
         self.assertEqual(caught.exception.code, "EXISTING_INSTRUCTIONS_GAP")
 
-    def test_legacy_marker_fails_closed_without_compatibility(self) -> None:
+    def test_legacy_markers_fail_closed_without_compatibility(self) -> None:
         body = b"# Legacy\n"
-        marker = (
+        digest = contracts._sha256_bytes(body).encode()
+        markers = (
             b"<!-- project-agent-instructions:generated-v1 body-sha256="
-            + contracts._sha256_bytes(body).encode()
-            + b" -->\n\n"
+            + digest
+            + b" -->\n\n",
+            b"<!-- project-agent-instructions:managed-v2 manifest-sha256="
+            + b"1" * 64
+            + b" decision-sha256="
+            + b"2" * 64
+            + b" body-sha256="
+            + digest
+            + b" -->\n\n",
         )
-        (self.repo / "AGENTS.md").write_bytes(marker + body)
+        for marker in markers:
+            with self.subTest(marker=marker.split()[1]):
+                (self.repo / "AGENTS.md").write_bytes(marker + body)
+                subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+                manifest = self.inspect()
+                self.assertEqual(manifest["target"]["file_status"], "legacy")
+                with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+                    self.apply(manifest, self.decision(manifest, "needed"))
+                self.assertEqual(caught.exception.code, "LEGACY_GENERATED_FILE")
+
+    def test_malformed_or_multiple_managed_markers_fail_closed(self) -> None:
+        target = self.repo / "AGENTS.md"
+        malformed = b"<!-- project-agent-instructions:managed-v3 invalid -->\n"
+        target.write_bytes(malformed)
         subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
-        manifest = self.inspect()
-        self.assertEqual(manifest["target"]["file_status"], "legacy")
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
-            self.apply(manifest, self.decision(manifest, "needed"))
-        self.assertEqual(caught.exception.code, "LEGACY_GENERATED_FILE")
+            self.inspect()
+        self.assertEqual(caught.exception.code, "UNSAFE_TARGET")
+
+        target.unlink()
+        initial = self.inspect()
+        decision = self.decision(initial, "needed")
+        _, body, _, _ = workflow._validate_decision(decision, initial)
+        assert body is not None
+        region = target_io._generated_content(
+            body,
+            contracts._generation_manifest_sha256(initial),
+            contracts._generation_decision_sha256("needed", body, self.evidence()),
+        )
+        target.write_bytes(region + b"\n\n" + region)
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.inspect()
+        self.assertEqual(caught.exception.code, "UNSAFE_TARGET")
 
     def test_lock_or_backup_blocks_every_inspection(self) -> None:
         for name in discovery.RECOVERY_NAMES:
@@ -699,7 +857,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         first = self.inspect()
         self.apply(first, self.decision(first, "needed"))
         receipt = json.loads((self.private / "ownership.json").read_text())
-        receipt["target_sha256"] = "0" * 64
+        receipt["body_sha256"] = "0" * 64
         self.write_json("ownership.json", receipt)
         current = self.inspect()
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
@@ -789,9 +947,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         (self.repo / "AGENTS.md").write_text(
             "# Human instructions\n\n- Keep this tracked file.\n", encoding="utf-8"
         )
-        subprocess.run(
-            ["git", "add", "-f", "AGENTS.md"], cwd=self.repo, check=True
-        )
+        subprocess.run(["git", "add", "-f", "AGENTS.md"], cwd=self.repo, check=True)
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
             self.inspect()
         self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
@@ -901,7 +1057,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
                 "--project-root",
                 str(self.repo),
                 "--spec-owner",
-                "agentic-sdlc",
+                "maintain-project-specs",
                 "--codex-home",
                 str(self.codex_home),
                 "--private-root",
@@ -921,6 +1077,33 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((self.private / "cli-manifest.json").read_text())
         self.assertEqual(manifest["schema"], contracts.MANIFEST_SCHEMA)
+
+    def test_cli_inspect_requires_explicit_codex_home(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "inspect",
+                "--project-root",
+                str(self.repo),
+                "--spec-owner",
+                "maintain-project-specs",
+                "--private-root",
+                str(self.private),
+                "--spec-receipt",
+                str(self.receipt_path),
+                "--runtime-config",
+                str(self.runtime_path),
+                "--output",
+                "cli-manifest.json",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--codex-home", result.stderr)
 
 
 if __name__ == "__main__":

@@ -842,16 +842,18 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assertIn("unchanged agent-nebius-auth-setup/assets/hooks", second.stdout)
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
+        self.assertIn("unchanged maintain-project-specs/assets/hooks", second.stdout)
+        self.assertIn("unchanged prompt-session-intake/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
         self.assertIn("unchanged troubleshoot/assets/hooks", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
-        self.assertIn("files: unchanged 6", second.stdout)
-        self.assertIn("files: unchanged 2", second.stdout)
+        self.assertIn("files: unchanged 7", second.stdout)
+        self.assertIn("files: unchanged 8", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 15; registrations unchanged 8",
+            "Summary: files updated 0, unchanged 29; registrations unchanged 16",
             second.stdout,
         )
         self.assertTrue(
@@ -865,10 +867,24 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             for hook in group["hooks"]
             if "remediation_attempt_guard.py" in hook["command"]
         ]
-        self.assertEqual(len(remediation_events), 3)
-        self.assertEqual(
-            set(remediation_events), {"UserPromptSubmit", "PreToolUse", "Stop"}
-        )
+        self.assertEqual(len(remediation_events), 2)
+        self.assertEqual(set(remediation_events), {"UserPromptSubmit", "PreToolUse"})
+        arbiter_events = [
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "stop_lifecycle_arbiter.py" in hook["command"]
+        ]
+        self.assertEqual(arbiter_events, ["Stop"])
+        prompt_events = [
+            event
+            for event, groups in hooks["hooks"].items()
+            for group in groups
+            for hook in group["hooks"]
+            if "prompt_session_intake.py" in hook["command"]
+        ]
+        self.assertEqual(prompt_events, ["UserPromptSubmit"])
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)
@@ -877,6 +893,116 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertNotIn(
             "Action required: hook files or registrations changed", second.stderr
         )
+
+    def test_install_all_migrates_only_legacy_stop_owners_to_arbiter(self) -> None:
+        unrelated = {
+            "matcher": "custom",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "python3 /tmp/custom_stop.py",
+                    "timeout": 10,
+                }
+            ],
+        }
+        legacy_sdlc = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/stop_sdlc_continue.py"',
+                    "timeout": 30,
+                }
+            ]
+        }
+        legacy_troubleshoot = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/remediation_attempt_guard.py"',
+                    "timeout": 30,
+                }
+            ]
+        }
+        self.codex_home.mkdir(parents=True, exist_ok=True)
+        (self.codex_home / "hooks.json").write_text(
+            json.dumps(
+                {"hooks": {"Stop": [legacy_sdlc, unrelated, legacy_troubleshoot]}},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_all_hooks_installer()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        hooks = json.loads((self.codex_home / "hooks.json").read_text())
+        stop_groups = hooks["hooks"]["Stop"]
+        commands = [hook["command"] for group in stop_groups for hook in group["hooks"]]
+        self.assertEqual(
+            sum("stop_lifecycle_arbiter.py" in item for item in commands), 1
+        )
+        self.assertFalse(any("stop_sdlc_continue.py" in item for item in commands))
+        self.assertFalse(
+            any("remediation_attempt_guard.py" in item for item in commands)
+        )
+        self.assertTrue(any("custom_stop.py" in item for item in commands))
+        self.assertIn(
+            "Replaced legacy independently registered Stop handlers", result.stdout
+        )
+        self.assertEqual(len(list(self.codex_home.glob("hooks.json.bak.*"))), 1)
+
+    def test_stop_migration_rejects_basename_collision_without_mutation(self) -> None:
+        custom = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "python3 /tmp/custom/remediation_attempt_guard.py",
+                    "timeout": 10,
+                }
+            ]
+        }
+        hooks_path = self.codex_home / "hooks.json"
+        hooks_path.write_text(
+            json.dumps({"hooks": {"Stop": [custom]}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        before = hooks_path.read_bytes()
+
+        result = self.run_all_hooks_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact managed command", result.stderr)
+        self.assertEqual(hooks_path.read_bytes(), before)
+        self.assertFalse((self.codex_home / "hooks").exists())
+
+    def test_stop_migration_rejects_custom_interpreter_without_mutation(self) -> None:
+        custom = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": (
+                        '"/tmp/custom/python3" '
+                        '"${CODEX_HOME:-$HOME/.codex}/hooks/'
+                        'remediation_attempt_guard.py"'
+                    ),
+                    "timeout": 30,
+                }
+            ]
+        }
+        hooks_path = self.codex_home / "hooks.json"
+        hooks_path.write_text(
+            json.dumps({"hooks": {"Stop": [custom]}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        before = hooks_path.read_bytes()
+
+        result = self.run_all_hooks_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact managed command", result.stderr)
+        self.assertEqual(hooks_path.read_bytes(), before)
+        self.assertFalse((self.codex_home / "hooks").exists())
 
     def test_repeated_register_hooks_is_idempotent_and_hook_runs(self) -> None:
         first = self.run_installer()
