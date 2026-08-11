@@ -46,3 +46,24 @@ The selected project has no `AGENTS.md`, and bounded repository evidence shows
 that no durable project-specific agent rule remains outside the canonical specs
 and reusable skills. Record and verify `not-needed`; report that the missing
 file remains absent. Do not describe this as a failed or skipped creation.
+
+## Existing users require compatibility
+
+The user says that people already use the project and future changes to code or
+interfaces must remain safe, without using `GA` or `backward compatibility`.
+Treat the meaning as explicit compatibility intent. Update requirements and
+design to protect supported public APIs/imports, CLI behavior, configuration
+schemas/defaults, persisted formats, and upgrade paths. Require explicit
+approval, migration or deprecation planning, and regression coverage for a
+breaking supported change while keeping private internals on one canonical
+path. Render those rules before implementation and choose `needed` unless
+active same-directory project instructions already express the equivalent
+contract. Do not let a personal global no-compatibility default suppress the
+project decision.
+
+## Compatibility intent is ambiguous
+
+The user mentions users, maturity, or future safety without saying that current
+supported behavior or interfaces must remain compatible. Do not promote a
+guess into durable project policy. Ask for the missing decision and leave the
+lifecycle unsealed when focused project evidence does not resolve the intent.

@@ -47,9 +47,13 @@ Only fallback filenames, project-document byte capacity, and project-root
 markers affect this workflow. The runtime declaration is mandatory: `null`
 explicitly selects the base configuration, while a non-null profile loads the
 current Codex 0.134+ profile file and fails closed if its name or file is
-invalid. A nested selected project must contain an effective root marker unless
-the effective marker list is empty; an empty list disables parent traversal and
-makes the selected working directory the discovery root.
+invalid. For a nonempty marker list, walk upward from the selected project
+through the enclosing Git root and use the nearest directory containing any
+effective marker as the instruction discovery root. Do not inspect a marker or
+instruction above the Git root, and fail closed when no marker matches. An
+empty list disables parent traversal and makes the selected directory the
+discovery root. In every case the receipt, evidence, target, and generated
+`AGENTS.md` remain scoped to the exact selected project.
 
 The manifest separates global instructions from ancestor project
 instructions. Global instructions are conflict context only: their presence or
@@ -57,6 +61,14 @@ absence does not change generated project bytes. Ancestor project files count
 toward capacity and redundancy. At the selected directory,
 `AGENTS.override.md`, then `AGENTS.md`, then configured fallbacks determine the
 active source.
+
+Semantic compatibility intent is supplied by `maintain-project-specs`, not
+inferred by a hook. A canonical statement that real users depend on existing
+behavior and future code or interface changes must not break them is explicit
+intent even without prescribed keywords. Unless active same-directory project
+instructions already provide an equivalent contract, render the two default
+`Change requirements` rules documented in `SKILL.md`. Personal global
+instructions remain conflict context only and cannot suppress those rules.
 
 Git-ignored target paths are rejected before generation. Ancestor project
 instructions and human-owned active instruction sources must be tracked and

@@ -78,6 +78,22 @@ validated, and reconciled before implementation can be represented as complete.
   project-instructions decision from repository file creation: `not-needed` is
   a verified successful outcome and leaves a missing project `AGENTS.md`
   absent.
+- AC-007: A clear statement that existing users depend on a project and future
+  code or interface changes must not break them is explicit compatibility
+  intent even when it does not use `GA`, `backward compatibility`, or another
+  prescribed keyword. The semantic owner captures that intent in the canonical
+  specs before implementation and makes it available to the current turn.
+- AC-008: Explicit project compatibility intent protects supported observable
+  behavior and public interfaces, including APIs and public import paths, CLI
+  commands, flags, output and exit behavior, configuration schemas and
+  defaults, persisted formats, and upgrade paths. Breaking one of those
+  surfaces requires explicit approval, a deprecation or migration plan, and
+  regression coverage; private internals retain one canonical path.
+- AC-009: Conditional project-instruction discovery keeps the exact selected
+  project as the rule target while resolving the nearest matching configured
+  project-root marker from that directory through the enclosing Git root as
+  the instruction-chain root. An empty marker list retains selected-directory
+  discovery semantics.
 
 #### Negative Criteria
 
@@ -91,18 +107,28 @@ validated, and reconciled before implementation can be represented as complete.
   implementation epoch.
 - NC-004: A hook must not imply that reconciliation always creates or changes
   project `AGENTS.md`.
+- NC-005: Personal global compatibility defaults must not be copied into
+  portable project instructions or suppress an explicit project compatibility
+  rule; an active same-directory project instruction may satisfy the rule only
+  when it already expresses the required contract.
+- NC-006: Hooks must not infer compatibility semantics, and nested selected
+  projects must not be forced to contain a duplicate local root marker when an
+  effective marker exists at an ancestor within the enclosing Git worktree.
 
 #### Validation Method
 
 Run owner validation, lifecycle transition tests, hook contract tests, and
-project-instruction render/apply/verify tests.
+project-instruction discovery/render/apply/verify tests.
 
 #### Test Method
 
 Exercise every lifecycle phase, rejected transition, stale-evidence path,
 missing-spec path, bounded waiver, repeated successful writes, terminal
 reconciliation, unchanged-spec seal, and missing-target `not-needed` outcome
-using disposable repositories and private state roots.
+using disposable repositories and private state roots. Cover paraphrased
+user-dependence intent, global-policy isolation, missing and human-owned
+targets, same-directory overrides, nearest-ancestor root discovery, and empty
+root-marker configuration.
 
 #### Evaluation Method
 
@@ -110,7 +136,9 @@ Confirm repeated implementation writes remain silent while advancing the write
 epoch, one terminal reconciliation classifies the final delta, an explicit
 project-instructions outcome is reported without promising file creation, and
 the selected project reaches `sealed` with a current receipt or an explicit
-bounded waiver.
+bounded waiver. Confirm that explicit no-break intent is injected for the
+current implementation and persists at terminal seal when project rules are
+needed, without requiring magic words or weakening higher-level safeguards.
 
 <!-- /REQUIREMENT: REQ-002 -->
 

@@ -89,12 +89,12 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
-| `maintain-project-specs` | Implicit allowed | Create, migrate, validate, and reconcile canonical project requirements/design, coordinate deferred project `AGENTS.md` sealing, and enforce the prompt-to-implementation lifecycle through hook guardrails. |
+| `maintain-project-specs` | Implicit allowed | Create, migrate, validate, and reconcile canonical project requirements/design, capture semantic compatibility intent, coordinate deferred project `AGENTS.md` sealing, and enforce the prompt-to-implementation lifecycle through hook guardrails. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
-| `project-agent-instructions` | Explicit only | Conditionally render and terminally seal a concise managed tail in selected-project `AGENTS.md` from shared-owner specs and tracked evidence, preserving human prefix bytes with explicit region ownership, guarded retirement, and fail-closed recovery. |
+| `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, managed-tail ownership, guarded retirement, and fail-closed recovery. |
 | `prompt-session-intake` | Explicit only (hook-routed) | Internally capture safe direct prompts from an explicitly bound Task Implementer or Agentic SDLC session, preserve private provenance, and coordinate lossless refinement, CAS prompt updates, and exact-once workflow continuation. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
@@ -616,6 +616,12 @@ to `project-agent-instructions` with a private receipt binding both complete
 files and their traceability. It deterministically renders the exact
 selected-project `AGENTS.md` only when tracked evidence establishes durable
 project rules. Personal global instructions never change repository bytes.
+Clear intent that existing users depend on safe code or interface changes is
+treated as compatibility intent without requiring a magic keyword; it protects
+supported public APIs/imports, CLI behavior, configuration, persisted formats,
+and upgrade paths unless active project instructions already do so. Nested
+selected projects resolve the nearest effective marker ancestor for discovery
+without moving their target scope.
 Human-owned or edited files are preserved; adoption and retirement require
 exact-digest approval, and recovery artifacts block every transition. Its
 private manifest, decision, ownership, and verified state are resolved before
@@ -919,6 +925,9 @@ The committed project truth is `docs/requirements.md`, `docs/design.md`, and,
 only when the evidence gate requires it, a provenance-owned project-root
 `AGENTS.md`. The shared `project-agent-instructions` skill makes that
 conditional decision after design and before auto-steering or planning.
+Explicit existing-user no-break intent is rendered for the current execution
+and persisted at terminal seal; a conflicting personal global default cannot
+suppress the project rule.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 Each active feature also has schema-v7 execution state and private worktrees
@@ -1015,9 +1024,10 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `project-agent-instructions`: after an owner receipt validates requirements,
   design, and traceability, decides whether tracked evidence justifies durable
   selected-project rules; deterministically renders within a 2 KiB preferred
-  and 4 KiB hard budget, preserves human-owned files, binds v2 output to private
-  ownership, guards adoption/retirement, fingerprints effective Codex config,
-  and rejects untracked evidence or unresolved recovery state.
+  and 4 KiB hard budget, preserves human-owned files, binds v3 managed output
+  to private ownership, guards adoption/retirement, resolves the nearest
+  effective marker ancestor for nested discovery, fingerprints effective Codex
+  config, and rejects untracked evidence or unresolved recovery state.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
   and routes requirements, design, project-instruction, docs, or human-input

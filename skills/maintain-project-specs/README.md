@@ -22,11 +22,21 @@ The terminal project-instructions step decides whether repository instructions
 are actually needed. A verified `not-needed` outcome is successful and leaves
 a missing project `AGENTS.md` absent; only a `needed` outcome can create one.
 Hook and completion wording reports that distinction explicitly.
+Plain-language intent that existing users rely on stable behavior is explicit
+compatibility intent without requiring `GA` or another keyword. The owner
+captures the supported public API, CLI, configuration, persisted-format, and
+upgrade-path contract in the specs, injects matching rules before the current
+implementation, and persists them at terminal seal unless active project
+instructions are already sufficient. Personal global defaults are never copied
+or used to suppress that project rule.
 Lifecycle-owned project-instructions commands are bound to the canonical
 current-session private bundle; alternate same-project evidence and malformed
 coordinator-shaped commands fail closed. Inspection uses one uncomposed
 canonical command with the active Codex home declared explicitly and every
 receipt, runtime, private-root, and output path absolute within that bundle.
+Nested selected projects use the nearest effective root-marker ancestor within
+the enclosing Git worktree for instruction discovery while keeping the exact
+selected project as the lifecycle and `AGENTS.md` target.
 
 Installed hooks resolve their coordinators from the same canonical
 `~/.agents/skills` root used by Codex and `install-skills.sh`. They admit

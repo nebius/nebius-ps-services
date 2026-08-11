@@ -29,6 +29,7 @@ from project_specs_lib.lifecycle import (
     plan,
     seal,
     start_prompt,
+    write_validation_receipt,
 )
 from project_specs_lib import migration
 from project_specs_lib import lifecycle as lifecycle_module
@@ -36,6 +37,10 @@ from project_specs_lib.migration import migrate_project, recover_migration
 
 
 SCRIPT = Path(__file__).resolve().with_name("project_specs.py")
+PROJECT_AGENT_SCRIPT = (
+    SCRIPT.parents[2]
+    / "project-agent-instructions/scripts/project_agent_instructions.py"
+)
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -260,6 +265,23 @@ class ProjectSpecsTestCase(unittest.TestCase):
         _prefix, design_body, _suffix = _managed_region(design, "design")
         self.assertEqual(_parse_requirements(requirements_body)[0]["status"], "draft")
         self.assertEqual(_parse_design(design_body)[0]["status"], "draft")
+
+    def test_compatibility_intent_contract_is_semantic_and_owner_controlled(
+        self,
+    ) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        cases = (skill_root / "evals/reconciliation-cases.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("even without `GA`, `backward", skill)
+        self.assertIn("compatibility`, or another prescribed phrase", skill)
+        self.assertIn("Hooks are guardrails", skill)
+        self.assertIn("Personal global instructions are conflict context only", skill)
+        self.assertIn("## Existing users require compatibility", cases)
+        self.assertIn("without using `GA` or `backward compatibility`", cases)
+        self.assertIn("private internals on one canonical", cases)
 
     def test_validate_emits_one_shared_owner_receipt(self) -> None:
         self.write_canonical()
@@ -658,6 +680,216 @@ class ProjectSpecsTestCase(unittest.TestCase):
             )
         self.assertEqual(sealed["phase"], "sealed")
         self.assertTrue(sealed["project_instructions_reload_required"])
+
+    def test_compatibility_rules_render_before_terminal_apply_and_seal(
+        self,
+    ) -> None:
+        self.write_canonical()
+        session = "session-compatibility"
+        turn = "turn-compatibility"
+        start_prompt(self.project, session, turn)
+        git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
+        session_root = lifecycle_dir(git_root, session)
+        receipt_path = session_root / "spec-receipt.json"
+        write_validation_receipt(self.project, receipt_path, session)
+        runtime_path = session_root / "runtime-config.json"
+        runtime_path.write_text(
+            json.dumps(
+                {
+                    "schema": "project-agent-instructions.runtime-config.v1",
+                    "profile": None,
+                    "overrides": {},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        runtime_path.chmod(0o600)
+        private_root = session_root / "project-instructions"
+        manifest_path = private_root / "manifest.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_AGENT_SCRIPT),
+                "inspect",
+                "--project-root",
+                str(self.project),
+                "--spec-owner",
+                "maintain-project-specs",
+                "--requirements",
+                "docs/requirements.md",
+                "--design",
+                "docs/design.md",
+                "--spec-receipt",
+                str(receipt_path),
+                "--runtime-config",
+                str(runtime_path),
+                "--codex-home",
+                os.environ["CODEX_HOME"],
+                "--private-root",
+                str(private_root),
+                "--output",
+                str(manifest_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        design_path = self.docs / "design.md"
+        decision_path = private_root / "decision.json"
+        decision_path.write_text(
+            json.dumps(
+                {
+                    "schema": "project-agent-instructions.decision.v3",
+                    "manifest_sha256": manifest["manifest_sha256"],
+                    "disposition": "needed",
+                    "rationale": "Existing users require durable compatibility rules.",
+                    "evidence": [
+                        {
+                            "path": "docs/design.md",
+                            "sha256": hashlib.sha256(design_path.read_bytes()).hexdigest(),
+                            "locator": "### TI-DES-001: Maintain one owner",
+                        }
+                    ],
+                    "rules": [
+                        {
+                            "section": "Change requirements",
+                            "instruction": (
+                                "This project has existing users. Preserve supported "
+                                "behavior and public interfaces across changes; treat "
+                                "unintended compatibility breakage as a regression."
+                            ),
+                            "evidence": ["docs/design.md"],
+                        },
+                        {
+                            "section": "Change requirements",
+                            "instruction": (
+                                "Breaking a supported API, CLI contract, configuration or "
+                                "persisted format, or upgrade path requires explicit "
+                                "approval, a deprecation or migration plan, and regression "
+                                "coverage. Keep internals on one canonical path."
+                            ),
+                            "evidence": ["docs/design.md"],
+                        },
+                    ],
+                    "budget_exception": None,
+                    "ownership_approval": None,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        decision_path.chmod(0o600)
+        rules_path = private_root / "rules.md"
+        render_state_path = private_root / "render-state.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_AGENT_SCRIPT),
+                "render",
+                "--private-root",
+                str(private_root),
+                "--manifest",
+                str(manifest_path),
+                "--decision",
+                str(decision_path),
+                "--output",
+                str(rules_path),
+                "--state",
+                str(render_state_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+
+        planned = plan(
+            self.project,
+            session,
+            turn,
+            rules_file=rules_path,
+            render_state_file=render_state_path,
+            project_instructions_private_root=private_root,
+        )
+        pending = lifecycle_module.rules_context(
+            planned, session_root / "lifecycle.json"
+        )
+        assert pending is not None
+        self.assertIn("This project has existing users.", pending)
+        self.assertFalse((self.project / "AGENTS.md").exists())
+        open_implementation(self.project, session, turn)
+        mark_material_write(self.project, session)
+        plan(
+            self.project,
+            session,
+            turn,
+            rules_file=rules_path,
+            render_state_file=render_state_path,
+            project_instructions_private_root=private_root,
+        )
+        ownership_path = private_root / "ownership.json"
+        final_state_path = private_root / "state.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_AGENT_SCRIPT),
+                "apply",
+                "--private-root",
+                str(private_root),
+                "--manifest",
+                str(manifest_path),
+                "--decision",
+                str(decision_path),
+                "--ownership",
+                str(ownership_path),
+                "--state",
+                str(final_state_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        verified = subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_AGENT_SCRIPT),
+                "verify",
+                "--private-root",
+                str(private_root),
+                "--state",
+                str(final_state_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.assertTrue(json.loads(verified.stdout)["reload_required"])
+        armed, lifecycle_path, _project = lifecycle_module.load_for_project(
+            self.project, session
+        )
+        assert armed is not None
+        armed["phase"] = "seal-armed"
+        lifecycle_module._write_private(lifecycle_path, armed)
+
+        sealed = seal(
+            self.project,
+            session,
+            turn,
+            project_instructions_state=final_state_path,
+            project_instructions_private_root=private_root,
+        )
+
+        self.assertEqual(sealed["phase"], "sealed")
+        self.assertTrue(sealed["project_instructions_reload_required"])
+        self.assertIn(
+            "This project has existing users.",
+            (self.project / "AGENTS.md").read_text(encoding="utf-8"),
+        )
 
     def test_plan_requires_verified_project_instruction_render(self) -> None:
         self.write_canonical()

@@ -456,15 +456,6 @@ def _codex_settings(
     _apply_settings(settings, dict(runtime["overrides"]))
     sources.append(runtime_source)
     fallbacks, limit, markers = _validated_settings(settings)
-    if (
-        project_root != git_root
-        and markers
-        and not any((project_root / marker).exists() for marker in markers)
-    ):
-        raise ProjectInstructionsError(
-            "DISCOVERY_CONTEXT_UNVERIFIED",
-            "selected project root has none of the effective root markers",
-        )
     payload: dict[str, object] = {
         "fallback_filenames": fallbacks,
         "project_doc_max_bytes": limit,
@@ -474,6 +465,24 @@ def _codex_settings(
     }
     payload["sha256"] = _sha256_bytes(_canonical_json(payload))
     return payload
+
+
+def _instruction_discovery_root(
+    project_root: Path, git_root: Path, markers: list[str]
+) -> Path:
+    if not markers:
+        return project_root
+    current = project_root
+    while True:
+        if any((current / marker).exists() for marker in markers):
+            return current
+        if current == git_root:
+            break
+        current = current.parent
+    raise ProjectInstructionsError(
+        "DISCOVERY_CONTEXT_UNVERIFIED",
+        "no effective project root marker exists between the selected project and Git root",
+    )
 
 
 def _instruction_entry(
@@ -603,7 +612,7 @@ def _target_record(
 
 def _instruction_chain(
     project_root: Path,
-    git_root: Path,
+    discovery_root: Path,
     codex_home: Path,
     fallbacks: list[str],
 ) -> tuple[
@@ -618,9 +627,9 @@ def _instruction_chain(
     )
     if global_entry is not None:
         global_entries.append(global_entry)
-    relative = project_root.relative_to(git_root)
-    directories = [git_root]
-    current = git_root
+    relative = project_root.relative_to(discovery_root)
+    directories = [discovery_root]
+    current = discovery_root
     for part in relative.parts:
         current = current / part
         directories.append(current)
@@ -715,8 +724,11 @@ def _manifest(
     )
     config = _codex_settings(codex_home, git_root, project_root, runtime_config_path)
     fallbacks = list(config["fallback_filenames"])
+    discovery_root = _instruction_discovery_root(
+        project_root, git_root, list(config["project_root_markers"])
+    )
     global_entries, ancestors, active = _instruction_chain(
-        project_root, git_root, codex_home, fallbacks
+        project_root, discovery_root, codex_home, fallbacks
     )
     target = _target_record(project_root, active)
     tracked_entries = list(ancestors)

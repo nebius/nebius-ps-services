@@ -238,6 +238,29 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             }
         ]
 
+    def compatibility_rules(self) -> list[dict[str, object]]:
+        return [
+            {
+                "section": "Change requirements",
+                "instruction": (
+                    "This project has existing users. Preserve supported behavior and "
+                    "public interfaces across changes; treat unintended compatibility "
+                    "breakage as a regression."
+                ),
+                "evidence": ["docs/design.md"],
+            },
+            {
+                "section": "Change requirements",
+                "instruction": (
+                    "Breaking a supported API, CLI contract, configuration or persisted "
+                    "format, or upgrade path requires explicit approval, a deprecation or "
+                    "migration plan, and regression coverage. Keep internals on one "
+                    "canonical path."
+                ),
+                "evidence": ["docs/design.md"],
+            },
+        ]
+
     def decision(
         self,
         manifest: dict[str, object],
@@ -318,10 +341,12 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self,
     ) -> None:
         (self.codex_home / "AGENTS.md").write_text(
-            "# Global\n\n- Personal-only rule.\n", encoding="utf-8"
+            "# Global\n\n- Do not preserve backward compatibility by default.\n",
+            encoding="utf-8",
         )
         manifest = self.inspect()
         decision = self.decision(manifest, "needed")
+        decision["rules"] = self.compatibility_rules()
         body1, normalized1 = contracts._render_body(
             manifest, decision["rules"], None, {"docs/design.md"}
         )
@@ -330,7 +355,9 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         )
         self.assertEqual(body1, body2)
         self.assertEqual(normalized1, normalized2)
-        self.assertNotIn(b"Personal-only", body1)
+        self.assertIn(b"This project has existing users.", body1)
+        self.assertIn(b"Breaking a supported API, CLI contract", body1)
+        self.assertNotIn(b"Do not preserve backward compatibility", body1)
         without_global = dict(manifest)
         without_global["global_instructions"] = []
         self.assertEqual(
@@ -348,9 +375,11 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
 
     def test_render_prepares_exact_rules_without_repository_mutation(self) -> None:
         manifest = self.inspect()
+        decision = self.decision(manifest, "needed")
+        decision["rules"] = self.compatibility_rules()
         result = workflow.render_decision(
             self.write_json("manifest.json", manifest),
-            self.write_json("decision.json", self.decision(manifest, "needed")),
+            self.write_json("decision.json", decision),
             self.private / "rules.md",
             self.private / "render-state.json",
             self.private,
@@ -358,9 +387,12 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertFalse(result["repository_mutated"])
         self.assertFalse((self.repo / "AGENTS.md").exists())
+        rendered = (self.private / "rules.md").read_text(encoding="utf-8")
+        self.assertIn("This project has existing users.", rendered)
+        self.assertIn("Keep internals on one canonical path.", rendered)
         rendered = (self.private / "rules.md").read_bytes()
         self.assertEqual(result["rules_sha256"], contracts._sha256_bytes(rendered))
-        self.assertIn(b"Run the focused contract tests", rendered)
+        self.assertIn(b"Breaking a supported API, CLI contract", rendered)
         render_state = json.loads((self.private / "render-state.json").read_text())
         self.assertEqual(
             render_state["schema"], "project-agent-instructions.render-state.v1"
@@ -595,6 +627,41 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         self.assertEqual(
             target.read_text(), "# Human instructions\n\n- Preserve this file.\n"
         )
+
+    def test_human_project_instructions_can_satisfy_compatibility_intent(self) -> None:
+        target = self.repo / "AGENTS.md"
+        target.write_text(
+            "# Compatibility\n\n"
+            "- Preserve supported behavior and public interfaces for existing users.\n"
+            "- Breaking supported interfaces requires approval, migration planning, "
+            "and regression tests.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+
+        manifest = self.inspect()
+        state = self.apply(manifest, self.decision(manifest, "existing-sufficient"))
+
+        self.assertEqual(state["outcome"], "existing-sufficient")
+        self.assertFalse(state["reload_required"])
+
+    def test_active_override_blocks_missing_compatibility_rules(self) -> None:
+        override = self.repo / "AGENTS.override.md"
+        override.write_text(
+            "# Local override\n\n- Run the focused tests.\n", encoding="utf-8"
+        )
+        subprocess.run(
+            ["git", "add", "AGENTS.override.md"], cwd=self.repo, check=True
+        )
+        manifest = self.inspect()
+        decision = self.decision(manifest, "needed")
+        decision["rules"] = self.compatibility_rules()
+
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(manifest, decision)
+
+        self.assertEqual(caught.exception.code, "EXISTING_INSTRUCTIONS_GAP")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
 
     def test_needed_rules_attach_to_human_file_and_preserve_prefix(self) -> None:
         target = self.repo / "AGENTS.md"
@@ -876,8 +943,83 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.apply(manifest, self.decision(manifest, "needed"))
         self.assertEqual(caught.exception.code, "CONCURRENT_MODIFICATION")
 
-    def test_selected_subproject_requires_effective_root_marker(self) -> None:
+    def test_selected_subproject_uses_enclosing_git_root_marker(self) -> None:
         project = self.repo / "service"
+        (project / "docs").mkdir(parents=True)
+        for name in ("requirements.md", "design.md"):
+            (project / "docs" / name).write_bytes(
+                (self.repo / "docs" / name).read_bytes()
+            )
+        ancestor = self.repo / "AGENTS.md"
+        ancestor.write_text(
+            "# Repository instructions\n\n- Preserve supported behavior.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["git", "add", "service/docs", "AGENTS.md"],
+            cwd=self.repo,
+            check=True,
+        )
+        self.write_json("spec-receipt.json", self.receipt(project))
+
+        manifest = self.inspect(project=project)
+
+        self.assertEqual(manifest["project_scope"], "service")
+        self.assertEqual(manifest["target"]["path"], str(project / "AGENTS.md"))
+        self.assertEqual(
+            [entry["path"] for entry in manifest["ancestor_project_instructions"]],
+            [str(ancestor.resolve())],
+        )
+
+    def test_nearest_matching_ancestor_bounds_instruction_chain(self) -> None:
+        project = self.repo / "packages" / "service"
+        (project / "docs").mkdir(parents=True)
+        for name in ("requirements.md", "design.md"):
+            (project / "docs" / name).write_bytes(
+                (self.repo / "docs" / name).read_bytes()
+            )
+        root_agents = self.repo / "AGENTS.md"
+        root_agents.write_text("# Repository instructions\n", encoding="utf-8")
+        package_root = self.repo / "packages"
+        (package_root / ".project-root").write_text("marker\n", encoding="utf-8")
+        package_agents = package_root / "AGENTS.md"
+        package_agents.write_text("# Package instructions\n", encoding="utf-8")
+        subprocess.run(
+            [
+                "git",
+                "add",
+                "AGENTS.md",
+                "packages/.project-root",
+                "packages/AGENTS.md",
+                "packages/service/docs",
+            ],
+            cwd=self.repo,
+            check=True,
+        )
+        self.write_json("spec-receipt.json", self.receipt(project))
+        runtime = self.write_json(
+            "runtime.json",
+            {
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": None,
+                "overrides": {"project_root_markers": [".project-root"]},
+            },
+        )
+
+        manifest = self.inspect(project=project, runtime_config=runtime)
+
+        self.assertEqual(
+            [entry["path"] for entry in manifest["ancestor_project_instructions"]],
+            [str(package_agents.resolve())],
+        )
+        self.assertNotIn(
+            str(root_agents.resolve()),
+            [entry["path"] for entry in manifest["ancestor_project_instructions"]],
+        )
+
+    def test_missing_effective_root_marker_within_git_root_fails_closed(self) -> None:
+        project = self.repo / "service"
+        (self.root / ".project-root").write_text("outside Git\n", encoding="utf-8")
         (project / "docs").mkdir(parents=True)
         for name in ("requirements.md", "design.md"):
             (project / "docs" / name).write_bytes(
@@ -885,12 +1027,19 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             )
         subprocess.run(["git", "add", "service/docs"], cwd=self.repo, check=True)
         self.write_json("spec-receipt.json", self.receipt(project))
+        runtime = self.write_json(
+            "runtime.json",
+            {
+                "schema": contracts.RUNTIME_CONFIG_SCHEMA,
+                "profile": None,
+                "overrides": {"project_root_markers": [".project-root"]},
+            },
+        )
+
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
-            self.inspect(project=project)
+            self.inspect(project=project, runtime_config=runtime)
+
         self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
-        (project / ".git").mkdir()
-        manifest = self.inspect(project=project)
-        self.assertEqual(manifest["project_scope"], "service")
 
     def test_parent_directory_is_not_a_valid_project_root_marker(self) -> None:
         project = self.repo / "service"
@@ -920,7 +1069,13 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             (project / "docs" / name).write_bytes(
                 (self.repo / "docs" / name).read_bytes()
             )
-        subprocess.run(["git", "add", "service/docs"], cwd=self.repo, check=True)
+        ancestor = self.repo / "AGENTS.md"
+        ancestor.write_text("# Repository instructions\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "service/docs", "AGENTS.md"],
+            cwd=self.repo,
+            check=True,
+        )
         self.write_json("spec-receipt.json", self.receipt(project))
         runtime = self.write_json(
             "runtime.json",
@@ -935,6 +1090,7 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
 
         self.assertEqual(manifest["project_scope"], "service")
         self.assertEqual(manifest["config_context"]["project_root_markers"], [])
+        self.assertEqual(manifest["ancestor_project_instructions"], [])
 
     def test_ignored_target_is_rejected_before_generation(self) -> None:
         (self.repo / ".gitignore").write_text("AGENTS.md\n", encoding="utf-8")

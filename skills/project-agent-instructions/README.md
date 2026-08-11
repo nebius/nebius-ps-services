@@ -15,6 +15,9 @@ automatically require a project instruction file.
   tracked repository evidence.
 - Compares those rules with the effective inherited instruction chain without
   copying personal global instructions into repository content.
+- Turns canonical existing-user no-break intent into a stable public-interface
+  compatibility contract without requiring magic keywords, unless active
+  selected-project instructions already provide it.
 - Preserves every human-authored prefix byte while owning only one generated
   tail region; managed-region edits fail closed.
 - Deterministically renders exact current-turn rules without repository
@@ -54,9 +57,18 @@ and explicitly reads the active instruction file.
 
 ## Decision And Ownership Model
 
-The selected project may be a subproject rather than the Git root. Project
-root discovery follows the effective Codex configuration, while the target is
-always the selected-project root `AGENTS.md`.
+The selected project may be a subproject rather than the Git root. For
+nonempty effective markers, discovery uses the nearest matching directory from
+the selected project through the enclosing Git root and scans down from there;
+an empty marker list uses only the selected directory. The target is always the
+selected-project root `AGENTS.md`.
+
+When the canonical specs say existing users depend on behavior that future
+changes must not break, the default protected surface is supported public APIs
+and import paths, CLI behavior, configuration schemas/defaults, persisted
+formats, and upgrade paths. Breaking one requires explicit approval,
+deprecation or migration planning, and regression coverage. Private internals
+remain free to use one canonical implementation path.
 
 Possible results are:
 

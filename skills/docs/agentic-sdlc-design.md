@@ -96,7 +96,7 @@ selected by ordinary prompt matching outside an active Agentic SDLC run.
 Every phase skill owns a narrow responsibility. For example,
 `sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
 owns `docs/design.md`, `project-agent-instructions` owns the conditional
-v2-managed selected-project `AGENTS.md`, `sdlc-create-plan` owns a locked private
+v3-managed selected-project `AGENTS.md`, `sdlc-create-plan` owns a locked private
 task graph, and `sdlc-prepare-execution` owns the persistent integration
 resource.
 `sdlc-implement-plan` owns task waves and ordered integration, while
@@ -128,9 +128,9 @@ Ownership is strict:
 
 - Only `sdlc-create-requirements` writes `docs/requirements.md`.
 - Only `sdlc-create-design` writes `docs/design.md`.
-- Only `project-agent-instructions` may create, refresh, explicitly adopt, or
-  explicitly retire a v2-managed selected-project `AGENTS.md`; human-owned or
-  edited instruction files are preserved.
+- Only `project-agent-instructions` may create, attach, refresh, explicitly
+  adopt, or explicitly retire a v3-managed selected-project `AGENTS.md`;
+  human-owned or edited instruction files are preserved.
 - Other skills route changes back to the owning skill instead of editing those
   files directly.
 
@@ -437,7 +437,7 @@ Project instructions intentionally have no fill-every-section template.
 `sdlc-start/scripts/validate_project_specs.py` validates complete tracked
 Agentic-owned documents, managed blocks, ready-feature completeness,
 marker/body agreement, and total status-aware REQ-to-FEAT traceability before
-emitting the private v2 prerequisite receipt.
+emitting the private v3 prerequisite receipt.
 `project-agent-instructions/references/decision-contract.md` defines layered
 discovery, structured evidence-backed rules, deterministic rendering, the 2 KiB
 preferred and 4 KiB hard body budgets, provenance plus private ownership,
@@ -915,17 +915,31 @@ ownership receipt, recovery artifacts, and relevant tracked evidence. A new
 file is justified only by durable, project-specific, actionable rules.
 
 Ignored target paths and untracked or ignored human project-instruction sources
-fail discovery. An empty effective `project_root_markers` list follows Codex
-semantics by disabling parent traversal at the selected project directory.
+fail discovery. For nonempty effective `project_root_markers`, the nearest
+matching directory from the selected project through the enclosing Git root is
+the instruction discovery root while the selected project remains the receipt,
+evidence, and target scope. An empty marker list disables parent traversal at
+the selected project directory.
 
-The deterministic helper renders structured rules and records a private v2
+Plain-language intent that existing users depend on safe future code or
+interface changes is explicit compatibility intent without requiring a magic
+keyword. Unless active same-directory project instructions already provide the
+equivalent contract, render rules that protect supported public APIs/imports,
+CLI behavior, configuration, persisted formats, and upgrade paths; breaking a
+supported surface requires explicit approval, migration or deprecation
+planning, and regression coverage while private internals retain one canonical
+path. Personal global defaults are never copied or allowed to suppress the
+project rule.
+
+The deterministic helper renders structured rules and records a private v3
 manifest, decision, ownership receipt, and final state. It creates exclusively,
-refreshes exact receipted bytes, adopts or retires only with exact-digest
-approval, and treats v1 as a manual-resolution blocker. Human-owned or edited
-files, same-directory `AGENTS.override.md`, and configured fallbacks are never
-overwritten. A surviving lock/backup blocks every transition. Created,
-refreshed, or retired output requires a fresh session and re-verification before
-the coordinator continues.
+attaches while preserving human prefix bytes, refreshes exact receipted bytes,
+adopts or retires only with exact-digest approval, and treats v1 or v2 as a
+manual-resolution blocker. Human-owned or edited files, same-directory
+`AGENTS.override.md`, and configured fallbacks are never overwritten. A
+surviving lock/backup blocks every transition. Created, attached, refreshed, or
+retired output requires a fresh session and re-verification before the
+coordinator continues.
 
 ### `sdlc-auto-steering`
 

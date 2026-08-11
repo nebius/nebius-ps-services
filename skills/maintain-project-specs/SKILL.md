@@ -103,6 +103,12 @@ completion.
   missing project `AGENTS.md` absent; only a needed transition creates or
   updates repository instructions. A fresh session is still required before
   changed repository instructions become loaded authority.
+- Interpret user intent semantically. A clear statement that existing users
+  depend on the project and future code or interface changes must not break
+  them is explicit compatibility intent even without `GA`, `backward
+  compatibility`, or another prescribed phrase. Capture it in requirements and
+  design before implementation so the current rendered rules and future
+  project instructions share one contract.
 - Bind lifecycle-owned project-instructions inspect, render, plan, apply,
   verify, and seal inputs to the exact current-session private bundle. Deny a
   coordinator-shaped command when its action or evidence paths are
@@ -161,6 +167,15 @@ Create the canonical requirements region. Record observable outcomes,
 constraints, non-goals, acceptance criteria, and verification. For a new
 prompt, update or append stable records and the change log. Mark replaced
 requirements `superseded`; do not delete history.
+
+When the user says real users depend on existing behavior and future changes
+must remain safe, record compatibility as an accepted constraint. By default it
+covers supported APIs and public import paths, CLI commands, flags, output and
+exit behavior, configuration schemas and defaults, persisted formats, and
+upgrade paths. Breaking a supported surface requires explicit approval, a
+deprecation or migration plan, and regression coverage. Do not turn that
+public contract into parallel internal paths; private internals retain one
+canonical implementation.
 
 ### 4. Establish or update design
 
@@ -221,6 +236,15 @@ rules. For a managed lifecycle, these are the canonical current-session
 `project-instructions/rules.md`, `project-instructions/render-state.json`, and
 `project-instructions/` paths; alternate same-project bundles are invalid. Do
 not run `apply` yet.
+
+Explicit compatibility intent is durable and project-specific. Choose `needed`
+with the default compatibility rules unless active same-directory project
+instructions already provide an equivalent contract, in which case choose
+`existing-sufficient`. Personal global instructions are conflict context only:
+do not copy them and do not let a global no-compatibility default suppress the
+project rule. If a same-directory override is active and lacks a necessary
+rule, return the fail-closed instructions-gap blocker instead of creating a
+dormant file behind it.
 
 The canonical pair must be tracked before validation. For a newly created
 file, use only the hook-admitted intent-only transition, bound to the selected

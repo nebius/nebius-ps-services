@@ -63,6 +63,12 @@ empty render is the authoritative `not-needed` result; omitting render evidence
 is never equivalent to it. `Not-needed` records verified private state and
 leaves a missing project `AGENTS.md` absent; only a `needed` missing-target
 decision creates the file.
+When canonical specs record that existing users depend on stable supported
+behavior, the planned render includes the compatibility rules before
+implementation opens. The terminal apply persists the same decision for future
+sessions only after reconciliation. A global no-compatibility default is not
+copied and cannot suppress the project intent; equivalent active project
+instructions may produce `existing-sufficient`.
 The exact project-instructions `apply` action advances `planned` to
 `seal-armed`, so no new implementation command is admitted after the terminal
 `AGENTS.md` decision. A previously admitted write that reports success late
@@ -76,6 +82,11 @@ coordinator-shaped command with malformed bindings is denied rather
 than classified as an ordinary Python read. The inspect action additionally
 requires an explicit active Codex home and absolute current-session receipt,
 runtime, private-root, and output paths in one uncomposed command.
+For nonempty effective root markers, project-instructions discovery starts at
+the nearest matching directory from the selected project through its Git root
+and then scans down to the selected project. Empty markers use the selected
+directory only. The selected-project lifecycle scope and target never move to
+that discovery ancestor.
 
 ## Private state
 

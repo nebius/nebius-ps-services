@@ -110,6 +110,10 @@ state must never be committed.
 3. Keep a rule only when it is durable, project-specific, actionable,
    public-safe, and supported by a tracked evidence record with an exact
    locator. Requirements and design are inputs, not sufficient justification.
+   Treat a canonical statement that existing users depend on stable behavior
+   and future code or interface changes must not break them as explicit
+   compatibility intent without requiring `GA`, `backward compatibility`, or
+   another prescribed phrase.
 4. Store the `project-agent-instructions.decision.v3` decision as the exact
    private `decision.json` input. For `needed`,
    provide structured rules; the helper renders all Markdown deterministically.
@@ -134,9 +138,27 @@ state must never be committed.
 ## Decision Rules
 
 - Evaluate the exact selected project, not automatically the Git root.
-- A selected subproject must satisfy the effective root-marker config. An empty
-  marker list disables parent traversal and treats the selected directory as
-  the project root.
+- For nonempty effective root markers, resolve the nearest matching directory
+  from the selected project through the enclosing Git root and scan
+  instructions from that discovery root down to the selected project. Do not
+  search above the Git root. An empty marker list disables parent traversal and
+  treats the selected directory as the discovery root.
+- Explicit existing-user no-break intent requires a durable project rule unless
+  active same-directory project instructions already express the equivalent
+  compatibility contract. Do not let a conflicting personal global default
+  suppress that rule.
+- The default compatibility scope is supported observable behavior and public
+  interfaces: APIs and public import paths, CLI commands, flags, output and exit
+  behavior, configuration schemas and defaults, persisted formats, and upgrade
+  paths. Breaking one requires explicit approval, a deprecation or migration
+  plan, and regression coverage; private internals keep one canonical path.
+- Prefer these two `Change requirements` rules for that default contract:
+  "This project has existing users. Preserve supported behavior and public
+  interfaces across changes; treat unintended compatibility breakage as a
+  regression." and "Breaking a supported API, CLI contract, configuration or
+  persisted format, or upgrade path requires explicit approval, a deprecation
+  or migration plan, and regression coverage. Keep internals on one canonical
+  path."
 - `not-needed` is correct when no meaningful durable project rule remains.
 - A missing `AGENTS.md` is not evidence that one is needed. Missing plus
   `not-needed` is a verified successful no-file outcome, not a creation

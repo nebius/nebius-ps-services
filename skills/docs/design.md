@@ -79,7 +79,7 @@ activation boundary agree without a duplicate installed skill tree.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=ready priority=P0 version=4 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002,REQ-003 status=ready priority=P0 version=5 -->
 ### FEAT-002: Receipt-bound project lifecycle and coordinator trust
 
 #### Requirements Covered
@@ -95,6 +95,13 @@ validation, planning, opening, waivers, and sealing.
 scope, phases, coordinator commands, material writes, and Stop arbitration.
 `project-agent-instructions` owns conditional project `AGENTS.md` rendering and
 the terminal apply/verify decision.
+`project_agent_instructions_lib/discovery.py` now separates the exact selected
+target from the nearest-marker instruction discovery root. Focused disposable
+Git tests cover enclosing-root and closer custom markers, no marker inside the
+worktree, empty-marker behavior, global-policy isolation, human and override
+targets, current-turn compatibility rendering, and terminal reload outcomes.
+The owner reconciliation cases cover explicit and ambiguous paraphrases of
+existing-user compatibility intent.
 
 #### Design Details
 
@@ -145,6 +152,42 @@ byte-identical. Ambiguous impact remains unsealed. In every outcome, validation
 and planning advance `planned_write_epoch` to the current `write_epoch` before
 the terminal project-instructions apply, verify, and seal sequence.
 
+Treat plain-language user-dependence intent semantically rather than through a
+keyword trigger. A statement that real users rely on the project and future
+code or interface changes must remain safe is explicit compatibility intent,
+even without `GA` or `backward compatibility`. Reconcile it into requirements
+and design before implementation, then render the resulting project rules into
+the current lifecycle plan so they govern the current change. When no active
+same-directory instruction already supplies an equivalent contract, the
+decision is `needed` and terminal apply persists these default rules:
+
+- This project has existing users. Preserve supported behavior and public
+  interfaces across changes; treat unintended compatibility breakage as a
+  regression.
+- Breaking a supported API, CLI contract, configuration or persisted format,
+  or upgrade path requires explicit approval, a deprecation or migration plan,
+  and regression coverage. Keep internals on one canonical path.
+
+The protected surface includes public APIs and import paths, CLI commands,
+flags, output and exit behavior, configuration schemas and defaults, persisted
+formats, and upgrade paths. Private implementation details may be refactored
+when those observable contracts remain intact. Global instructions remain
+conflict context only: a personal no-compatibility default is neither copied
+into the repository nor allowed to suppress explicit project intent. A
+same-directory `AGENTS.override.md` stays authoritative and blocks automatic
+generation if it omits a necessary rule.
+
+Resolve project targeting independently from Codex instruction discovery. The
+selected directory remains the receipt, evidence, target, and generated-file
+scope. For a nonempty effective marker list, walk upward from that directory
+through the enclosing Git root and use the nearest directory containing any
+configured marker as the instruction-chain root. Search no directory above the
+Git root and fail closed when no marker matches. When the marker list is empty,
+use the selected directory directly and do not traverse parents. The manifest
+continues to bind the effective marker configuration and instruction files;
+replay recomputes the discovery root without adding a schema field, public
+flag, or bypass path.
+
 #### Selected Option
 
 Resolve trusted installed coordinators from the canonical user-skill root,
@@ -154,7 +197,10 @@ project-instructions outcome without implying unconditional file creation.
 Bind terminal decision evidence to the canonical current-session private
 bundle, and let late successful write accounting invalidate later planning or
 sealing evidence. Keep the existing fail-closed command contract and phase
-machine.
+machine. Make explicit user-dependence intent durable through a `needed`
+project rule unless an active selected-project instruction is already
+sufficient, and derive the instruction chain from the nearest effective marker
+ancestor without changing the selected-project target.
 
 #### Alternatives Considered
 
@@ -164,18 +210,24 @@ would permit unreviewed worktree changes to obtain coordinator authority.
 Removing PostToolUse would lose post-success failure discrimination and stale
 epoch protection. Per-edit semantic inference or a persistent change-content
 journal would make hooks document authors, duplicate Git evidence, and expand
-private-state migration and privacy risk.
+private-state migration and privacy risk. Requiring `GA` or another magic word
+would miss equivalent user intent. Treating the selected project as the Codex
+discovery root in every case would reject valid nested projects; changing the
+user's global marker configuration or adding a bypass flag would alter runtime
+semantics outside the selected project.
 
 #### Implementation Boundaries
 
 Owned changes are the lifecycle hook's coordinator-root resolution and output
 contract, PostToolUse registration metadata, focused tests and semantic evals,
 lifecycle reference documentation, project-instructions outcome wording and
-missing-target regression coverage, skill README and runtime instructions,
-root installation guidance, and changelog. Canonical owner schemas, lifecycle
-phases, receipts, decision semantics, and public coordinator commands remain
-unchanged. The public coordinator retains bounded receipt persistence and an
-opaque turn-token input while preserving raw turn IDs for direct owner tests.
+missing-target regression coverage, compatibility-intent reconciliation and
+evaluation guidance, nested discovery-root resolution, skill README and
+runtime instructions, root installation guidance, and changelog. Canonical
+owner schemas, lifecycle phases, receipts, decision dispositions, and public
+coordinator commands remain unchanged. The public coordinator retains bounded
+receipt persistence and an opaque turn-token input while preserving raw turn
+IDs for direct owner tests.
 
 #### Test-First Success Criteria
 
@@ -203,6 +255,20 @@ opaque turn-token input while preserving raw turn IDs for direct owner tests.
 - TDD-010: A material tool admitted before planning but recorded afterward
   advances the epoch, returns the lifecycle to `reconciliation-required`, and
   prevents stale apply or seal completion.
+- TDD-011: Semantically equivalent statements that existing users depend on
+  stable behavior produce the same compatibility requirements without a magic
+  keyword, while conversational or ambiguous statements remain uncommitted.
+- TDD-012: A global no-compatibility default is not copied and does not
+  suppress a necessary project rule; an equivalent active project instruction
+  yields `existing-sufficient`, while a same-directory override missing the
+  rule fails closed.
+- TDD-013: A selected nested project without a local `.git` resolves the
+  nearest matching ancestor through the enclosing Git root, scans only that
+  instruction chain, and still targets its own `AGENTS.md`. No matching marker
+  fails closed, and an empty marker list uses only the selected directory.
+- TDD-014: Current-session render and lifecycle planning inject needed
+  compatibility rules before implementation; terminal apply, verify, seal,
+  reload reporting, and fresh inspection preserve the intended file effect.
 
 #### Validation Plan
 
@@ -216,7 +282,11 @@ Cover every coordinator action and lifecycle phase, both coordinator owners,
 canonical and noncanonical roots, path normalization, symlinks, missing files,
 interpreter mismatch, selected-project mismatch, repeated PostToolUse output,
 late successful material-write recording, unchanged-spec sealing,
-missing-target `not-needed`, and semantic reconciliation categories.
+missing-target `not-needed`, semantic reconciliation categories,
+compatibility-intent paraphrases, global-policy isolation, missing and
+human-owned targets, same-directory overrides, nearest-marker nested discovery,
+empty marker configuration, current-session injection, terminal apply/verify,
+and reload reporting.
 
 #### Evaluation Plan
 
@@ -228,6 +298,10 @@ or status text appears before exactly one terminal request. Confirm that the
 request calls for an explicit project-instructions outcome and says
 `not-needed` leaves a missing `AGENTS.md` absent. Treat any generic
 host-rendered hook-completion row as a runtime observation, not source proof.
+Also confirm that user-dependence intent yields the compatibility rules without
+requiring prescribed words, that the rules are present during the current
+implementation plan, and that terminal persistence is reported separately from
+fresh-session instruction discovery.
 
 #### Rollout And Rollback
 
@@ -240,7 +314,9 @@ exact backup if the fresh probe fails before accepting further project writes.
 The lifecycle reaches a receipt-bound terminal state using canonical installed
 coordinators, repeated writes stay silently accounted, semantic reconciliation
 occurs once at Stop, unchanged specs can seal after current-epoch validation,
-and noncanonical commands still fail closed.
+explicit compatibility intent governs the current change and future sessions,
+nested selected projects follow effective Codex root discovery without changing
+their target scope, and noncanonical commands still fail closed.
 
 <!-- /FEATURE: FEAT-002 -->
 

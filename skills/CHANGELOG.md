@@ -185,6 +185,18 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Project compatibility intent is now semantic and project-scoped. A clear
+  statement that existing users depend on safe future code or interface changes
+  produces durable rules for supported APIs/imports, CLI behavior,
+  configuration, persisted formats, and upgrade paths without requiring `GA`
+  or `backward compatibility`; breaking those surfaces requires explicit
+  approval, migration or deprecation planning, and regression coverage while
+  internals retain one canonical path. Personal global defaults are never
+  copied or allowed to suppress explicit project intent, active sufficient
+  project instructions are reused, and an incomplete same-directory override
+  fails closed. Nested selected projects now resolve instruction discovery from
+  the nearest effective marker ancestor within the enclosing Git worktree
+  while retaining their own receipt, evidence, and `AGENTS.md` target scope.
 - Upgraded Task Implementer and Agentic SDLC editable prompts to prompt-v3.
   Every full prompt ID now has an exact collision-safe short reference stored
   in metadata and prefixed to its filename, and public `run` accepts the ref,
