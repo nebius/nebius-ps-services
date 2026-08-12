@@ -68,10 +68,49 @@ def test_generation_store_recovers_committed_previous_and_last_known_good(tmp_pa
 
 
 def test_generation_store_never_infers_commit_from_staged_revision(tmp_path) -> None:
-    store = AtomicGenerationStore(tmp_path / "ha")
+    root = tmp_path / "ha"
+    store = AtomicGenerationStore(root)
     store.stage(_revision("a"))
 
-    assert AtomicGenerationStore(tmp_path / "ha").load_committed() is None
+    assert store.pointer_path.exists()
+    assert store.pointer_backup_path.exists()
+    assert AtomicGenerationStore(root).load_committed() is None
+
+
+def test_generation_store_initializes_precreated_empty_root_and_commits(tmp_path) -> None:
+    root = tmp_path / "ha"
+    root.mkdir()
+    store = AtomicGenerationStore(root)
+
+    assert store.load_committed() is None
+
+    restarted = AtomicGenerationStore(root)
+    revision = _revision("a")
+    restarted.stage(revision)
+    restarted.commit(revision.generation_id)
+
+    assert AtomicGenerationStore(root).load_committed() == revision
+
+
+def test_generation_store_rejects_loss_of_all_pointer_authority(tmp_path) -> None:
+    root = tmp_path / "ha"
+    store = AtomicGenerationStore(root)
+    first = _revision("a")
+    second = _revision("d")
+    store.stage(first)
+    store.commit(first.generation_id)
+    store.pointer_path.unlink()
+    store.pointer_backup_path.unlink()
+
+    restarted = AtomicGenerationStore(root)
+    with pytest.raises(CorruptStateError, match="pointers.json"):
+        restarted.load_committed()
+    with pytest.raises(CorruptStateError, match="pointers.backup.json"):
+        restarted.recover()
+
+    restarted.stage(second)
+    with pytest.raises(CorruptStateError, match="pointers.backup.json"):
+        restarted.commit(second.generation_id)
 
 
 def test_generation_store_recovers_last_durable_pointer_set_after_corruption(tmp_path) -> None:
