@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -33,7 +33,9 @@ def _public_allocation(
 
     assignment = None
     if assignment_instance_id is not None:
-        assignment = SimpleNamespace(network_interface=SimpleNamespace(instance_id=assignment_instance_id))
+        assignment = SimpleNamespace(
+            network_interface=SimpleNamespace(instance_id=assignment_instance_id)
+        )
 
     return SimpleNamespace(
         id=alloc_id,
@@ -138,7 +140,9 @@ def test_resolve_prepared_public_allocation_prefers_requested_ip_over_stale_name
 
     with (
         patch.object(vm_mgr, "_get_allocation_by_id", return_value=desired_alloc),
-        patch.object(vm_mgr, "_get_allocation_by_name", return_value=stale_named_alloc) as by_name_mock,
+        patch.object(
+            vm_mgr, "_get_allocation_by_name", return_value=stale_named_alloc
+        ) as by_name_mock,
     ):
         alloc_obj, _ = vm_mgr._resolve_prepared_public_allocation(
             alloc_client=object(),
@@ -190,3 +194,96 @@ def test_require_public_allocation_in_gateway_subnet_rejects_different_subnet() 
             "subnet-new",
             "204.12.163.64",
         )
+
+
+def test_set_ha_private_allocation_updates_only_exact_nic() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.compute.v1 import (
+        Instance,
+        InstanceSpec,
+        IPAddress,
+        NetworkInterfaceSpec,
+    )
+
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    instance = Instance(
+        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        spec=InstanceSpec(
+            network_interfaces=[
+                NetworkInterfaceSpec(
+                    subnet_id="subnet-1",
+                    name="eth0",
+                    ip_address=IPAddress(allocation_id="old-private"),
+                ),
+                NetworkInterfaceSpec(
+                    subnet_id="subnet-2",
+                    name="eth1",
+                    ip_address=IPAddress(allocation_id="other-private"),
+                ),
+            ]
+        ),
+    )
+    operation = MagicMock()
+    service = MagicMock()
+    service.update.return_value.wait.return_value = operation
+
+    with (
+        patch.object(vm_mgr, "_get_client", return_value=object()),
+        patch.object(vm_mgr, "get_ha_instance", return_value=instance),
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+    ):
+        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+
+    request = service.update.call_args.args[0]
+    assert request.metadata.id == "instance-new"
+    assert request.spec.network_interfaces[0].ip_address.allocation_id == "shared-private"
+    assert request.spec.network_interfaces[1].ip_address.allocation_id == "other-private"
+
+
+def test_set_ha_private_allocation_replay_skips_update() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.compute.v1 import Instance, InstanceSpec, IPAddress, NetworkInterfaceSpec
+
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    instance = Instance(
+        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        spec=InstanceSpec(
+            network_interfaces=[
+                NetworkInterfaceSpec(
+                    subnet_id="subnet-1",
+                    name="eth0",
+                    ip_address=IPAddress(allocation_id="shared-private"),
+                )
+            ]
+        ),
+    )
+    service = MagicMock()
+
+    with (
+        patch.object(vm_mgr, "_get_client", return_value=object()),
+        patch.object(vm_mgr, "get_ha_instance", return_value=instance),
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+    ):
+        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+
+    service.update.assert_not_called()
+
+
+def test_set_ha_private_allocation_requires_exact_nic() -> None:
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.compute.v1 import Instance, InstanceSpec, NetworkInterfaceSpec
+
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    instance = Instance(
+        metadata=ResourceMetadata(id="instance-new", parent_id="project-1", name="new"),
+        spec=InstanceSpec(
+            network_interfaces=[NetworkInterfaceSpec(subnet_id="subnet-1", name="eth1")]
+        ),
+    )
+
+    with (
+        patch.object(vm_mgr, "_get_client", return_value=object()),
+        patch.object(vm_mgr, "get_ha_instance", return_value=instance),
+        pytest.raises(RuntimeError, match="exactly one NIC named eth0"),
+    ):
+        vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")

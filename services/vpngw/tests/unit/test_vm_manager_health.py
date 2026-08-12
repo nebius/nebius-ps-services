@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from unittest.mock import patch
 
 import pytest
 
@@ -9,13 +10,17 @@ from nebius_vpngw.deploy.vm_manager import VMManager
 
 
 def _completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=["ssh"], returncode=returncode, stdout=stdout, stderr="")
+    return subprocess.CompletedProcess(
+        args=["ssh"], returncode=returncode, stdout=stdout, stderr=""
+    )
 
 
 def _fake_ssh_run_for_esp4(
     esp4_result: subprocess.CompletedProcess[str],
 ) -> object:
-    def fake_run(cmd: Sequence[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def fake_run(
+        cmd: Sequence[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
         remote_cmd = str(cmd[-1])
         if remote_cmd == "echo connected":
             return _completed()
@@ -36,7 +41,12 @@ def _fake_ssh_run_for_esp4(
     ("esp4_result", "esp4_ready", "esp4_reboot_pending", "message_fragment"),
     [
         (_completed(returncode=0), True, False, "ESP4 ready"),
-        (_completed(stdout="reboot-pending\n", returncode=75), False, True, "waiting for gateway reboot"),
+        (
+            _completed(stdout="reboot-pending\n", returncode=75),
+            False,
+            True,
+            "waiting for gateway reboot",
+        ),
         (_completed(stdout="blocked\n", returncode=1), False, False, "ESP4 is not ready"),
     ],
 )
@@ -60,3 +70,24 @@ def test_check_vm_health_reports_esp4_states(
     assert health["esp4_ready"] is esp4_ready
     assert health["esp4_reboot_pending"] is esp4_reboot_pending
     assert message_fragment in health["message"]
+
+
+@pytest.mark.parametrize(
+    ("operation", "args"),
+    [
+        ("get_ha_instance", ("instance-old",)),
+        ("stop_ha_instance", ("instance-old",)),
+        ("get_ha_allocation", ("private-1",)),
+        ("set_ha_private_allocation", ("instance-new", "eth0", "private-1")),
+    ],
+)
+def test_vm_ha_cloud_operations_never_use_scaffold_mode(
+    operation: str,
+    args: tuple[str, ...],
+) -> None:
+    vm_mgr = VMManager(project_id="project-test", zone="eu-west1")
+    with (
+        patch.object(vm_mgr, "_get_client", return_value=None),
+        pytest.raises(RuntimeError, match="unavailable for VM-HA fencing"),
+    ):
+        getattr(vm_mgr, operation)(*args)
