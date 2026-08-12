@@ -228,6 +228,15 @@ class ControllerCheckpoint:
             raise ValueError("checkpoint sequence must be non-negative")
         if self.ownership_incarnation < 0:
             raise ValueError("ownership incarnation must be non-negative")
+        if self.ownership_continuity_invalidated:
+            if self.ownership_incarnation == 0:
+                raise ValueError(
+                    "ownership continuity invalidation requires a positive incarnation"
+                )
+            if self.established_ownership_context is not None:
+                raise ValueError(
+                    "ownership continuity invalidation cannot retain established context"
+                )
         if self.suspect_since is not None and not math.isfinite(self.suspect_since):
             raise ValueError("suspect_since must be finite")
 
@@ -297,6 +306,14 @@ class VMHAController:
                         pending_action=None,
                     ),
                 )
+                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                    return self._action(
+                        HAState.BLOCKED,
+                        ("checkpointed-action-prerequisites-changed",),
+                        snapshot,
+                        checkpoint,
+                        ActionKind.DISABLE_ACTIVE,
+                    )
                 return self._result(
                     HAState.BLOCKED,
                     ("checkpointed-action-prerequisites-changed",),
@@ -424,9 +441,7 @@ class VMHAController:
         parity_reasons: tuple[str, ...],
     ) -> ControllerResult:
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
-        routes_current = snapshot.routes_reconciled_context == self._route_context(
-            snapshot, checkpoint
-        )
+        routes_current = self._routes_current(snapshot, checkpoint)
         if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
             if not routes_current:
                 return self._action(
@@ -792,7 +807,7 @@ class VMHAController:
             return bool(
                 self._local_ownership_safe(snapshot, checkpoint)
                 and snapshot.readiness.promotion_ready
-                and snapshot.routes_reconciled_context == self._route_context(snapshot, checkpoint)
+                and self._routes_current(snapshot, checkpoint)
             )
         return False
 
@@ -866,6 +881,14 @@ class VMHAController:
         return replace(
             snapshot.route_reconciliation_context,
             ownership_incarnation=checkpoint.ownership_incarnation,
+        )
+
+    def _routes_current(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> bool:
+        return bool(
+            not checkpoint.ownership_continuity_invalidated
+            and snapshot.routes_reconciled_context == self._route_context(snapshot, checkpoint)
         )
 
     @staticmethod
