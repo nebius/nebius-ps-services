@@ -87,8 +87,11 @@ def ensure_service_account_and_token(
     tenant_id: str | None,
     project_id: str | None,
     region_id: str | None,
+    *,
+    role_ids: tuple[str, ...] = ("roles/editor",),
+    strict_role_grants: bool = False,
 ) -> str | None:
-    """Ensure a Service Account exists with Editor permissions and return a token.
+    """Ensure a Service Account has the explicitly requested roles and return a token.
 
     If initialization via explicit context fails, falls back to Nebius CLI config.
     Returns an access token string if available, otherwise None (caller may fall back
@@ -122,18 +125,28 @@ def ensure_service_account_and_token(
             )
     except Exception as e:
         print(f"[SA] Failed to ensure Service Account: {e}")
+        if strict_role_grants:
+            raise RuntimeError("VM-HA Service Account creation failed") from e
         sa = None
 
-    # Grant Editor role if possible
+    normalized_roles = tuple(dict.fromkeys(role.strip() for role in role_ids if role.strip()))
+
+    # Grant only the caller's verified role IDs. VM HA deliberately passes a
+    # bounded set rather than inheriting this legacy non-HA Editor default.
     try:
         if sa is not None:
             bindings = getattr(iam, "bindings", None) or getattr(iam, "role_binding", None)
-            editor_role_id = "roles/editor"
-            if bindings and hasattr(bindings, "grant"):
-                print(f"[SA] Granting role {editor_role_id} to {sa_name}...")
-                bindings.grant(principal=sa, role_id=editor_role_id, project_id=project_id)
+            grant = getattr(bindings, "grant", None)
+            if normalized_roles:
+                if not callable(grant):
+                    raise RuntimeError("IAM role-binding API is unavailable")
+                for role_id in normalized_roles:
+                    print(f"[SA] Granting role {role_id} to {sa_name}...")
+                    grant(principal=sa, role_id=role_id, project_id=project_id)
     except Exception as e:
-        print(f"[SA] Failed to grant Editor role: {e}")
+        print(f"[SA] Failed to grant requested role: {e}")
+        if strict_role_grants:
+            raise RuntimeError("VM-HA verified role grant failed") from e
 
     # Issue an access token
     token: str | None = None
@@ -157,6 +170,31 @@ def ensure_service_account_and_token(
     if used_cli:
         print("[SA] Using Nebius CLI configured credentials (no explicit SA token).")
     return None
+
+
+def ensure_vm_ha_service_account_and_token(
+    sa_name: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    region_id: str | None,
+    *,
+    verified_role_ids: tuple[str, ...],
+) -> str | None:
+    """Provision VM-HA identity only from operator-verified least-privilege roles."""
+
+    roles = tuple(dict.fromkeys(role.strip() for role in verified_role_ids if role.strip()))
+    if not roles:
+        raise ValueError("VM HA service-account provisioning requires verified role IDs")
+    if any(role.lower() in {"roles/editor", "roles/admin", "editor", "admin"} for role in roles):
+        raise ValueError("VM HA rejects broad Editor/Admin roles")
+    return ensure_service_account_and_token(
+        sa_name,
+        tenant_id,
+        project_id,
+        region_id,
+        role_ids=roles,
+        strict_role_grants=True,
+    )
 
 
 def get_cli_token() -> str | None:

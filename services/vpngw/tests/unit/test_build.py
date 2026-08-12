@@ -32,3 +32,6 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     assert "--onefile" in cmd
     assert "--add-data" in cmd
     assert str(build.Path(build.__file__).parent / "__main__.py") in cmd
+    systemd_dir = build.Path(build.__file__).parent / "systemd"
+    assert (systemd_dir / "nebius-vpngw-vm-ha-guard.service").exists()
+    assert (systemd_dir / "nebius-vpngw-vm-ha.service").exists()

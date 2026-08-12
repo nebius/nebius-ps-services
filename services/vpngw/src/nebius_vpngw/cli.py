@@ -1,8 +1,10 @@
+import json
 import os
 import platform
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import textwrap
 import time
@@ -44,6 +46,8 @@ _HELP_COMMAND_ORDER = [
     "validate-config",
     "apply",
     "status",
+    "vm-ha-recover",
+    "vm-ha-failback",
     "add-routes-local",
     "list-routes-local",
     "list-routes-remote",
@@ -769,6 +773,57 @@ def _vm_packages_verified(health: dict[str, t.Any]) -> bool:
     return bool(health.get("strongswan_installed") and health.get("frr_installed"))
 
 
+def _vm_ha_apply_order(plan: ResolvedDeploymentPlan) -> list[t.Any]:
+    """Return the only safe node order: configured passive, then configured active."""
+
+    instances = list(plan.iter_instance_configs())
+    if plan.vm_ha is None:
+        return instances
+    if any(instance.vm_ha_node is None for instance in instances):
+        raise ValueError("VM-HA deployment plan contains an incomplete node manifest")
+
+    def role_value(instance: t.Any) -> str:
+        node = instance.vm_ha_node
+        if node is None:
+            raise ValueError("VM-HA deployment plan contains an incomplete node manifest")
+        return str(node.role.value)
+
+    ordered = sorted(
+        instances,
+        key=lambda instance: 0 if role_value(instance) == "passive" else 1,
+    )
+    if [role_value(instance) for instance in ordered] != ["passive", "active"]:
+        raise ValueError("VM-HA apply requires exactly one passive and one active node")
+    return ordered
+
+
+def _vm_ha_activation_blockers() -> tuple[str, ...]:
+    """Expose the service-owned fail-closed activation boundary to apply."""
+
+    from .agent.main import vm_ha_runtime_blockers
+
+    return vm_ha_runtime_blockers()
+
+
+def _fetch_vm_ha_agent_status(
+    *, target: str, username: str, key_path: Path | None
+) -> dict[str, t.Any]:
+    command = _build_ssh_base_cmd(key_path)
+    command.extend(
+        [
+            f"{username}@{target}",
+            "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-status",
+        ]
+    )
+    result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "VM-HA agent status command failed")
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, dict) or payload.get("schema") != "nebius-vpngw/vm-ha-status-v1":
+        raise ValueError("VM-HA agent returned an invalid status record")
+    return payload
+
+
 def _print_vm_wait_reason(vm_name: str, health: dict[str, t.Any]) -> None:
     if not health.get("reachable"):
         print(f"[dim]{vm_name}: SSH not ready yet[/dim]")
@@ -1063,20 +1118,44 @@ def apply(
         print(f"[bold]Ensuring Service Account '{sa}' and obtaining token...[/bold]")
         try:
             # Defer import to keep optional dependency surface small
-            from .vpngw_sa import ensure_service_account_and_token
+            if plan.vm_ha is not None:
+                from .vpngw_sa import ensure_vm_ha_service_account_and_token
 
-            auth_token = ensure_service_account_and_token(
-                sa_name=sa, tenant_id=tenant_id, project_id=proj_id, region_id=region_id
-            )
+                verified_roles = tuple(
+                    role.strip()
+                    for role in os.environ.get("VPNGW_VM_HA_ROLE_IDS", "").split(",")
+                    if role.strip()
+                )
+                auth_token = ensure_vm_ha_service_account_and_token(
+                    sa_name=sa,
+                    tenant_id=tenant_id,
+                    project_id=proj_id,
+                    region_id=region_id,
+                    verified_role_ids=verified_roles,
+                )
+            else:
+                from .vpngw_sa import ensure_service_account_and_token
+
+                auth_token = ensure_service_account_and_token(
+                    sa_name=sa, tenant_id=tenant_id, project_id=proj_id, region_id=region_id
+                )
             if auth_token:
                 print("[green]Service Account token acquired.[/green]")
                 # Make token available to SDKs expecting env var (PyPI SDK)
                 os.environ["NEBIUS_IAM_TOKEN"] = auth_token
             else:
+                if plan.vm_ha is not None:
+                    raise RuntimeError("VM-HA Service Account flow returned no access token")
                 print(
                     "[yellow]Service Account flow returned no token; falling back to CLI config.[/yellow]"
                 )
         except Exception as e:
+            if plan.vm_ha is not None:
+                print(f"[red]VM-HA Service Account setup failed:[/red] {e}")
+                print(
+                    "[yellow]Set VPNGW_VM_HA_ROLE_IDS only to role IDs verified for the current Nebius environment.[/yellow]"
+                )
+                raise typer.Exit(code=1) from e
             print(f"[yellow]Service Account setup skipped due to error:[/yellow] {e}")
     else:
         # No SA requested; if NEBIUS_IAM_TOKEN is missing, try to read it from CLI config
@@ -1235,9 +1314,7 @@ def apply(
                             print(
                                 f"[green]✓ All VMs ready: SSH accessible, cloud-init complete, ESP4 ready, and packages verified (waited {wait_elapsed}s)[/green]"
                             )
-                        print(
-                            f"[green]✓ Config push gate passed after {wait_elapsed}s[/green]"
-                        )
+                        print(f"[green]✓ Config push gate passed after {wait_elapsed}s[/green]")
                         break
                     print(
                         f"[dim]Waiting for bootstrap to complete... ({wait_elapsed}s elapsed)[/dim]"
@@ -1253,8 +1330,7 @@ def apply(
         else:
             print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
 
-    print("[bold]Pushing per-VM resolved configs and reloading agent...[/bold]")
-    for inst_cfg in plan.iter_instance_configs():
+    def _config_target(inst_cfg: t.Any) -> str:
         # Use discovered IP from vm_ips first, then fall back to config
         target = vm_ips.get(inst_cfg.hostname) or (inst_cfg.external_ip or "").strip()
         if not target:
@@ -1262,12 +1338,67 @@ def apply(
             discovered_ip = vm_mgr.get_vm_public_ip(inst_cfg.hostname)
             if discovered_ip:
                 target = discovered_ip
-            else:
+        return target
+
+    if plan.vm_ha is None:
+        print("[bold]Pushing per-VM resolved configs and reloading agent...[/bold]")
+        for inst_cfg in plan.iter_instance_configs():
+            target = _config_target(inst_cfg)
+            if not target:
                 print(
                     f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
                 )
                 continue
-        ssh.push_config_and_reload(target, inst_cfg, local_cfg)
+            ssh.push_config_and_reload(target, inst_cfg, local_cfg)
+    else:
+        ordered_instances = _vm_ha_apply_order(plan)
+        print("[bold]Staging VM-HA configs passive-first without activation...[/bold]")
+        staged: list[tuple[t.Any, str, t.Any]] = []
+        for inst_cfg in ordered_instances:
+            target = _config_target(inst_cfg)
+            if not target:
+                print(f"[red]Cannot stage VM-HA node {inst_cfg.hostname}: no SSH target[/red]")
+                print(
+                    "[yellow]No staged node was activated; rerun apply after SSH is ready.[/yellow]"
+                )
+                raise typer.Exit(code=1)
+            receipt = ssh.stage_vm_ha_config(target, inst_cfg, local_cfg)
+            staged.append((inst_cfg, target, receipt))
+            print(
+                f"[green]✓ Staged {receipt.node_id} generation {receipt.generation_id[:12]}[/green]"
+            )
+
+        generation_ids = {receipt.generation_id for _, _, receipt in staged}
+        digest_sets = {
+            (
+                receipt.configuration_digest,
+                receipt.static_routes_digest,
+                receipt.bgp_policy_digest,
+            )
+            for _, _, receipt in staged
+        }
+        if len(generation_ids) != 1 or len(digest_sets) != 1:
+            print("[red]VM-HA staged acknowledgements do not have exact generation parity.[/red]")
+            print("[yellow]Neither node was activated; repair parity and rerun apply.[/yellow]")
+            raise typer.Exit(code=1)
+
+        blockers = _vm_ha_activation_blockers()
+        if blockers:
+            print("[red]VM-HA activation is BLOCKED by incomplete runtime wiring.[/red]")
+            for blocker in blockers:
+                print(f"[yellow]  - {blocker}[/yellow]")
+            print("[yellow]Both manifests remain staged and neither node was activated.[/yellow]")
+            raise typer.Exit(code=1)
+
+        print("[bold]Activating verified VM-HA configs passive-first...[/bold]")
+        for inst_cfg, target, receipt in staged:
+            ssh.push_config_and_reload(
+                target,
+                inst_cfg,
+                local_cfg,
+                staged_receipt=receipt,
+            )
+            print(f"[green]✓ Activated {receipt.node_id}[/green]")
 
     print("[green]Apply completed successfully.[/green]")
     if show_add_routes_hint:
@@ -3059,6 +3190,56 @@ print(json.dumps(health))
     except Exception as e:
         console.print(f"[yellow]Error displaying route table: {e}[/yellow]")
 
+    if plan.vm_ha is not None:
+        console.print("\n[bold]VM-HA Controller Status:[/bold]")
+        vm_ha_table = Table(show_header=True, header_style="bold cyan")
+        for column in (
+            "Gateway VM",
+            "Role",
+            "State",
+            "Data Plane",
+            "Observed Owner",
+            "Promotion Ready",
+            "Reason / Recovery",
+        ):
+            vm_ha_table.add_column(column, style="white")
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        key_path = Path(raw_key).expanduser() if raw_key else None
+        for inst_cfg in plan.iter_instance_configs():
+            target = vm_ips.get(inst_cfg.hostname)
+            if not target:
+                continue
+            try:
+                vm_ha = _fetch_vm_ha_agent_status(
+                    target=target,
+                    username=username,
+                    key_path=key_path,
+                )
+                reasons = ", ".join(str(reason) for reason in vm_ha.get("reasons") or [])
+                recovery = str(vm_ha.get("recovery_action") or "")
+                vm_ha_table.add_row(
+                    inst_cfg.hostname,
+                    str(vm_ha.get("configured_role") or "unknown"),
+                    str(vm_ha.get("state") or "blocked"),
+                    str(vm_ha.get("data_plane_mode") or "blocked"),
+                    str(vm_ha.get("observed_owner_node_id") or "unknown"),
+                    "yes" if vm_ha.get("promotion_ready") else "no",
+                    reasons or recovery or "no authoritative status",
+                )
+            except Exception as error:
+                vm_ha_table.add_row(
+                    inst_cfg.hostname,
+                    str(getattr(inst_cfg.vm_ha_node, "role", "unknown")),
+                    "blocked",
+                    "unknown",
+                    "unknown",
+                    "no",
+                    f"status unavailable: {error}; run vm-ha-recover",
+                )
+        console.print(vm_ha_table)
+
 
 @app.command(name="add-routes-local")
 def add_routes_local(
@@ -3125,7 +3306,9 @@ def add_routes_local(
 
     if swap_route_table and not yes:
         print("")
-        print("[yellow]⚠ WARNING: --swap-route-table performs a blue/green subnet route-table cutover.[/yellow]")
+        print(
+            "[yellow]⚠ WARNING: --swap-route-table performs a blue/green subnet route-table cutover.[/yellow]"
+        )
         print(
             "[yellow]  • A fresh custom route table will be created for each selected workload subnet[/yellow]"
         )
@@ -4463,6 +4646,94 @@ def tunnel_failback(
 
 
 # init_config command removed; auto-creation occurs on first run without --local-config-file
+
+
+def _run_vm_ha_operator_command(
+    *, local_config_file: Path, agent_flag: str, configured_role: str | None = None
+) -> list[dict[str, t.Any]]:
+    local_cfg = load_local_config(local_config_file)
+    plan = merge_with_peer_configs(local_cfg, [])
+    if plan.vm_ha is None:
+        raise typer.BadParameter("VM HA is not enabled in this configuration")
+    vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+    username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+    raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+    key_path = Path(raw_key).expanduser() if raw_key else None
+    results: list[dict[str, t.Any]] = []
+    for instance in _vm_ha_apply_order(plan):
+        node = instance.vm_ha_node
+        if configured_role is not None and node.role.value != configured_role:
+            continue
+        target = (instance.external_ip or "").strip()
+        if not target:
+            raise RuntimeError(f"VM-HA node {node.node_id} has no SSH target")
+        command = _build_ssh_base_cmd(key_path)
+        command.extend(
+            [
+                f"{username}@{target}",
+                f"sudo /usr/bin/python3 -m nebius_vpngw.agent.main {agent_flag}",
+            ]
+        )
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"VM-HA action failed on {node.node_id}: "
+                f"{completed.stderr.strip() or completed.stdout.strip()}"
+            )
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, dict):
+            raise ValueError(f"VM-HA action on {node.node_id} returned invalid JSON")
+        results.append(payload)
+    return results
+
+
+@app.command(name="vm-ha-recover")
+def vm_ha_recover(
+    local_config_file: Path | None = typer.Option(
+        None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
+    ),
+) -> None:
+    """Validate durable VM-HA recovery state on both nodes without bypassing fencing."""
+
+    config_path = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    for status_record in _run_vm_ha_operator_command(
+        local_config_file=config_path,
+        agent_flag="--vm-ha-recover",
+    ):
+        print(json.dumps(status_record, sort_keys=True))
+
+
+@app.command(name="vm-ha-failback")
+def vm_ha_failback(
+    local_config_file: Path | None = typer.Option(
+        None, exists=True, readable=True, help=f"Path to {DEFAULT_CONFIG_FILENAME}"
+    ),
+) -> None:
+    """Request manual VM ownership failback through the normal fenced controller path."""
+
+    config_path = _resolve_local_config(
+        local_config_file,
+        create_if_missing=False,
+        exit_after_create=False,
+    )
+    records = _run_vm_ha_operator_command(
+        local_config_file=config_path,
+        agent_flag="--vm-ha-manual-failback",
+        configured_role="active",
+    )
+    if len(records) != 1:
+        raise RuntimeError("manual VM-HA failback did not target exactly one configured active")
+    print(json.dumps(records[0], sort_keys=True))
 
 
 _apply_help_command_order()

@@ -4,10 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 import yaml
 from typer.main import get_command
 from typer.testing import CliRunner
 
+from nebius_vpngw import vpngw_sa
 from nebius_vpngw.cli import (
     _detect_connection_role_overrides,
     _detect_cross_connection_ecmp_warnings,
@@ -19,6 +21,8 @@ from nebius_vpngw.cli import (
     _select_carrying_tunnel_for_connection,
     _should_prompt_add_routes_after_apply,
     _update_external_ips_in_yaml,
+    _vm_ha_activation_blockers,
+    _vm_ha_apply_order,
     app,
 )
 from nebius_vpngw.config_loader import (
@@ -532,12 +536,14 @@ def test_format_ecmp_warning_lines_groups_prefix_and_tunnels() -> None:
 def test_cli_help_command_order() -> None:
     command_names = [_registered_command_name(command) for command in app.registered_commands]
 
-    assert command_names[:13] == [
+    assert command_names[:15] == [
         "create-config",
         "prep-network",
         "validate-config",
         "apply",
         "status",
+        "vm-ha-recover",
+        "vm-ha-failback",
         "add-routes-local",
         "list-routes-local",
         "list-routes-remote",
@@ -547,6 +553,64 @@ def test_cli_help_command_order() -> None:
         "create-from-peer-config",
         "destroy",
     ]
+
+
+def test_vm_ha_apply_order_is_passive_first_and_non_ha_order_is_unchanged() -> None:
+    active = SimpleNamespace(vm_ha_node=SimpleNamespace(role=SimpleNamespace(value="active")))
+    passive = SimpleNamespace(vm_ha_node=SimpleNamespace(role=SimpleNamespace(value="passive")))
+    ha_plan = SimpleNamespace(vm_ha=object(), iter_instance_configs=lambda: iter([active, passive]))
+    ordinary_plan = SimpleNamespace(
+        vm_ha=None, iter_instance_configs=lambda: iter([active, passive])
+    )
+
+    assert _vm_ha_apply_order(ha_plan) == [passive, active]
+    assert _vm_ha_apply_order(ordinary_plan) == [active, passive]
+
+
+def test_vm_ha_activation_is_fail_closed_while_authoritative_adapters_are_missing() -> None:
+    assert _vm_ha_activation_blockers() == (
+        "authoritative-allocation-identity-unavailable",
+        "authoritative-compute-state-adapter-unavailable",
+        "authoritative-nic-attachment-adapter-unavailable",
+        "authenticated-peer-transport-unavailable",
+        "route-runtime-adapter-unavailable",
+    )
+
+
+def test_vm_ha_service_account_requires_verified_non_broad_roles(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_ensure(*args, **kwargs):
+        observed["roles"] = kwargs["role_ids"]
+        observed["strict"] = kwargs["strict_role_grants"]
+        return "token"
+
+    monkeypatch.setattr(vpngw_sa, "ensure_service_account_and_token", fake_ensure)
+
+    assert (
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("roles/verified-compute-fencer", "roles/verified-vpc-operator"),
+        )
+        == "token"
+    )
+    assert observed["roles"] == (
+        "roles/verified-compute-fencer",
+        "roles/verified-vpc-operator",
+    )
+    assert observed["strict"] is True
+
+    with pytest.raises(ValueError, match="rejects broad"):
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("roles/editor",),
+        )
 
 
 def test_each_cli_command_help_renders() -> None:
@@ -583,7 +647,9 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     assert "only the owning gateway VM" in restart_help
 
 
-def test_add_routes_local_swap_route_table_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
+def test_add_routes_local_swap_route_table_requires_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:
     runner = CliRunner()
     config_path = tmp_path / "swap.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
