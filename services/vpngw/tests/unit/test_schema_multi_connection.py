@@ -66,6 +66,86 @@ def _duplicate_site_1_apipa(second_connection: dict) -> None:
     second_connection["tunnels"][0]["inner_remote_ip"] = "169.254.10.2"
 
 
+def _enable_vm_ha(cfg: dict) -> None:
+    cfg["gateway_group"]["instance_count"] = 2
+    cfg["gateway_group"]["external_ips"] = [["203.0.113.10"], ["203.0.113.20"]]
+    cfg["gateway_group"]["vm_ha"] = {
+        "enabled": True,
+        "cluster_id": "gateway-cluster",
+        "members": [
+            {"node_id": "gateway-a", "instance_index": 0, "role": "active"},
+            {"node_id": "gateway-b", "instance_index": 1, "role": "passive"},
+        ],
+    }
+    second_tunnel = deepcopy(cfg["connections"][0]["tunnels"][0])
+    second_tunnel.update(
+        {
+            "name": "site-1-tunnel-node-b",
+            "gateway_instance_index": 1,
+            "remote_public_ip": "198.51.100.11",
+            "inner_cidr": "169.254.11.0/30",
+            "inner_local_ip": "169.254.11.1",
+            "inner_remote_ip": "169.254.11.2",
+        }
+    )
+    cfg["connections"][0]["tunnels"].append(second_tunnel)
+
+
+def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
+    sample_config: dict,
+) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+
+    validated = validate_config(cfg)
+
+    assert validated.gateway_group.vm_ha is not None
+    assert [member.role.value for member in validated.gateway_group.vm_ha.members] == [
+        "active",
+        "passive",
+    ]
+    assert [tunnel.ha_role.value for tunnel in validated.connections[0].tunnels] == [
+        "active",
+        "active",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda cfg: cfg["gateway_group"].update(instance_count=3), "instance_count=2"),
+        (
+            lambda cfg: cfg["gateway_group"]["vm_ha"]["members"].pop(),
+            "exactly two nodes",
+        ),
+        (
+            lambda cfg: cfg["gateway_group"]["vm_ha"]["members"][1].update(role="active"),
+            "exactly one active and one passive",
+        ),
+    ],
+)
+def test_schema_rejects_invalid_vm_ha_topologies(
+    sample_config: dict,
+    mutation,
+    message: str,
+) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    mutation(cfg)
+
+    with pytest.raises(ValueError, match=message):
+        validate_config(cfg)
+
+
+def test_schema_rejects_vm_ha_connection_missing_one_member(sample_config: dict) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    cfg["connections"][0]["tunnels"] = cfg["connections"][0]["tunnels"][:1]
+
+    with pytest.raises(ValueError, match="must define tunnels for both VM-HA members"):
+        validate_config(cfg)
+
+
 def test_schema_accepts_multiple_connections_with_unique_tunnel_identity(
     sample_config: dict,
 ) -> None:

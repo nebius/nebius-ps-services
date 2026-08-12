@@ -63,6 +63,13 @@ class HARole(str, Enum):
     DISABLE = "disable"
 
 
+class VMHARole(str, Enum):
+    """Ownership role for a VM-HA gateway node."""
+
+    ACTIVE = "active"
+    PASSIVE = "passive"
+
+
 class HAMode(str, Enum):
     """High availability mode for tunnel selection."""
 
@@ -795,6 +802,67 @@ class GatewaySubnetConfig(BaseModel):
         return validate_private_ipv4_cidr(v)
 
 
+class VMHAMemberConfig(BaseModel):
+    """Stable identity and initial ownership role for one VM-HA node."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    node_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$",
+        description="Stable node identity (lowercase, alphanumeric, hyphens)",
+    )
+    instance_index: int = Field(..., ge=0, le=1, description="Gateway VM index (0 or 1)")
+    role: VMHARole = Field(..., description="Initial VM ownership role")
+
+
+class VMHAConfig(BaseModel):
+    """Explicit, default-disabled two-node VM-level HA configuration."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    enabled: bool = Field(default=False, description="Enable VM-level active/passive HA")
+    cluster_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$",
+        description="Stable shared cluster identity",
+    )
+    members: list[VMHAMemberConfig] = Field(
+        default_factory=list,
+        description="Exactly two stable node records when VM HA is enabled",
+    )
+
+    @model_validator(mode="after")
+    def validate_topology(self) -> VMHAConfig:
+        if not self.enabled:
+            if self.cluster_id is not None or self.members:
+                raise ValueError("vm_ha.cluster_id and vm_ha.members require vm_ha.enabled=true")
+            return self
+
+        if self.cluster_id is None:
+            raise ValueError("vm_ha.cluster_id is required when vm_ha.enabled=true")
+        if len(self.members) != 2:
+            raise ValueError("vm_ha.members must contain exactly two nodes")
+
+        node_ids = [member.node_id for member in self.members]
+        if len(set(node_ids)) != 2:
+            raise ValueError("vm_ha member node_id values must be unique")
+
+        instance_indices = [member.instance_index for member in self.members]
+        if set(instance_indices) != {0, 1}:
+            raise ValueError("vm_ha members must map exactly to instance_index 0 and 1")
+
+        roles = [member.role for member in self.members]
+        if roles.count(VMHARole.ACTIVE) != 1 or roles.count(VMHARole.PASSIVE) != 1:
+            raise ValueError("vm_ha members must define exactly one active and one passive role")
+
+        return self
+
+
 class GatewayGroup(BaseModel):
     """Gateway group infrastructure specification."""
 
@@ -835,6 +903,10 @@ class GatewayGroup(BaseModel):
     vm_spec: VMSpec = Field(..., description="VM specification")
     region: str | None = Field(
         default=None, description="Region ID (can be set at top level or here)"
+    )
+    vm_ha: VMHAConfig | None = Field(
+        default=None,
+        description="Optional explicit two-node VM-level active/passive HA configuration",
     )
 
     @field_validator("external_ips", mode="before")
@@ -907,6 +979,28 @@ class VPNGatewayConfig(BaseModel):
         duplicates = [n for n in names if names.count(n) > 1]
         if duplicates:
             raise ValueError(f"Duplicate connection names found: {set(duplicates)}")
+        return self
+
+    @model_validator(mode="after")
+    def validate_vm_ha_gateway_topology(self) -> VPNGatewayConfig:
+        """Keep VM ownership distinct from tunnel HA while requiring both nodes."""
+        vm_ha = self.gateway_group.vm_ha
+        if vm_ha is None or not vm_ha.enabled:
+            return self
+
+        if self.gateway_group.instance_count != 2:
+            raise ValueError("vm_ha.enabled=true requires gateway_group.instance_count=2")
+
+        member_indices = {member.instance_index for member in vm_ha.members}
+        for connection in self.connections:
+            tunnel_indices = {tunnel.gateway_instance_index for tunnel in connection.tunnels}
+            if tunnel_indices != member_indices:
+                raise ValueError(
+                    f"Connection '{connection.name}' must define tunnels for both VM-HA "
+                    "members (gateway_instance_index 0 and 1); VM roles do not replace "
+                    "per-tunnel ha_role"
+                )
+
         return self
 
     @model_validator(mode="after")
