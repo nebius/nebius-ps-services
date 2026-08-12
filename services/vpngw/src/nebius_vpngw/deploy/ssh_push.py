@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname, urlopen
 
 from ..config_loader import InstanceResolvedConfig
+
+
+@dataclass(frozen=True)
+class VMHAStageReceipt:
+    """Secret-free acknowledgement for one exact staged node generation."""
+
+    node_id: str
+    generation_id: str
+    configuration_digest: str
+    static_routes_digest: str
+    bgp_policy_digest: str
+    staged_file_sha256: str
 
 
 class SSHPush:
@@ -35,6 +49,72 @@ class SSHPush:
 
             self._paramiko = paramiko
         return self._paramiko
+
+    @staticmethod
+    def _vm_ha_receipt(inst_cfg: InstanceResolvedConfig) -> VMHAStageReceipt:
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        readiness = inst_cfg.vm_ha_readiness
+        if node is None or generation is None or readiness is None:
+            raise ValueError("VM-HA staging requires a complete resolved node manifest")
+        if generation.generation_id != readiness.generation_id:
+            raise ValueError("VM-HA generation and readiness identities do not match")
+        if generation.digests != readiness.digests:
+            raise ValueError("VM-HA generation and readiness digests do not match")
+        return VMHAStageReceipt(
+            node_id=node.node_id,
+            generation_id=generation.generation_id,
+            configuration_digest=generation.digests.configuration,
+            static_routes_digest=generation.digests.static_routes,
+            bgp_policy_digest=generation.digests.bgp_policy,
+            staged_file_sha256=hashlib.sha256(inst_cfg.config_yaml.encode("utf-8")).hexdigest(),
+        )
+
+    def stage_vm_ha_config(
+        self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
+    ) -> VMHAStageReceipt:
+        """Stage and verify one node without activating it or reloading services."""
+
+        receipt = self._vm_ha_receipt(inst_cfg)
+        paramiko = self._ensure_paramiko()
+        gg = local_cfg.get("gateway_group") or {}
+        vm_spec = gg.get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            temporary = f"/tmp/nebius-vpngw-vm-ha-stage-{inst_cfg.instance_index}.yaml"
+            destination = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
+            with client.open_sftp() as sftp, sftp.file(temporary, "w") as stream:
+                stream.write(inst_cfg.config_yaml)
+            command = (
+                "sudo install -d -m 0700 /etc/nebius-vpngw/vm-ha-staged && "
+                f"sudo install -o root -g root -m 0600 {temporary} {destination} && "
+                f"sudo sha256sum {destination}"
+            )
+            stdin, stdout, stderr = client.exec_command(command, timeout=30)
+            return_code = stdout.channel.recv_exit_status()
+            observed = stdout.read().decode().strip().split(maxsplit=1)[0]
+            if return_code != 0 or observed != receipt.staged_file_sha256:
+                detail = stderr.read().decode().strip()
+                raise RuntimeError(
+                    f"VM-HA stage verification failed for {receipt.node_id}: {detail or observed}"
+                )
+            return receipt
+        finally:
+            client.close()
 
     def _find_project_root(self) -> Path | None:
         """Locate repo root based on the installed module path."""
@@ -230,8 +310,19 @@ class SSHPush:
         return None
 
     def push_config_and_reload(
-        self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
+        self,
+        ssh_target: str,
+        inst_cfg: InstanceResolvedConfig,
+        local_cfg: dict,
+        *,
+        staged_receipt: VMHAStageReceipt | None = None,
     ) -> None:
+        if staged_receipt is not None:
+            from ..agent.main import vm_ha_runtime_blockers
+
+            blockers = vm_ha_runtime_blockers()
+            if blockers:
+                raise RuntimeError(f"VM-HA activation BLOCKED: {', '.join(blockers)}")
         if not ssh_target:
             print(f"[SSHPush] No SSH target for instance {inst_cfg.instance_index}; skipping")
             return
@@ -448,15 +539,22 @@ WantedBy=multi-user.target
                                     f.write(firewall_script.read_text())
                                 print("[SSHPush] Staged firewall setup script")
 
-                            esp4_preflight_script = (
-                                systemd_dir / "nebius-vpngw-esp4-preflight.sh"
-                            )
+                            esp4_preflight_script = systemd_dir / "nebius-vpngw-esp4-preflight.sh"
                             if esp4_preflight_script.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-esp4-preflight.sh", "w"
-                                ) as f:
+                                with sftp.file("/tmp/nebius-vpngw-esp4-preflight.sh", "w") as f:
                                     f.write(esp4_preflight_script.read_text())
                                 print("[SSHPush] Staged ESP4 preflight helper")
+
+                            for asset_name in (
+                                "nebius-vpngw-vm-ha-guard.service",
+                                "nebius-vpngw-vm-ha.service",
+                                "nebius-vpngw-vm-ha-ordering.conf",
+                            ):
+                                asset = systemd_dir / asset_name
+                                if asset.exists():
+                                    with sftp.file(f"/tmp/{asset_name}", "w") as f:
+                                        f.write(asset.read_text())
+                                    print(f"[SSHPush] Staged {asset_name}")
                     except Exception as e:
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
@@ -481,28 +579,41 @@ WantedBy=multi-user.target
             print("[SSHPush] WARNING: Could not build wheel, skipping package deployment")
 
         # Upload to /tmp then move with sudo
-        tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
-        try:
-            with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
-                f.write(inst_cfg.config_yaml)
-            print(f"[SSHPush] Uploaded temp config to {tmp_path}")
-        except Exception as e:
-            print(f"[SSHPush] SFTP upload failed: {e}")
-            client.close()
-            return
+        if staged_receipt is not None:
+            expected = self._vm_ha_receipt(inst_cfg)
+            if staged_receipt != expected:
+                client.close()
+                raise ValueError("VM-HA activation receipt does not match the node manifest")
+            tmp_path = f"/etc/nebius-vpngw/vm-ha-staged/{staged_receipt.generation_id}.yaml"
+        else:
+            tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
+            try:
+                with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
+                    f.write(inst_cfg.config_yaml)
+                print(f"[SSHPush] Uploaded temp config to {tmp_path}")
+            except Exception as e:
+                print(f"[SSHPush] SFTP upload failed: {e}")
+                client.close()
+                return
 
         agent_cmd = (
             "sudo systemctl restart nebius-vpngw-agent"
             if restart_agent
             else "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent"
         )
+        config_install_cmd = (
+            f"sudo install -o root -g root -m 0600 {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+            if staged_receipt is not None
+            else f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+        )
+        config_mode = "0600" if staged_receipt is not None else "0644"
 
         # Move into place and trigger reload
         cmds = [
             "sudo mkdir -p /etc/nebius-vpngw",
-            f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
+            config_install_cmd,
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
-            "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
+            f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
             # Install route fix service and timer if staged
             "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
@@ -515,10 +626,23 @@ WantedBy=multi-user.target
             "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
             "if [ -f /tmp/nebius-vpngw-esp4-preflight.sh ]; then sudo mv /tmp/nebius-vpngw-esp4-preflight.sh /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
             "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha-guard.service ]; then sudo mv /tmp/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha.service ]; then sudo mv /tmp/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha.service; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha-ordering.conf ]; then sudo install -d -m 0755 /etc/systemd/system/strongswan-starter.service.d /etc/systemd/system/strongswan.service.d /etc/systemd/system/frr.service.d /etc/systemd/system/nebius-vpngw-agent.service.d; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf; fi",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
             "sudo systemctl daemon-reload",
+            *(
+                [
+                    "sudo install -o root -g root -m 0600 /dev/null /etc/nebius-vpngw/vm-ha-enabled",
+                    "sudo systemctl enable nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service",
+                    "sudo systemctl restart nebius-vpngw-vm-ha-guard.service",
+                    "sudo systemctl restart nebius-vpngw-vm-ha.service",
+                ]
+                if staged_receipt is not None
+                else []
+            ),
             # Enable and start route fix timer (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
             # Enable and start health monitoring service (only if service file exists)
