@@ -11,7 +11,11 @@ from pathlib import Path
 from rich import print
 
 from ..config_loader import ResolvedDeploymentPlan
-from .vm_ha_routes import ManagedRouteOwnership, owned_route_snapshots
+from .vm_ha_routes import (
+    ManagedRouteOwnership,
+    owned_route_snapshots,
+    route_observation_snapshots,
+)
 
 
 class RouteManager:
@@ -713,6 +717,43 @@ class RouteManager:
                 else None
             ),
             route_allocation_id=self._route_next_hop_allocation_id,
+        )
+
+    @classmethod
+    def _vm_ha_route_next_hop(cls, route) -> str:
+        spec = getattr(route, "spec", None)
+        next_hop = getattr(spec, "next_hop", None) if spec else None
+        allocation_id = cls._route_next_hop_allocation_id(route)
+        default_egress = bool(
+            getattr(next_hop, "default_egress_gateway", False) if next_hop else False
+        )
+        if allocation_id and default_egress:
+            raise ValueError("Observed route has an ambiguous next hop")
+        if allocation_id:
+            return f"allocation:{allocation_id}"
+        if default_egress:
+            return "default-egress-gateway"
+        raise ValueError("Observed route has no supported next hop")
+
+    def _vm_ha_route_snapshots(
+        self,
+        routes,
+        *,
+        ownership_by_route_id: t.Mapping[str, ManagedRouteOwnership],
+    ):
+        """Adapt all VPC routes without granting unledgered routes mutation authority."""
+
+        return route_observation_snapshots(
+            routes,
+            ownership_by_route_id=ownership_by_route_id,
+            route_id=self._metadata_id,
+            route_prefix=lambda route: (
+                str(network)
+                if (network := self._route_destination_network(route)) is not None
+                else None
+            ),
+            route_allocation_id=self._route_next_hop_allocation_id,
+            route_next_hop=self._vm_ha_route_next_hop,
         )
 
     def _routes_with_destination(

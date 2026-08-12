@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nebius_vpngw.deploy.route_manager import RouteManager
 from nebius_vpngw.deploy.vm_ha_routes import (
     BGPRouteReadiness,
     LogicalStaticRouteManifest,
@@ -312,6 +313,63 @@ def test_explicit_route_ownership_blocks_name_based_takeover_and_foreign_conflic
 
     assert plan.mutations == ()
     assert plan.blocked_reasons == ("foreign-route-conflict:10.10.0.0/16",)
+
+
+def test_unledgered_occupied_prefix_flows_from_route_manager_to_conflict_plan() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    foreign = SimpleNamespace(
+        metadata=SimpleNamespace(id="route-foreign", name="unmanaged"),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr="10.10.0.0/16"),
+            next_hop=SimpleNamespace(
+                allocation=SimpleNamespace(id="foreign-allocation"),
+                default_egress_gateway=False,
+            ),
+        ),
+    )
+
+    observed = route_manager._vm_ha_route_snapshots((foreign,), ownership_by_route_id={})
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16", "10.11.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=observed,
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+
+    assert plan.mutations == ()
+    assert plan.blocked_reasons == ("foreign-route-conflict:10.10.0.0/16",)
+
+
+@pytest.mark.parametrize(
+    "next_hop",
+    [
+        SimpleNamespace(
+            allocation=SimpleNamespace(id="foreign-allocation"),
+            default_egress_gateway=True,
+        ),
+        SimpleNamespace(
+            allocation=SimpleNamespace(id=""),
+            default_egress_gateway=False,
+        ),
+    ],
+)
+def test_vm_ha_route_observation_rejects_ambiguous_or_missing_next_hop(
+    next_hop: SimpleNamespace,
+) -> None:
+    route = SimpleNamespace(
+        metadata=SimpleNamespace(id="route-foreign", name="unmanaged"),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr="10.10.0.0/16"),
+            next_hop=next_hop,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="next hop"):
+        RouteManager(project_id="project-test")._vm_ha_route_snapshots(
+            (route,), ownership_by_route_id={}
+        )
 
 
 def test_existing_route_with_old_allocation_is_replaced_with_shared_allocation() -> None:

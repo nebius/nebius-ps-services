@@ -3,7 +3,8 @@
 This module never discovers cloud ownership, queries FRR, or mutates VPC
 resources.  Callers must supply an authoritative ownership observation, the
 committed logical static-route manifest, normalized local FRR observations,
-and an explicitly owned VPC route snapshot.
+and all observed VPC prefix occupancy.  Only explicit ledger ownership grants
+mutation authority.
 """
 
 from __future__ import annotations
@@ -205,6 +206,23 @@ class ManagedRouteSnapshot:
 
 
 @dataclass(frozen=True)
+class RouteOccupancySnapshot:
+    """Observed prefix occupancy without authority to mutate the route."""
+
+    route_id: str
+    prefix: str
+    next_hop: str
+
+    def __post_init__(self) -> None:
+        if not self.route_id:
+            raise ValueError("Observed route ID is required")
+        if not self.next_hop:
+            raise ValueError("Observed route next hop is required")
+        normalized = _normalized_prefixes((self.prefix,))
+        object.__setattr__(self, "prefix", next(iter(normalized)))
+
+
+@dataclass(frozen=True)
 class RouteMutation:
     kind: RouteMutationKind
     prefix: str
@@ -274,7 +292,7 @@ class VMHARouteReconciler:
         ownership: VerifiedAllocationOwnership,
         static_manifest: LogicalStaticRouteManifest,
         bgp: BGPRouteReadiness,
-        existing_routes: Iterable[ManagedRouteSnapshot],
+        existing_routes: Iterable[ManagedRouteSnapshot | RouteOccupancySnapshot],
         state: RouteTransitionState,
         now: float,
     ) -> RouteReconciliationPlan:
@@ -298,10 +316,16 @@ class VMHARouteReconciler:
 
         routes = tuple(existing_routes)
         owned_routes = tuple(
-            route for route in routes if route.ownership.cluster_id == self.cluster_id
+            route
+            for route in routes
+            if isinstance(route, ManagedRouteSnapshot)
+            and route.ownership.cluster_id == self.cluster_id
         )
         foreign_prefixes = {
-            route.prefix for route in routes if route.ownership.cluster_id != self.cluster_id
+            route.prefix
+            for route in routes
+            if not isinstance(route, ManagedRouteSnapshot)
+            or route.ownership.cluster_id != self.cluster_id
         }
         existing_bgp = {
             route.prefix for route in owned_routes if route.ownership.kind is ManagedRouteKind.BGP
@@ -330,6 +354,19 @@ class VMHARouteReconciler:
         )
         mutations: list[RouteMutation] = []
         blocked_reasons = list(bgp.blocked_reasons)
+        foreign_conflicts = sorted(set(desired_kinds) & foreign_prefixes)
+        if foreign_conflicts:
+            blocked_reasons.extend(
+                f"foreign-route-conflict:{prefix}" for prefix in foreign_conflicts
+            )
+            return RouteReconciliationPlan(
+                authorized=True,
+                blocked_reasons=tuple(dict.fromkeys(blocked_reasons)),
+                mutations=(),
+                held_bgp_prefixes=frozenset(held_bgp),
+                desired_prefixes=frozenset(desired_kinds),
+                next_state=state,
+            )
 
         owned_by_prefix: dict[str, list[ManagedRouteSnapshot]] = {}
         for route in owned_routes:
@@ -340,9 +377,6 @@ class VMHARouteReconciler:
             desired_kinds.items(), key=lambda item: (item[1].value, item[0])
         ):
             existing_candidates = owned_by_prefix.get(prefix, [])
-            if not existing_candidates and prefix in foreign_prefixes:
-                blocked_reasons.append(f"foreign-route-conflict:{prefix}")
-                continue
             if not existing_candidates:
                 mutations.append(
                     RouteMutation(
@@ -473,6 +507,48 @@ def owned_route_snapshots(
         allocation_id = route_allocation_id(route)
         if not identifier or not prefix or not allocation_id:
             continue
+        snapshots.append(
+            ManagedRouteSnapshot(
+                route_id=identifier,
+                prefix=prefix,
+                allocation_id=allocation_id,
+                ownership=ownership,
+            )
+        )
+    return tuple(sorted(snapshots, key=lambda item: (item.prefix, item.route_id)))
+
+
+def route_observation_snapshots(
+    routes: Iterable[object],
+    *,
+    ownership_by_route_id: Mapping[str, ManagedRouteOwnership],
+    route_id: Callable[[object], str],
+    route_prefix: Callable[[object], str | None],
+    route_allocation_id: Callable[[object], str | None],
+    route_next_hop: Callable[[object], str],
+) -> tuple[ManagedRouteSnapshot | RouteOccupancySnapshot, ...]:
+    """Normalize every route as mutable ledger ownership or read-only occupancy."""
+
+    snapshots: list[ManagedRouteSnapshot | RouteOccupancySnapshot] = []
+    for route in routes:
+        identifier = route_id(route)
+        prefix = route_prefix(route)
+        next_hop = route_next_hop(route)
+        if not identifier or not prefix:
+            raise ValueError("Observed route identity and prefix are required")
+        ownership = ownership_by_route_id.get(identifier)
+        if ownership is None:
+            snapshots.append(
+                RouteOccupancySnapshot(
+                    route_id=identifier,
+                    prefix=prefix,
+                    next_hop=next_hop,
+                )
+            )
+            continue
+        allocation_id = route_allocation_id(route)
+        if not allocation_id:
+            raise ValueError("Ledger-owned route must have an allocation next hop")
         snapshots.append(
             ManagedRouteSnapshot(
                 route_id=identifier,
