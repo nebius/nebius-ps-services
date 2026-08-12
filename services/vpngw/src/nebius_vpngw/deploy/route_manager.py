@@ -11,6 +11,7 @@ from pathlib import Path
 from rich import print
 
 from ..config_loader import ResolvedDeploymentPlan
+from .vm_ha_routes import ManagedRouteOwnership, owned_route_snapshots
 
 
 class RouteManager:
@@ -689,6 +690,30 @@ class RouteManager:
     @staticmethod
     def _route_is_managed(route) -> bool:
         return RouteManager._route_name(route).startswith("vpngw-")
+
+    def _vm_ha_owned_route_snapshots(
+        self,
+        routes,
+        *,
+        ownership_by_route_id: t.Mapping[str, ManagedRouteOwnership],
+    ):
+        """Adapt VPC route objects using an explicit HA management ledger.
+
+        A ``vpngw-`` metadata-name prefix remains a legacy non-HA convention;
+        it is deliberately insufficient to establish VM-HA route ownership.
+        """
+
+        return owned_route_snapshots(
+            routes,
+            ownership_by_route_id=ownership_by_route_id,
+            route_id=self._metadata_id,
+            route_prefix=lambda route: (
+                str(network)
+                if (network := self._route_destination_network(route)) is not None
+                else None
+            ),
+            route_allocation_id=self._route_next_hop_allocation_id,
+        )
 
     def _routes_with_destination(
         self,
