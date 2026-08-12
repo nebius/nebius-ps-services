@@ -338,30 +338,39 @@ def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
             owner=None,
             state=ComputeState.STOPPED,
             absent=True,
-            ownership_epoch="ownership-epoch-2",
         ),
     )
     disable = policy.decide(lost, ControllerCheckpoint())
     assert disable.action is not None
     assert disable.action.kind is ActionKind.DISABLE_ACTIVE
+    assert disable.checkpoint.ownership_continuity_invalidated
+    assert disable.checkpoint.ownership_incarnation == 1
 
     reacquired = replace(
         owned,
-        cloud=replace(_owned_cloud(), ownership_epoch="ownership-epoch-3"),
         data_plane_mode=DataPlaneMode.PASSIVE,
     )
     reconcile = policy.decide(reacquired, disable.checkpoint)
     assert reconcile.action is not None
     assert reconcile.action.kind is ActionKind.RECONCILE_ROUTES
+    assert reconcile.action.ownership_incarnation == 1
     assert not reconcile.forwarding_enabled
+
+    stale = policy.decide(reacquired, reconcile.checkpoint)
+    assert stale.action == reconcile.action
+    assert stale.reasons == ("replaying-checkpointed-action",)
 
     current = replace(
         reacquired,
-        routes_reconciled_context=reacquired.route_reconciliation_context,
+        routes_reconciled_context=replace(
+            reacquired.route_reconciliation_context,
+            ownership_incarnation=reconcile.action.ownership_incarnation,
+        ),
     )
-    enable = policy.decide(current, ControllerCheckpoint())
+    enable = policy.decide(current, reconcile.checkpoint)
     assert enable.action is not None
     assert enable.action.kind is ActionKind.ENABLE_ACTIVE
+    assert not enable.checkpoint.ownership_continuity_invalidated
 
 
 def test_route_failure_replays_without_enabling_forwarding(
@@ -375,6 +384,31 @@ def test_route_failure_replays_without_enabling_forwarding(
     replay = policy.decide(owned, first.checkpoint)
     assert replay.action == first.action
     assert not replay.forwarding_enabled
+
+
+def test_restart_cannot_clear_loss_invalidation_from_old_route_action(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(cloud=_owned_cloud())
+    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    reconcile = policy.decide(
+        owned,
+        ControllerCheckpoint(
+            ownership_continuity_invalidated=True,
+            ownership_incarnation=1,
+        ),
+    )
+    assert reconcile.action is not None
+    assert reconcile.action.kind is ActionKind.RECONCILE_ROUTES
+
+    restarted = policy.decide(
+        replace(owned, boot_id="new-boot", guard_boot_id="local-boot"),
+        reconcile.checkpoint,
+    )
+
+    assert restarted.action is not None
+    assert restarted.action.kind is ActionKind.INSTALL_COLD_START_GUARD
+    assert restarted.checkpoint.ownership_continuity_invalidated
 
 
 def test_checkpointed_route_effect_is_cancelled_when_ownership_epoch_changes(
@@ -505,7 +539,7 @@ def test_established_active_owner_remains_active_while_passive_peer_is_running(
     snapshot = _snapshot(
         configured_role=ConfiguredRole.ACTIVE,
         peer_heartbeat=_peer(node_id="node-a", configured_role="passive"),
-        cloud=_cloud(owner="node-b", attached=True, confirmed=True),
+        cloud=_cloud(owner="node-b", absent=True, attached=True, confirmed=True),
         data_plane_mode=DataPlaneMode.ACTIVE,
     )
 
@@ -520,11 +554,39 @@ def test_established_active_owner_remains_active_while_passive_peer_is_running(
     assert decision.reasons == ("authoritative-owner-active",)
 
 
+@pytest.mark.parametrize("data_plane_mode", [DataPlaneMode.PASSIVE, DataPlaneMode.ACTIVE])
+def test_local_owner_with_former_attachment_present_is_rejected(
+    policy: VMHAController, data_plane_mode: DataPlaneMode
+) -> None:
+    snapshot = _snapshot(
+        configured_role=ConfiguredRole.ACTIVE,
+        peer_heartbeat=_peer(node_id="node-a", configured_role="passive"),
+        cloud=_cloud(owner="node-b", attached=True, confirmed=True),
+        data_plane_mode=data_plane_mode,
+    )
+    snapshot = replace(
+        snapshot,
+        routes_reconciled_context=snapshot.route_reconciliation_context,
+    )
+
+    decision = policy.decide(snapshot, ControllerCheckpoint())
+
+    assert decision.state is HAState.BLOCKED
+    assert not decision.forwarding_enabled
+    assert decision.reasons == ("candidate-owner-observation-with-former-attachment-present",)
+    assert decision.checkpoint.ownership_continuity_invalidated
+    if data_plane_mode is DataPlaneMode.ACTIVE:
+        assert decision.action is not None
+        assert decision.action.kind is ActionKind.DISABLE_ACTIVE
+    else:
+        assert decision.action is None
+
+
 def test_passive_owner_requires_durable_establishment_when_peer_is_running(
     policy: VMHAController,
 ) -> None:
     snapshot = _snapshot(
-        cloud=_cloud(owner="node-b", attached=True, confirmed=True),
+        cloud=_cloud(owner="node-b", absent=True, attached=True, confirmed=True),
         data_plane_mode=DataPlaneMode.ACTIVE,
     )
     snapshot = replace(
