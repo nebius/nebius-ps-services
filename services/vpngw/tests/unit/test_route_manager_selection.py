@@ -14,6 +14,7 @@ from nebius_vpngw.config_loader import (
     ResolvedDeploymentPlan,
 )
 from nebius_vpngw.deploy.route_manager import RouteManager
+from nebius_vpngw.deploy.vm_ha_routes import ManagedRouteKind, ManagedRouteOwnership
 
 _LocalConfig = dict[str, t.Any]
 
@@ -66,6 +67,36 @@ def _metadata_name(resource: object) -> str:
 
 def _metadata_id(resource: object) -> str:
     return str(vars(vars(resource)["metadata"])["id"])
+
+
+def test_vm_ha_route_selection_requires_explicit_route_id_ownership() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    ledger_route = _fake_route(
+        route_id="route-owned",
+        name="ordinary-name",
+        cidr="10.10.0.0/16",
+        allocation_id="shared-allocation",
+    )
+    name_only_route = _fake_route(
+        route_id="route-unowned",
+        name="vpngw-name-is-not-authority",
+        cidr="10.20.0.0/16",
+        allocation_id="shared-allocation",
+    )
+
+    snapshots = route_manager._vm_ha_owned_route_snapshots(
+        (ledger_route, name_only_route),
+        ownership_by_route_id={
+            "route-owned": ManagedRouteOwnership(
+                cluster_id="cluster-a",
+                kind=ManagedRouteKind.STATIC,
+            )
+        },
+    )
+
+    assert [(snapshot.route_id, snapshot.prefix) for snapshot in snapshots] == [
+        ("route-owned", "10.10.0.0/16")
+    ]
 
 
 def _three_vm_plan() -> ResolvedDeploymentPlan:

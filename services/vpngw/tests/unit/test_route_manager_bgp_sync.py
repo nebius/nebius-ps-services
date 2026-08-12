@@ -6,6 +6,7 @@ from nebius_vpngw.config_loader import (
     ResolvedDeploymentPlan,
 )
 from nebius_vpngw.deploy.route_manager import RouteManager
+from nebius_vpngw.deploy.vm_ha_routes import BGPRouteReadiness
 
 
 def _plan() -> ResolvedDeploymentPlan:
@@ -27,6 +28,22 @@ def _plan() -> ResolvedDeploymentPlan:
             )
         ],
     )
+
+
+def test_vm_ha_bgp_optional_prefix_drift_is_informational() -> None:
+    readiness = BGPRouteReadiness.normalize(
+        configured_sessions=("169.254.10.2",),
+        established_sessions=("169.254.10.2",),
+        required_prefixes=("10.20.0.0/16",),
+        optional_prefixes=("10.21.0.0/16",),
+        learned_prefixes=("10.20.0.0/16",),
+        usable_xfrm_prefixes=("10.20.0.0/16",),
+        observed_import_policy_digest="policy-a",
+        committed_import_policy_digest="policy-a",
+    )
+
+    assert readiness.promotion_ready
+    assert readiness.missing_optional_prefixes == {"10.21.0.0/16"}
 
 
 def test_expected_advertised_prefixes_follow_gateway_local_prefixes() -> None:
