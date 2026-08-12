@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
+
+import pytest
 
 from nebius_vpngw.agent.state_store import RENDER_VERSION, StateStore
 
@@ -32,3 +35,20 @@ def test_state_store_returns_none_for_invalid_json(tmp_path) -> None:
     store = StateStore(state_path)
 
     assert store.load_last_applied() is None
+
+
+def test_state_store_atomic_write_preserves_previous_state_on_replace_failure(tmp_path) -> None:
+    state_path = tmp_path / "state" / "last-applied.json"
+    store = StateStore(state_path)
+    first = {"connections": [{"name": "peer-a"}]}
+    second = {"connections": [{"name": "peer-b"}]}
+    store.save_last_applied(first)
+
+    with (
+        patch.object(os, "replace", side_effect=OSError("injected replace failure")),
+        pytest.raises(OSError, match="injected replace failure"),
+    ):
+        store.save_last_applied(second)
+
+    assert store.load_last_applied()["resolved_config"] == first
+    assert list(state_path.parent.glob(".last-applied.json.*")) == []
