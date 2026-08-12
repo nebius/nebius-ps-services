@@ -17,6 +17,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     HAState,
     LocalReadiness,
     RecoverableController,
+    RouteReconciliationContext,
     VMHAController,
 )
 
@@ -103,6 +104,18 @@ def _snapshot(**changes: object) -> ControllerSnapshot:
         routes_reconciled_context=None,
     )
     return replace(snapshot, **changes)
+
+
+def _reconciled(
+    snapshot: ControllerSnapshot,
+    *,
+    operation_id: str = "completed-route-effect",
+    ownership_incarnation: int | None = None,
+) -> RouteReconciliationContext:
+    context = snapshot.route_reconciliation_context
+    if ownership_incarnation is not None:
+        context = replace(context, ownership_incarnation=ownership_incarnation)
+    return replace(context, operation_id=operation_id)
 
 
 @pytest.fixture
@@ -282,7 +295,10 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
     assert routes.action.kind is ActionKind.RECONCILE_ROUTES
 
     forwarding = policy.decide(
-        replace(owned, routes_reconciled_context=owned.route_reconciliation_context),
+        replace(
+            owned,
+            routes_reconciled_context=_reconciled(owned, operation_id=routes.action.operation_id),
+        ),
         ControllerCheckpoint(),
     )
     assert forwarding.action is not None
@@ -291,7 +307,7 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
     active = policy.decide(
         replace(
             owned,
-            routes_reconciled_context=owned.route_reconciliation_context,
+            routes_reconciled_context=_reconciled(owned),
             data_plane_mode=DataPlaneMode.ACTIVE,
         ),
         ControllerCheckpoint(),
@@ -301,11 +317,29 @@ def test_routes_then_forwarding_require_exact_candidate_ownership(
     assert active.forwarding_enabled
 
 
+def test_checkpointed_enable_completion_remains_valid(policy: VMHAController) -> None:
+    owned = _snapshot(cloud=_owned_cloud())
+    routed = replace(owned, routes_reconciled_context=_reconciled(owned))
+    enable = policy.decide(routed, ControllerCheckpoint())
+    assert enable.action is not None
+    assert enable.action.kind is ActionKind.ENABLE_ACTIVE
+
+    completed = policy.decide(
+        replace(routed, data_plane_mode=DataPlaneMode.ACTIVE),
+        enable.checkpoint,
+    )
+
+    assert completed.state is HAState.ACTIVE
+    assert completed.action is None
+    assert completed.forwarding_enabled
+    assert completed.checkpoint.pending_action is None
+
+
 def test_allocation_replacement_invalidates_route_reconciliation_before_forwarding(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
-    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     replacement = replace(
         owned,
         cloud=replace(
@@ -331,7 +365,7 @@ def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
-    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
 
     lost = replace(
         owned,
@@ -363,8 +397,9 @@ def test_ownership_loss_and_reacquisition_requires_fresh_route_reconciliation(
 
     current = replace(
         reacquired,
-        routes_reconciled_context=replace(
-            reacquired.route_reconciliation_context,
+        routes_reconciled_context=_reconciled(
+            reacquired,
+            operation_id=reconcile.action.operation_id,
             ownership_incarnation=reconcile.action.ownership_incarnation,
         ),
     )
@@ -391,7 +426,7 @@ def test_restart_cannot_clear_loss_invalidation_from_old_route_action(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     reconcile = policy.decide(
         owned,
         ControllerCheckpoint(
@@ -416,8 +451,9 @@ def test_invalidated_route_evidence_requires_fresh_reconciliation(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    stale_context = replace(
-        owned.route_reconciliation_context,
+    stale_context = _reconciled(
+        owned,
+        operation_id="stale-route-effect",
         ownership_incarnation=1,
     )
 
@@ -433,6 +469,46 @@ def test_invalidated_route_evidence_requires_fresh_reconciliation(
     assert decision.action.kind is ActionKind.RECONCILE_ROUTES
     assert decision.action.ownership_incarnation == 1
     assert decision.checkpoint.ownership_continuity_invalidated
+
+
+def test_checkpoint_before_route_effect_cannot_accept_stale_matching_context(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(cloud=_owned_cloud())
+    stale_context = _reconciled(
+        owned,
+        operation_id="stale-route-effect",
+        ownership_incarnation=1,
+    )
+    snapshot = replace(owned, routes_reconciled_context=stale_context)
+    checkpoint = ControllerCheckpoint(
+        ownership_continuity_invalidated=True,
+        ownership_incarnation=1,
+    )
+
+    scheduled = policy.decide(snapshot, checkpoint)
+    assert scheduled.action is not None
+    assert scheduled.action.kind is ActionKind.RECONCILE_ROUTES
+
+    crashed_before_effect = policy.decide(snapshot, scheduled.checkpoint)
+    assert crashed_before_effect.action == scheduled.action
+    assert crashed_before_effect.reasons == ("replaying-checkpointed-action",)
+    assert crashed_before_effect.checkpoint.ownership_continuity_invalidated
+
+    completed = policy.decide(
+        replace(
+            snapshot,
+            routes_reconciled_context=_reconciled(
+                snapshot,
+                operation_id=scheduled.action.operation_id,
+                ownership_incarnation=scheduled.action.ownership_incarnation,
+            ),
+        ),
+        scheduled.checkpoint,
+    )
+    assert completed.action is not None
+    assert completed.action.kind is ActionKind.ENABLE_ACTIVE
+    assert not completed.checkpoint.ownership_continuity_invalidated
 
 
 @pytest.mark.parametrize(
@@ -502,7 +578,7 @@ def test_owner_generation_drift_is_degraded_but_does_not_disable_serving(
         data_plane_mode=DataPlaneMode.ACTIVE,
     )
     decision = policy.decide(
-        replace(snapshot, routes_reconciled_context=snapshot.route_reconciliation_context),
+        replace(snapshot, routes_reconciled_context=_reconciled(snapshot)),
         ControllerCheckpoint(),
     )
     assert decision.state is HAState.DEGRADED
@@ -594,7 +670,7 @@ def test_established_active_owner_remains_active_while_passive_peer_is_running(
     )
 
     decision = policy.decide(
-        replace(snapshot, routes_reconciled_context=snapshot.route_reconciliation_context),
+        replace(snapshot, routes_reconciled_context=_reconciled(snapshot)),
         ControllerCheckpoint(),
     )
 
@@ -616,7 +692,7 @@ def test_local_owner_with_former_attachment_present_is_rejected(
     )
     snapshot = replace(
         snapshot,
-        routes_reconciled_context=snapshot.route_reconciliation_context,
+        routes_reconciled_context=_reconciled(snapshot),
     )
 
     decision = policy.decide(snapshot, ControllerCheckpoint())
@@ -641,7 +717,7 @@ def test_passive_owner_requires_durable_establishment_when_peer_is_running(
     )
     snapshot = replace(
         snapshot,
-        routes_reconciled_context=snapshot.route_reconciliation_context,
+        routes_reconciled_context=_reconciled(snapshot),
     )
 
     unproven = policy.decide(snapshot, ControllerCheckpoint())
@@ -775,7 +851,7 @@ def test_restart_cancels_old_boot_effect_and_reinstalls_guard(
     policy: VMHAController,
 ) -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     enable = policy.decide(owned, ControllerCheckpoint())
     assert enable.action is not None
     assert enable.action.kind is ActionKind.ENABLE_ACTIVE
@@ -804,7 +880,7 @@ def test_dual_suspicion_never_authorizes_two_active_nodes(policy: VMHAController
         data_plane_mode=DataPlaneMode.ACTIVE,
         peer_received_at=80.0,
     )
-    owner = replace(owner, routes_reconciled_context=owner.route_reconciliation_context)
+    owner = replace(owner, routes_reconciled_context=_reconciled(owner))
     candidate = _snapshot(peer_received_at=80.0)
 
     owner_decision = policy.decide(owner, ControllerCheckpoint())
@@ -815,6 +891,108 @@ def test_dual_suspicion_never_authorizes_two_active_nodes(policy: VMHAController
     assert not candidate_decision.forwarding_enabled
     assert candidate_decision.action is None
     assert candidate_decision.state is HAState.SUSPECT
+
+
+@pytest.mark.parametrize(
+    "pending_kind",
+    [
+        ActionKind.STOP_FORMER_OWNER,
+        ActionKind.DETACH_FORMER_ATTACHMENT,
+        ActionKind.ATTACH_CANDIDATE,
+        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+        ActionKind.RECONCILE_ROUTES,
+    ],
+)
+def test_runtime_disables_active_dataplane_before_pending_mutation_replay(
+    policy: VMHAController,
+    pending_kind: ActionKind,
+) -> None:
+    transfer_checkpoint = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    cases = {
+        ActionKind.STOP_FORMER_OWNER: (
+            _snapshot(now=110.0, peer_received_at=80.0),
+            transfer_checkpoint,
+        ),
+        ActionKind.DETACH_FORMER_ATTACHMENT: (
+            _snapshot(
+                now=110.0,
+                peer_received_at=80.0,
+                cloud=_cloud(state=ComputeState.STOPPED),
+            ),
+            transfer_checkpoint,
+        ),
+        ActionKind.ATTACH_CANDIDATE: (
+            _snapshot(
+                now=110.0,
+                peer_received_at=80.0,
+                cloud=_cloud(
+                    owner=None,
+                    state=ComputeState.STOPPED,
+                    absent=True,
+                ),
+            ),
+            transfer_checkpoint,
+        ),
+        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: (
+            _snapshot(
+                now=110.0,
+                peer_received_at=80.0,
+                cloud=_cloud(
+                    owner="node-b",
+                    state=ComputeState.STOPPED,
+                    absent=True,
+                    attached=True,
+                ),
+            ),
+            transfer_checkpoint,
+        ),
+        ActionKind.RECONCILE_ROUTES: (
+            _snapshot(cloud=_owned_cloud()),
+            ControllerCheckpoint(),
+        ),
+    }
+    passive_snapshot, initial_checkpoint = cases[pending_kind]
+    pending = policy.decide(passive_snapshot, initial_checkpoint)
+    assert pending.action is not None
+    assert pending.action.kind is pending_kind
+    replay = policy.decide(passive_snapshot, pending.checkpoint)
+    assert replay.action == pending.action
+
+    events: list[str] = []
+
+    class Snapshots:
+        def observe(self) -> ControllerSnapshot:
+            return replace(passive_snapshot, data_plane_mode=DataPlaneMode.ACTIVE)
+
+    class Checkpoints:
+        value = pending.checkpoint
+
+        def load(self) -> ControllerCheckpoint:
+            return self.value
+
+        def save(self, checkpoint: ControllerCheckpoint) -> None:
+            events.append("checkpoint")
+            self.value = checkpoint
+
+    class Effects:
+        def apply(self, action: ControllerAction) -> None:
+            events.append(action.kind.value)
+
+    checkpoints = Checkpoints()
+    runtime = RecoverableController(
+        policy=policy,
+        snapshots=Snapshots(),
+        checkpoints=checkpoints,
+        effects=Effects(),
+    )
+
+    disabled = runtime.step()
+
+    assert disabled.action is not None
+    assert disabled.action.kind is ActionKind.DISABLE_ACTIVE
+    assert disabled.reasons == ("checkpointed-action-requires-passive-dataplane",)
+    assert events == ["checkpoint", ActionKind.DISABLE_ACTIVE.value]
+    assert checkpoints.value.pending_action == disabled.action
 
 
 def test_runtime_persists_before_effect() -> None:
@@ -850,7 +1028,7 @@ def test_runtime_persists_before_effect() -> None:
 
 def test_runtime_disables_active_dataplane_when_pending_enable_loses_authority() -> None:
     owned = _snapshot(cloud=_owned_cloud())
-    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     events: list[str] = []
     actions: list[ActionKind] = []
 

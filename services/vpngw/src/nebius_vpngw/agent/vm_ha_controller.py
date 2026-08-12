@@ -60,6 +60,17 @@ class ActionKind(str, Enum):
     ENABLE_ACTIVE = "enable-active"
 
 
+_PASSIVE_REPLAY_ACTIONS = frozenset(
+    {
+        ActionKind.STOP_FORMER_OWNER,
+        ActionKind.DETACH_FORMER_ATTACHMENT,
+        ActionKind.ATTACH_CANDIDATE,
+        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+        ActionKind.RECONCILE_ROUTES,
+    }
+)
+
+
 @dataclass(frozen=True)
 class LocalReadiness:
     service_healthy: bool
@@ -138,6 +149,7 @@ class RouteReconciliationContext:
     generation_id: str
     digests: DigestSet
     ownership_incarnation: int = 0
+    operation_id: str = ""
 
     @property
     def ownership_context(self) -> OwnershipContext:
@@ -297,6 +309,22 @@ class VMHAController:
                         established_ownership_context=snapshot.ownership_context,
                         ownership_continuity_invalidated=False,
                     )
+            elif (
+                pending.kind in _PASSIVE_REPLAY_ACTIONS
+                and snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+            ):
+                passive_action = (
+                    ActionKind.DISABLE_ACTIVE
+                    if snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                    else ActionKind.ENTER_PASSIVE
+                )
+                return self._action(
+                    HAState.BLOCKED,
+                    ("checkpointed-action-requires-passive-dataplane",),
+                    snapshot,
+                    replace(checkpoint, pending_action=None),
+                    passive_action,
+                )
             elif not self._pending_action_safe(pending, snapshot, checkpoint):
                 checkpoint = self._invalidate_ownership_if_lost(
                     snapshot,
@@ -728,6 +756,7 @@ class VMHAController:
             == replace(
                 snapshot.route_reconciliation_context,
                 ownership_incarnation=action.ownership_incarnation,
+                operation_id=action.operation_id,
             ),
             ActionKind.ENABLE_ACTIVE: snapshot.data_plane_mode is DataPlaneMode.ACTIVE
             and cloud.local_attachment_exact(snapshot.local_node_id),
@@ -770,6 +799,10 @@ class VMHAController:
         ):
             return False
         if not cloud.authoritative or not self._promotion_gates_clear(snapshot):
+            return False
+        if kind in _PASSIVE_REPLAY_ACTIONS and (
+            snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+        ):
             return False
         if kind in {
             ActionKind.STOP_FORMER_OWNER,
@@ -886,9 +919,12 @@ class VMHAController:
     def _routes_current(
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> bool:
+        reconciled = snapshot.routes_reconciled_context
         return bool(
             not checkpoint.ownership_continuity_invalidated
-            and snapshot.routes_reconciled_context == self._route_context(snapshot, checkpoint)
+            and reconciled is not None
+            and reconciled.operation_id
+            and replace(reconciled, operation_id="") == self._route_context(snapshot, checkpoint)
         )
 
     @staticmethod
