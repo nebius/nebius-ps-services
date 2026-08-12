@@ -69,6 +69,9 @@ _PASSIVE_REPLAY_ACTIONS = frozenset(
         ActionKind.RECONCILE_ROUTES,
     }
 )
+_FORMER_OWNER_ACTIONS = frozenset(
+    {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
+)
 
 
 @dataclass(frozen=True)
@@ -298,8 +301,46 @@ class VMHAController:
 
         pending = checkpoint.pending_action
         if pending is not None:
+            expected_target = (
+                snapshot.peer_node_id
+                if pending.kind in _FORMER_OWNER_ACTIONS
+                else snapshot.local_node_id
+            )
+            expected_operation = (
+                f"{pending.boot_id}:{checkpoint.sequence}:{pending.kind.value}:{expected_target}"
+                if isinstance(pending.kind, ActionKind)
+                else ""
+            )
+            if not (
+                checkpoint.sequence > 0
+                and pending.boot_id
+                and pending.target_node_id == expected_target
+                and pending.ownership_incarnation == checkpoint.ownership_incarnation
+                and pending.operation_id == expected_operation
+            ):
+                raise ValueError("pending action does not match its durable checkpoint")
+            if (
+                pending.boot_id == snapshot.boot_id
+                and (
+                    pending.kind in _PASSIVE_REPLAY_ACTIONS
+                    or pending.kind is ActionKind.ENABLE_ACTIVE
+                )
+                and snapshot.guard_boot_id != snapshot.boot_id
+            ):
+                guard_action = ActionKind.INSTALL_COLD_START_GUARD
+                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                    guard_action = ActionKind.DISABLE_ACTIVE
+                return self._action(
+                    HAState.BLOCKED,
+                    ("checkpointed-action-requires-current-boot-guard",),
+                    snapshot,
+                    replace(checkpoint, state=HAState.BLOCKED, pending_action=None),
+                    guard_action,
+                )
             postcondition_met = bool(
-                pending.boot_id == snapshot.boot_id and self._postcondition(pending, snapshot)
+                pending.boot_id == snapshot.boot_id
+                and self._pending_action_context_matches(pending, snapshot, checkpoint)
+                and self._postcondition(pending, snapshot)
             )
             if pending.boot_id != snapshot.boot_id or postcondition_met:
                 checkpoint = replace(checkpoint, pending_action=None)
@@ -717,7 +758,7 @@ class VMHAController:
         sequence = checkpoint.sequence + 1
         target = (
             snapshot.cloud.former_owner_node_id
-            if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
+            if kind in _FORMER_OWNER_ACTIONS
             else snapshot.local_node_id
         )
         action = ControllerAction(
@@ -773,15 +814,9 @@ class VMHAController:
         kind = action.kind
         cloud = snapshot.cloud
         expected_target = (
-            cloud.former_owner_node_id
-            if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
-            else snapshot.local_node_id
+            cloud.former_owner_node_id if kind in _FORMER_OWNER_ACTIONS else snapshot.local_node_id
         )
         if action.target_node_id != expected_target:
-            return False
-        if action.operation_id != (
-            f"{snapshot.boot_id}:{checkpoint.sequence}:{kind.value}:{expected_target}"
-        ):
             return False
         if kind in {
             ActionKind.INSTALL_COLD_START_GUARD,
@@ -789,14 +824,7 @@ class VMHAController:
             ActionKind.DISABLE_ACTIVE,
         }:
             return True
-        if action.allocation_id != cloud.allocation_id:
-            return False
-        if (
-            action.ownership_epoch != cloud.ownership_epoch
-            or action.generation_id != snapshot.local_generation_id
-            or action.digests != snapshot.local_digests
-            or action.ownership_incarnation != checkpoint.ownership_incarnation
-        ):
+        if not self._pending_action_context_matches(action, snapshot, checkpoint):
             return False
         if not cloud.authoritative or not self._promotion_gates_clear(snapshot):
             return False
@@ -843,6 +871,20 @@ class VMHAController:
                 and self._routes_current(snapshot, checkpoint)
             )
         return False
+
+    @staticmethod
+    def _pending_action_context_matches(
+        action: ControllerAction,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+    ) -> bool:
+        return bool(
+            action.allocation_id == snapshot.cloud.allocation_id
+            and action.ownership_epoch == snapshot.cloud.ownership_epoch
+            and action.generation_id == snapshot.local_generation_id
+            and action.digests == snapshot.local_digests
+            and action.ownership_incarnation == checkpoint.ownership_incarnation
+        )
 
     def _promotion_gates_clear(self, snapshot: ControllerSnapshot) -> bool:
         return not (

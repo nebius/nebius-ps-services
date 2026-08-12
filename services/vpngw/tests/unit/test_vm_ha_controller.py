@@ -788,6 +788,224 @@ def test_crash_replay_reuses_operation_id_until_postcondition(
     assert completed.action.operation_id != first.action.operation_id
 
 
+@pytest.mark.parametrize("kind", list(ActionKind))
+def test_forged_pending_operation_is_rejected_before_postcondition(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> None:
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+    )
+    target = (
+        snapshot.peer_node_id
+        if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
+        else snapshot.local_node_id
+    )
+    forged = ControllerAction(
+        kind=kind,
+        operation_id="forged-operation",
+        boot_id=snapshot.boot_id,
+        target_node_id=target,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+    if kind is ActionKind.RECONCILE_ROUTES:
+        snapshot = replace(
+            snapshot,
+            routes_reconciled_context=_reconciled(
+                snapshot,
+                operation_id=forged.operation_id,
+            ),
+        )
+
+    checkpoint = ControllerCheckpoint(sequence=7, pending_action=forged)
+    with pytest.raises(ValueError, match="pending action does not match"):
+        policy.decide(snapshot, checkpoint)
+
+
+def test_forged_pending_route_context_cannot_complete_from_matching_marker(
+    policy: VMHAController,
+) -> None:
+    snapshot = _snapshot(cloud=_owned_cloud())
+    operation_id = "local-boot:7:reconcile-routes:node-b"
+    action = ControllerAction(
+        kind=ActionKind.RECONCILE_ROUTES,
+        operation_id=operation_id,
+        boot_id=snapshot.boot_id,
+        target_node_id=snapshot.local_node_id,
+        allocation_id="forged-allocation",
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+    snapshot = replace(
+        snapshot,
+        routes_reconciled_context=_reconciled(snapshot, operation_id=operation_id),
+    )
+
+    decision = policy.decide(
+        snapshot,
+        ControllerCheckpoint(sequence=7, pending_action=action),
+    )
+
+    assert decision.action is None
+    assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
+    assert decision.checkpoint.established_ownership_context is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "operation_id"),
+    [
+        (
+            {"target_node_id": "foreign-node"},
+            "local-boot:7:stop-former-owner:foreign-node",
+        ),
+        ({"ownership_incarnation": 2}, "local-boot:7:stop-former-owner:node-a"),
+    ],
+)
+def test_malformed_pending_action_structure_is_rejected(
+    policy: VMHAController,
+    mutation: dict[str, object],
+    operation_id: str,
+) -> None:
+    snapshot = _snapshot(now=110.0, peer_received_at=80.0)
+    action = ControllerAction(
+        kind=ActionKind.STOP_FORMER_OWNER,
+        operation_id=operation_id,
+        boot_id=snapshot.boot_id,
+        target_node_id=snapshot.peer_node_id,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+        ownership_incarnation=1,
+    )
+    action = replace(action, **mutation)
+    checkpoint = ControllerCheckpoint(
+        sequence=7,
+        suspect_since=90.0,
+        pending_action=action,
+        ownership_incarnation=1,
+    )
+
+    with pytest.raises(ValueError, match="pending action does not match"):
+        policy.decide(snapshot, checkpoint)
+
+
+def test_pending_action_requires_positive_checkpoint_sequence(
+    policy: VMHAController,
+) -> None:
+    snapshot = _snapshot(data_plane_mode=DataPlaneMode.BLOCKED)
+    action = ControllerAction(
+        kind=ActionKind.INSTALL_COLD_START_GUARD,
+        operation_id="local-boot:0:install-cold-start-guard:node-b",
+        boot_id=snapshot.boot_id,
+        target_node_id=snapshot.local_node_id,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+
+    with pytest.raises(ValueError, match="pending action does not match"):
+        policy.decide(snapshot, ControllerCheckpoint(pending_action=action))
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ActionKind.STOP_FORMER_OWNER,
+        ActionKind.DETACH_FORMER_ATTACHMENT,
+        ActionKind.ATTACH_CANDIDATE,
+        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+        ActionKind.RECONCILE_ROUTES,
+        ActionKind.ENABLE_ACTIVE,
+    ],
+)
+@pytest.mark.parametrize("guard_boot_id", [None, "previous-boot"])
+def test_pending_authority_action_installs_current_boot_guard_before_completion_or_replay(
+    policy: VMHAController,
+    kind: ActionKind,
+    guard_boot_id: str | None,
+) -> None:
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        guard_boot_id=guard_boot_id,
+        data_plane_mode=DataPlaneMode.PASSIVE,
+    )
+    target = (
+        snapshot.peer_node_id
+        if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
+        else snapshot.local_node_id
+    )
+    operation_id = f"{snapshot.boot_id}:7:{kind.value}:{target}"
+    action = ControllerAction(
+        kind=kind,
+        operation_id=operation_id,
+        boot_id=snapshot.boot_id,
+        target_node_id=target,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+    if kind is ActionKind.RECONCILE_ROUTES:
+        snapshot = replace(
+            snapshot,
+            routes_reconciled_context=_reconciled(snapshot, operation_id=operation_id),
+        )
+
+    decision = policy.decide(
+        snapshot,
+        ControllerCheckpoint(sequence=7, pending_action=action),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.INSTALL_COLD_START_GUARD
+    assert decision.reasons == ("checkpointed-action-requires-current-boot-guard",)
+    assert decision.checkpoint.pending_action == decision.action
+
+
+@pytest.mark.parametrize("kind", [ActionKind.STOP_FORMER_OWNER, ActionKind.ENABLE_ACTIVE])
+@pytest.mark.parametrize("guard_boot_id", [None, "previous-boot"])
+def test_pending_authority_action_disables_active_dataplane_before_guard_recovery(
+    policy: VMHAController,
+    kind: ActionKind,
+    guard_boot_id: str | None,
+) -> None:
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        guard_boot_id=guard_boot_id,
+        data_plane_mode=DataPlaneMode.ACTIVE,
+    )
+    target = (
+        snapshot.peer_node_id if kind is ActionKind.STOP_FORMER_OWNER else snapshot.local_node_id
+    )
+    action = ControllerAction(
+        kind=kind,
+        operation_id=f"{snapshot.boot_id}:7:{kind.value}:{target}",
+        boot_id=snapshot.boot_id,
+        target_node_id=target,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+
+    decision = policy.decide(
+        snapshot,
+        ControllerCheckpoint(sequence=7, pending_action=action),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.DISABLE_ACTIVE
+    assert decision.reasons == ("checkpointed-action-requires-current-boot-guard",)
+    assert decision.checkpoint.pending_action == decision.action
+
+
 def test_checkpointed_fencing_is_cancelled_if_peer_recovers(
     policy: VMHAController,
 ) -> None:
@@ -800,6 +1018,29 @@ def test_checkpointed_fencing_is_cancelled_if_peer_recovers(
     assert recovered.state is HAState.BLOCKED
     assert recovered.action is None
     assert recovered.reasons == ("checkpointed-action-prerequisites-changed",)
+
+
+def test_checkpointed_fencing_is_cancelled_if_cloud_target_identity_changes(
+    policy: VMHAController,
+) -> None:
+    snapshot = _snapshot(now=110.0, peer_received_at=80.0)
+    first = policy.decide(
+        snapshot,
+        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+    )
+    assert first.action is not None
+    assert first.action.kind is ActionKind.STOP_FORMER_OWNER
+
+    changed = policy.decide(
+        replace(
+            snapshot,
+            cloud=replace(snapshot.cloud, former_owner_node_id="foreign-node"),
+        ),
+        first.checkpoint,
+    )
+
+    assert changed.action is None
+    assert changed.reasons == ("checkpointed-action-prerequisites-changed",)
 
 
 def test_crash_replay_blocks_when_attachment_authority_changes(
