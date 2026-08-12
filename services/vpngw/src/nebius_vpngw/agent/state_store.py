@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from .vm_ha.store import atomic_write_json
+
 RENDER_VERSION = 3
 
 
@@ -52,4 +54,4 @@ class StateStore:
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
             "resolved_config": resolved_config,
         }
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_json(self.path, payload)
