@@ -94,16 +94,55 @@ class CloudObservation:
     former_attachment_absent: bool
     candidate_attachment_exact: bool
     ownership_re_read_exact: bool
+    ownership_epoch: str = ""
 
-    def candidate_owns(self, node_id: str) -> bool:
+    def local_attachment_exact(self, node_id: str) -> bool:
+        """Return fresh exact ownership without inferring a transfer."""
+
         return bool(
             self.authoritative
             and self.allocation_id
+            and self.ownership_epoch
             and self.observed_owner_node_id == node_id
-            and self.former_owner_compute_state is ComputeState.STOPPED
-            and self.former_attachment_absent
             and self.candidate_attachment_exact
             and self.ownership_re_read_exact
+        )
+
+    def transfer_complete(self, node_id: str) -> bool:
+        """Return exact ownership plus the mandatory takeover fencing proof."""
+
+        return bool(
+            self.local_attachment_exact(node_id)
+            and self.former_owner_compute_state is ComputeState.STOPPED
+            and self.former_attachment_absent
+        )
+
+
+@dataclass(frozen=True)
+class OwnershipContext:
+    """Stable identity of one uninterrupted authoritative attachment."""
+
+    owner_node_id: str
+    allocation_id: str
+    ownership_epoch: str
+
+
+@dataclass(frozen=True)
+class RouteReconciliationContext:
+    """Authority and policy identity covered by one route reconciliation."""
+
+    owner_node_id: str
+    allocation_id: str
+    ownership_epoch: str
+    generation_id: str
+    digests: DigestSet
+
+    @property
+    def ownership_context(self) -> OwnershipContext:
+        return OwnershipContext(
+            owner_node_id=self.owner_node_id,
+            allocation_id=self.allocation_id,
+            ownership_epoch=self.ownership_epoch,
         )
 
 
@@ -126,7 +165,7 @@ class ControllerSnapshot:
     cloud: CloudObservation
     guard_boot_id: str | None
     data_plane_mode: DataPlaneMode
-    routes_reconciled_owner_node_id: str | None
+    routes_reconciled_context: RouteReconciliationContext | None
 
     def __post_init__(self) -> None:
         if not all((self.boot_id, self.cluster_id, self.local_node_id, self.peer_node_id)):
@@ -138,6 +177,20 @@ class ControllerSnapshot:
         if self.peer_received_at is not None and not math.isfinite(self.peer_received_at):
             raise ValueError("peer_received_at must be finite")
 
+    @property
+    def route_reconciliation_context(self) -> RouteReconciliationContext:
+        return RouteReconciliationContext(
+            owner_node_id=self.local_node_id,
+            allocation_id=self.cloud.allocation_id,
+            ownership_epoch=self.cloud.ownership_epoch,
+            generation_id=self.local_generation_id,
+            digests=self.local_digests,
+        )
+
+    @property
+    def ownership_context(self) -> OwnershipContext:
+        return self.route_reconciliation_context.ownership_context
+
 
 @dataclass(frozen=True)
 class ControllerAction:
@@ -146,16 +199,24 @@ class ControllerAction:
     boot_id: str
     target_node_id: str
     allocation_id: str
+    ownership_epoch: str
+    generation_id: str
+    digests: DigestSet
 
 
 @dataclass(frozen=True)
 class ControllerCheckpoint:
-    """Durable recovery state; it is never allocation authority."""
+    """Durable recovery state; it is never allocation authority.
+
+    The established context records continuity only.  The controller always
+    pairs it with a fresh exact authoritative attachment observation.
+    """
 
     sequence: int = 0
     state: HAState = HAState.BLOCKED
     suspect_since: float | None = None
     pending_action: ControllerAction | None = None
+    established_ownership_context: OwnershipContext | None = None
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
@@ -249,7 +310,11 @@ class VMHAController:
         if cloud_reasons:
             return self._block_or_disable(cloud_reasons, snapshot, checkpoint)
 
-        local_owns = snapshot.cloud.candidate_owns(snapshot.local_node_id)
+        local_owns = snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+        if local_owns and not self._local_ownership_safe(snapshot, checkpoint):
+            return self._block_or_disable(
+                "local-ownership-lacks-establishment-proof", snapshot, checkpoint
+            )
         if snapshot.data_plane_mode is DataPlaneMode.ACTIVE and not local_owns:
             return self._action(
                 HAState.BLOCKED,
@@ -339,13 +404,27 @@ class VMHAController:
         parity_reasons: tuple[str, ...],
     ) -> ControllerResult:
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
+        routes_current = snapshot.routes_reconciled_context == snapshot.route_reconciliation_context
         if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if not routes_current:
+                return self._action(
+                    HAState.BLOCKED,
+                    ("active-route-reconciliation-context-stale",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.DISABLE_ACTIVE,
+                )
             state = HAState.DEGRADED if reasons else HAState.ACTIVE
             return self._result(
                 state,
                 reasons or ("authoritative-owner-active",),
                 snapshot,
-                replace(checkpoint, state=state, suspect_since=None),
+                replace(
+                    checkpoint,
+                    state=state,
+                    suspect_since=None,
+                    established_ownership_context=snapshot.ownership_context,
+                ),
             )
 
         promotion_blockers: tuple[str, ...] = ()
@@ -363,7 +442,7 @@ class VMHAController:
                 replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
             )
 
-        if snapshot.routes_reconciled_owner_node_id != snapshot.local_node_id:
+        if not routes_current:
             if not snapshot.readiness.promotion_ready:
                 return self._result(
                     HAState.DEGRADED,
@@ -456,8 +535,9 @@ class VMHAController:
                 checkpoint,
                 ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
             )
-        # ``candidate_owns`` will be true on the next observation and only then
-        # may route reconciliation or forwarding be requested.
+        # Exact local ownership will be visible on the next observation.  The
+        # retained transfer checkpoint keeps the fencing proof mandatory until
+        # promotion has completed.
         return self._result(
             HAState.PROMOTING,
             ("candidate-ownership-awaiting-authoritative-observation",),
@@ -506,6 +586,8 @@ class VMHAController:
         reasons: list[str] = []
         if not cloud.allocation_id:
             reasons.append("shared-allocation-identity-missing")
+        if not cloud.ownership_epoch:
+            reasons.append("authoritative-ownership-epoch-missing")
         if cloud.former_owner_node_id != snapshot.peer_node_id:
             reasons.append("former-owner-identity-mismatch")
         if cloud.observed_owner_node_id not in {
@@ -574,6 +656,9 @@ class VMHAController:
             boot_id=snapshot.boot_id,
             target_node_id=target,
             allocation_id=snapshot.cloud.allocation_id,
+            ownership_epoch=snapshot.cloud.ownership_epoch,
+            generation_id=snapshot.local_generation_id,
+            digests=snapshot.local_digests,
         )
         next_checkpoint = replace(
             checkpoint,
@@ -594,11 +679,11 @@ class VMHAController:
             ActionKind.STOP_FORMER_OWNER: cloud.former_owner_compute_state is ComputeState.STOPPED,
             ActionKind.DETACH_FORMER_ATTACHMENT: cloud.former_attachment_absent,
             ActionKind.ATTACH_CANDIDATE: cloud.candidate_attachment_exact,
-            ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: cloud.candidate_owns(snapshot.local_node_id),
-            ActionKind.RECONCILE_ROUTES: snapshot.routes_reconciled_owner_node_id
-            == snapshot.local_node_id,
+            ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: cloud.transfer_complete(snapshot.local_node_id),
+            ActionKind.RECONCILE_ROUTES: snapshot.routes_reconciled_context
+            == snapshot.route_reconciliation_context,
             ActionKind.ENABLE_ACTIVE: snapshot.data_plane_mode is DataPlaneMode.ACTIVE
-            and cloud.candidate_owns(snapshot.local_node_id),
+            and cloud.local_attachment_exact(snapshot.local_node_id),
         }[kind]
 
     def _pending_action_safe(
@@ -629,6 +714,12 @@ class VMHAController:
         }:
             return True
         if action.allocation_id != cloud.allocation_id:
+            return False
+        if (
+            action.ownership_epoch != cloud.ownership_epoch
+            or action.generation_id != snapshot.local_generation_id
+            or action.digests != snapshot.local_digests
+        ):
             return False
         if not cloud.authoritative or not self._promotion_gates_clear(snapshot):
             return False
@@ -661,13 +752,14 @@ class VMHAController:
             )
         if kind is ActionKind.RECONCILE_ROUTES:
             return (
-                cloud.candidate_owns(snapshot.local_node_id) and snapshot.readiness.promotion_ready
+                self._local_ownership_safe(snapshot, checkpoint)
+                and snapshot.readiness.promotion_ready
             )
         if kind is ActionKind.ENABLE_ACTIVE:
             return bool(
-                cloud.candidate_owns(snapshot.local_node_id)
+                self._local_ownership_safe(snapshot, checkpoint)
                 and snapshot.readiness.promotion_ready
-                and snapshot.routes_reconciled_owner_node_id == snapshot.local_node_id
+                and snapshot.routes_reconciled_context == snapshot.route_reconciliation_context
             )
         return False
 
@@ -693,6 +785,27 @@ class VMHAController:
         )
 
     @staticmethod
+    def _transfer_in_progress(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> bool:
+        return bool(snapshot.manual_failback_requested or checkpoint.suspect_since is not None)
+
+    def _local_ownership_safe(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> bool:
+        cloud = snapshot.cloud
+        if not cloud.local_attachment_exact(snapshot.local_node_id):
+            return False
+        if cloud.transfer_complete(snapshot.local_node_id):
+            return True
+        if checkpoint.established_ownership_context == snapshot.ownership_context:
+            return True
+        return bool(
+            snapshot.configured_role is ConfiguredRole.ACTIVE
+            and not self._transfer_in_progress(snapshot, checkpoint)
+        )
+
+    @staticmethod
     def _result(
         state: HAState,
         reasons: tuple[str, ...],
@@ -707,7 +820,7 @@ class VMHAController:
                 action is None
                 and state in {HAState.ACTIVE, HAState.DEGRADED}
                 and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
-                and snapshot.cloud.candidate_owns(snapshot.local_node_id)
+                and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
             ),
             action=action,
             checkpoint=checkpoint,
