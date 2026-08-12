@@ -91,6 +91,55 @@ def test_generation_store_recovers_last_durable_pointer_set_after_corruption(tmp
     assert AtomicGenerationStore(root).load_committed() == first
 
 
+def test_generation_store_rejects_corrupt_primary_without_backup(tmp_path) -> None:
+    root = tmp_path / "ha"
+    store = AtomicGenerationStore(root)
+    first = _revision("a")
+    second = _revision("d")
+    store.stage(first)
+    store.commit(first.generation_id)
+    store.pointer_path.write_text("{truncated", encoding="utf-8")
+    store.pointer_backup_path.unlink()
+
+    restarted = AtomicGenerationStore(root)
+    with pytest.raises(CorruptStateError, match="pointers.backup.json"):
+        restarted.recover()
+
+    assert restarted.pointer_path.read_text(encoding="utf-8") == "{truncated"
+    assert not restarted.pointer_backup_path.exists()
+    assert (restarted.revisions / first.generation_id).is_dir()
+
+    restarted.stage(second)
+    with pytest.raises(CorruptStateError, match="pointers.backup.json"):
+        restarted.commit(second.generation_id)
+
+    assert restarted.pointer_path.read_text(encoding="utf-8") == "{truncated"
+    assert not restarted.pointer_backup_path.exists()
+    assert (restarted.revisions / first.generation_id).is_dir()
+    assert (restarted.revisions / second.generation_id).is_dir()
+
+
+def test_generation_store_recovers_missing_primary_from_valid_backup(tmp_path) -> None:
+    root = tmp_path / "ha"
+    store = AtomicGenerationStore(root)
+    first = _revision("a")
+    second = _revision("d")
+    store.stage(first)
+    store.commit(first.generation_id)
+    store.stage(second)
+    store.commit(second.generation_id)
+    store.pointer_path.unlink()
+
+    restarted = AtomicGenerationStore(root)
+    with pytest.raises(CorruptStateError, match="pointers.json"):
+        restarted.load_pointers()
+
+    recovered = restarted.recover()
+
+    assert recovered.committed == first.generation_id
+    assert AtomicGenerationStore(root).load_committed() == first
+
+
 @pytest.mark.parametrize(
     ("checkpoint", "expected_committed"),
     [
