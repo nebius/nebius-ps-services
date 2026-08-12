@@ -262,7 +262,7 @@ pip install -e ".[dev]"
 - One NIC per VM (platform constraint), future-ready for multi-NIC
 - Public IP allocations preserved across VM recreation
 
-For detailed architecture, see [design document](doc/design.md).
+For detailed architecture, see [design document](docs/design.md).
 
 ## Configuration
 
@@ -1984,4 +1984,4 @@ Notes:
 
 ---
 
-For detailed design, workflows, and troubleshooting, see [doc/design.md](doc/design.md).
+For detailed design, workflows, and troubleshooting, see [docs/design.md](docs/design.md).
