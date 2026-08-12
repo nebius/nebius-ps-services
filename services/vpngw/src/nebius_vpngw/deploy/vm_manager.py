@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.resources as resources
 import ipaddress
 import textwrap
@@ -11,6 +12,9 @@ from pathlib import Path
 from ..config_loader import GatewayGroupSpec
 from .vm_diff import VMDiffAnalyzer, VMSpec
 
+if t.TYPE_CHECKING:
+    from .vm_ha_cloud import VMHACloudAdapter
+
 
 def _read_firewall_setup_script() -> str:
     script_path = Path(__file__).resolve().parents[1] / "systemd" / "setup-vpngw-firewall.sh"
@@ -18,9 +22,7 @@ def _read_firewall_setup_script() -> str:
 
 
 def _read_esp4_preflight_script() -> str:
-    script_path = (
-        Path(__file__).resolve().parents[1] / "systemd" / "nebius-vpngw-esp4-preflight.sh"
-    )
+    script_path = Path(__file__).resolve().parents[1] / "systemd" / "nebius-vpngw-esp4-preflight.sh"
     return script_path.read_text(encoding="utf-8")
 
 
@@ -74,6 +76,112 @@ class VMManager:
         self.region_id = region_id
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
+
+    def get_ha_instance(self, instance_id: str) -> t.Any:
+        """Read one Compute instance without permissive provisioning fallback."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client is unavailable for VM-HA fencing")
+        from nebius.api.nebius.compute.v1 import (  # type: ignore
+            GetInstanceRequest,
+            InstanceServiceClient,
+        )
+
+        return InstanceServiceClient(client).get(GetInstanceRequest(id=instance_id)).wait()
+
+    def stop_ha_instance(self, instance_id: str) -> None:
+        """Request a Compute stop without accepting scaffold-mode success."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client is unavailable for VM-HA fencing")
+        from nebius.api.nebius.compute.v1 import (  # type: ignore
+            InstanceServiceClient,
+            StopInstanceRequest,
+        )
+
+        InstanceServiceClient(client).stop(StopInstanceRequest(id=instance_id)).wait()
+
+    def get_ha_allocation(self, allocation_id: str) -> t.Any:
+        """Read one allocation without converting access failure into absence."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client is unavailable for VM-HA fencing")
+        from nebius.api.nebius.vpc.v1 import (  # type: ignore
+            AllocationServiceClient,
+            GetAllocationRequest,
+        )
+
+        return AllocationServiceClient(client).get(GetAllocationRequest(id=allocation_id)).wait()
+
+    def set_ha_private_allocation(
+        self,
+        instance_id: str,
+        network_interface_name: str,
+        allocation_id: str | None,
+    ) -> None:
+        """Idempotently set the exact private allocation on one instance NIC."""
+        client = self._get_client()
+        if client is None:
+            raise RuntimeError("Nebius SDK client is unavailable for VM-HA fencing")
+        from nebius.api.nebius.compute.v1 import (  # type: ignore
+            InstanceServiceClient,
+            IPAddress,
+            UpdateInstanceRequest,
+        )
+
+        instance = self.get_ha_instance(instance_id)
+        spec = copy.deepcopy(getattr(instance, "spec", None))
+        metadata = copy.deepcopy(getattr(instance, "metadata", None))
+        if spec is None or metadata is None:
+            raise RuntimeError(f"Compute instance {instance_id} has no mutable spec metadata")
+
+        interfaces = list(getattr(spec, "network_interfaces", []) or [])
+        matching = [
+            (index, interface)
+            for index, interface in enumerate(interfaces)
+            if str(getattr(interface, "name", "")) == network_interface_name
+        ]
+        if len(matching) != 1:
+            raise RuntimeError(
+                f"Compute instance {instance_id} must have exactly one NIC named "
+                f"{network_interface_name}; found {len(matching)}"
+            )
+
+        index, interface = matching[0]
+        current_id = getattr(getattr(interface, "ip_address", None), "allocation_id", None)
+        normalized_current = str(current_id) if current_id else None
+        if normalized_current == allocation_id:
+            return
+
+        updated_interface = copy.deepcopy(interface)
+        updated_interface.ip_address = (
+            IPAddress(allocation_id=allocation_id) if allocation_id else IPAddress()
+        )
+        interfaces[index] = updated_interface
+        spec.network_interfaces = interfaces
+        InstanceServiceClient(client).update(
+            UpdateInstanceRequest(metadata=metadata, spec=spec)
+        ).wait()
+
+    def vm_ha_cloud_adapter(
+        self,
+        *,
+        attempts: int = 10,
+        poll_interval: float = 1.0,
+        sleeper: t.Callable[[float], None] = time.sleep,
+    ) -> VMHACloudAdapter:
+        """Build the strict policy-facing adapter over the SDK translations."""
+        from .vm_ha_cloud import VMHACloudAdapter
+
+        return VMHACloudAdapter(
+            instance_reader=self.get_ha_instance,
+            instance_stopper=self.stop_ha_instance,
+            allocation_reader=self.get_ha_allocation,
+            allocation_setter=self.set_ha_private_allocation,
+            attempts=attempts,
+            poll_interval=poll_interval,
+            sleeper=sleeper,
+        )
 
     def check_changes(self, spec: GatewayGroupSpec) -> list[tuple[str, t.Any]]:
         """Check what changes would be applied without making them.
@@ -1448,7 +1556,9 @@ class VMManager:
 
     @staticmethod
     def _allocation_is_transitional(state: str | None) -> bool:
-        return bool(state and any(token in state.lower() for token in ("delet", "releas", "pending")))
+        return bool(
+            state and any(token in state.lower() for token in ("delet", "releas", "pending"))
+        )
 
     def _hydrate_allocation(self, alloc_client: t.Any, alloc_obj: t.Any | None) -> t.Any | None:
         if alloc_client is None or alloc_obj is None:
@@ -1458,7 +1568,9 @@ class VMManager:
             return alloc_obj
         return self._get_allocation_by_id(alloc_client, alloc_id) or alloc_obj
 
-    def _resolve_known_allocation_ip(self, alloc_client: t.Any, alloc_obj: t.Any | None) -> str | None:
+    def _resolve_known_allocation_ip(
+        self, alloc_client: t.Any, alloc_obj: t.Any | None
+    ) -> str | None:
         if alloc_obj is None:
             return None
         alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
@@ -3427,7 +3539,8 @@ class VMManager:
             "  - path: /usr/local/bin/setup-vpngw-firewall.sh\n"
             '    permissions: "0755"\n'
             "    owner: root:root\n"
-            "    content: |\n" + textwrap.indent(firewall_script.rstrip() + "\n", "            ")
+            "    content: |\n"
+            + textwrap.indent(firewall_script.rstrip() + "\n", "            ")
             + "  - path: /usr/local/bin/nebius-vpngw-esp4-preflight.sh\n"
             '    permissions: "0755"\n'
             "    owner: root:root\n"
