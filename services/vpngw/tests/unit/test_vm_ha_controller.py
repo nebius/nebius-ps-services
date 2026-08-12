@@ -10,6 +10,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     CloudObservation,
     ComputeState,
     ConfiguredRole,
+    ControllerAction,
     ControllerCheckpoint,
     ControllerSnapshot,
     DataPlaneMode,
@@ -411,6 +412,55 @@ def test_restart_cannot_clear_loss_invalidation_from_old_route_action(
     assert restarted.checkpoint.ownership_continuity_invalidated
 
 
+def test_invalidated_route_evidence_requires_fresh_reconciliation(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(cloud=_owned_cloud())
+    stale_context = replace(
+        owned.route_reconciliation_context,
+        ownership_incarnation=1,
+    )
+
+    decision = policy.decide(
+        replace(owned, routes_reconciled_context=stale_context),
+        ControllerCheckpoint(
+            ownership_continuity_invalidated=True,
+            ownership_incarnation=1,
+        ),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.RECONCILE_ROUTES
+    assert decision.action.ownership_incarnation == 1
+    assert decision.checkpoint.ownership_continuity_invalidated
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"ownership_continuity_invalidated": True},
+        {
+            "ownership_continuity_invalidated": True,
+            "ownership_incarnation": 1,
+            "established_ownership_context": _snapshot(cloud=_owned_cloud()).ownership_context,
+        },
+    ],
+)
+def test_checkpoint_rejects_inconsistent_ownership_invalidation(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="ownership continuity invalidation"):
+        ControllerCheckpoint(**changes)
+
+
+def test_legacy_checkpoint_without_ownership_fields_uses_safe_defaults() -> None:
+    checkpoint = ControllerCheckpoint(sequence=3, state=HAState.NORMAL)
+
+    assert checkpoint.ownership_incarnation == 0
+    assert not checkpoint.ownership_continuity_invalidated
+    assert checkpoint.established_ownership_context is None
+
+
 def test_checkpointed_route_effect_is_cancelled_when_ownership_epoch_changes(
     policy: VMHAController,
 ) -> None:
@@ -796,6 +846,69 @@ def test_runtime_persists_before_effect() -> None:
     )
     runtime.step()
     assert events == ["checkpoint", "effect"]
+
+
+def test_runtime_disables_active_dataplane_when_pending_enable_loses_authority() -> None:
+    owned = _snapshot(cloud=_owned_cloud())
+    owned = replace(owned, routes_reconciled_context=owned.route_reconciliation_context)
+    events: list[str] = []
+    actions: list[ActionKind] = []
+
+    class Snapshots:
+        value = owned
+
+        def observe(self) -> ControllerSnapshot:
+            return self.value
+
+    class Checkpoints:
+        value = ControllerCheckpoint()
+
+        def load(self) -> ControllerCheckpoint:
+            return self.value
+
+        def save(self, checkpoint: ControllerCheckpoint) -> None:
+            events.append("checkpoint")
+            self.value = checkpoint
+
+    snapshots = Snapshots()
+
+    class Effects:
+        def apply(self, action: ControllerAction) -> None:
+            events.append("effect")
+            actions.append(action.kind)
+            if action.kind is ActionKind.ENABLE_ACTIVE:
+                snapshots.value = replace(
+                    owned,
+                    data_plane_mode=DataPlaneMode.ACTIVE,
+                    cloud=_cloud(
+                        owner=None,
+                        state=ComputeState.STOPPED,
+                        absent=True,
+                    ),
+                )
+
+    checkpoints = Checkpoints()
+    runtime = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=10, suspicion_seconds=5),
+        snapshots=snapshots,
+        checkpoints=checkpoints,
+        effects=Effects(),
+    )
+
+    enable = runtime.step()
+    assert enable.action is not None
+    assert enable.action.kind is ActionKind.ENABLE_ACTIVE
+
+    events.clear()
+    disable = runtime.step()
+
+    assert disable.action is not None
+    assert disable.action.kind is ActionKind.DISABLE_ACTIVE
+    assert disable.reasons == ("checkpointed-action-prerequisites-changed",)
+    assert events == ["checkpoint", "effect"]
+    assert actions == [ActionKind.ENABLE_ACTIVE, ActionKind.DISABLE_ACTIVE]
+    assert checkpoints.value.pending_action == disable.action
+    assert checkpoints.value.ownership_continuity_invalidated
 
 
 def test_failed_effect_leaves_the_pre_effect_checkpoint_for_exact_replay() -> None:
