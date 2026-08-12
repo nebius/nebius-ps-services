@@ -104,6 +104,7 @@ class CloudObservation:
             and self.allocation_id
             and self.ownership_epoch
             and self.observed_owner_node_id == node_id
+            and self.former_attachment_absent
             and self.candidate_attachment_exact
             and self.ownership_re_read_exact
         )
@@ -136,6 +137,7 @@ class RouteReconciliationContext:
     ownership_epoch: str
     generation_id: str
     digests: DigestSet
+    ownership_incarnation: int = 0
 
     @property
     def ownership_context(self) -> OwnershipContext:
@@ -202,6 +204,7 @@ class ControllerAction:
     ownership_epoch: str
     generation_id: str
     digests: DigestSet
+    ownership_incarnation: int = 0
 
 
 @dataclass(frozen=True)
@@ -217,10 +220,14 @@ class ControllerCheckpoint:
     suspect_since: float | None = None
     pending_action: ControllerAction | None = None
     established_ownership_context: OwnershipContext | None = None
+    ownership_continuity_invalidated: bool = False
+    ownership_incarnation: int = 0
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
             raise ValueError("checkpoint sequence must be non-negative")
+        if self.ownership_incarnation < 0:
+            raise ValueError("ownership incarnation must be non-negative")
         if self.suspect_since is not None and not math.isfinite(self.suspect_since):
             raise ValueError("suspect_since must be finite")
 
@@ -270,13 +277,25 @@ class VMHAController:
 
         pending = checkpoint.pending_action
         if pending is not None:
-            if pending.boot_id != snapshot.boot_id or self._postcondition(pending.kind, snapshot):
+            postcondition_met = bool(
+                pending.boot_id == snapshot.boot_id and self._postcondition(pending, snapshot)
+            )
+            if pending.boot_id != snapshot.boot_id or postcondition_met:
                 checkpoint = replace(checkpoint, pending_action=None)
+                if pending.kind is ActionKind.RECONCILE_ROUTES and postcondition_met:
+                    checkpoint = replace(
+                        checkpoint,
+                        established_ownership_context=snapshot.ownership_context,
+                        ownership_continuity_invalidated=False,
+                    )
             elif not self._pending_action_safe(pending, snapshot, checkpoint):
-                checkpoint = replace(
-                    checkpoint,
-                    state=HAState.BLOCKED,
-                    pending_action=None,
+                checkpoint = self._invalidate_ownership_if_lost(
+                    snapshot,
+                    replace(
+                        checkpoint,
+                        state=HAState.BLOCKED,
+                        pending_action=None,
+                    ),
                 )
                 return self._result(
                     HAState.BLOCKED,
@@ -306,6 +325,7 @@ class VMHAController:
         if not snapshot.cloud.authoritative:
             return self._block_or_disable("cloud-ownership-unavailable", snapshot, checkpoint)
 
+        checkpoint = self._invalidate_ownership_if_lost(snapshot, checkpoint)
         cloud_reasons = self._cloud_consistency_reasons(snapshot)
         if cloud_reasons:
             return self._block_or_disable(cloud_reasons, snapshot, checkpoint)
@@ -404,7 +424,9 @@ class VMHAController:
         parity_reasons: tuple[str, ...],
     ) -> ControllerResult:
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
-        routes_current = snapshot.routes_reconciled_context == snapshot.route_reconciliation_context
+        routes_current = snapshot.routes_reconciled_context == self._route_context(
+            snapshot, checkpoint
+        )
         if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
             if not routes_current:
                 return self._action(
@@ -606,6 +628,11 @@ class VMHAController:
             and not cloud.candidate_attachment_exact
         ):
             reasons.append("candidate-owner-observation-without-exact-attachment")
+        if (
+            cloud.observed_owner_node_id == snapshot.local_node_id
+            and not cloud.former_attachment_absent
+        ):
+            reasons.append("candidate-owner-observation-with-former-attachment-present")
         if cloud.candidate_attachment_exact and (
             cloud.observed_owner_node_id != snapshot.local_node_id
         ):
@@ -659,6 +686,7 @@ class VMHAController:
             ownership_epoch=snapshot.cloud.ownership_epoch,
             generation_id=snapshot.local_generation_id,
             digests=snapshot.local_digests,
+            ownership_incarnation=checkpoint.ownership_incarnation,
         )
         next_checkpoint = replace(
             checkpoint,
@@ -669,8 +697,9 @@ class VMHAController:
         return self._result(state, reasons, snapshot, next_checkpoint, action)
 
     @staticmethod
-    def _postcondition(kind: ActionKind, snapshot: ControllerSnapshot) -> bool:
+    def _postcondition(action: ControllerAction, snapshot: ControllerSnapshot) -> bool:
         cloud = snapshot.cloud
+        kind = action.kind
         return {
             ActionKind.INSTALL_COLD_START_GUARD: snapshot.guard_boot_id == snapshot.boot_id
             and snapshot.data_plane_mode is DataPlaneMode.BLOCKED,
@@ -681,7 +710,10 @@ class VMHAController:
             ActionKind.ATTACH_CANDIDATE: cloud.candidate_attachment_exact,
             ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: cloud.transfer_complete(snapshot.local_node_id),
             ActionKind.RECONCILE_ROUTES: snapshot.routes_reconciled_context
-            == snapshot.route_reconciliation_context,
+            == replace(
+                snapshot.route_reconciliation_context,
+                ownership_incarnation=action.ownership_incarnation,
+            ),
             ActionKind.ENABLE_ACTIVE: snapshot.data_plane_mode is DataPlaneMode.ACTIVE
             and cloud.local_attachment_exact(snapshot.local_node_id),
         }[kind]
@@ -719,6 +751,7 @@ class VMHAController:
             action.ownership_epoch != cloud.ownership_epoch
             or action.generation_id != snapshot.local_generation_id
             or action.digests != snapshot.local_digests
+            or action.ownership_incarnation != checkpoint.ownership_incarnation
         ):
             return False
         if not cloud.authoritative or not self._promotion_gates_clear(snapshot):
@@ -759,7 +792,7 @@ class VMHAController:
             return bool(
                 self._local_ownership_safe(snapshot, checkpoint)
                 and snapshot.readiness.promotion_ready
-                and snapshot.routes_reconciled_context == snapshot.route_reconciliation_context
+                and snapshot.routes_reconciled_context == self._route_context(snapshot, checkpoint)
             )
         return False
 
@@ -798,11 +831,41 @@ class VMHAController:
             return False
         if cloud.transfer_complete(snapshot.local_node_id):
             return True
+        if checkpoint.ownership_continuity_invalidated:
+            return False
         if checkpoint.established_ownership_context == snapshot.ownership_context:
             return True
         return bool(
             snapshot.configured_role is ConfiguredRole.ACTIVE
             and not self._transfer_in_progress(snapshot, checkpoint)
+        )
+
+    def _invalidate_ownership_if_lost(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerCheckpoint:
+        """Persist loss of exact ownership independently of caller epochs."""
+
+        cloud = snapshot.cloud
+        if not cloud.authoritative or cloud.local_attachment_exact(snapshot.local_node_id):
+            return checkpoint
+        return replace(
+            checkpoint,
+            established_ownership_context=None,
+            ownership_continuity_invalidated=True,
+            ownership_incarnation=(
+                checkpoint.ownership_incarnation
+                if checkpoint.ownership_continuity_invalidated
+                else checkpoint.ownership_incarnation + 1
+            ),
+        )
+
+    @staticmethod
+    def _route_context(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> RouteReconciliationContext:
+        return replace(
+            snapshot.route_reconciliation_context,
+            ownership_incarnation=checkpoint.ownership_incarnation,
         )
 
     @staticmethod
