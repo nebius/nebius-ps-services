@@ -150,6 +150,9 @@ class AtomicGenerationStore:
             raise ValueError("revision_retention must retain at least three revisions")
         if journal_retention < 1:
             raise ValueError("journal_retention must be positive")
+        root_is_pristine = not root.exists() or (
+            root.is_dir() and next(root.iterdir(), None) is None
+        )
         self.root = root
         self.revisions = root / "revisions"
         self.journal = root / "journal"
@@ -166,6 +169,12 @@ class AtomicGenerationStore:
         for directory in (self.revisions, self.journal, self.peers, self.root):
             _fsync_directory(directory)
         _fsync_directory(self.root.parent)
+        if root_is_pristine:
+            with self._locked():
+                if not self.pointer_path.exists() and not self.pointer_backup_path.exists():
+                    empty = _envelope(GenerationPointers().to_dict())
+                    atomic_write_json(self.pointer_backup_path, empty)
+                    atomic_write_json(self.pointer_path, empty)
 
     def _checkpoint(self, name: str, path: Path) -> None:
         if self._fault_hook is not None:
@@ -378,7 +387,7 @@ class AtomicGenerationStore:
             self._validate_pointer_targets(pointers)
             return pointers
         try:
-            pointers = self._read_pointer_file(self.pointer_path, allow_missing=True)
+            pointers = self._read_pointer_file(self.pointer_path, allow_missing=False)
             self._validate_pointer_targets(pointers)
             return pointers
         except CorruptStateError:
