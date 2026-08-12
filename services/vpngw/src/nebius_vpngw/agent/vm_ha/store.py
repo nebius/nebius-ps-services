@@ -245,7 +245,7 @@ class AtomicGenerationStore:
             try:
                 return self._load_pointers_unlocked(allow_backup=False)
             except CorruptStateError:
-                recovered = self._read_pointer_file(self.pointer_backup_path)
+                recovered = self._read_pointer_file(self.pointer_backup_path, allow_missing=False)
                 self._validate_pointer_targets(recovered)
                 atomic_write_json(self.pointer_path, _envelope(recovered.to_dict()))
                 return recovered
@@ -355,9 +355,11 @@ class AtomicGenerationStore:
             raise CorruptStateError("generation directory does not match its payload identity")
         return revision
 
-    def _read_pointer_file(self, path: Path) -> GenerationPointers:
+    def _read_pointer_file(self, path: Path, *, allow_missing: bool) -> GenerationPointers:
         if not path.exists():
-            return GenerationPointers()
+            if allow_missing:
+                return GenerationPointers()
+            raise CorruptStateError(f"generation pointer file {path.name} is missing")
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
             return GenerationPointers.from_mapping(_unwrap(value))
@@ -367,14 +369,22 @@ class AtomicGenerationStore:
             ) from error
 
     def _load_pointers_unlocked(self, *, allow_backup: bool) -> GenerationPointers:
+        if not self.pointer_path.exists() and self.pointer_backup_path.exists():
+            if not allow_backup:
+                raise CorruptStateError(
+                    f"generation pointer file {self.pointer_path.name} is missing"
+                )
+            pointers = self._read_pointer_file(self.pointer_backup_path, allow_missing=False)
+            self._validate_pointer_targets(pointers)
+            return pointers
         try:
-            pointers = self._read_pointer_file(self.pointer_path)
+            pointers = self._read_pointer_file(self.pointer_path, allow_missing=True)
             self._validate_pointer_targets(pointers)
             return pointers
         except CorruptStateError:
             if not allow_backup:
                 raise
-            pointers = self._read_pointer_file(self.pointer_backup_path)
+            pointers = self._read_pointer_file(self.pointer_backup_path, allow_missing=False)
             self._validate_pointer_targets(pointers)
             return pointers
 
