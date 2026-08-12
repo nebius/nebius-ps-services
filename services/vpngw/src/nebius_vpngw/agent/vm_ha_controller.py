@@ -72,6 +72,13 @@ _PASSIVE_REPLAY_ACTIONS = frozenset(
 _FORMER_OWNER_ACTIONS = frozenset(
     {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
 )
+_LOCAL_SAFETY_ACTIONS = frozenset(
+    {
+        ActionKind.INSTALL_COLD_START_GUARD,
+        ActionKind.ENTER_PASSIVE,
+        ActionKind.DISABLE_ACTIVE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -339,8 +346,11 @@ class VMHAController:
                 )
             postcondition_met = bool(
                 pending.boot_id == snapshot.boot_id
-                and self._pending_action_context_matches(pending, snapshot, checkpoint)
                 and self._postcondition(pending, snapshot)
+                and (
+                    pending.kind in _LOCAL_SAFETY_ACTIONS
+                    or self._pending_action_context_matches(pending, snapshot, checkpoint)
+                )
             )
             if pending.boot_id != snapshot.boot_id or postcondition_met:
                 checkpoint = replace(checkpoint, pending_action=None)
@@ -818,11 +828,7 @@ class VMHAController:
         )
         if action.target_node_id != expected_target:
             return False
-        if kind in {
-            ActionKind.INSTALL_COLD_START_GUARD,
-            ActionKind.ENTER_PASSIVE,
-            ActionKind.DISABLE_ACTIVE,
-        }:
+        if kind in _LOCAL_SAFETY_ACTIONS:
             return True
         if not self._pending_action_context_matches(action, snapshot, checkpoint):
             return False

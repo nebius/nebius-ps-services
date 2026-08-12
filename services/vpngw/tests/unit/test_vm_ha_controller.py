@@ -914,6 +914,225 @@ def test_pending_action_requires_positive_checkpoint_sequence(
         policy.decide(snapshot, ControllerCheckpoint(pending_action=action))
 
 
+def _local_safety_case(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> tuple[ControllerSnapshot, ControllerCheckpoint, ControllerSnapshot]:
+    if kind is ActionKind.INSTALL_COLD_START_GUARD:
+        initial = _snapshot(
+            guard_boot_id="previous-boot",
+            data_plane_mode=DataPlaneMode.BLOCKED,
+            cloud=replace(_cloud(), authoritative=False),
+        )
+        completed = replace(
+            initial,
+            guard_boot_id=initial.boot_id,
+            local_generation_id="d" * 64,
+            peer_heartbeat=_peer(generation_id="d" * 64),
+        )
+    elif kind is ActionKind.ENTER_PASSIVE:
+        initial = _snapshot(data_plane_mode=DataPlaneMode.BLOCKED)
+        completed = replace(
+            initial,
+            data_plane_mode=DataPlaneMode.PASSIVE,
+            cloud=replace(
+                initial.cloud,
+                allocation_id="replacement-allocation",
+                ownership_epoch="ownership-epoch-2",
+            ),
+        )
+    elif kind is ActionKind.DISABLE_ACTIVE:
+        initial = _snapshot(
+            data_plane_mode=DataPlaneMode.ACTIVE,
+            cloud=replace(_cloud(), authoritative=False),
+        )
+        completed = replace(
+            initial,
+            data_plane_mode=DataPlaneMode.BLOCKED,
+            cloud=replace(
+                initial.cloud,
+                allocation_id="replacement-allocation",
+                ownership_epoch="ownership-epoch-2",
+            ),
+        )
+    else:
+        raise AssertionError(f"not a local safety action: {kind}")
+
+    scheduled = policy.decide(initial, ControllerCheckpoint())
+    assert scheduled.action is not None
+    assert scheduled.action.kind is kind
+    return initial, scheduled.checkpoint, completed
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ActionKind.INSTALL_COLD_START_GUARD,
+        ActionKind.ENTER_PASSIVE,
+        ActionKind.DISABLE_ACTIVE,
+    ],
+)
+def test_completed_local_safety_action_clears_after_unrelated_context_drift(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> None:
+    _initial, pending, completed = _local_safety_case(policy, kind)
+
+    decision = policy.decide(completed, pending)
+
+    assert decision.checkpoint.pending_action is None
+    assert decision.action is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ActionKind.INSTALL_COLD_START_GUARD,
+        ActionKind.ENTER_PASSIVE,
+        ActionKind.DISABLE_ACTIVE,
+    ],
+)
+def test_local_safety_action_replays_after_context_drift_without_exact_postcondition(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> None:
+    initial, pending, completed = _local_safety_case(policy, kind)
+    missing = replace(
+        completed,
+        guard_boot_id=(
+            "previous-boot"
+            if kind is ActionKind.INSTALL_COLD_START_GUARD
+            else completed.guard_boot_id
+        ),
+        data_plane_mode=(
+            DataPlaneMode.ACTIVE if kind is ActionKind.DISABLE_ACTIVE else initial.data_plane_mode
+        ),
+    )
+
+    decision = policy.decide(missing, pending)
+
+    assert decision.action == pending.pending_action
+    assert decision.checkpoint == pending
+    assert decision.reasons == ("replaying-checkpointed-action",)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ActionKind.STOP_FORMER_OWNER,
+        ActionKind.DETACH_FORMER_ATTACHMENT,
+        ActionKind.ATTACH_CANDIDATE,
+        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+        ActionKind.RECONCILE_ROUTES,
+        ActionKind.ENABLE_ACTIVE,
+    ],
+)
+def test_authority_action_completion_remains_bound_to_original_context(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> None:
+    snapshot = _snapshot(cloud=_owned_cloud())
+    target = (
+        snapshot.peer_node_id
+        if kind
+        in {
+            ActionKind.STOP_FORMER_OWNER,
+            ActionKind.DETACH_FORMER_ATTACHMENT,
+        }
+        else snapshot.local_node_id
+    )
+    operation_id = f"{snapshot.boot_id}:7:{kind.value}:{target}"
+    action = ControllerAction(
+        kind=kind,
+        operation_id=operation_id,
+        boot_id=snapshot.boot_id,
+        target_node_id=target,
+        allocation_id=snapshot.cloud.allocation_id,
+        ownership_epoch=snapshot.cloud.ownership_epoch,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+    drifted = replace(
+        snapshot,
+        cloud=replace(snapshot.cloud, allocation_id="replacement-allocation"),
+        data_plane_mode=(
+            DataPlaneMode.ACTIVE if kind is ActionKind.ENABLE_ACTIVE else DataPlaneMode.PASSIVE
+        ),
+    )
+    if kind is ActionKind.RECONCILE_ROUTES:
+        drifted = replace(
+            drifted,
+            routes_reconciled_context=_reconciled(
+                drifted,
+                operation_id=operation_id,
+            ),
+        )
+
+    decision = policy.decide(
+        drifted,
+        ControllerCheckpoint(sequence=7, suspect_since=90.0, pending_action=action),
+    )
+
+    assert decision.action != action
+    assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ActionKind.INSTALL_COLD_START_GUARD,
+        ActionKind.ENTER_PASSIVE,
+        ActionKind.DISABLE_ACTIVE,
+    ],
+)
+def test_deduplicating_effect_port_observes_local_safety_pending_clear_after_drift(
+    policy: VMHAController,
+    kind: ActionKind,
+) -> None:
+    initial, _pending, completed = _local_safety_case(policy, kind)
+    applied_operation_ids: set[str] = set()
+
+    class Snapshots:
+        value = initial
+
+        def observe(self) -> ControllerSnapshot:
+            return self.value
+
+    class Checkpoints:
+        value = ControllerCheckpoint()
+
+        def load(self) -> ControllerCheckpoint:
+            return self.value
+
+        def save(self, checkpoint: ControllerCheckpoint) -> None:
+            self.value = checkpoint
+
+    snapshots = Snapshots()
+    checkpoints = Checkpoints()
+
+    class Effects:
+        def apply(self, action: ControllerAction) -> None:
+            if action.operation_id in applied_operation_ids:
+                return
+            applied_operation_ids.add(action.operation_id)
+            snapshots.value = completed
+
+    runtime = RecoverableController(
+        policy=policy,
+        snapshots=snapshots,
+        checkpoints=checkpoints,
+        effects=Effects(),
+    )
+
+    applied = runtime.step()
+    assert applied.action is not None
+    cleared = runtime.step()
+
+    assert applied_operation_ids == {applied.action.operation_id}
+    assert cleared.action is None
+    assert checkpoints.value.pending_action is None
+
+
 @pytest.mark.parametrize(
     "kind",
     [
