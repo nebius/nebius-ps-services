@@ -14,6 +14,7 @@
 #### Acceptance criteria
 
 - A valid VM-HA configuration resolves two deterministic node identities and one shared cluster identity.
+- After provisioning, each node receives one secret-free runtime binding that names the single shared private allocation, both authoritative Compute instance and NIC identities, peer endpoint and credential file references, and the route-runtime identity needed by the controller.
 - Invalid member counts, ambiguous roles, or VM-HA and tunnel-role conflation fail before cloud or host mutation.
 - Representative configurations without VM HA produce the same resolved plan and observable command behavior as before this feature.
 
@@ -51,6 +52,7 @@
 
 - Exactly one node may enable forwarding and owner-only reconciliation for each authoritative allocation snapshot.
 - The enforced transition order is former owner stopped, former attachment absent, new attachment exact, ownership re-read exact, then candidate promotion.
+- Ownership continuity is keyed by the exact attached candidate Compute resource revision read after assignment; allocation status alone and locally synthesized journals, hashes, or counters are not authoritative ownership epochs.
 - Every HA member starts with forwarding and cluster tunnel initiation fail-closed; a boot, process restart, or automatic Compute recovery requires fresh role and cloud-ownership proof before the appropriate passive or active data plane is enabled.
 - Every external side effect has durable before-and-after checkpoints and can be retried without skipping fencing or duplicating an unsafe mutation.
 - Fencing-critical SDK errors never enter permissive scaffold or best-effort fallback behavior.
@@ -71,6 +73,7 @@
 - Static logical-route digests match across nodes while node-local XFRM interface renderings may differ.
 - BGP promotion readiness requires configured sessions, required prefixes, current import policy, and usable local XFRM next hops; optional-prefix parity is informational.
 - Promotion preserves existing managed BGP routes during takeover hold-down, allows newly valid routes, and reconciles static routes from the committed manifest.
+- Route completion is durable only when the runtime re-observes a success receipt bound to the exact controller operation ID and full current owner, allocation, ownership revision, generation, policy-digest, and ownership-incarnation context.
 - Existing non-HA conflicting-next-hop rejection remains unchanged.
 
 #### Verification
@@ -91,6 +94,7 @@
 - Automatic failover requires generation parity plus required static, BGP, XFRM, service-health, and cloud-ownership readiness.
 - Restart at any checkpoint reconstructs the next safe action from committed local state and current cloud truth without enabling forwarding early.
 - Authenticated heartbeats report role, owner observation, generation, policy digests, service health, route readiness, and promotion readiness without carrying secrets.
+- Every forwarding writer, route timer, agent startup path, and service dependency remains behind the current-boot guard until the controller durably records and exposes the justified data-plane mode; controller stop, failure, or stale readiness restores the guard.
 
 #### Verification
 
@@ -106,8 +110,11 @@
 #### Acceptance criteria
 
 - Non-HA command syntax, defaults, output meaning, and exit behavior remain supported.
+- Removing explicit VM HA performs a fail-closed deactivation transaction that stops and disables HA services, removes HA-only systemd state and credential references, reloads service state, and only then resumes the ordinary non-HA path.
 - VM-HA status explains why a passive is promotable or blocked and names the safe operator recovery action.
 - Manual failback follows the same fencing, ownership-transfer, readiness, and route-reconciliation invariants as automatic failover.
+- HA activation aborts on the first critical remote failure, revalidates the remote generation and digest immediately before installation, and never reports success from stale staging acknowledgements or unverified guard/controller state.
+- Manifests, status, journals, and logs contain only absolute credential references; credential material is installed separately with restrictive permissions, and HA IAM grants are selected only from a reviewed action-to-role allowlist.
 - Offline two-node tests prove no forwarding or VPC-route mutation occurs before authoritative fencing and exact allocation ownership.
 - A later live-ready claim requires a separately authorized non-production trial with independently observed cloud, allocation, forwarding, and route postconditions.
 
@@ -117,10 +124,11 @@
 
 ## Task Implementer Open Questions
 
-- No architecture-blocking questions remain for offline implementation; exact IAM role names and live allocation-transfer behavior require verification before any non-production trial.
+- No architecture-blocking questions remain for offline implementation. Current official API metadata defines Compute `resource_version` as a positive monotonic revision for instance specification changes, which is the ownership-revision source after an exact attachment re-read; exact IAM role names, SDK field parity, and live allocation-transfer behavior still require verification before any non-production trial.
 
 ## Task Implementer Requirements Change Log
 
+- 2026-08-12: Reconciled TI-REQ-001 through TI-REQ-006 with the proven post-provision runtime-binding, authoritative ownership-revision, exact route-receipt, guard-closure, fail-closed deactivation, credential-reference, IAM-allowlist, and activation-verification requirements.
 - 2026-08-11: Added TI-REQ-001 through TI-REQ-006 for additive two-node VM-level active/passive HA.
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 -->

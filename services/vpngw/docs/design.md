@@ -8,8 +8,8 @@
 
 - Status: planned
 - Requirements: TI-REQ-001, TI-REQ-002
-- Selected approach: Add a default-disabled VM-HA block under the gateway-group contract and compile it into stable cluster, member, role, generation, digest, readiness, and logical-manifest records without changing the existing path when omitted.
-- Boundaries and interfaces: `schema.py`, `config_loader.py`, `config_template.py`, examples, and their focused tests own configuration validation and resolved-plan output; VM role remains distinct from tunnel `ha_role`.
+- Selected approach: Add a default-disabled VM-HA block under the gateway-group contract, compile stable pre-provision cluster intent, then bind the provisioned shared allocation and authoritative node identities into secret-free node runtime manifests without changing the existing path when omitted.
+- Boundaries and interfaces: `schema.py`, `config_loader.py`, `config_template.py`, examples, and their focused tests own configuration validation and pre-provision intent; `config_loader.py` also owns the typed post-provision binding for the shared allocation ID, both Compute instance and NIC identities, peer endpoint and absolute credential references, route-runtime identity, generation, and digests. VM role remains distinct from tunnel `ha_role`, and credential bytes never enter the manifest.
 - Validation: Compare existing configuration golden outputs byte-for-behavior, validate exactly two stable members, and reject ambiguous or unsupported topologies before side effects.
 - Rollback: Revert the additive schema and resolved-plan records; no persisted migration or compatibility wrapper is introduced.
 
@@ -23,14 +23,14 @@
 
 - Current `VPNGatewayConfig.validate_single_active_tunnel_per_instance` enforces one active tunnel per connection and VM, not one active VM per gateway group.
 - Current `merge_with_peer_configs` produces isolated per-instance plans by filtering tunnels on `gateway_instance_index`.
-- Implementation is not present; this record is the planning boundary.
+- The additive VM-HA schema and generation records are implemented, but the retained integration review proved that resolved node YAML still lacks the authoritative post-provision runtime binding. The correction must add that binding before activation can become eligible.
 
 ### TI-DES-002: Atomic generation store and authenticated peer state
 
 - Status: planned
 - Requirements: TI-REQ-002, TI-REQ-005
-- Selected approach: Add a narrow VM-HA state package that writes immutable revision directories, validates canonical JSON and checksums, fsyncs files and directories, atomically advances committed pointers, and exchanges authenticated monotonic peer observations through an injected transport.
-- Boundaries and interfaces: The state package and `agent/state_store.py` own local durability; a peer port owns transport and authentication; neither may claim cloud ownership or decide promotion.
+- Selected approach: Add a narrow VM-HA state package that writes immutable revision directories, validates canonical JSON and checksums, fsyncs files and directories, atomically advances committed pointers, and exchanges authenticated monotonic peer observations through a concrete mutually authenticated transport.
+- Boundaries and interfaces: The state package and `agent/state_store.py` own local durability; `agent/vm_ha/transport.py` owns bounded mTLS I/O and derives the peer node identity from the verified certificate identity. Manifests carry only endpoint and credential-file references, and neither persistence nor transport may claim cloud ownership or decide promotion.
 - Validation: Inject write, fsync, rename, truncation, restart, stale sequence, boot identity, authentication, and peer timeout failures.
 - Rollback: Remove the additive state package and restore the prior state-store path before controller integration.
 
@@ -44,14 +44,14 @@
 
 - Current agent state persists a local applied-configuration hash but has no cluster generation, boot identity, peer sequence, atomic revision store, or recoverable external-transition journal.
 - The canonical operator configuration remains the only configuration source.
-- Implementation is not present; filesystem and transport interfaces must be testable without live hosts.
+- Atomic generation, replay, and controller-checkpoint primitives are implemented. A concrete authenticated peer transport and its credential-reference lifecycle remain required before functional wiring.
 
 ### TI-DES-003: Strict cloud fencing and shared-allocation ownership adapter
 
 - Status: planned
 - Requirements: TI-REQ-003, TI-REQ-005
-- Selected approach: Isolate Compute status translation and shared private-allocation detach, attach, and verification behind a strict adapter; checkpoint before and after each idempotent side effect and permit success only after an authoritative stopped former owner and exact candidate ownership re-read.
-- Boundaries and interfaces: `deploy/vm_manager.py` retains ordinary provisioning behavior while a dedicated HA cloud adapter exposes typed stopped-state and allocation operations to the controller; policy never imports SDK objects.
+- Selected approach: Provision exactly one deterministic static shared private allocation for an explicit VM-HA pair, attach it initially only to the configured active node, and isolate Compute status plus shared-allocation detach, attach, and verification behind a strict adapter. Checkpoint before and after each idempotent side effect and permit success only after an authoritative stopped former owner and exact candidate ownership re-read.
+- Boundaries and interfaces: `deploy/vm_manager.py` owns strict HA provisioning and returns the authoritative post-provision member/allocation binding; its broad scaffold fallback remains available only to the ordinary non-HA path. `deploy/vm_ha_cloud.py` exposes typed stopped-state and allocation operations plus a strict observation whose ownership revision is the exact attached candidate Compute `metadata.resource_version` read with the matching NIC allocation. Allocation `resource_version` is not sufficient because assignment is status. Policy never imports SDK objects.
 - Validation: Use deterministic Compute and allocation fakes for every status, owner, API error, stale read, partial update, retry, and crash boundary.
 - Rollback: Revert the dedicated adapter before controller wiring; existing non-HA provisioning remains the canonical fallback only for non-fencing operations.
 
@@ -64,15 +64,15 @@
 #### Implementation evidence
 
 - Nebius Compute lifecycle documentation distinguishes `Stopped` from `Running`, `Stopping`, and `Error` states.
-- Nebius networking documentation supports reserved secondary private allocations for backup-node use, while implementation must still prove exact detach and attachment postconditions through current SDK reads.
-- No fencing or shared-owner adapter exists today; implementation is pending.
+- Nebius networking documentation supports reusable private allocations, and Compute metadata documents a monotonically increasing resource revision for specification changes; implementation must still prove exact detach, attachment, and candidate revision postconditions through current SDK reads.
+- Strict fencing operations exist, but ordinary provisioning still creates a private allocation per VM and catches HA-critical failures into scaffold mode. Functional wiring remains blocked until strict shared provisioning and authoritative observation are composed.
 
 ### TI-DES-004: Owner-gated static and BGP route reconciliation
 
 - Status: planned
 - Requirements: TI-REQ-004, TI-REQ-005
-- Selected approach: Add a route-transition adapter that accepts already verified allocation ownership, renders static routes from the committed logical manifest, derives BGP readiness from the candidate's local FRR RIB, and applies bounded takeover preservation and withdrawal rules.
-- Boundaries and interfaces: `deploy/route_manager.py` continues to own VPC route operations; the HA route adapter owns transition policy but never fences or infers ownership; FRR and XFRM remain node-local authorities.
+- Selected approach: Add a route-transition adapter that accepts already verified allocation ownership, renders static routes from the committed logical manifest, derives BGP readiness from the candidate's local FRR RIB, applies bounded takeover preservation and withdrawal rules, and persists a success receipt for the exact scheduled controller operation and complete reconciliation context.
+- Boundaries and interfaces: `deploy/route_manager.py` continues to own VPC route operations; `deploy/vm_ha_routes.py` owns transition policy and the managed-route ledger but never fences or infers ownership. The agent runtime may re-observe route completion only when the receipt matches the exact operation ID, owner, allocation, attached-candidate ownership revision, generation, policy digests, and controller ownership incarnation. FRR and XFRM remain node-local authorities.
 - Validation: Exercise wrong-owner denial, static and BGP readiness, allocation next-hop preservation, hold-down, stability observations, withdrawals, retries, partial failures, and non-HA regressions.
 - Rollback: Revert the HA adapter and extensions; retain current conflicting-next-hop rejection for all non-HA configurations.
 
@@ -86,7 +86,7 @@
 
 - Current `_collect_remote_prefix_targets` requires one owning VM per connection and rejects the same remote prefix on different VMs.
 - Nebius routing documentation supports an allocation ID as a route next hop and warns that an unassigned allocation black-holes traffic.
-- No current route path accepts verified VM-HA ownership or takeover hold-down; implementation is pending.
+- Route planning and controller context-binding policy are implemented, but no runtime adapter currently executes the plan and durably re-observes its exact operation receipt.
 
 ### TI-DES-005: Pure fail-closed VM-HA controller
 
@@ -114,9 +114,9 @@
 
 - Status: planned
 - Requirements: TI-REQ-001, TI-REQ-002, TI-REQ-003, TI-REQ-004, TI-REQ-005, TI-REQ-006
-- Selected approach: Select a new cluster-aware apply path only for explicit VM-HA configuration, stage and validate the passive before the active, commit each node locally, recover cross-node partial progress without activation, compare generation acknowledgements, then wire the cold-start guard, controller, status, recovery, manual failback, and least-privilege permissions.
-- Boundaries and interfaces: `cli.py`, `agent/main.py`, `deploy/ssh_push.py`, `vpngw_sa.py`, and systemd assets compose existing rendering and deployment with the new ports; HA service ordering installs the guard before strongSwan, FRR, and the gateway agent, while non-HA commands remain on the existing path.
-- Validation: Run CLI, service ordering, cold-boot, automatic-recovery, cloud-init, IAM, packaging, build, and release tests plus a non-HA golden trace and offline two-node apply/status/recovery trace.
+- Selected approach: Select a new cluster-aware apply path only for explicit VM-HA configuration, provision before final runtime-manifest serialization, stage and validate the passive before the active, revalidate remote generation and digests immediately before installation, commit each node locally, recover cross-node partial progress without activation, compare generation acknowledgements, then wire the cold-start guard, controller, status, recovery, manual failback, and least-privilege permissions. Any critical remote failure aborts activation; removing VM HA performs an explicit guarded deactivation before ordinary services resume.
+- Boundaries and interfaces: `cli.py` orchestrates provision-bind-stage-activate; `agent/main.py` constructs the concrete `RecoverableController`, snapshot port, and idempotent effect port; `deploy/ssh_push.py` installs credential bytes separately from secret-free manifests and verifies current-boot guard/controller state; `routing_guard.py`, `fix_routes.py`, the ordinary agent reconciliation path, route timers, and all systemd assets share one controller-ready forwarding gate; `vpngw_sa.py` accepts only a reviewed action-to-role allowlist. `config_loader.py`, `deploy/vm_manager.py`, `deploy/vm_ha_cloud.py`, `agent/vm_ha/transport.py`, `deploy/vm_ha_routes.py`, and `deploy/route_manager.py` own the authoritative lower-level contracts. Non-HA commands remain on the existing canonical path after any stale HA state is safely removed.
+- Validation: Run CLI, critical-SSH-failure, remote-staging replacement, service readiness/failure, guard-bypass, cold-boot, automatic-recovery, HA-to-non-HA deactivation, cloud-init, IAM allowlist, status/recovery/failback, packaging, build, and release tests plus a non-HA golden trace and offline two-node apply/status/recovery trace.
 - Rollback: Revert the integration layer; the schema remains inert when VM HA is omitted and no migration is required.
 
 #### Alternatives considered
@@ -129,7 +129,7 @@
 
 - Existing `apply`, `status`, `failover`, and `failback` workflows are tunnel- and instance-local and provide reusable operator surfaces but no clustered semantics.
 - Existing systemd packaging already installs agent-side components and can host an additive HA service when explicitly enabled.
-- Implementation is not present; no live cloud mutation is authorized during this phase.
+- The retained integration is intentionally fail-closed: it serializes controller state and packages service scaffolding, but hard-codes runtime blockers and does not construct the controller or its adapters. Review also proved that existing forwarding writers bypass the guard, remote activation can report success after failure, stale HA state survives an omitted-VM-HA apply, operator actions are placeholders, and caller-provided role strings are not least-privilege verification. Promotion remains withheld until the correction chain closes every boundary.
 
 ### TI-DES-007: Deterministic two-node safety and compatibility proof
 
@@ -154,6 +154,7 @@
 
 ## Task Implementer Design Change Log
 
+- 2026-08-12: Reconciled TI-DES-001 through TI-DES-006 after retained integration review: added the post-provision runtime-binding phase, strict shared allocation provisioning, Compute resource revision as ownership epoch, concrete mTLS and route-receipt ownership, complete controller composition, guard closure across all forwarding writers, verified activation/deactivation, and IAM allowlist boundaries.
 - 2026-08-11: Added TI-DES-001 through TI-DES-007 for additive two-node VM-level active/passive HA.
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 -->
