@@ -128,6 +128,7 @@
 
 ## Task Implementer Requirements Change Log
 
+- 2026-08-13: Reconciled TI-REQ-001 through TI-REQ-006 after implementation: the explicit two-node path now has secret-free authoritative bindings, immutable credential bundles, strict stopped-owner fencing, exact target-aware route reconciliation, a production-composed current-boot guard/controller, guarded recovery and failback, and preserved omitted/disabled behavior. Live readiness remains a separately authorized non-production gate.
 - 2026-08-12: Reconciled TI-REQ-001 through TI-REQ-006 with the proven post-provision runtime-binding, authoritative ownership-revision, exact route-receipt, guard-closure, fail-closed deactivation, credential-reference, IAM-allowlist, and activation-verification requirements.
 - 2026-08-11: Added TI-REQ-001 through TI-REQ-006 for additive two-node VM-level active/passive HA.
 <!-- maintain-project-specs:requirements:end -->

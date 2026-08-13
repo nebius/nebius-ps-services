@@ -14,6 +14,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added explicit, default-disabled two-node VM-level active/passive HA with
+  immutable generation and credential staging, authenticated peer state,
+  authoritative stopped-owner and shared-allocation fencing, owner-gated static
+  and BGP route reconciliation, cold-start forwarding guards, durable recovery,
+  status, and fenced manual failback while preserving omitted and disabled
+  non-HA behavior.
 - Added concise static and BGP example configurations and clarified the subnet
   and route-table resources created by `prep-network`.
 
