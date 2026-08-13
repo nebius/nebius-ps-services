@@ -14,12 +14,30 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     TransferStage,
     VMHACloudAdapter,
     allocation_observation,
+    compute_observation,
     instance_cloud_state,
 )
 
 
-def _instance(state: object) -> SimpleNamespace:
-    return SimpleNamespace(status=SimpleNamespace(state=state))
+def _instance(
+    state: object,
+    *,
+    resource_version: object = "7",
+    attachments: tuple[tuple[str, str], ...] = (("eth0", ""),),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(resource_version=resource_version),
+        spec=SimpleNamespace(
+            network_interfaces=[
+                SimpleNamespace(
+                    name=name,
+                    ip_address=SimpleNamespace(allocation_id=allocation_id),
+                )
+                for name, allocation_id in attachments
+            ]
+        ),
+        status=SimpleNamespace(state=state),
+    )
 
 
 def _allocation(owner: AllocationOwner | None) -> SimpleNamespace:
@@ -62,6 +80,13 @@ def test_transfer_enforces_fencing_and_exact_ownership_order() -> None:
     events: list[str] = []
 
     def read_instance(instance_id: str) -> SimpleNamespace:
+        if instance_id == "new":
+            events.append("instance:new:RUNNING:8")
+            return _instance(
+                "RUNNING",
+                resource_version=8,
+                attachments=(("eth0", "private-1"),),
+            )
         assert instance_id == "old"
         state = instance_states.popleft() if len(instance_states) > 1 else instance_states[0]
         events.append(f"instance:{state}")
@@ -105,7 +130,10 @@ def test_transfer_enforces_fencing_and_exact_ownership_order() -> None:
     )
     assert events.index("instance:STOPPED") < events.index("owner:absent")
     assert events.index("owner:absent") < events.index("owner:new/eth0")
-    assert events.count("owner:new/eth0") == 2
+    assert events.count("owner:new/eth0") == 3
+    assert proof.ownership_epoch == "8"
+    assert proof.former_compute_state is InstanceCloudState.STOPPED
+    assert proof.candidate_compute_state is InstanceCloudState.RUNNING
 
 
 @pytest.mark.parametrize("state", ["ERROR", "UNSPECIFIED", "CREATING"])
@@ -160,7 +188,10 @@ def test_stopping_timeout_is_retryable_and_never_detaches() -> None:
 def test_unexpected_allocation_owner_is_permanent_and_not_mutated() -> None:
     setters: list[tuple[object, ...]] = []
     adapter = VMHACloudAdapter(
-        instance_reader=lambda _: _instance("STOPPED"),
+        instance_reader=lambda instance_id: _instance(
+            "RUNNING" if instance_id == "new" else "STOPPED",
+            attachments=(("eth0", "private-1" if instance_id == "new" else ""),),
+        ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(AllocationOwner("foreign", "eth9")),
         allocation_setter=lambda *args: setters.append(args),
@@ -188,7 +219,10 @@ def test_detached_allocation_skips_detach_and_attaches_candidate() -> None:
         owner = AllocationOwner(instance_id, nic_name) if allocation_id else None
 
     adapter = VMHACloudAdapter(
-        instance_reader=lambda _: _instance("STOPPED"),
+        instance_reader=lambda instance_id: _instance(
+            "RUNNING" if instance_id == "new" else "STOPPED",
+            attachments=(("eth0", "private-1" if instance_id == "new" else ""),),
+        ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(owner),
         allocation_setter=set_allocation,
@@ -208,7 +242,10 @@ def test_replay_with_exact_candidate_owner_is_read_only() -> None:
     candidate = AllocationOwner("new", "eth0")
     setters: list[tuple[object, ...]] = []
     adapter = VMHACloudAdapter(
-        instance_reader=lambda _: _instance("STOPPED"),
+        instance_reader=lambda instance_id: _instance(
+            "RUNNING" if instance_id == "new" else "STOPPED",
+            attachments=(("eth0", "private-1" if instance_id == "new" else ""),),
+        ),
         instance_stopper=lambda _: None,
         allocation_reader=lambda _: _allocation(candidate),
         allocation_setter=lambda *args: setters.append(args),
@@ -222,7 +259,97 @@ def test_replay_with_exact_candidate_owner_is_read_only() -> None:
         candidate=candidate,
     )
     assert proof.candidate == candidate
+    assert proof.ownership_epoch == "7"
     assert setters == []
+
+
+@pytest.mark.parametrize("resource_version", [None, "", "0", "-1", "local-hash", True, 1.5])
+def test_compute_observation_requires_positive_resource_revision(
+    resource_version: object,
+) -> None:
+    with pytest.raises(AmbiguousHACloudError, match="metadata.resource_version"):
+        compute_observation(
+            "new",
+            _instance(
+                "RUNNING",
+                resource_version=resource_version,
+                attachments=(("eth0", "private-1"),),
+            ),
+        )
+
+
+def test_candidate_compute_revision_is_ownership_epoch_not_allocation_revision() -> None:
+    candidate = AllocationOwner("new", "eth0")
+    allocation = _allocation(candidate)
+    allocation.metadata = SimpleNamespace(resource_version="999")
+    adapter = VMHACloudAdapter(
+        instance_reader=lambda instance_id: _instance(
+            "RUNNING" if instance_id == "new" else "STOPPED",
+            resource_version=41 if instance_id == "new" else 40,
+            attachments=(("eth0", "private-1" if instance_id == "new" else ""),),
+        ),
+        instance_stopper=lambda _: None,
+        allocation_reader=lambda _: allocation,
+        allocation_setter=lambda *_: None,
+        attempts=1,
+        poll_interval=0,
+    )
+
+    proof = adapter.transfer_private_allocation(
+        allocation_id="private-1",
+        former_owner=AllocationOwner("old", "eth0"),
+        candidate=candidate,
+    )
+    assert proof.ownership_epoch == "41"
+
+
+def test_transfer_away_and_back_uses_each_candidate_compute_revision() -> None:
+    owners = {
+        "old": AllocationOwner("old", "eth0"),
+        "new": AllocationOwner("new", "eth0"),
+    }
+    allocation_owner = owners["old"]
+    revisions = {"old": 10, "new": 20}
+    attachments = {"old": "private-1", "new": ""}
+
+    def read_instance(instance_id: str) -> SimpleNamespace:
+        return _instance(
+            "STOPPED",
+            resource_version=revisions[instance_id],
+            attachments=(("eth0", attachments[instance_id]),),
+        )
+
+    def read_allocation(_: str) -> SimpleNamespace:
+        return _allocation(allocation_owner)
+
+    def set_allocation(instance_id: str, _: str, allocation_id: str | None) -> None:
+        nonlocal allocation_owner
+        revisions[instance_id] += 1
+        attachments[instance_id] = allocation_id or ""
+        allocation_owner = owners[instance_id] if allocation_id else None
+
+    adapter = VMHACloudAdapter(
+        instance_reader=read_instance,
+        instance_stopper=lambda _: None,
+        allocation_reader=read_allocation,
+        allocation_setter=set_allocation,
+        attempts=2,
+        poll_interval=0,
+    )
+    away = adapter.transfer_private_allocation(
+        allocation_id="private-1",
+        former_owner=owners["old"],
+        candidate=owners["new"],
+    )
+    back = adapter.transfer_private_allocation(
+        allocation_id="private-1",
+        former_owner=owners["new"],
+        candidate=owners["old"],
+    )
+
+    assert away.ownership_epoch == "21"
+    assert back.ownership_epoch == "12"
+    assert away.ownership_epoch != back.ownership_epoch
 
 
 def test_transfer_rejects_candidate_on_former_compute_instance() -> None:

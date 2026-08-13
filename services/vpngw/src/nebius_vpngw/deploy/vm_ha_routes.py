@@ -50,6 +50,27 @@ class VerifiedAllocationOwnership:
     candidate_node_id: str
     observed_owner_node_id: str
     allocation_id: str
+    ownership_epoch: str
+
+    def __post_init__(self) -> None:
+        if not all(
+            (
+                self.cluster_id,
+                self.candidate_node_id,
+                self.observed_owner_node_id,
+                self.allocation_id,
+            )
+        ):
+            raise ValueError("Verified allocation ownership identities must be non-empty")
+        if not isinstance(self.ownership_epoch, str) or not self.ownership_epoch.isdecimal():
+            raise ValueError(
+                "Verified allocation ownership epoch must be a Compute resource revision"
+            )
+        ownership_revision = int(self.ownership_epoch)
+        if ownership_revision <= 0:
+            raise ValueError(
+                "Verified allocation ownership epoch must be a positive Compute resource revision"
+            )
 
     def authorizes(self, *, cluster_id: str, node_id: str) -> bool:
         return bool(
@@ -57,6 +78,7 @@ class VerifiedAllocationOwnership:
             and self.candidate_node_id == node_id
             and self.observed_owner_node_id == node_id
             and self.allocation_id
+            and self.ownership_epoch
         )
 
 
@@ -254,6 +276,165 @@ class RouteReconciliationPlan:
     held_bgp_prefixes: frozenset[str]
     desired_prefixes: frozenset[str]
     next_state: RouteTransitionState
+    ownership: VerifiedAllocationOwnership | None = None
+
+
+@dataclass(frozen=True)
+class RouteReconciliationContext:
+    """Complete controller operation identity covered by one route receipt."""
+
+    operation_id: str
+    cluster_id: str
+    owner_node_id: str
+    allocation_id: str
+    ownership_epoch: str
+    generation_id: str
+    configuration_digest: str
+    static_routes_digest: str
+    bgp_policy_digest: str
+    ownership_incarnation: int
+
+    def __post_init__(self) -> None:
+        values = (
+            self.operation_id,
+            self.cluster_id,
+            self.owner_node_id,
+            self.allocation_id,
+            self.ownership_epoch,
+            self.generation_id,
+            self.configuration_digest,
+            self.static_routes_digest,
+            self.bgp_policy_digest,
+        )
+        if not all(values):
+            raise ValueError("Route reconciliation context identities must be non-empty")
+        if not isinstance(self.ownership_epoch, str) or not self.ownership_epoch.isdecimal():
+            raise ValueError(
+                "Route reconciliation ownership epoch must be a Compute resource revision"
+            )
+        ownership_revision = int(self.ownership_epoch)
+        if ownership_revision <= 0:
+            raise ValueError(
+                "Route reconciliation ownership epoch must be a positive Compute resource revision"
+            )
+        for digest in (
+            self.configuration_digest,
+            self.static_routes_digest,
+            self.bgp_policy_digest,
+        ):
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError("Route reconciliation policy digests must be lowercase SHA-256")
+        if self.ownership_incarnation < 0:
+            raise ValueError("Route reconciliation ownership incarnation must be non-negative")
+
+    def matches(self, ownership: VerifiedAllocationOwnership) -> bool:
+        return bool(
+            ownership.authorizes(
+                cluster_id=self.cluster_id,
+                node_id=self.owner_node_id,
+            )
+            and ownership.allocation_id == self.allocation_id
+            and ownership.ownership_epoch == self.ownership_epoch
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "allocation_id": self.allocation_id,
+            "bgp_policy_digest": self.bgp_policy_digest,
+            "cluster_id": self.cluster_id,
+            "configuration_digest": self.configuration_digest,
+            "generation_id": self.generation_id,
+            "operation_id": self.operation_id,
+            "owner_node_id": self.owner_node_id,
+            "ownership_epoch": self.ownership_epoch,
+            "ownership_incarnation": self.ownership_incarnation,
+            "schema": "nebius-vpngw/vm-ha-route-reconciliation-context-v1",
+            "static_routes_digest": self.static_routes_digest,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> RouteReconciliationContext:
+        if not isinstance(value, Mapping):
+            raise ValueError("Route reconciliation context must be an object")
+        expected = {
+            "allocation_id",
+            "bgp_policy_digest",
+            "cluster_id",
+            "configuration_digest",
+            "generation_id",
+            "operation_id",
+            "owner_node_id",
+            "ownership_epoch",
+            "ownership_incarnation",
+            "schema",
+            "static_routes_digest",
+        }
+        if set(value) != expected or value.get("schema") != (
+            "nebius-vpngw/vm-ha-route-reconciliation-context-v1"
+        ):
+            raise ValueError("Route reconciliation context has an invalid shape")
+
+        def string_field(name: str) -> str:
+            field = value[name]
+            if not isinstance(field, str):
+                raise ValueError("Route reconciliation context string fields are invalid")
+            return field
+
+        ownership_incarnation = value["ownership_incarnation"]
+        if not isinstance(ownership_incarnation, int) or isinstance(ownership_incarnation, bool):
+            raise ValueError("Route reconciliation ownership incarnation is invalid")
+        return cls(
+            operation_id=string_field("operation_id"),
+            cluster_id=string_field("cluster_id"),
+            owner_node_id=string_field("owner_node_id"),
+            allocation_id=string_field("allocation_id"),
+            ownership_epoch=string_field("ownership_epoch"),
+            generation_id=string_field("generation_id"),
+            configuration_digest=string_field("configuration_digest"),
+            static_routes_digest=string_field("static_routes_digest"),
+            bgp_policy_digest=string_field("bgp_policy_digest"),
+            ownership_incarnation=ownership_incarnation,
+        )
+
+
+@dataclass(frozen=True)
+class RouteReconciliationReceipt:
+    """Secret-free durable proof that one exact route operation completed."""
+
+    context: RouteReconciliationContext
+    plan_digest: str
+
+    def __post_init__(self) -> None:
+        if len(self.plan_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.plan_digest
+        ):
+            raise ValueError("Route reconciliation plan digest must be lowercase SHA-256")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "context": self.context.to_dict(),
+            "plan_digest": self.plan_digest,
+            "schema": "nebius-vpngw/vm-ha-route-reconciliation-receipt-v1",
+        }
+
+    @classmethod
+    def from_mapping(cls, value: object) -> RouteReconciliationReceipt:
+        if not isinstance(value, Mapping) or set(value) != {
+            "context",
+            "plan_digest",
+            "schema",
+        }:
+            raise ValueError("Route reconciliation receipt has an invalid shape")
+        if value["schema"] != "nebius-vpngw/vm-ha-route-reconciliation-receipt-v1":
+            raise ValueError("Route reconciliation receipt has an unsupported schema")
+        if not isinstance(value["plan_digest"], str):
+            raise ValueError("Route reconciliation receipt plan digest is invalid")
+        return cls(
+            context=RouteReconciliationContext.from_mapping(value["context"]),
+            plan_digest=value["plan_digest"],
+        )
 
 
 @dataclass(frozen=True)
@@ -262,6 +443,7 @@ class RouteApplyResult:
     failed: RouteMutation | None
     remaining: tuple[RouteMutation, ...]
     committed_state: RouteTransitionState | None
+    receipt: RouteReconciliationReceipt | None = None
 
 
 class VMHARouteReconciler:
@@ -312,6 +494,7 @@ class VMHARouteReconciler:
                 held_bgp_prefixes=frozenset(),
                 desired_prefixes=frozenset(),
                 next_state=state,
+                ownership=None,
             )
 
         routes = tuple(existing_routes)
@@ -366,6 +549,7 @@ class VMHARouteReconciler:
                 held_bgp_prefixes=frozenset(held_bgp),
                 desired_prefixes=frozenset(desired_kinds),
                 next_state=state,
+                ownership=ownership,
             )
 
         owned_by_prefix: dict[str, list[ManagedRouteSnapshot]] = {}
@@ -456,19 +640,72 @@ class VMHARouteReconciler:
             held_bgp_prefixes=frozenset(held_bgp),
             desired_prefixes=frozenset(desired_kinds),
             next_state=next_state,
+            ownership=ownership,
         )
+
+
+def _route_plan_digest(plan: RouteReconciliationPlan) -> str:
+    payload = {
+        "desired_prefixes": sorted(plan.desired_prefixes),
+        "next_state": {
+            "absent_bgp_observations": list(plan.next_state.absent_bgp_observations),
+            "takeover_started_at": plan.next_state.takeover_started_at,
+        },
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _has_route_safety_blocker(plan: RouteReconciliationPlan) -> bool:
+    return any(reason.startswith("foreign-route-conflict:") for reason in plan.blocked_reasons)
 
 
 def execute_route_plan(
     plan: RouteReconciliationPlan,
     apply_mutation: Callable[[RouteMutation], None],
+    *,
+    context: RouteReconciliationContext,
+    reobserve_ownership: Callable[[], VerifiedAllocationOwnership],
+    reobserve_plan: Callable[[], RouteReconciliationPlan],
+    persist_receipt: Callable[[Mapping[str, object]], None],
+    observe_receipt: Callable[[], Mapping[str, object] | None],
 ) -> RouteApplyResult:
-    """Apply in order and stop at the first failure for safe deterministic retry."""
+    """Apply only for the exact current owner and durably re-observe completion."""
 
-    if not plan.authorized:
-        return RouteApplyResult((), None, (), None)
+    ownership = plan.ownership
+    if not plan.authorized or ownership is None or not context.matches(ownership):
+        return RouteApplyResult((), None, (), None, None)
+    plan_digest = _route_plan_digest(plan)
+    if not context.matches(reobserve_ownership()):
+        return RouteApplyResult((), None, plan.mutations, None, None)
+    current = reobserve_plan()
+    observed = observe_receipt()
+    if observed is not None:
+        receipt = RouteReconciliationReceipt.from_mapping(observed)
+        if receipt.context == context and receipt.plan_digest == plan_digest:
+            if (
+                not current.authorized
+                or current.ownership is None
+                or not context.matches(current.ownership)
+                or _has_route_safety_blocker(current)
+                or current.mutations
+                or _route_plan_digest(current) != plan_digest
+                or not context.matches(reobserve_ownership())
+            ):
+                raise RuntimeError("Current route observation does not satisfy the durable receipt")
+            return RouteApplyResult((), None, (), plan.next_state, receipt)
+    if current != plan:
+        raise RuntimeError("Route plan changed before mutation")
     applied: list[RouteMutation] = []
     for index, mutation in enumerate(plan.mutations):
+        if not context.matches(reobserve_ownership()):
+            return RouteApplyResult(
+                applied=tuple(applied),
+                failed=mutation,
+                remaining=plan.mutations[index:],
+                committed_state=None,
+                receipt=None,
+            )
         try:
             apply_mutation(mutation)
         except Exception:
@@ -477,13 +714,42 @@ def execute_route_plan(
                 failed=mutation,
                 remaining=plan.mutations[index:],
                 committed_state=None,
+                receipt=None,
             )
         applied.append(mutation)
+    if not context.matches(reobserve_ownership()):
+        return RouteApplyResult(
+            applied=tuple(applied),
+            failed=None,
+            remaining=(),
+            committed_state=None,
+            receipt=None,
+        )
+    current = reobserve_plan()
+    if (
+        not current.authorized
+        or current.ownership is None
+        or not context.matches(current.ownership)
+        or _has_route_safety_blocker(current)
+        or current.mutations
+        or _route_plan_digest(current) != plan_digest
+        or not context.matches(reobserve_ownership())
+    ):
+        raise RuntimeError("Route reconciliation postcondition was not observed")
+    receipt = RouteReconciliationReceipt(context=context, plan_digest=plan_digest)
+    persist_receipt(receipt.to_dict())
+    observed = observe_receipt()
+    if observed is None:
+        raise RuntimeError("Route reconciliation receipt was not durably observed")
+    durable_receipt = RouteReconciliationReceipt.from_mapping(observed)
+    if durable_receipt != receipt:
+        raise RuntimeError("Route reconciliation receipt does not match the current operation")
     return RouteApplyResult(
         applied=tuple(applied),
         failed=None,
         remaining=(),
         committed_state=plan.next_state,
+        receipt=durable_receipt,
     )
 
 
