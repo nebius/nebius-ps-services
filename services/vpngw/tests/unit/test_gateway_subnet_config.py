@@ -243,6 +243,7 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     guard = (systemd / "nebius-vpngw-vm-ha-guard.service").read_text(encoding="utf-8")
     controller = (systemd / "nebius-vpngw-vm-ha.service").read_text(encoding="utf-8")
     ordering = (systemd / "nebius-vpngw-vm-ha-ordering.conf").read_text(encoding="utf-8")
+    fix_routes = (systemd / "nebius-vpngw-fix-routes.service").read_text(encoding="utf-8")
 
     assert "Before=network-online.target strongswan-starter.service" in guard
     assert "ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in guard
@@ -253,3 +254,6 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert "Before=strongswan-starter.service strongswan.service frr.service" in controller
     assert "After=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert "Requires=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
+    assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" in fix_routes
+    assert "ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
+    assert "Restart=on-failure" in controller
