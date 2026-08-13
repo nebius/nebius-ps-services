@@ -349,7 +349,14 @@ class VMHAController:
                 and self._postcondition(pending, snapshot)
                 and (
                     pending.kind in _LOCAL_SAFETY_ACTIONS
-                    or self._pending_action_context_matches(pending, snapshot, checkpoint)
+                    or (
+                        pending.kind is ActionKind.ATTACH_CANDIDATE
+                        and self._attach_completion_context_matches(pending, snapshot, checkpoint)
+                    )
+                    or (
+                        pending.kind is not ActionKind.ATTACH_CANDIDATE
+                        and self._pending_action_context_matches(pending, snapshot, checkpoint)
+                    )
                 )
             )
             if pending.boot_id != snapshot.boot_id or postcondition_met:
@@ -890,6 +897,44 @@ class VMHAController:
             and action.generation_id == snapshot.local_generation_id
             and action.digests == snapshot.local_digests
             and action.ownership_incarnation == checkpoint.ownership_incarnation
+        )
+
+    @staticmethod
+    def _attach_completion_context_matches(
+        action: ControllerAction,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+    ) -> bool:
+        """Bind attach completion to the exact newer Compute revision."""
+
+        cloud = snapshot.cloud
+        pre_revision = action.ownership_epoch
+        observed_revision = cloud.ownership_epoch
+        try:
+            revisions_advance = bool(
+                pre_revision.isascii()
+                and observed_revision.isascii()
+                and pre_revision.isdecimal()
+                and observed_revision.isdecimal()
+                and int(pre_revision) > 0
+                and int(observed_revision) > int(pre_revision)
+            )
+        except ValueError:
+            revisions_advance = False
+        return bool(
+            revisions_advance
+            and cloud.authoritative
+            and action.target_node_id == snapshot.local_node_id
+            and action.allocation_id == cloud.allocation_id
+            and action.generation_id == snapshot.local_generation_id
+            and action.digests == snapshot.local_digests
+            and action.ownership_incarnation == checkpoint.ownership_incarnation
+            and cloud.former_owner_node_id == snapshot.peer_node_id
+            and cloud.former_owner_compute_state is ComputeState.STOPPED
+            and cloud.former_attachment_absent
+            and cloud.candidate_attachment_exact
+            and not cloud.ownership_re_read_exact
+            and cloud.observed_owner_node_id == snapshot.local_node_id
         )
 
     def _promotion_gates_clear(self, snapshot: ControllerSnapshot) -> bool:
