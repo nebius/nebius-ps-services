@@ -1,13 +1,8 @@
-"""Complete inert runtime ports for the opt-in VM-HA controller.
-
-The service entry point deliberately does not import this module yet.  It owns
-one renewable SDK, validates the installed binding and credentials, and
-constructs fail-closed peer, local data-plane, cloud, and route ports that can
-be exercised with injected offline fakes.
-"""
+"""Complete runtime ports for the explicitly enabled VM-HA controller."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -296,6 +291,8 @@ class BoundCloudRuntime:
         self.local = local
         self.peer = peer
         self.adapter = adapter
+        self._attach_started_revision: str | None = None
+        self._confirmed_candidate_revision: str | None = None
 
     @property
     def allocation_id(self) -> str:
@@ -321,13 +318,16 @@ class BoundCloudRuntime:
                 owner_id = node.node_id
         if owner is not None and owner_id is None:
             raise RuntimeError("shared allocation has an unexpected Compute owner")
-        if owner == self._owner(self.local):
-            epoch = observed.candidate.resource_version
-        elif owner == self._owner(self.peer):
-            epoch = observed.former.resource_version
-        else:
-            epoch = ""
+        # The candidate Compute revision is the transfer epoch both before and
+        # after detachment.  That keeps every checkpoint on one resource and
+        # lets attachment prove a strictly newer post-mutation revision.
+        epoch = observed.candidate.resource_version
         exact = observed.candidate_attachment_exact
+        if not exact:
+            self._confirmed_candidate_revision = None
+        elif self._attach_started_revision is None and self.local.role.value == "active":
+            # The configured initial owner did not traverse a local transfer.
+            self._confirmed_candidate_revision = epoch
         return CloudObservation(
             authoritative=True,
             allocation_id=self.allocation_id,
@@ -336,7 +336,7 @@ class BoundCloudRuntime:
             former_owner_compute_state=_compute_state(observed.former.state),
             former_attachment_absent=observed.former_attachment_absent,
             candidate_attachment_exact=exact,
-            ownership_re_read_exact=exact,
+            ownership_re_read_exact=bool(exact and self._confirmed_candidate_revision == epoch),
             ownership_epoch=epoch,
         )
 
@@ -372,7 +372,7 @@ class BoundCloudRuntime:
             self.allocation_id, self._owner(self.peer), present=False
         )
 
-    def attach_candidate(self, _action: ControllerAction) -> None:
+    def attach_candidate(self, action: ControllerAction) -> None:
         observation = self.observe()
         if observation.candidate_attachment_exact:
             self.adapter.require_compute_attachment(
@@ -385,15 +385,28 @@ class BoundCloudRuntime:
             and observation.former_attachment_absent
         ):
             raise RuntimeError("candidate attach requires completed former-owner fencing")
+        if observation.ownership_epoch != action.ownership_epoch:
+            raise RuntimeError("candidate pre-attach revision changed before the effect")
+        self._attach_started_revision = action.ownership_epoch
+        self._confirmed_candidate_revision = None
         self.adapter.require_candidate_attachment(self.allocation_id, self._owner(self.local))
         self.adapter.require_compute_attachment(
             self.allocation_id, self._owner(self.local), present=True
         )
 
     def confirm_candidate(self) -> None:
-        observation = self.observe()
-        if not observation.transfer_complete(self.local.node_id):
+        observed = self._cluster()
+        revision = observed.candidate.resource_version
+        if not (
+            observed.former.state is InstanceCloudState.STOPPED
+            and observed.former_attachment_absent
+            and observed.candidate_attachment_exact
+            and observed.allocation.owner == self._owner(self.local)
+            and revision.isascii()
+            and revision.isdecimal()
+        ):
             raise RuntimeError("candidate ownership is not exact after former-owner fencing")
+        self._confirmed_candidate_revision = revision
 
 
 def build_cloud_runtime(
@@ -629,20 +642,35 @@ class SystemDataPlaneRuntime:
         self,
         *,
         state_path: Path,
+        guard_path: Path,
         configured_bgp_sessions: Iterable[str],
         expected_bgp_policy_digest: str,
         runner: CommandRunner = _run_command,
         command_timeout: float = 5.0,
         commands: DataPlaneCommandSet = DataPlaneCommandSet(),
+        routing_lock_path: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
     ) -> None:
         if not math.isfinite(command_timeout) or command_timeout <= 0:
             raise ValueError("local command timeout must be finite and positive")
         self.state_path = state_path
+        self.guard_path = guard_path
         self.configured_bgp_sessions = frozenset(str(item) for item in configured_bgp_sessions)
         self.expected_bgp_policy_digest = expected_bgp_policy_digest
         self.runner = runner
         self.command_timeout = command_timeout
         self.commands = commands
+        self.routing_lock_path = routing_lock_path
+
+    def _write_guard(self, action: ControllerAction, mode: DataPlaneMode) -> None:
+        _atomic_write_json(
+            self.guard_path,
+            {
+                "schema": "nebius-vpngw/vm-ha-status-v1",
+                "guard_boot_id": action.boot_id,
+                "data_plane_mode": mode.value,
+                "installed_at": time.time(),
+            },
+        )
 
     def _run(self, *argv: str) -> CommandResult:
         try:
@@ -714,8 +742,22 @@ class SystemDataPlaneRuntime:
         )
 
     def _set_mode(self, action: ControllerAction, mode: DataPlaneMode) -> None:
+        self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            self._set_mode_locked(action, mode)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+    def _set_mode_locked(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         forwarding = "1" if mode is DataPlaneMode.ACTIVE else "0"
-        if mode is DataPlaneMode.ACTIVE:
+        if mode is not DataPlaneMode.ACTIVE:
+            # Revoke the shared readiness authority before touching kernel or
+            # tunnel state so no concurrent writer can re-enable forwarding.
+            self._write_guard(action, DataPlaneMode.BLOCKED)
+        else:
             _atomic_write_json(
                 self.state_path,
                 {
@@ -729,18 +771,28 @@ class SystemDataPlaneRuntime:
         if result.returncode != 0 or self._forwarding() is (mode is not DataPlaneMode.ACTIVE):
             raise RuntimeError("local forwarding postcondition was not observed")
         if mode is DataPlaneMode.BLOCKED:
-            terminate = self._run(
-                self.commands.swanctl, "--terminate", "--ike", "all", "--timeout", "5"
+            strongswan_running = any(
+                self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
+                for service in ("strongswan-starter", "strongswan")
             )
-            if terminate.returncode != 0:
-                raise RuntimeError("cluster tunnel initiation could not be disabled")
-            unload = self._run(self.commands.swanctl, "--unload-conns")
-            if unload.returncode != 0:
-                raise RuntimeError("cluster tunnel start actions could not be disabled")
+            if strongswan_running:
+                terminate = self._run(
+                    self.commands.swanctl, "--terminate", "--ike", "all", "--timeout", "5"
+                )
+                if terminate.returncode != 0:
+                    raise RuntimeError("cluster tunnel initiation could not be disabled")
+                unload = self._run(self.commands.swanctl, "--unload-conns")
+                if unload.returncode != 0:
+                    raise RuntimeError("cluster tunnel start actions could not be disabled")
         elif mode is DataPlaneMode.PASSIVE:
-            load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
-            if load.returncode != 0:
-                raise RuntimeError("cluster tunnel configuration could not be loaded")
+            strongswan_running = any(
+                self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
+                for service in ("strongswan-starter", "strongswan")
+            )
+            if strongswan_running:
+                load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
+                if load.returncode != 0:
+                    raise RuntimeError("cluster tunnel configuration could not be loaded")
         try:
             _atomic_write_json(
                 self.state_path,
@@ -751,8 +803,10 @@ class SystemDataPlaneRuntime:
                     "schema": "nebius-vpngw/vm-ha-data-plane-v1",
                 },
             )
+            self._write_guard(action, mode)
         except Exception:
             if mode is DataPlaneMode.ACTIVE:
+                self._write_guard(action, DataPlaneMode.BLOCKED)
                 rollback = self._run(self.commands.sysctl, "-w", "net.ipv4.ip_forward=0")
                 if rollback.returncode != 0 or self._forwarding():
                     raise RuntimeError(
@@ -1307,6 +1361,18 @@ class VMHARuntimePorts:
                 raise RuntimeError("active forwarding requires the exact current route receipt")
             self.data_plane.enable_active(action)
 
+        def confirm(action: ControllerAction) -> None:
+            before = self.cloud.observe()
+            if before.ownership_epoch != action.ownership_epoch:
+                raise RuntimeError("candidate ownership revision changed before confirmation")
+            self.cloud.confirm_candidate()
+            after = self.cloud.observe()
+            if not (
+                after.ownership_epoch == action.ownership_epoch
+                and after.transfer_complete(self.local.node_id)
+            ):
+                raise RuntimeError("candidate ownership is not exact after confirmation")
+
         return {
             ActionKind.INSTALL_COLD_START_GUARD: checked(
                 ActionKind.INSTALL_COLD_START_GUARD, self.data_plane.install_guard
@@ -1329,13 +1395,58 @@ class VMHARuntimePorts:
             ),
             ActionKind.CONFIRM_CANDIDATE_OWNERSHIP: checked(
                 ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
-                lambda _action: self.cloud.confirm_candidate(),
+                confirm,
             ),
             ActionKind.RECONCILE_ROUTES: checked(
                 ActionKind.RECONCILE_ROUTES, self.routes.reconcile
             ),
             ActionKind.ENABLE_ACTIVE: checked(ActionKind.ENABLE_ACTIVE, enable),
         }
+
+    def heartbeat(self, *, boot_id: str, sequence: int, clock: float) -> PeerHeartbeat:
+        """Build one secret-free advisory heartbeat from fresh local truth."""
+
+        cloud = self.cloud.observe()
+        readiness = self.routes.readiness()
+        return PeerHeartbeat(
+            cluster_id=self.binding.cluster_id,
+            node_id=self.local.node_id,
+            boot_id=boot_id,
+            sequence=sequence,
+            sent_at=datetime.fromtimestamp(clock, timezone.utc).isoformat().replace("+00:00", "Z"),
+            configured_role=self.local.role.value,
+            observed_owner_id=cloud.observed_owner_node_id,
+            generation_id=self.binding.generation_id,
+            digests=DigestSet(
+                self.binding.configuration_digest,
+                self.binding.static_routes_digest,
+                self.binding.bgp_policy_digest,
+            ),
+            service_healthy=readiness.service_healthy,
+            route_ready=readiness.promotion_ready,
+            promotion_ready=bool(
+                readiness.promotion_ready and cloud.local_attachment_exact(self.local.node_id)
+            ),
+        )
+
+    def install_shutdown_guard(self, *, boot_id: str) -> None:
+        """Restore the local fail-closed data plane without cloud authority."""
+
+        action = ControllerAction(
+            kind=ActionKind.INSTALL_COLD_START_GUARD,
+            operation_id=f"{boot_id}:shutdown-guard:{self.local.node_id}",
+            boot_id=boot_id,
+            target_node_id=self.local.node_id,
+            allocation_id=self.binding.shared_allocation_id,
+            ownership_epoch="shutdown",
+            generation_id=self.binding.generation_id,
+            digests=DigestSet(
+                self.binding.configuration_digest,
+                self.binding.static_routes_digest,
+                self.binding.bgp_policy_digest,
+            ),
+        )
+        self.handlers()[ActionKind.INSTALL_COLD_START_GUARD](action)
 
     def close(self) -> None:
         self.sdk.close()
@@ -1489,6 +1600,7 @@ def build_runtime_ports(
         cloud = build_cloud_runtime(binding, local_node_id, sdk.client)
         data_plane = data_plane_factory(
             state_path=state_dir / "data-plane.json",
+            guard_path=state_dir / "guard.json",
             configured_bgp_sessions=configured_sessions,
             expected_bgp_policy_digest=binding.bgp_policy_digest,
             runner=runner,

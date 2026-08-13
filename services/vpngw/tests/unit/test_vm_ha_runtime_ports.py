@@ -10,6 +10,7 @@ import pytest
 
 from nebius_vpngw.agent.vm_ha.models import DigestSet, ReplayState
 from nebius_vpngw.agent.vm_ha.runtime import (
+    BoundCloudRuntime,
     CommandResult,
     DataPlaneCommandSet,
     LocalDataPlaneObservation,
@@ -27,6 +28,13 @@ from nebius_vpngw.agent.vm_ha_controller import (
     ControllerAction,
     DataPlaneMode,
     LocalReadiness,
+)
+from nebius_vpngw.deploy.vm_ha_cloud import (
+    AllocationObservation,
+    AllocationOwner,
+    ClusterCloudObservation,
+    ComputeObservation,
+    InstanceCloudState,
 )
 from nebius_vpngw.deploy.vm_ha_routes import (
     ManagedRouteKind,
@@ -120,6 +128,91 @@ def _private_file(path: Path, value: str = "fixture") -> str:
     return str(path)
 
 
+def test_bound_cloud_transfer_uses_one_candidate_revision_boundary(tmp_path: Path) -> None:
+    config = _runtime_config(tmp_path)
+    binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
+    local = next(node for node in binding.nodes if node.role.value == "passive")
+    peer = next(node for node in binding.nodes if node.node_id != local.node_id)
+    state = {
+        "owner": AllocationOwner(peer.compute_id, peer.network_interface_name),
+        "former_state": InstanceCloudState.RUNNING,
+        "candidate_revision": "3",
+    }
+
+    class Adapter:
+        def observe_cluster(self, **_kwargs: object) -> ClusterCloudObservation:
+            owner = state["owner"]
+            candidate_allocation = (
+                binding.shared_allocation_id
+                if owner == AllocationOwner(local.compute_id, local.network_interface_name)
+                else ""
+            )
+            former_allocation = (
+                binding.shared_allocation_id
+                if owner == AllocationOwner(peer.compute_id, peer.network_interface_name)
+                else ""
+            )
+            return ClusterCloudObservation(
+                allocation=AllocationObservation(binding.shared_allocation_id, owner),
+                former=ComputeObservation(
+                    peer.compute_id,
+                    state["former_state"],
+                    "9",
+                    ((peer.network_interface_name, former_allocation),),
+                ),
+                candidate=ComputeObservation(
+                    local.compute_id,
+                    InstanceCloudState.RUNNING,
+                    state["candidate_revision"],
+                    ((local.network_interface_name, candidate_allocation),),
+                ),
+                former_owner=AllocationOwner(peer.compute_id, peer.network_interface_name),
+                candidate_owner=AllocationOwner(local.compute_id, local.network_interface_name),
+            )
+
+        def require_stopped(self, _compute_id: str) -> None:
+            state["former_state"] = InstanceCloudState.STOPPED
+
+        def require_former_attachment_absent(self, *_args: object) -> None:
+            state["owner"] = None
+
+        def require_candidate_attachment(self, *_args: object) -> None:
+            state["owner"] = AllocationOwner(local.compute_id, local.network_interface_name)
+            state["candidate_revision"] = "4"
+
+        def require_compute_attachment(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    runtime = BoundCloudRuntime(binding, local, peer, Adapter())  # type: ignore[arg-type]
+    action = lambda kind: ControllerAction(  # noqa: E731
+        kind,
+        f"op-{kind.value}",
+        "boot-a",
+        peer.node_id
+        if kind in {ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT}
+        else local.node_id,
+        binding.shared_allocation_id,
+        "3",
+        binding.generation_id,
+        DigestSet(
+            binding.configuration_digest,
+            binding.static_routes_digest,
+            binding.bgp_policy_digest,
+        ),
+    )
+
+    assert runtime.observe().ownership_epoch == "3"
+    runtime.stop_former(action(ActionKind.STOP_FORMER_OWNER))
+    runtime.detach_former(action(ActionKind.DETACH_FORMER_ATTACHMENT))
+    assert runtime.observe().ownership_epoch == "3"
+    runtime.attach_candidate(action(ActionKind.ATTACH_CANDIDATE))
+    attached = runtime.observe()
+    assert attached.ownership_epoch == "4"
+    assert attached.ownership_re_read_exact is False
+    runtime.confirm_candidate()
+    assert runtime.observe().ownership_re_read_exact is True
+
+
 def _runtime_config(tmp_path: Path) -> dict[str, object]:
     static_json = "[]"
     bgp_json = "[]"
@@ -193,7 +286,7 @@ def _runtime_config(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def test_factory_builds_every_inert_port_and_closes_one_sdk(tmp_path: Path) -> None:
+def test_factory_builds_every_runtime_port_and_closes_one_sdk(tmp_path: Path) -> None:
     sdk = FakeSDK()
     ports = build_runtime_ports(
         _runtime_config(tmp_path),
@@ -212,6 +305,43 @@ def test_factory_builds_every_inert_port_and_closes_one_sdk(tmp_path: Path) -> N
     ports.close()
     ports.close()
     assert sdk.close_calls == 1
+
+
+def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
+    tmp_path: Path,
+) -> None:
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    ports.cloud.observe = lambda: CloudObservation(
+        authoritative=True,
+        allocation_id="allocation-a",
+        observed_owner_node_id="node-a",
+        former_owner_node_id="node-b",
+        former_owner_compute_state=ComputeState.STOPPED,
+        former_attachment_absent=True,
+        candidate_attachment_exact=True,
+        ownership_re_read_exact=True,
+        ownership_epoch="7",
+    )
+    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
+
+    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=10.0)
+    ports.install_shutdown_guard(boot_id="boot-a")
+
+    assert heartbeat.node_id == "node-a"
+    assert heartbeat.sequence == 4
+    assert heartbeat.observed_owner_id == "node-a"
+    assert heartbeat.promotion_ready is True
+    assert "credentials" not in heartbeat.to_dict()
+    assert ports.data_plane.mode() is DataPlaneMode.BLOCKED
+    ports.close()
 
 
 def test_factory_failure_closes_sdk_and_never_persists_credentials(tmp_path: Path) -> None:
@@ -345,6 +475,8 @@ def test_local_data_plane_guard_is_absolute_bounded_and_fail_closed(tmp_path: Pa
     def runner(argv: tuple[str, ...], timeout: float) -> CommandResult:
         nonlocal forwarding
         calls.append((tuple(argv), timeout))
+        if argv[0] == DataPlaneCommandSet().systemctl:
+            return CommandResult(0)
         if argv[0] == "/usr/sbin/swanctl":
             return CommandResult(0)
         if argv[-1] == "net.ipv4.ip_forward":
@@ -356,6 +488,8 @@ def test_local_data_plane_guard_is_absolute_bounded_and_fail_closed(tmp_path: Pa
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
         configured_bgp_sessions=(),
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
@@ -392,6 +526,8 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         nonlocal forwarding
         calls.append(tuple(argv))
+        if argv[0] == DataPlaneCommandSet().systemctl:
+            return CommandResult(0)
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
@@ -403,6 +539,8 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
         configured_bgp_sessions=(),
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
@@ -470,6 +608,8 @@ def test_active_persistence_failure_rolls_forwarding_back_off(
     monkeypatch.setattr(runtime_module, "_atomic_write_json", interrupted)
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
         configured_bgp_sessions=(),
         expected_bgp_policy_digest="c" * 64,
         runner=runner,

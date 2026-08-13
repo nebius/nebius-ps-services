@@ -711,14 +711,8 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
     assert all(item is binding for _, _, item in observed)
 
 
-def test_vm_ha_activation_is_fail_closed_while_authoritative_adapters_are_missing() -> None:
-    assert _vm_ha_activation_blockers() == (
-        "authoritative-allocation-identity-unavailable",
-        "authoritative-compute-state-adapter-unavailable",
-        "authoritative-nic-attachment-adapter-unavailable",
-        "authenticated-peer-transport-unavailable",
-        "route-runtime-adapter-unavailable",
-    )
+def test_vm_ha_activation_has_no_static_runtime_blockers_after_complete_wiring() -> None:
+    assert _vm_ha_activation_blockers() == ()
 
 
 def test_vm_ha_service_account_requires_verified_non_broad_roles(monkeypatch) -> None:
