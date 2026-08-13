@@ -133,7 +133,7 @@
 
 ### TI-DES-007: Deterministic two-node safety and compatibility proof
 
-- Status: planned
+- Status: implemented
 - Requirements: TI-REQ-001, TI-REQ-002, TI-REQ-003, TI-REQ-004, TI-REQ-005, TI-REQ-006
 - Selected approach: Build composed offline tests with fake time, two agents, peer transport, filesystem faults, Compute, allocations, routes, FRR, XFRM, and forwarding, and retain a golden non-HA execution trace.
 - Boundaries and interfaces: New integration tests own cross-component sequencing evidence; focused unit suites retain adapter and policy coverage; live validation remains a separately authorized product trial.
@@ -148,9 +148,9 @@
 
 #### Implementation evidence
 
-- Existing tests cover tunnel roles, per-instance configuration, route conflicts, and instance-scoped CLI operations but not a two-node ownership transition.
-- The required proof is one traceable chain from canonical generation through fencing, allocation ownership, promotion, and owner-only route reconciliation.
-- Implementation is not present; this planned slice becomes the terminal offline acceptance gate.
+- Deterministic two-node tests cover normal operation, heartbeat loss, stale generation parity, fencing failure, cloud outage, route hold-down, resynchronization, and manual failback using fake time and shared cloud truth.
+- Crash injection after each takeover effect plus checkpoint persistence failure proves restart resumes the same operation without duplicating effects or enabling forwarding before exact ownership and route completion.
+- Omitted and explicitly disabled VM HA retain the ordinary plan, while instance count and public-allocation shape do not infer VM HA. This completes the offline acceptance gate only; live readiness still requires a separately authorized non-production trial.
 
 ## Task Implementer Design Change Log
 

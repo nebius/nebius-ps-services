@@ -19,7 +19,9 @@ All notable changes to this project are tracked here. This changelog follows
   authoritative stopped-owner and shared-allocation fencing, owner-gated static
   and BGP route reconciliation, cold-start forwarding guards, durable recovery,
   status, and fenced manual failback while preserving omitted and disabled
-  non-HA behavior.
+  non-HA behavior. Deterministic offline two-node tests cover negative fencing
+  and readiness gates plus restart after every takeover effect; live readiness
+  remains a separately authorized validation boundary.
 - Added concise static and BGP example configurations and clarified the subnet
   and route-table resources created by `prep-network`.
 
