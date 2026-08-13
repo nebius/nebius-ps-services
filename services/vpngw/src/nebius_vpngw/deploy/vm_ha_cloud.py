@@ -125,23 +125,45 @@ class ClusterCloudObservation:
 class NebiusSDKCloudClient:
     """Exact synchronous Nebius SDK calls used by the on-node HA service."""
 
+    _REQUEST_TIMEOUT_SECONDS = 30.0
+
     def __init__(self, sdk: t.Any) -> None:
         self.sdk = sdk
 
     def get_instance(self, instance_id: str) -> t.Any:
         from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
 
-        return InstanceServiceClient(self.sdk).get(GetInstanceRequest(id=instance_id)).wait()
+        return (
+            InstanceServiceClient(self.sdk)
+            .get(
+                GetInstanceRequest(id=instance_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
 
     def stop_instance(self, instance_id: str) -> None:
         from nebius.api.nebius.compute.v1 import InstanceServiceClient, StopInstanceRequest
 
-        InstanceServiceClient(self.sdk).stop(StopInstanceRequest(id=instance_id)).wait()
+        InstanceServiceClient(self.sdk).stop(
+            StopInstanceRequest(id=instance_id),
+            timeout=self._REQUEST_TIMEOUT_SECONDS,
+            auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+        ).wait()
 
     def get_allocation(self, allocation_id: str) -> t.Any:
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest
 
-        return AllocationServiceClient(self.sdk).get(GetAllocationRequest(id=allocation_id)).wait()
+        return (
+            AllocationServiceClient(self.sdk)
+            .get(
+                GetAllocationRequest(id=allocation_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
 
     def set_allocation(
         self,
@@ -180,8 +202,8 @@ class NebiusSDKCloudClient:
         spec.network_interfaces = interfaces
         InstanceServiceClient(self.sdk).update(
             UpdateInstanceRequest(metadata=metadata, spec=spec),
-            timeout=30,
-            auth_timeout=30,
+            timeout=self._REQUEST_TIMEOUT_SECONDS,
+            auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
         ).wait()
 
 
