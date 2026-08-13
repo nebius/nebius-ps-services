@@ -1366,6 +1366,7 @@ def apply(
                 fail_closed=stale_vm_ha_removed,
             )
     else:
+        assert vm_ha_runtime_binding is not None
         ordered_instances = _vm_ha_apply_order(plan)
         print("[bold]Staging VM-HA configs passive-first without activation...[/bold]")
         staged: list[tuple[t.Any, str, t.Any]] = []
