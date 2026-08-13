@@ -4,7 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from nebius_vpngw.schema import validate_config
+from nebius_vpngw.schema import (
+    VMHACredentialReferences,
+    VMHARuntimeBinding,
+    VMHARuntimeNodeBinding,
+    validate_config,
+)
 
 
 def _base_bgp_config(sample_config: dict) -> dict:
@@ -108,6 +113,50 @@ def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
         "active",
         "active",
     ]
+
+
+def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references() -> None:
+    digest = "a" * 64
+    references = VMHACredentialReferences(
+        certificate_authority="/etc/nebius-vpngw/vm-ha/ca.crt",
+        certificate="/etc/nebius-vpngw/vm-ha/node.crt",
+        private_key="/etc/nebius-vpngw/vm-ha/node.key",
+    )
+    binding = VMHARuntimeBinding(
+        cluster_id="gateway-cluster",
+        shared_allocation_id="allocation-1",
+        nodes=(
+            VMHARuntimeNodeBinding(
+                node_id="gateway-a",
+                role="active",
+                compute_id="compute-a",
+                network_interface_name="eth0",
+                peer_endpoint="10.0.0.10:9443",
+                credentials=references,
+            ),
+            VMHARuntimeNodeBinding(
+                node_id="gateway-b",
+                role="passive",
+                compute_id="compute-b",
+                network_interface_name="eth0",
+                peer_endpoint="10.0.0.11:9443",
+                credentials=references,
+            ),
+        ),
+        route_runtime_id="gateway-cluster:allocation-1",
+        generation_id=digest,
+        configuration_digest=digest,
+        static_routes_digest="b" * 64,
+        bgp_policy_digest="c" * 64,
+    )
+
+    assert "credential" not in binding.model_dump_json().replace("credentials", "")
+    with pytest.raises(ValueError, match="absolute paths"):
+        VMHACredentialReferences(
+            certificate_authority="ca.crt",
+            certificate="/node.crt",
+            private_key="/node.key",
+        )
 
 
 @pytest.mark.parametrize(
