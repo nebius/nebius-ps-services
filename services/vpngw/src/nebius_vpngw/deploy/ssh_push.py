@@ -13,7 +13,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname, urlopen
 
+import yaml
+
 from ..config_loader import InstanceResolvedConfig
+from ..schema import VMHARuntimeBinding
 
 
 @dataclass(frozen=True)
@@ -51,7 +54,40 @@ class SSHPush:
         return self._paramiko
 
     @staticmethod
-    def _vm_ha_receipt(inst_cfg: InstanceResolvedConfig) -> VMHAStageReceipt:
+    def _render_vm_ha_config(
+        inst_cfg: InstanceResolvedConfig,
+        runtime_binding: VMHARuntimeBinding,
+    ) -> str:
+        """Bind authoritative post-provision identities into one node manifest."""
+
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        readiness = inst_cfg.vm_ha_readiness
+        if node is None or generation is None or readiness is None:
+            raise ValueError("VM-HA staging requires a complete resolved node manifest")
+        bound_nodes = [item for item in runtime_binding.nodes if item.node_id == node.node_id]
+        if len(bound_nodes) != 1 or bound_nodes[0].role.value != node.role.value:
+            raise ValueError("VM-HA runtime binding does not match the staged node")
+        payload = yaml.safe_load(inst_cfg.config_yaml)
+        if not isinstance(payload, dict) or not isinstance(payload.get("vm_ha"), dict):
+            raise ValueError("VM-HA resolved YAML has no node manifest")
+        if not (
+            runtime_binding.cluster_id == payload["vm_ha"].get("cluster_id")
+            and runtime_binding.generation_id == generation.generation_id
+            and runtime_binding.configuration_digest == generation.digests.configuration
+            and runtime_binding.static_routes_digest == generation.digests.static_routes
+            and runtime_binding.bgp_policy_digest == generation.digests.bgp_policy
+        ):
+            raise ValueError("VM-HA runtime binding does not match the staged generation")
+
+        payload["vm_ha"]["runtime_binding"] = runtime_binding.model_dump(mode="json")
+        return yaml.safe_dump(payload, sort_keys=False)
+
+    @staticmethod
+    def _vm_ha_receipt(
+        inst_cfg: InstanceResolvedConfig,
+        rendered_config: str,
+    ) -> VMHAStageReceipt:
         node = inst_cfg.vm_ha_node
         generation = inst_cfg.vm_ha_generation
         readiness = inst_cfg.vm_ha_readiness
@@ -67,15 +103,26 @@ class SSHPush:
             configuration_digest=generation.digests.configuration,
             static_routes_digest=generation.digests.static_routes,
             bgp_policy_digest=generation.digests.bgp_policy,
-            staged_file_sha256=hashlib.sha256(inst_cfg.config_yaml.encode("utf-8")).hexdigest(),
+            staged_file_sha256=hashlib.sha256(rendered_config.encode("utf-8")).hexdigest(),
         )
 
+    @staticmethod
+    def _vm_ha_staged_verify_command(receipt: VMHAStageReceipt) -> str:
+        path = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
+        return f"echo '{receipt.staged_file_sha256}  {path}' | sudo sha256sum --check --status"
+
     def stage_vm_ha_config(
-        self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
+        self,
+        ssh_target: str,
+        inst_cfg: InstanceResolvedConfig,
+        local_cfg: dict,
+        *,
+        runtime_binding: VMHARuntimeBinding,
     ) -> VMHAStageReceipt:
         """Stage and verify one node without activating it or reloading services."""
 
-        receipt = self._vm_ha_receipt(inst_cfg)
+        rendered_config = self._render_vm_ha_config(inst_cfg, runtime_binding)
+        receipt = self._vm_ha_receipt(inst_cfg, rendered_config)
         paramiko = self._ensure_paramiko()
         gg = local_cfg.get("gateway_group") or {}
         vm_spec = gg.get("vm_spec") or {}
@@ -98,7 +145,7 @@ class SSHPush:
             temporary = f"/tmp/nebius-vpngw-vm-ha-stage-{inst_cfg.instance_index}.yaml"
             destination = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
             with client.open_sftp() as sftp, sftp.file(temporary, "w") as stream:
-                stream.write(inst_cfg.config_yaml)
+                stream.write(rendered_config)
             command = (
                 "sudo install -d -m 0700 /etc/nebius-vpngw/vm-ha-staged && "
                 f"sudo install -o root -g root -m 0600 {temporary} {destination} && "
@@ -113,6 +160,71 @@ class SSHPush:
                     f"VM-HA stage verification failed for {receipt.node_id}: {detail or observed}"
                 )
             return receipt
+        finally:
+            client.close()
+
+    def deactivate_vm_ha(self, ssh_target: str, local_cfg: dict) -> bool:
+        """Remove stale HA activation state before an ordinary agent restart."""
+
+        if not ssh_target:
+            raise ValueError("VM-HA deactivation requires an SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        command = """sudo /bin/bash -lc '
+set -eu
+stale=0
+for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  if [ -e "$path" ]; then stale=1; fi
+done
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    stale=1
+  fi
+done
+if [ "$stale" -eq 0 ]; then
+  printf "VM_HA_DEACTIVATED=0\\n"
+  exit 0
+fi
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    systemctl disable --now "$unit"
+  fi
+done
+rm -f /etc/nebius-vpngw/vm-ha-enabled
+rm -f /etc/systemd/system/nebius-vpngw-vm-ha.service
+rm -f /etc/systemd/system/nebius-vpngw-vm-ha-guard.service
+rm -f /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/strongswan.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/frr.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf
+for path in /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  if [ -d "$path" ]; then find "$path" -depth -delete; fi
+done
+systemctl daemon-reload
+printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
+'"""
+        try:
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=60)
+            return_code = stdout.channel.recv_exit_status()
+            if return_code != 0:
+                detail = stderr.read().decode().strip()
+                raise RuntimeError(f"VM-HA deactivation failed: {detail or return_code}")
+            return "VM_HA_DEACTIVATED=1" in stdout.read().decode().splitlines()
         finally:
             client.close()
 
@@ -316,8 +428,13 @@ class SSHPush:
         local_cfg: dict,
         *,
         staged_receipt: VMHAStageReceipt | None = None,
+        runtime_binding: VMHARuntimeBinding | None = None,
+        fail_closed: bool = False,
     ) -> None:
+        required_remote = staged_receipt is not None or fail_closed
         if staged_receipt is not None:
+            if runtime_binding is None:
+                raise ValueError("VM-HA activation requires its authoritative runtime binding")
             from ..agent.main import vm_ha_runtime_blockers
 
             blockers = vm_ha_runtime_blockers()
@@ -368,6 +485,11 @@ class SSHPush:
                 print("  • If the issue persists, restart the VM from the console and retry")
                 print("  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply")
                 print("=" * 80 + "\n")
+            if required_remote:
+                raise RuntimeError(
+                    f"{'VM-HA activation' if staged_receipt is not None else 'required'} "
+                    f"SSH connection failed for {ssh_target}"
+                ) from e
             return
 
         restart_agent = False
@@ -409,6 +531,8 @@ class SSHPush:
                     re_out = stdout_re.read().decode().strip()
                     re_err = stderr_re.read().decode().strip()
                     if rc_re != 0:
+                        if required_remote:
+                            raise RuntimeError("VM-HA package reinstall verification failed")
                         print("[SSHPush] WARNING: Forced reinstall failed; continuing anyway")
                         if re_out:
                             print(
@@ -459,6 +583,8 @@ class SSHPush:
                         else:
                             print("[SSHPush] WARNING: Could not read installed package version")
                     else:
+                        if required_remote:
+                            raise RuntimeError("VM-HA installed package import check failed")
                         print(
                             "[SSHPush] WARNING: pip install succeeded but package import check failed"
                         )
@@ -556,6 +682,8 @@ WantedBy=multi-user.target
                                         f.write(asset.read_text())
                                     print(f"[SSHPush] Staged {asset_name}")
                     except Exception as e:
+                        if required_remote:
+                            raise RuntimeError("VM-HA systemd asset staging failed") from e
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
                     print(f"[SSHPush] Package installation failed (rc={rc})")
@@ -571,16 +699,23 @@ WantedBy=multi-user.target
                             if len(err) > 500
                             else f"[SSHPush] stderr: {err}"
                         )
+                    if required_remote:
+                        raise RuntimeError("VM-HA package installation failed")
                     print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
             except Exception as e:
+                if required_remote:
+                    raise RuntimeError("VM-HA package deployment failed") from e
                 print(f"[SSHPush] Failed to deploy package: {e}")
                 print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
         else:
+            if required_remote:
+                raise RuntimeError("VM-HA activation requires a deployable agent wheel")
             print("[SSHPush] WARNING: Could not build wheel, skipping package deployment")
 
         # Upload to /tmp then move with sudo
         if staged_receipt is not None:
-            expected = self._vm_ha_receipt(inst_cfg)
+            rendered_config = self._render_vm_ha_config(inst_cfg, runtime_binding)
+            expected = self._vm_ha_receipt(inst_cfg, rendered_config)
             if staged_receipt != expected:
                 client.close()
                 raise ValueError("VM-HA activation receipt does not match the node manifest")
@@ -611,6 +746,11 @@ WantedBy=multi-user.target
         # Move into place and trigger reload
         cmds = [
             "sudo mkdir -p /etc/nebius-vpngw",
+            *(
+                [self._vm_ha_staged_verify_command(staged_receipt)]
+                if staged_receipt is not None
+                else []
+            ),
             config_install_cmd,
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
             f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
@@ -653,6 +793,15 @@ WantedBy=multi-user.target
             "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
             # Start or reload agent
             agent_cmd,
+            *(
+                [
+                    "sudo systemctl is-active --quiet nebius-vpngw-vm-ha-guard.service",
+                    "sudo systemctl is-active --quiet nebius-vpngw-vm-ha.service",
+                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready",
+                ]
+                if staged_receipt is not None
+                else []
+            ),
         ]
         had_failures = False
         for cmd in cmds:
@@ -662,11 +811,15 @@ WantedBy=multi-user.target
                 if rc != 0:
                     err = stderr.read().decode().strip()
                     print(f"[SSHPush] Command failed (rc={rc}): {cmd}\n{err}")
+                    if required_remote:
+                        raise RuntimeError(f"VM-HA activation command failed: {cmd}: {err or rc}")
                     had_failures = True
                 else:
                     # Suppress noisy per-command logs on success
                     pass
             except Exception as e:
+                if required_remote:
+                    raise RuntimeError(f"VM-HA activation command failed: {cmd}") from e
                 print(f"[SSHPush] Exec failed for: {cmd} -> {e}")
                 had_failures = True
 

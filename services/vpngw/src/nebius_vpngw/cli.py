@@ -1107,6 +1107,14 @@ def apply(
         # Skip VM ensure and SSH push in dry-run; just show summary.
         raise typer.Exit(code=0)
 
+    if plan.vm_ha is not None:
+        blockers = _vm_ha_activation_blockers()
+        if blockers:
+            print("[red]VM-HA apply is BLOCKED before external mutation.[/red]")
+            for blocker in blockers:
+                print(f"[yellow]  - {blocker}[/yellow]")
+            raise typer.Exit(code=1)
+
     # Resolve context from CLI args or config
     tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
     proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
@@ -1119,19 +1127,17 @@ def apply(
         try:
             # Defer import to keep optional dependency surface small
             if plan.vm_ha is not None:
-                from .vpngw_sa import ensure_vm_ha_service_account_and_token
-
-                verified_roles = tuple(
-                    role.strip()
-                    for role in os.environ.get("VPNGW_VM_HA_ROLE_IDS", "").split(",")
-                    if role.strip()
+                from .vpngw_sa import (
+                    VM_HA_ROLE_ALLOWLIST,
+                    ensure_vm_ha_service_account_and_token,
                 )
+
                 auth_token = ensure_vm_ha_service_account_and_token(
                     sa_name=sa,
                     tenant_id=tenant_id,
                     project_id=proj_id,
                     region_id=region_id,
-                    verified_role_ids=verified_roles,
+                    verified_role_ids=tuple(sorted(VM_HA_ROLE_ALLOWLIST)),
                 )
             else:
                 from .vpngw_sa import ensure_service_account_and_token
@@ -1153,7 +1159,7 @@ def apply(
             if plan.vm_ha is not None:
                 print(f"[red]VM-HA Service Account setup failed:[/red] {e}")
                 print(
-                    "[yellow]Set VPNGW_VM_HA_ROLE_IDS only to role IDs verified for the current Nebius environment.[/yellow]"
+                    "[yellow]VM HA grants only its reviewed Compute and VPC role allowlist.[/yellow]"
                 )
                 raise typer.Exit(code=1) from e
             print(f"[yellow]Service Account setup skipped due to error:[/yellow] {e}")
@@ -1259,6 +1265,9 @@ def apply(
         recreate=recreate_gw,
         local_prefixes=plan.gateway.get("local_prefixes"),
     )
+    vm_ha_runtime_binding = getattr(vm_ips, "vm_ha_runtime_binding", None)
+    if plan.vm_ha is not None and vm_ha_runtime_binding is None:
+        raise RuntimeError("VM-HA provisioning returned no authoritative runtime binding")
 
     # Wait for VMs to be network-reachable and verify bootstrap
     if vm_ips:
@@ -1349,7 +1358,13 @@ def apply(
                     f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
                 )
                 continue
-            ssh.push_config_and_reload(target, inst_cfg, local_cfg)
+            stale_vm_ha_removed = ssh.deactivate_vm_ha(target, local_cfg)
+            ssh.push_config_and_reload(
+                target,
+                inst_cfg,
+                local_cfg,
+                fail_closed=stale_vm_ha_removed,
+            )
     else:
         ordered_instances = _vm_ha_apply_order(plan)
         print("[bold]Staging VM-HA configs passive-first without activation...[/bold]")
@@ -1362,7 +1377,12 @@ def apply(
                     "[yellow]No staged node was activated; rerun apply after SSH is ready.[/yellow]"
                 )
                 raise typer.Exit(code=1)
-            receipt = ssh.stage_vm_ha_config(target, inst_cfg, local_cfg)
+            receipt = ssh.stage_vm_ha_config(
+                target,
+                inst_cfg,
+                local_cfg,
+                runtime_binding=vm_ha_runtime_binding,
+            )
             staged.append((inst_cfg, target, receipt))
             print(
                 f"[green]✓ Staged {receipt.node_id} generation {receipt.generation_id[:12]}[/green]"
@@ -1397,6 +1417,7 @@ def apply(
                 inst_cfg,
                 local_cfg,
                 staged_receipt=receipt,
+                runtime_binding=vm_ha_runtime_binding,
             )
             print(f"[green]✓ Activated {receipt.node_id}[/green]")
 
@@ -4662,6 +4683,9 @@ def _run_vm_ha_operator_command(
     results: list[dict[str, t.Any]] = []
     for instance in _vm_ha_apply_order(plan):
         node = instance.vm_ha_node
+        generation = instance.vm_ha_generation
+        if node is None or generation is None:
+            raise ValueError("VM-HA operator action requires a complete node manifest")
         if configured_role is not None and node.role.value != configured_role:
             continue
         target = (instance.external_ip or "").strip()
@@ -4689,6 +4713,24 @@ def _run_vm_ha_operator_command(
         payload = json.loads(completed.stdout)
         if not isinstance(payload, dict):
             raise ValueError(f"VM-HA action on {node.node_id} returned invalid JSON")
+        expected_schema = (
+            "nebius-vpngw/vm-ha-manual-failback-v1"
+            if agent_flag == "--vm-ha-manual-failback"
+            else "nebius-vpngw/vm-ha-status-v1"
+        )
+        if payload.get("schema") != expected_schema:
+            raise ValueError(f"VM-HA action on {node.node_id} returned the wrong record type")
+        if not (
+            payload.get("cluster_id") == plan.vm_ha.cluster_id
+            and payload.get("node_id") == node.node_id
+            and payload.get("generation_id") == generation.generation_id
+        ):
+            raise ValueError(f"VM-HA action on {node.node_id} returned stale node identity")
+        if (
+            agent_flag != "--vm-ha-manual-failback"
+            and payload.get("configured_role") != node.role.value
+        ):
+            raise ValueError(f"VM-HA status on {node.node_id} returned the wrong configured role")
         results.append(payload)
     return results
 
