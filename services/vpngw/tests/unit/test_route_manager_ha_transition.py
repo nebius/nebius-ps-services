@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import deque
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from nebius_vpngw.agent.vm_ha.models import StateValidationError
+from nebius_vpngw.agent.vm_ha.store import AtomicGenerationStore, CorruptStateError
 from nebius_vpngw.deploy.route_manager import RouteManager
+from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError
 from nebius_vpngw.deploy.vm_ha_routes import (
     BGPRouteReadiness,
     LogicalStaticRouteManifest,
@@ -14,6 +19,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     ManagedRouteOwnership,
     ManagedRouteSnapshot,
     RouteMutationKind,
+    RouteReconciliationContext,
     RouteTransitionState,
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
@@ -58,7 +64,32 @@ def _owner(node_id: str = "node-b") -> VerifiedAllocationOwnership:
         candidate_node_id="node-b",
         observed_owner_node_id=node_id,
         allocation_id="shared-allocation",
+        ownership_epoch="7",
     )
+
+
+def _context(
+    *,
+    operation_id: str = "boot-a:7:reconcile-routes:node-b",
+    ownership_epoch: str = "7",
+) -> RouteReconciliationContext:
+    return RouteReconciliationContext(
+        operation_id=operation_id,
+        cluster_id="cluster-a",
+        owner_node_id="node-b",
+        allocation_id="shared-allocation",
+        ownership_epoch=ownership_epoch,
+        generation_id="generation-a",
+        configuration_digest="a" * 64,
+        static_routes_digest="b" * 64,
+        bgp_policy_digest="c" * 64,
+        ownership_incarnation=3,
+    )
+
+
+def _observations(*plans):
+    queued = deque(plans)
+    return lambda: queued.popleft()
 
 
 def _route(
@@ -105,6 +136,62 @@ def test_non_owner_never_plans_route_mutations() -> None:
     assert not plan.authorized
     assert plan.mutations == ()
     assert plan.next_state is state
+
+
+@pytest.mark.parametrize("ownership_epoch", ["", "0", "-1", "local-hash"])
+def test_route_ownership_rejects_non_compute_epoch(ownership_epoch: str) -> None:
+    with pytest.raises(ValueError, match="Compute resource revision"):
+        replace(_owner(), ownership_epoch=ownership_epoch)
+
+
+def test_non_owner_cannot_execute_even_a_forged_authorized_plan(tmp_path) -> None:
+    plan = _reconciler().plan(
+        ownership=_owner(node_id="node-a"),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=10,
+    )
+    calls: list[str] = []
+    result = execute_route_plan(
+        plan,
+        lambda mutation: calls.append(mutation.operation_id),
+        context=_context(),
+        reobserve_ownership=_owner,
+        reobserve_plan=lambda: plan,
+        persist_receipt=AtomicGenerationStore(tmp_path / "ha").save_route_reconciliation_receipt,
+        observe_receipt=lambda: None,
+    )
+    assert result.committed_state is None
+    assert calls == []
+
+
+def test_ambiguous_owner_observation_fails_before_route_mutation(tmp_path) -> None:
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=10,
+    )
+    calls: list[str] = []
+
+    def ambiguous_owner() -> VerifiedAllocationOwnership:
+        raise AmbiguousHACloudError("ambiguous owner")
+
+    with pytest.raises(AmbiguousHACloudError, match="ambiguous owner"):
+        RouteManager.execute_vm_ha_route_plan(
+            plan,
+            context=_context(),
+            apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+            reobserve_ownership=ambiguous_owner,
+            reobserve_plan=lambda: plan,
+            receipt_store=AtomicGenerationStore(tmp_path / "ha"),
+        )
+
+    assert calls == []
 
 
 def test_owner_reconciles_static_and_local_frr_routes_to_shared_allocation() -> None:
@@ -395,7 +482,9 @@ def test_existing_route_with_old_allocation_is_replaced_with_shared_allocation()
     assert plan.mutations[0].allocation_id == "shared-allocation"
 
 
-def test_partial_failure_does_not_commit_observation_state_and_retry_is_idempotent() -> None:
+def test_partial_failure_does_not_commit_observation_state_and_retry_is_idempotent(
+    tmp_path,
+) -> None:
     plan = _reconciler().plan(
         ownership=_owner(),
         static_manifest=_static_manifest("10.10.0.0/16", "10.11.0.0/16"),
@@ -411,7 +500,16 @@ def test_partial_failure_does_not_commit_observation_state_and_retry_is_idempote
         if len(calls) == 2:
             raise RuntimeError("injected")
 
-    result = execute_route_plan(plan, fail_second)
+    store = AtomicGenerationStore(tmp_path / "ha")
+    result = execute_route_plan(
+        plan,
+        fail_second,
+        context=_context(),
+        reobserve_ownership=_owner,
+        reobserve_plan=lambda: plan,
+        persist_receipt=store.save_route_reconciliation_receipt,
+        observe_receipt=store.load_route_reconciliation_receipt,
+    )
 
     assert len(result.applied) == 1
     assert result.failed == plan.mutations[1]
@@ -436,7 +534,172 @@ def test_partial_failure_does_not_commit_observation_state_and_retry_is_idempote
     )
 
     assert [item.prefix for item in retry.mutations] == [result.failed.prefix]
-    assert execute_route_plan(retry, lambda mutation: None).committed_state == retry.next_state
+    assert (
+        execute_route_plan(
+            retry,
+            lambda mutation: None,
+            context=_context(),
+            reobserve_ownership=_owner,
+            reobserve_plan=_observations(retry, replace(retry, mutations=())),
+            persist_receipt=store.save_route_reconciliation_receipt,
+            observe_receipt=store.load_route_reconciliation_receipt,
+        ).committed_state
+        == retry.next_state
+    )
+
+
+def test_ownership_epoch_change_mid_plan_stops_before_next_mutation(tmp_path) -> None:
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16", "10.11.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+    owners = deque((_owner(), _owner(), replace(_owner(), ownership_epoch="8")))
+    calls: list[str] = []
+    store = AtomicGenerationStore(tmp_path / "ha")
+
+    result = execute_route_plan(
+        plan,
+        lambda mutation: calls.append(mutation.operation_id),
+        context=_context(),
+        reobserve_ownership=lambda: owners.popleft(),
+        reobserve_plan=lambda: plan,
+        persist_receipt=store.save_route_reconciliation_receipt,
+        observe_receipt=store.load_route_reconciliation_receipt,
+    )
+
+    assert result.applied == plan.mutations[:1]
+    assert result.failed == plan.mutations[1]
+    assert result.remaining == plan.mutations[1:]
+    assert result.receipt is None
+    assert len(calls) == 1
+
+
+def test_route_receipt_is_exact_operation_bound_and_restart_durable(tmp_path) -> None:
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+    store = AtomicGenerationStore(tmp_path / "ha")
+    calls: list[str] = []
+    first = RouteManager.execute_vm_ha_route_plan(
+        plan,
+        context=_context(),
+        apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+        reobserve_ownership=_owner,
+        reobserve_plan=_observations(plan, replace(plan, mutations=())),
+        receipt_store=store,
+    )
+
+    assert first.receipt is not None
+    assert first.receipt.context.operation_id == _context().operation_id
+    assert len(calls) == 1
+    replay = RouteManager.execute_vm_ha_route_plan(
+        plan,
+        context=_context(),
+        apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+        reobserve_ownership=_owner,
+        reobserve_plan=lambda: replace(plan, mutations=()),
+        receipt_store=AtomicGenerationStore(store.root),
+    )
+    assert replay.receipt == first.receipt
+    assert len(calls) == 1
+
+    foreign_current = replace(
+        plan,
+        blocked_reasons=("foreign-route-conflict:10.10.0.0/16",),
+        mutations=(),
+    )
+    with pytest.raises(RuntimeError, match="does not satisfy"):
+        RouteManager.execute_vm_ha_route_plan(
+            plan,
+            context=_context(),
+            apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+            reobserve_ownership=_owner,
+            reobserve_plan=lambda: foreign_current,
+            receipt_store=store,
+        )
+    assert len(calls) == 1
+
+    settled_plan = replace(plan, mutations=())
+    changed_operation = RouteManager.execute_vm_ha_route_plan(
+        settled_plan,
+        context=_context(operation_id="boot-a:8:reconcile-routes:node-b"),
+        apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+        reobserve_ownership=_owner,
+        reobserve_plan=_observations(settled_plan, settled_plan),
+        receipt_store=store,
+    )
+    assert changed_operation.receipt != first.receipt
+    assert len(calls) == 1
+
+
+def test_route_receipt_store_rejects_fields_outside_secret_free_contract(tmp_path) -> None:
+    store = AtomicGenerationStore(tmp_path / "ha")
+    context = {**_context().to_dict(), "unexpected": "not-persisted"}
+
+    with pytest.raises(StateValidationError, match="context has an invalid shape"):
+        store.save_route_reconciliation_receipt(
+            {
+                "schema": "nebius-vpngw/vm-ha-route-reconciliation-receipt-v1",
+                "context": context,
+                "plan_digest": "d" * 64,
+            }
+        )
+
+    assert not store.route_receipt_path.exists()
+
+
+def test_route_executor_rejects_stale_ownership_epoch_without_mutation(tmp_path) -> None:
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+    calls: list[str] = []
+    result = RouteManager.execute_vm_ha_route_plan(
+        plan,
+        context=_context(ownership_epoch="8"),
+        apply_mutation=lambda mutation: calls.append(mutation.operation_id),
+        reobserve_ownership=_owner,
+        reobserve_plan=lambda: plan,
+        receipt_store=AtomicGenerationStore(tmp_path / "ha"),
+    )
+    assert result.committed_state is None
+    assert result.receipt is None
+    assert calls == []
+
+
+def test_corrupt_route_receipt_fails_closed_before_mutation(tmp_path) -> None:
+    store = AtomicGenerationStore(tmp_path / "ha")
+    store.route_receipt_path.write_text("{truncated", encoding="utf-8")
+    plan = _reconciler().plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+    with pytest.raises(CorruptStateError, match="route reconciliation receipt"):
+        RouteManager.execute_vm_ha_route_plan(
+            plan,
+            context=_context(),
+            apply_mutation=lambda mutation: pytest.fail("must not mutate"),
+            reobserve_ownership=_owner,
+            reobserve_plan=lambda: plan,
+            receipt_store=store,
+        )
 
 
 def test_generation_adapter_consumes_task_one_logical_manifest_shape() -> None:

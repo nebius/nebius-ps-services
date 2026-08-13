@@ -26,6 +26,19 @@ from .models import (
 
 FaultHook = Callable[[str, Path], None]
 _PEER_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
+_ROUTE_RECEIPT_CONTEXT_KEYS = {
+    "allocation_id",
+    "bgp_policy_digest",
+    "cluster_id",
+    "configuration_digest",
+    "generation_id",
+    "operation_id",
+    "owner_node_id",
+    "ownership_epoch",
+    "ownership_incarnation",
+    "schema",
+    "static_routes_digest",
+}
 
 
 class CorruptStateError(StateValidationError):
@@ -159,6 +172,7 @@ class AtomicGenerationStore:
         self.peers = root / "peers"
         self.pointer_path = root / "pointers.json"
         self.pointer_backup_path = root / "pointers.backup.json"
+        self.route_receipt_path = root / "route-reconciliation-receipt.json"
         self.lock_path = root / ".lock"
         self.revision_retention = revision_retention
         self.journal_retention = journal_retention
@@ -328,6 +342,34 @@ class AtomicGenerationStore:
     def load_replay_state(self, peer_node_id: str) -> ReplayState | None:
         with self._locked():
             return self._load_replay_state_unlocked(self._replay_state_path(peer_node_id))
+
+    def save_route_reconciliation_receipt(self, receipt: Mapping[str, Any]) -> None:
+        """Atomically replace the exact secret-free successful route receipt."""
+
+        if (
+            set(receipt) != {"context", "plan_digest", "schema"}
+            or receipt.get("schema") != "nebius-vpngw/vm-ha-route-reconciliation-receipt-v1"
+        ):
+            raise StateValidationError("route reconciliation receipt has an invalid shape")
+        context = receipt.get("context")
+        if not isinstance(context, Mapping) or set(context) != _ROUTE_RECEIPT_CONTEXT_KEYS:
+            raise StateValidationError("route reconciliation receipt context has an invalid shape")
+        if context.get("schema") != ("nebius-vpngw/vm-ha-route-reconciliation-context-v1"):
+            raise StateValidationError("route reconciliation receipt context schema is invalid")
+        with self._locked():
+            atomic_write_json(self.route_receipt_path, _envelope(receipt))
+
+    def load_route_reconciliation_receipt(self) -> Mapping[str, Any] | None:
+        """Load only a checksum-valid route receipt; malformed state fails closed."""
+
+        with self._locked():
+            if not self.route_receipt_path.exists():
+                return None
+            try:
+                value = json.loads(self.route_receipt_path.read_text(encoding="utf-8"))
+                return dict(_unwrap(value))
+            except (OSError, json.JSONDecodeError, StateValidationError) as error:
+                raise CorruptStateError(f"invalid route reconciliation receipt: {error}") from error
 
     def _replay_state_path(self, peer_node_id: str) -> Path:
         if not _PEER_ID_RE.fullmatch(peer_node_id):

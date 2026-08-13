@@ -13,9 +13,21 @@ from rich import print
 from ..config_loader import ResolvedDeploymentPlan
 from .vm_ha_routes import (
     ManagedRouteOwnership,
+    RouteApplyResult,
+    RouteMutation,
+    RouteReconciliationContext,
+    RouteReconciliationPlan,
+    VerifiedAllocationOwnership,
+    execute_route_plan,
     owned_route_snapshots,
     route_observation_snapshots,
 )
+
+
+class _RouteReceiptStore(t.Protocol):
+    def save_route_reconciliation_receipt(self, receipt: t.Mapping[str, object]) -> None: ...
+
+    def load_route_reconciliation_receipt(self) -> t.Mapping[str, object] | None: ...
 
 
 class RouteManager:
@@ -754,6 +766,28 @@ class RouteManager:
             ),
             route_allocation_id=self._route_next_hop_allocation_id,
             route_next_hop=self._vm_ha_route_next_hop,
+        )
+
+    @staticmethod
+    def execute_vm_ha_route_plan(
+        plan: RouteReconciliationPlan,
+        *,
+        context: RouteReconciliationContext,
+        apply_mutation: t.Callable[[RouteMutation], None],
+        reobserve_ownership: t.Callable[[], VerifiedAllocationOwnership],
+        reobserve_plan: t.Callable[[], RouteReconciliationPlan],
+        receipt_store: _RouteReceiptStore,
+    ) -> RouteApplyResult:
+        """Execute and receipt one owner-verified HA plan through the durable store."""
+
+        return execute_route_plan(
+            plan,
+            apply_mutation,
+            context=context,
+            reobserve_ownership=reobserve_ownership,
+            reobserve_plan=reobserve_plan,
+            persist_receipt=receipt_store.save_route_reconciliation_receipt,
+            observe_receipt=receipt_store.load_route_reconciliation_receipt,
         )
 
     def _routes_with_destination(

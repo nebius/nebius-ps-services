@@ -62,7 +62,37 @@ class AllocationTransferProof:
     allocation_id: str
     former_instance_id: str
     candidate: AllocationOwner
+    former_compute_state: InstanceCloudState
+    candidate_compute_state: InstanceCloudState
+    ownership_epoch: str
     stages: tuple[TransferStage, ...]
+
+
+@dataclass(frozen=True)
+class ComputeObservation:
+    """Strict Compute state and NIC attachment at one resource revision."""
+
+    instance_id: str
+    state: InstanceCloudState
+    resource_version: str
+    nic_allocations: tuple[tuple[str, str], ...]
+
+    def allocation_on(self, network_interface_name: str) -> str | None:
+        matches = [
+            allocation_id
+            for name, allocation_id in self.nic_allocations
+            if name == network_interface_name
+        ]
+        if len(matches) > 1:
+            raise AmbiguousHACloudError(
+                f"Compute instance {self.instance_id} has duplicate NIC identity "
+                f"{network_interface_name}"
+            )
+        if not matches:
+            raise AmbiguousHACloudError(
+                f"Compute instance {self.instance_id} has no NIC {network_interface_name}"
+            )
+        return matches[0]
 
 
 InstanceReader = t.Callable[[str], t.Any]
@@ -107,6 +137,56 @@ def instance_cloud_state(instance: t.Any) -> InstanceCloudState:
     if state in {"CREATING", "UPDATING", "STARTING", "DELETING"}:
         return InstanceCloudState.TRANSITIONAL
     return InstanceCloudState.UNKNOWN
+
+
+def compute_observation(instance_id: str, instance: t.Any) -> ComputeObservation:
+    """Normalize one Compute resource without inventing an ownership revision."""
+
+    metadata = getattr(instance, "metadata", None)
+    raw_resource_version = getattr(metadata, "resource_version", None)
+    if raw_resource_version is None:
+        raise AmbiguousHACloudError(
+            f"Compute instance {instance_id} has no valid metadata.resource_version"
+        )
+    if isinstance(raw_resource_version, bool) or not isinstance(raw_resource_version, (int, str)):
+        raise AmbiguousHACloudError(
+            f"Compute instance {instance_id} has no valid metadata.resource_version"
+        )
+    raw_text = str(raw_resource_version)
+    if not raw_text.isdecimal():
+        raise AmbiguousHACloudError(
+            f"Compute instance {instance_id} has no valid metadata.resource_version"
+        )
+    numeric_resource_version = int(raw_text)
+    if numeric_resource_version <= 0:
+        raise AmbiguousHACloudError(
+            f"Compute instance {instance_id} has no positive metadata.resource_version"
+        )
+
+    interfaces = getattr(getattr(instance, "spec", None), "network_interfaces", None)
+    if interfaces is None:
+        raise AmbiguousHACloudError(
+            f"Compute instance {instance_id} has no network interface specification"
+        )
+    nic_allocations: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+    for interface in interfaces:
+        name = str(getattr(interface, "name", None) or "")
+        if not name or name in seen_names:
+            raise AmbiguousHACloudError(
+                f"Compute instance {instance_id} has an incomplete or duplicate NIC identity"
+            )
+        seen_names.add(name)
+        allocation_id = str(
+            getattr(getattr(interface, "ip_address", None), "allocation_id", None) or ""
+        )
+        nic_allocations.append((name, allocation_id))
+    return ComputeObservation(
+        instance_id=instance_id,
+        state=instance_cloud_state(instance),
+        resource_version=str(numeric_resource_version),
+        nic_allocations=tuple(nic_allocations),
+    )
 
 
 def allocation_observation(allocation_id: str, allocation: t.Any) -> AllocationObservation:
@@ -205,14 +285,14 @@ class VMHACloudAdapter:
                 raise PermanentHACloudError(f"{description}: {exc}") from exc
             raise AmbiguousHACloudError(f"{description}: {exc}") from exc
 
-    def _read_instance_state(self, instance_id: str) -> InstanceCloudState:
+    def _read_instance(self, instance_id: str) -> ComputeObservation:
         instance = self._call(
             f"cannot read Compute instance {instance_id}",
             lambda: self._instance_reader(instance_id),
         )
         if instance is None:
             raise AmbiguousHACloudError(f"Compute instance {instance_id} was not returned")
-        return instance_cloud_state(instance)
+        return compute_observation(instance_id, instance)
 
     def _read_allocation(self, allocation_id: str) -> AllocationObservation:
         allocation = self._call(
@@ -223,13 +303,14 @@ class VMHACloudAdapter:
             raise AmbiguousHACloudError(f"allocation {allocation_id} was not returned")
         return allocation_observation(allocation_id, allocation)
 
-    def require_stopped(self, instance_id: str) -> None:
+    def require_stopped(self, instance_id: str) -> ComputeObservation:
         """Stop a running former owner and require an authoritative STOPPED read."""
         stop_requested = False
         for attempt in range(self._attempts):
-            state = self._read_instance_state(instance_id)
+            observation = self._read_instance(instance_id)
+            state = observation.state
             if state is InstanceCloudState.STOPPED:
-                return
+                return observation
             if state is InstanceCloudState.RUNNING and not stop_requested:
                 self._call(
                     f"cannot stop Compute instance {instance_id}",
@@ -244,6 +325,43 @@ class VMHACloudAdapter:
                 self._sleep(self._poll_interval)
         raise RetryableHACloudError(
             f"Compute instance {instance_id} did not become STOPPED within the bounded poll"
+        )
+
+    def require_compute_attachment(
+        self,
+        allocation_id: str,
+        owner: AllocationOwner,
+        *,
+        present: bool,
+    ) -> ComputeObservation:
+        """Require the exact NIC specification to agree with allocation ownership."""
+
+        for attempt in range(self._attempts):
+            observation = self._read_instance(owner.instance_id)
+            if observation.state in {InstanceCloudState.ERROR, InstanceCloudState.UNKNOWN}:
+                raise AmbiguousHACloudError(
+                    f"Compute instance {owner.instance_id} is {observation.state.value}"
+                )
+            if observation.state in {
+                InstanceCloudState.STOPPING,
+                InstanceCloudState.TRANSITIONAL,
+            }:
+                if attempt + 1 < self._attempts:
+                    self._sleep(self._poll_interval)
+                    continue
+                raise RetryableHACloudError(
+                    f"Compute instance {owner.instance_id} did not reach a stable state"
+                )
+            attached_allocation = observation.allocation_on(owner.network_interface_name)
+            matches = attached_allocation == allocation_id
+            if matches is present:
+                return observation
+            if attempt + 1 < self._attempts:
+                self._sleep(self._poll_interval)
+        expected = "contain" if present else "exclude"
+        raise RetryableHACloudError(
+            f"Compute instance {owner.instance_id} NIC {owner.network_interface_name} "
+            f"did not {expected} allocation {allocation_id}"
         )
 
     def require_former_attachment_absent(
@@ -331,9 +449,10 @@ class VMHACloudAdapter:
                 "former owner and candidate must be distinct Compute instances"
             )
 
-        self.require_stopped(former_owner.instance_id)
+        former_compute = self.require_stopped(former_owner.instance_id)
         stages = [TransferStage.FORMER_OWNER_STOPPED]
         self.require_former_attachment_absent(allocation_id, former_owner, candidate)
+        former_compute = self.require_compute_attachment(allocation_id, former_owner, present=False)
         stages.append(TransferStage.FORMER_ATTACHMENT_ABSENT)
         self.require_candidate_attachment(allocation_id, candidate)
         stages.append(TransferStage.CANDIDATE_ATTACHMENT_EXACT)
@@ -343,10 +462,21 @@ class VMHACloudAdapter:
             raise AmbiguousHACloudError(
                 f"allocation {allocation_id} ownership changed before final confirmation"
             )
+        candidate_compute = self.require_compute_attachment(allocation_id, candidate, present=True)
+        former_compute = self.require_stopped(former_owner.instance_id)
+        former_compute = self.require_compute_attachment(allocation_id, former_owner, present=False)
+        final_owner = self._read_allocation(allocation_id).owner
+        if final_owner != candidate:
+            raise AmbiguousHACloudError(
+                f"allocation {allocation_id} ownership changed after candidate Compute read"
+            )
         stages.append(TransferStage.OWNERSHIP_CONFIRMED)
         return AllocationTransferProof(
             allocation_id=allocation_id,
             former_instance_id=former_owner.instance_id,
             candidate=candidate,
+            former_compute_state=former_compute.state,
+            candidate_compute_state=candidate_compute.state,
+            ownership_epoch=candidate_compute.resource_version,
             stages=tuple(stages),
         )
