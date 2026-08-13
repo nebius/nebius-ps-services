@@ -145,6 +145,56 @@ def test_peer_exchange_requires_bounded_positive_receive_timeout() -> None:
 
 
 @pytest.mark.parametrize(
+    ("sent_at", "message"),
+    [
+        ("2026-08-12T00:00:00Z", "stale"),
+        ("2026-08-12T00:01:00Z", "future"),
+    ],
+)
+def test_peer_exchange_rejects_stale_or_future_authenticated_timestamp(
+    sent_at: str, message: str
+) -> None:
+    heartbeat = _heartbeat()
+    heartbeat = PeerHeartbeat.from_mapping({**heartbeat.to_dict(), "sent_at": sent_at})
+    store = MemoryReplayStore()
+    exchange = PeerStateExchange(
+        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+        max_heartbeat_age_seconds=10,
+        max_clock_skew_seconds=2,
+        wall_clock=lambda: 1786492830.0,
+    )
+
+    with pytest.raises(StalePeerStateError, match=message):
+        exchange.receive(timeout_seconds=1)
+
+    assert store.state is None
+
+
+def test_peer_exchange_accepts_fresh_timestamp_and_persists_after_validation() -> None:
+    heartbeat = _heartbeat()
+    heartbeat = PeerHeartbeat.from_mapping(
+        {**heartbeat.to_dict(), "sent_at": "2026-08-12T00:00:25Z"}
+    )
+    store = MemoryReplayStore()
+    exchange = PeerStateExchange(
+        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+        max_heartbeat_age_seconds=10,
+        wall_clock=lambda: 1786492830.0,
+    )
+
+    received, replay = exchange.receive(timeout_seconds=1)
+
+    assert received == heartbeat
+    assert store.state == replay
+
+
+@pytest.mark.parametrize(
     ("factory", "purpose", "check_hostname"),
     [
         ("client_context", ssl.Purpose.SERVER_AUTH, True),

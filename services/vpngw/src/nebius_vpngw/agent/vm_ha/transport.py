@@ -8,8 +8,9 @@ import socket
 import ssl
 import struct
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ from .models import (
     PeerHeartbeat,
     PeerReplayGuard,
     ReplayState,
+    StalePeerStateError,
     StateValidationError,
     canonical_json,
 )
@@ -296,16 +298,45 @@ class PeerStateExchange:
         peer_node_id: str,
         replay_store: ReplayStateStore,
         max_timeout_seconds: float = 30.0,
+        max_heartbeat_age_seconds: float | None = None,
+        max_clock_skew_seconds: float = 5.0,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not cluster_id or not peer_node_id:
             raise ValueError("cluster_id and peer_node_id must be non-empty")
         _require_positive_finite_timeout("max_timeout_seconds", max_timeout_seconds)
+        if max_heartbeat_age_seconds is not None:
+            _require_positive_finite_timeout("max_heartbeat_age_seconds", max_heartbeat_age_seconds)
+        if not math.isfinite(max_clock_skew_seconds) or max_clock_skew_seconds < 0:
+            raise ValueError("max_clock_skew_seconds must be finite and non-negative")
         self.transport = transport
         self.cluster_id = cluster_id
         self.peer_node_id = peer_node_id
         self.replay_store = replay_store
         self.replay_guard = PeerReplayGuard(replay_store.load_replay_state(peer_node_id))
         self.max_timeout_seconds = max_timeout_seconds
+        self.max_heartbeat_age_seconds = max_heartbeat_age_seconds
+        self.max_clock_skew_seconds = max_clock_skew_seconds
+        self.wall_clock = wall_clock
+
+    def _require_fresh_timestamp(self, heartbeat: PeerHeartbeat) -> None:
+        if self.max_heartbeat_age_seconds is None:
+            return
+        try:
+            sent_at = datetime.fromisoformat(heartbeat.sent_at.removesuffix("Z") + "+00:00")
+            if sent_at.tzinfo is None:
+                raise ValueError
+            sent_at_seconds = sent_at.astimezone(timezone.utc).timestamp()
+        except (OverflowError, ValueError):
+            raise StateValidationError("peer heartbeat timestamp is invalid") from None
+        now = self.wall_clock()
+        if not math.isfinite(now):
+            raise StateValidationError("peer heartbeat clock is unavailable")
+        age = now - sent_at_seconds
+        if age < -self.max_clock_skew_seconds:
+            raise StalePeerStateError("peer heartbeat timestamp is in the future")
+        if age > self.max_heartbeat_age_seconds:
+            raise StalePeerStateError("peer heartbeat timestamp is stale")
 
     def send(self, heartbeat: PeerHeartbeat) -> None:
         if heartbeat.cluster_id != self.cluster_id:
@@ -327,6 +358,7 @@ class PeerStateExchange:
             expected_cluster_id=self.cluster_id,
             expected_node_id=self.peer_node_id,
         )
+        self._require_fresh_timestamp(message.heartbeat)
         self.replay_store.save_replay_state(self.peer_node_id, replay_state)
         self.replay_guard = candidate
         return message.heartbeat, replay_state
