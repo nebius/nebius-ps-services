@@ -21,6 +21,12 @@ Notes:
 """
 
 
+# VM HA mutates only Compute lifecycle and VPC allocation/route resources.
+# Keep this list closed: an operator may select from it, but cannot expand it
+# through configuration or environment variables.
+VM_HA_ROLE_ALLOWLIST = frozenset({"compute.editor", "vpc.editor"})
+
+
 def _init_client(tenant_id: str | None, project_id: str | None, region_id: str | None):
     """Initialize Nebius SDK client.
 
@@ -185,8 +191,12 @@ def ensure_vm_ha_service_account_and_token(
     roles = tuple(dict.fromkeys(role.strip() for role in verified_role_ids if role.strip()))
     if not roles:
         raise ValueError("VM HA service-account provisioning requires verified role IDs")
-    if any(role.lower() in {"roles/editor", "roles/admin", "editor", "admin"} for role in roles):
-        raise ValueError("VM HA rejects broad Editor/Admin roles")
+    unexpected = sorted(set(roles) - VM_HA_ROLE_ALLOWLIST)
+    missing = sorted(VM_HA_ROLE_ALLOWLIST - set(roles))
+    if unexpected:
+        raise ValueError(f"VM HA rejects roles outside its reviewed allowlist: {unexpected}")
+    if missing:
+        raise ValueError(f"VM HA requires every reviewed least-privilege role: {missing}")
     return ensure_service_account_and_token(
         sa_name,
         tenant_id,

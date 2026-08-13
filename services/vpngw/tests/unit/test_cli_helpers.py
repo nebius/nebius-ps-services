@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,6 +19,7 @@ from nebius_vpngw.cli import (
     _format_role_override_lines,
     _format_traffic_state,
     _registered_command_name,
+    _run_vm_ha_operator_command,
     _select_carrying_tunnel_for_connection,
     _should_prompt_add_routes_after_apply,
     _update_external_ips_in_yaml,
@@ -162,7 +164,10 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
             return {}
 
     class FakeSSHPush:
-        def push_config_and_reload(self, target, inst_cfg, cfg) -> None:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, target, inst_cfg, cfg, *, fail_closed=False) -> None:
             return None
 
     with (
@@ -235,7 +240,10 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
             return health_results.pop(0)
 
     class FakeSSHPush:
-        def push_config_and_reload(self, target, inst_cfg, cfg) -> None:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, target, inst_cfg, cfg, *, fail_closed=False) -> None:
             pushed_targets.append(target)
 
     with (
@@ -567,6 +575,122 @@ def test_vm_ha_apply_order_is_passive_first_and_non_ha_order_is_unchanged() -> N
     assert _vm_ha_apply_order(ordinary_plan) == [active, passive]
 
 
+def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "vm-ha-blocked.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    plan = SimpleNamespace(vm_ha=object(), validate=lambda: None)
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value={}),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch(
+            "nebius_vpngw.cli._vm_ha_activation_blockers",
+            return_value=("authoritative-runtime-unavailable",),
+        ),
+        patch("nebius_vpngw.cli.VMManager") as manager,
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "BLOCKED before external mutation" in result.stdout
+    manager.assert_not_called()
+
+
+def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    binding = object()
+    generation = SimpleNamespace(generation_id="a" * 64)
+    active = SimpleNamespace(
+        hostname="gateway-0",
+        external_ip="",
+        vm_ha_node=SimpleNamespace(node_id="node-a", role=SimpleNamespace(value="active")),
+        vm_ha_generation=generation,
+    )
+    passive = SimpleNamespace(
+        hostname="gateway-1",
+        external_ip="",
+        vm_ha_node=SimpleNamespace(node_id="node-b", role=SimpleNamespace(value="passive")),
+        vm_ha_generation=generation,
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster-a"),
+        gateway_group=SimpleNamespace(region="eu-west1"),
+        gateway={},
+        manage_routes=False,
+        should_manage_routes=lambda: False,
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter([active, passive]),
+    )
+    local_cfg = {"gateway_group": {"vm_spec": {}}}
+    observed: list[tuple[str, str, object]] = []
+
+    class BoundResult(dict):
+        vm_ha_runtime_binding = binding
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            return BoundResult({"gateway-0": "203.0.113.10", "gateway-1": "203.0.113.11"})
+
+        def wait_for_vm_network(self, vm_name, vm_ip, timeout=180) -> bool:
+            return True
+
+        def check_vm_health(self, vm_name, vm_ip) -> dict[str, object]:
+            return {
+                "reachable": True,
+                "cloud_init_complete": True,
+                "strongswan_installed": True,
+                "frr_installed": True,
+                "agent_installed": True,
+                "esp4_ready": True,
+                "esp4_reboot_pending": False,
+                "message": "ready",
+            }
+
+    class FakeSSHPush:
+        def stage_vm_ha_config(self, target, inst_cfg, cfg, *, runtime_binding):
+            observed.append(("stage", inst_cfg.vm_ha_node.role.value, runtime_binding))
+            return SimpleNamespace(
+                node_id=inst_cfg.vm_ha_node.node_id,
+                generation_id="a" * 64,
+                configuration_digest="a" * 64,
+                static_routes_digest="b" * 64,
+                bgp_policy_digest="c" * 64,
+            )
+
+        def push_config_and_reload(
+            self, target, inst_cfg, cfg, *, staged_receipt, runtime_binding
+        ) -> None:
+            observed.append(("activate", inst_cfg.vm_ha_node.role.value, runtime_binding))
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert [(phase, role) for phase, role, _ in observed] == [
+        ("stage", "passive"),
+        ("stage", "active"),
+        ("activate", "passive"),
+        ("activate", "active"),
+    ]
+    assert all(item is binding for _, _, item in observed)
+
+
 def test_vm_ha_activation_is_fail_closed_while_authoritative_adapters_are_missing() -> None:
     assert _vm_ha_activation_blockers() == (
         "authoritative-allocation-identity-unavailable",
@@ -593,23 +717,75 @@ def test_vm_ha_service_account_requires_verified_non_broad_roles(monkeypatch) ->
             "tenant",
             "project",
             "region",
-            verified_role_ids=("roles/verified-compute-fencer", "roles/verified-vpc-operator"),
+            verified_role_ids=("compute.editor", "vpc.editor"),
         )
         == "token"
     )
     assert observed["roles"] == (
-        "roles/verified-compute-fencer",
-        "roles/verified-vpc-operator",
+        "compute.editor",
+        "vpc.editor",
     )
     assert observed["strict"] is True
 
-    with pytest.raises(ValueError, match="rejects broad"):
+    with pytest.raises(ValueError, match="reviewed allowlist"):
         vpngw_sa.ensure_vm_ha_service_account_and_token(
             "gateway-ha",
             "tenant",
             "project",
             "region",
             verified_role_ids=("roles/editor",),
+        )
+
+    with pytest.raises(ValueError, match="requires every reviewed"):
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("compute.editor",),
+        )
+
+
+def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> None:
+    generation = SimpleNamespace(generation_id="a" * 64)
+    active = SimpleNamespace(
+        external_ip="203.0.113.10",
+        vm_ha_node=SimpleNamespace(node_id="node-a", role=SimpleNamespace(value="active")),
+        vm_ha_generation=generation,
+    )
+    passive = SimpleNamespace(
+        external_ip="203.0.113.11",
+        vm_ha_node=SimpleNamespace(node_id="node-b", role=SimpleNamespace(value="passive")),
+        vm_ha_generation=generation,
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster-a"),
+        iter_instance_configs=lambda: iter([active, passive]),
+    )
+    local_cfg = {"gateway_group": {"vm_spec": {}}}
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: local_cfg)
+    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_: plan)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "schema": "nebius-vpngw/vm-ha-status-v1",
+                    "cluster_id": "cluster-a",
+                    "node_id": "another-node",
+                    "configured_role": "passive",
+                    "generation_id": "a" * 64,
+                }
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="stale node identity"):
+        _run_vm_ha_operator_command(
+            local_config_file=Path("config.yaml"),
+            agent_flag="--vm-ha-recover",
         )
 
 
