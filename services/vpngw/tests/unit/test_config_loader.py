@@ -99,6 +99,9 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 
     assert first_plan.vm_ha == second_plan.vm_ha
     assert first_plan.vm_ha is not None
+    assert first_plan.gateway_group.vm_ha is not None
+    assert first_plan.gateway_group.vm_ha.cluster_id == "gateway-cluster"
+    assert first_plan.gateway_group.vm_ha.active_instance_index == 0
     assert reordered_plan.vm_ha is not None
     assert (
         reordered_plan.vm_ha.generation.generation_id == first_plan.vm_ha.generation.generation_id

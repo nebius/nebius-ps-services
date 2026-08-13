@@ -32,6 +32,24 @@ class GatewayGroupSpec:
     vm_spec: dict
     network_id: str | None = None
     subnet: dict = field(default_factory=dict)
+    vm_ha: VMHAProvisioningSpec | None = None
+
+
+@dataclass(frozen=True)
+class VMHAProvisioningSpec:
+    """Minimum immutable intent required to provision VM-HA cloud identities."""
+
+    cluster_id: str
+    members: tuple[VMHANodeRecord, VMHANodeRecord]
+    generation: VMHAGenerationRecord
+
+    @property
+    def active_instance_index(self) -> int:
+        return next(
+            member.instance_index
+            for member in self.members
+            if member.role is schema.VMHARole.ACTIVE
+        )
 
 
 @dataclass(frozen=True)
@@ -815,6 +833,15 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
         subnet=subnet,
         vm_spec=vm_spec,
         network_id=network_id,
+        vm_ha=(
+            VMHAProvisioningSpec(
+                cluster_id=vm_ha_cluster.cluster_id,
+                members=vm_ha_cluster.members,
+                generation=vm_ha_cluster.generation,
+            )
+            if vm_ha_cluster is not None
+            else None
+        ),
     )
 
     # Build per-instance configs by filtering tunnels for each instance

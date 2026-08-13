@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import ipaddress
+import re
 import typing as t
 from enum import Enum
 
@@ -860,6 +861,71 @@ class VMHAConfig(BaseModel):
         if roles.count(VMHARole.ACTIVE) != 1 or roles.count(VMHARole.PASSIVE) != 1:
             raise ValueError("vm_ha members must define exactly one active and one passive role")
 
+        return self
+
+
+class VMHACredentialReferences(BaseModel):
+    """Absolute target-local references to mTLS material, never credential bytes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    certificate_authority: str
+    certificate: str
+    private_key: str
+
+    @field_validator("certificate_authority", "certificate", "private_key")
+    @classmethod
+    def require_absolute_reference(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("VM-HA credential references must be absolute paths")
+        return value
+
+
+class VMHARuntimeNodeBinding(BaseModel):
+    """Authoritative post-provision identity for one VM-HA member."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    node_id: str
+    role: VMHARole
+    compute_id: str
+    network_interface_name: str
+    peer_endpoint: str
+    credentials: VMHACredentialReferences
+
+
+class VMHARuntimeBinding(BaseModel):
+    """Secret-free authoritative inputs required by the VM-HA service shell."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    cluster_id: str
+    shared_allocation_id: str
+    nodes: tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding]
+    route_runtime_id: str
+    generation_id: str
+    configuration_digest: str
+    static_routes_digest: str
+    bgp_policy_digest: str
+
+    @model_validator(mode="after")
+    def validate_runtime_identity(self) -> VMHARuntimeBinding:
+        if len({node.node_id for node in self.nodes}) != 2:
+            raise ValueError("VM-HA runtime binding requires two distinct nodes")
+        if len({node.compute_id for node in self.nodes}) != 2:
+            raise ValueError("VM-HA runtime binding requires two distinct Compute identities")
+        if not self.shared_allocation_id:
+            raise ValueError("VM-HA runtime binding requires a shared allocation identity")
+        digests = (
+            self.generation_id,
+            self.configuration_digest,
+            self.static_routes_digest,
+            self.bgp_policy_digest,
+        )
+        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in digests):
+            raise ValueError("VM-HA runtime generation and digests must be lowercase SHA-256")
+        if self.generation_id != self.configuration_digest:
+            raise ValueError("VM-HA runtime generation must equal the configuration digest")
         return self
 
 

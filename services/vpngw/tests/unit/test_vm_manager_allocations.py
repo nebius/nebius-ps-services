@@ -5,7 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from nebius_vpngw.deploy.vm_manager import VMManager
+from nebius_vpngw.config_loader import GatewayGroupSpec
+from nebius_vpngw.deploy.vm_manager import (
+    VMManager,
+    VMProvisioningConfig,
+    VMProvisioningResult,
+)
+from nebius_vpngw.schema import VMHARole
 
 
 def _public_allocation(
@@ -287,3 +293,307 @@ def test_set_ha_private_allocation_requires_exact_nic() -> None:
         pytest.raises(RuntimeError, match="exactly one NIC named eth0"),
     ):
         vm_mgr.set_ha_private_allocation("instance-new", "eth0", "shared-private")
+
+
+def _ha_spec() -> GatewayGroupSpec:
+    generation = SimpleNamespace(
+        generation_id="a" * 64,
+        digests=SimpleNamespace(
+            configuration="a" * 64,
+            static_routes="b" * 64,
+            bgp_policy="c" * 64,
+        ),
+    )
+    return GatewayGroupSpec(
+        name="gateway",
+        instance_count=2,
+        region="eu-north1-a",
+        external_ips=[[], []],
+        vm_spec={},
+        vm_ha=SimpleNamespace(
+            cluster_id="cluster",
+            active_instance_index=0,
+            generation=generation,
+            members=(
+                SimpleNamespace(node_id="node-a", instance_index=0, role=VMHARole.ACTIVE),
+                SimpleNamespace(node_id="node-b", instance_index=1, role=VMHARole.PASSIVE),
+            ),
+        ),
+    )
+
+
+def test_ensure_vm_ha_shared_allocation_reuses_one_deterministic_identity() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    allocation = SimpleNamespace(
+        id="shared-private",
+        metadata=SimpleNamespace(id="shared-private", name="gateway-cluster-shared-private-ip"),
+    )
+    request = SimpleNamespace(wait=lambda: SimpleNamespace(items=[allocation]))
+    client = SimpleNamespace(list=lambda _: request)
+
+    with patch.object(vm_mgr, "get_ha_allocation", return_value=allocation):
+        allocation_id = vm_mgr._ensure_vm_ha_shared_allocation(
+            client,
+            _ha_spec(),
+            "subnet-1",
+        )
+
+    assert allocation_id == "shared-private"
+    assert vm_mgr._vm_ha_shared_allocation_id == "shared-private"
+
+
+def test_ensure_vm_ha_shared_allocation_propagates_ambiguous_sdk_failure() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    client = SimpleNamespace(
+        list=lambda _: SimpleNamespace(wait=lambda: (_ for _ in ()).throw(OSError("denied")))
+    )
+
+    with pytest.raises(OSError, match="denied"):
+        vm_mgr._ensure_vm_ha_shared_allocation(client, _ha_spec(), "subnet-1")
+
+
+def test_vm_ha_operation_sync_propagates_failure() -> None:
+    operation = SimpleNamespace(sync_wait=MagicMock(side_effect=OSError("operation failed")))
+
+    with pytest.raises(OSError, match="operation failed"):
+        VMManager._sync_vm_ha_operation(operation)
+
+
+def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    allocation = SimpleNamespace(
+        id="shared-private",
+        status=SimpleNamespace(
+            state="ASSIGNED",
+            assignment=SimpleNamespace(
+                network_interface=SimpleNamespace(instance_id="compute-a", name="eth0"),
+                load_balancer=None,
+            ),
+        ),
+    )
+
+    def instance(name: str) -> SimpleNamespace:
+        suffix = "a" if name.endswith("-0") else "b"
+        return SimpleNamespace(
+            id=f"compute-{suffix}",
+            spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+            status=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        ip_address=SimpleNamespace(
+                            address=f"10.0.0.{10 if suffix == 'a' else 11}/32"
+                        )
+                    )
+                ]
+            ),
+        )
+
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr, "_get_ha_instance_by_name", side_effect=lambda _, name: instance(name)
+        ),
+    ):
+        binding = vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+    assert binding.shared_allocation_id == "shared-private"
+    assert [node.compute_id for node in binding.nodes] == ["compute-a", "compute-b"]
+    assert [node.peer_endpoint for node in binding.nodes] == ["10.0.0.10:9443", "10.0.0.11:9443"]
+
+
+def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    allocation = SimpleNamespace(
+        id="shared-private",
+        status=SimpleNamespace(
+            state="ASSIGNED",
+            assignment=SimpleNamespace(
+                network_interface=SimpleNamespace(instance_id="compute-b", name="eth0"),
+                load_balancer=None,
+            ),
+        ),
+    )
+
+    def instance(name: str) -> SimpleNamespace:
+        suffix = "a" if name.endswith("-0") else "b"
+        return SimpleNamespace(
+            id=f"compute-{suffix}",
+            spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+            status=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(ip_address=SimpleNamespace(address="10.0.0.10/32"))
+                ]
+            ),
+        )
+
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr, "_get_ha_instance_by_name", side_effect=lambda _, name: instance(name)
+        ),
+        pytest.raises(RuntimeError, match="not exact on configured active"),
+    ):
+        vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+
+def test_initial_vm_ha_attachment_rejects_existing_passive_owner_without_mutation() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    allocation = SimpleNamespace(
+        id="shared-private",
+        status=SimpleNamespace(
+            state="ASSIGNED",
+            assignment=SimpleNamespace(
+                network_interface=SimpleNamespace(instance_id="compute-b", name="eth0"),
+                load_balancer=None,
+            ),
+        ),
+    )
+    setter = MagicMock()
+
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(vm_mgr, "set_ha_private_allocation", setter),
+        pytest.raises(RuntimeError, match="outside configured active"),
+    ):
+        vm_mgr._attach_vm_ha_shared_allocation_initially(
+            allocation_id="shared-private",
+            active_compute_id="compute-a",
+            active_network_interface_name="eth0",
+        )
+
+    setter.assert_not_called()
+
+
+def test_vm_ha_instance_allocations_use_shared_id_only_on_configured_active() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    provisioning = VMProvisioningConfig(
+        subnet_id="subnet-1",
+        num_nics=1,
+        platform="cpu-d3",
+        preset=None,
+        boot_image="image",
+        disk_gb=20,
+        disk_type="network-ssd",
+        disk_block_bytes=4096,
+        cloud_init="",
+    )
+
+    with (
+        patch.object(vm_mgr, "_ensure_public_allocation", return_value=("public", None)),
+        patch.object(vm_mgr, "_ensure_private_allocation") as per_node_private,
+    ):
+        vm_mgr._ensure_instance_allocations(
+            object(), object(), _ha_spec(), "gateway-0", 0, provisioning, [], {}
+        )
+        vm_mgr._ensure_instance_allocations(
+            object(), object(), _ha_spec(), "gateway-1", 1, provisioning, [], {}
+        )
+
+    assert vm_mgr._private_alloc_ids == {
+        "gateway-0": ["shared-private"],
+        "gateway-1": [],
+    }
+    per_node_private.assert_not_called()
+
+
+def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    provisioning = SimpleNamespace(subnet_id="subnet-1")
+    active = SimpleNamespace(
+        id="compute-a",
+        spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+    )
+    binding = MagicMock()
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_resolve_client_apis", return_value=(None, None, None, object())),
+        patch.object(vm_mgr, "_discover_existing_instances", return_value=[]),
+        patch.object(vm_mgr, "_build_vm_provisioning_config", return_value=provisioning),
+        patch.object(
+            vm_mgr,
+            "_ensure_vm_ha_shared_allocation",
+            side_effect=lambda *_: setattr(vm_mgr, "_vm_ha_shared_allocation_id", "shared-private"),
+        ) as ensure_shared,
+        patch.object(vm_mgr, "_instance_exists", return_value=False),
+        patch.object(vm_mgr, "_provision_instance") as provision,
+        patch.object(vm_mgr, "_get_ha_instance_by_name", return_value=active),
+        patch.object(vm_mgr, "_attach_vm_ha_shared_allocation_initially") as attach,
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding) as reread,
+    ):
+        result = vm_mgr.ensure_group(spec)
+
+    assert isinstance(result, VMProvisioningResult)
+    assert result.vm_ha_runtime_binding is binding
+    ensure_shared.assert_called_once()
+    assert provision.call_count == 2
+    attach.assert_called_once_with(
+        allocation_id="shared-private",
+        active_compute_id="compute-a",
+        active_network_interface_name="eth0",
+    )
+    reread.assert_called_once()
+
+
+def test_vm_ha_attachment_failure_emits_no_runtime_binding() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    active = SimpleNamespace(
+        id="compute-a",
+        spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+    )
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_resolve_client_apis", return_value=(None, None, None, object())),
+        patch.object(vm_mgr, "_discover_existing_instances", return_value=[]),
+        patch.object(
+            vm_mgr,
+            "_build_vm_provisioning_config",
+            return_value=SimpleNamespace(subnet_id="subnet-1"),
+        ),
+        patch.object(
+            vm_mgr,
+            "_ensure_vm_ha_shared_allocation",
+            side_effect=lambda *_: setattr(vm_mgr, "_vm_ha_shared_allocation_id", "shared-private"),
+        ),
+        patch.object(vm_mgr, "_instance_exists", return_value=False),
+        patch.object(vm_mgr, "_provision_instance"),
+        patch.object(vm_mgr, "_get_ha_instance_by_name", return_value=active),
+        patch.object(
+            vm_mgr,
+            "_attach_vm_ha_shared_allocation_initially",
+            side_effect=OSError("attach failed"),
+        ),
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding") as binding,
+        pytest.raises(RuntimeError, match="failed closed"),
+    ):
+        vm_mgr.ensure_group(_ha_spec())
+
+    binding.assert_not_called()
+    assert vm_mgr._vm_ha_shared_allocation_id is None
+
+
+def test_explicit_vm_ha_rejects_scaffold_fallback() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=None),
+        pytest.raises(RuntimeError, match="failed closed"),
+    ):
+        vm_mgr.ensure_group(_ha_spec())
+
+
+def test_omitted_vm_ha_preserves_scaffold_return_shape() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+
+    with patch.object(vm_mgr, "_build_sdk_client", return_value=None):
+        result = vm_mgr.ensure_group(spec)
+
+    assert result == {}
+    assert type(result) is dict
