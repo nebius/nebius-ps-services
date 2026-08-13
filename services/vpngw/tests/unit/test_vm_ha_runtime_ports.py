@@ -15,7 +15,10 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     LocalDataPlaneObservation,
     RuntimeStateStore,
     SystemDataPlaneRuntime,
+    _observed_import_policy_digest,
+    _policy_digest,
     build_runtime_ports,
+    validate_installed_credential_bundle,
 )
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
@@ -54,6 +57,9 @@ class FakeSDK:
 
 
 class FakeRouteBackend:
+    def verify_target(self, _target: VMHARouteTarget) -> None:
+        return None
+
     def list_routes(self, *_args: object) -> tuple[object, ...]:
         return ()
 
@@ -77,7 +83,7 @@ class FakeDataPlane:
             established_bgp_sessions=frozenset(),
             learned_bgp_prefixes=frozenset(),
             usable_xfrm_prefixes=frozenset(),
-            observed_bgp_policy_digest="c" * 64,
+            observed_bgp_policy_digest=hashlib.sha256(b"{}").hexdigest(),
         )
 
     def install_guard(self, _action: ControllerAction) -> None:
@@ -94,6 +100,18 @@ class FakeDataPlane:
 
     def mode(self) -> DataPlaneMode:
         return self.current
+
+
+class FakeCredentialBundle:
+    def __init__(self) -> None:
+        self.checks = 0
+
+    def revalidate(self) -> None:
+        self.checks += 1
+
+
+def _fake_credential_bundle(_binding: VMHARuntimeBinding, _node: object) -> FakeCredentialBundle:
+    return FakeCredentialBundle()
 
 
 def _private_file(path: Path, value: str = "fixture") -> str:
@@ -182,6 +200,7 @@ def test_factory_builds_every_inert_port_and_closes_one_sdk(tmp_path: Path) -> N
         state_dir=tmp_path / "state",
         replay_store=MemoryReplayStore(),
         sdk_factory=lambda **_kwargs: sdk,
+        credential_bundle_factory=_fake_credential_bundle,
         route_backend_factory=lambda _sdk: FakeRouteBackend(),
         data_plane_factory=FakeDataPlane,
     )
@@ -207,6 +226,7 @@ def test_factory_failure_closes_sdk_and_never_persists_credentials(tmp_path: Pat
             state_dir=tmp_path / "state",
             replay_store=MemoryReplayStore(),
             sdk_factory=lambda **_kwargs: sdk,
+            credential_bundle_factory=_fake_credential_bundle,
             route_backend_factory=fail,
             data_plane_factory=FakeDataPlane,
         )
@@ -239,6 +259,7 @@ def test_factory_rejects_non_private_credential_before_sdk_creation(tmp_path: Pa
             state_dir=tmp_path / "state",
             replay_store=MemoryReplayStore(),
             sdk_factory=sdk_factory,
+            credential_bundle_factory=_fake_credential_bundle,
             route_backend_factory=lambda _sdk: FakeRouteBackend(),
             data_plane_factory=FakeDataPlane,
         )
@@ -255,6 +276,7 @@ def test_enable_accepts_prior_route_operation_only_with_current_exact_authority(
         state_dir=tmp_path / "state",
         replay_store=MemoryReplayStore(),
         sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
         route_backend_factory=lambda _sdk: FakeRouteBackend(),
         data_plane_factory=FakeDataPlane,
     )
@@ -282,10 +304,15 @@ def test_enable_accepts_prior_route_operation_only_with_current_exact_authority(
         bgp_policy_digest=ports.binding.bgp_policy_digest,
         ownership_incarnation=2,
     )
+    current_plan = ports.routes._plan(
+        ports.routes._ownership(require_takeover_fence=True),
+        ports.routes.store.load_transition(now=0.0),
+    )
+    ports.routes.store.save_transition(current_plan.next_state)
     ports.routes.store.save_route_reconciliation_receipt(
         {
             "context": reconcile_context.to_dict(),
-            "plan_digest": "d" * 64,
+            "plan_digest": ports.routes._plan_digest(current_plan),
             "schema": "nebius-vpngw/vm-ha-route-reconciliation-receipt-v1",
         }
     )
@@ -330,7 +357,7 @@ def test_local_data_plane_guard_is_absolute_bounded_and_fail_closed(tmp_path: Pa
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
         configured_bgp_sessions=(),
-        bgp_policy_digest="c" * 64,
+        expected_bgp_policy_digest="c" * 64,
         runner=runner,
         command_timeout=2.0,
     )
@@ -351,6 +378,7 @@ def test_local_data_plane_guard_is_absolute_bounded_and_fail_closed(tmp_path: Pa
     assert all(Path(argv[0]).is_absolute() and timeout == 2.0 for argv, timeout in calls)
     assert calls[0][0][0] == DataPlaneCommandSet().sysctl
     assert any(argv[0] == DataPlaneCommandSet().swanctl for argv, _timeout in calls)
+    assert any("--unload-conns" in argv for argv, _timeout in calls)
     assert json.loads((tmp_path / "data-plane.json").read_text())["boot_id"] == "boot-a"
     assert os.stat(tmp_path / "data-plane.json").st_mode & 0o077 == 0
 
@@ -369,12 +397,14 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
+        if argv[0] == "/usr/sbin/swanctl":
+            return CommandResult(0)
         raise AssertionError(argv)
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
         configured_bgp_sessions=(),
-        bgp_policy_digest="c" * 64,
+        expected_bgp_policy_digest="c" * 64,
         runner=runner,
     )
     action = ControllerAction(
@@ -393,6 +423,108 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
     assert runtime.mode() is DataPlaneMode.PASSIVE
     assert forwarding == "0"
     assert not any("--terminate" in argv for argv in calls)
+
+
+def test_current_frr_import_policy_digest_detects_live_drift() -> None:
+    sessions = frozenset({"169.254.0.2"})
+    expected = _policy_digest({"169.254.0.2": ("10.0.0.0/24",)})
+    current = """
+ip prefix-list ALLOW-FROM-169-254-0-2 seq 10 permit 10.0.0.0/24
+router bgp 65000
+ neighbor 169.254.0.2 prefix-list ALLOW-FROM-169-254-0-2 in
+"""
+
+    assert _observed_import_policy_digest(current, sessions) == expected
+    assert (
+        _observed_import_policy_digest(current.replace("10.0.0.0/24", "10.1.0.0/24"), sessions)
+        != expected
+    )
+
+
+def test_active_persistence_failure_rolls_forwarding_back_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebius_vpngw.agent.vm_ha import runtime as runtime_module
+
+    forwarding = "0"
+
+    def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
+        nonlocal forwarding
+        if argv[-1] == "net.ipv4.ip_forward":
+            return CommandResult(0, forwarding)
+        if argv[-1].startswith("net.ipv4.ip_forward="):
+            forwarding = argv[-1].rsplit("=", 1)[-1]
+            return CommandResult(0)
+        raise AssertionError(argv)
+
+    real_write = runtime_module._atomic_write_json
+    writes = 0
+
+    def interrupted(path: Path, value: dict[str, object]) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("injected durable write failure")
+        real_write(path, value)
+
+    monkeypatch.setattr(runtime_module, "_atomic_write_json", interrupted)
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+    )
+    action = ControllerAction(
+        ActionKind.ENABLE_ACTIVE,
+        "enable-op",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+    )
+
+    with pytest.raises(OSError, match="injected"):
+        runtime.enable_active(action)
+
+    assert forwarding == "0"
+
+
+def test_runtime_distinguishes_initial_owner_from_takeover_fencing(tmp_path: Path) -> None:
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    ports.cloud.observe = lambda: CloudObservation(
+        authoritative=True,
+        allocation_id="allocation-a",
+        observed_owner_node_id="node-a",
+        former_owner_node_id="node-b",
+        former_owner_compute_state=ComputeState.RUNNING,
+        former_attachment_absent=True,
+        candidate_attachment_exact=True,
+        ownership_re_read_exact=True,
+        ownership_epoch="7",
+    )
+
+    assert ports.routes._ownership(require_takeover_fence=False).candidate_node_id == "node-a"
+    with pytest.raises(RuntimeError, match="ownership authority"):
+        ports.routes._ownership(require_takeover_fence=True)
+    ports.close()
+
+
+def test_credential_bundle_rejects_noncanonical_runtime_identity(tmp_path: Path) -> None:
+    config = _runtime_config(tmp_path)
+    binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
+
+    with pytest.raises(ValueError, match="non-canonical bundle path"):
+        validate_installed_credential_bundle(binding, binding.nodes[0])
 
 
 def test_route_pending_intent_round_trip_binds_full_authority(tmp_path: Path) -> None:
@@ -436,6 +568,7 @@ def test_completed_route_effect_recovers_if_pending_clear_was_interrupted(tmp_pa
         state_dir=tmp_path / "state",
         replay_store=MemoryReplayStore(),
         sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
         route_backend_factory=lambda _sdk: FakeRouteBackend(),
         data_plane_factory=FakeDataPlane,
     )

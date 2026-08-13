@@ -74,6 +74,7 @@ class MutualTLSConfig:
     certificate: Path
     private_key: Path
     server_hostname: str
+    credential_check: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         if not self.server_hostname.strip():
@@ -92,6 +93,8 @@ class MutualTLSConfig:
             raise ValueError(f"{field_name} must be a readable regular file") from None
 
     def _validate_credential_files(self) -> None:
+        if self.credential_check is not None:
+            self.credential_check()
         self._require_credential_file(self.certificate_authority, "certificate_authority")
         self._require_credential_file(self.certificate, "certificate")
         self._require_credential_file(self.private_key, "private_key")
