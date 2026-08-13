@@ -158,8 +158,13 @@ class RouteReconciliationContext:
     ownership_epoch: str
     generation_id: str
     digests: DigestSet
+    route_runtime_id: str
     ownership_incarnation: int = 0
     operation_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.route_runtime_id:
+            raise ValueError("route reconciliation requires an exact route runtime identity")
 
     @property
     def ownership_context(self) -> OwnershipContext:
@@ -190,9 +195,17 @@ class ControllerSnapshot:
     guard_boot_id: str | None
     data_plane_mode: DataPlaneMode
     routes_reconciled_context: RouteReconciliationContext | None
+    route_runtime_id: str = ""
 
     def __post_init__(self) -> None:
-        if not all((self.boot_id, self.cluster_id, self.local_node_id, self.peer_node_id)):
+        if not all(
+            (
+                self.boot_id,
+                self.cluster_id,
+                self.local_node_id,
+                self.peer_node_id,
+            )
+        ):
             raise ValueError("boot, cluster, and both node identities are required")
         if self.local_node_id == self.peer_node_id:
             raise ValueError("VM HA requires two distinct node identities")
@@ -209,6 +222,7 @@ class ControllerSnapshot:
             ownership_epoch=self.cloud.ownership_epoch,
             generation_id=self.local_generation_id,
             digests=self.local_digests,
+            route_runtime_id=self.route_runtime_id,
         )
 
     @property
@@ -305,6 +319,14 @@ class VMHAController:
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
         """Return one safe action, checkpointed before execution."""
+
+        if not snapshot.route_runtime_id:
+            return self._result(
+                HAState.BLOCKED,
+                ("route-runtime-identity-missing",),
+                snapshot,
+                replace(checkpoint, state=HAState.BLOCKED, pending_action=None),
+            )
 
         pending = checkpoint.pending_action
         if pending is not None:

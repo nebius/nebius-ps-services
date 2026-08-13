@@ -13,6 +13,7 @@ from ..config_loader import GatewayGroupSpec
 from ..schema import (
     VMHACredentialReferences,
     VMHARole,
+    VMHARouteTarget,
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
@@ -96,6 +97,7 @@ class VMManager:
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
+        self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
         """Read one Compute instance without permissive provisioning fallback."""
@@ -239,7 +241,8 @@ class VMManager:
     ) -> VMHARuntimeBinding:
         vm_ha = spec.vm_ha
         allocation_id = self._vm_ha_shared_allocation_id
-        if vm_ha is None or not allocation_id:
+        route_targets = self._vm_ha_route_targets
+        if vm_ha is None or not allocation_id or not route_targets:
             raise RuntimeError("VM-HA runtime binding requires complete provisioning intent")
         allocation = self.get_ha_allocation(allocation_id)
         if self._resource_id(allocation) != allocation_id:
@@ -292,12 +295,49 @@ class VMManager:
             cluster_id=vm_ha.cluster_id,
             shared_allocation_id=allocation_id,
             nodes=t.cast(tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding], tuple(nodes)),
-            route_runtime_id=f"{vm_ha.cluster_id}:{allocation_id}",
+            route_targets=route_targets,
+            route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+                vm_ha.cluster_id, allocation_id, route_targets
+            ),
             generation_id=vm_ha.generation.generation_id,
             configuration_digest=digests.configuration,
             static_routes_digest=digests.static_routes,
             bgp_policy_digest=digests.bgp_policy,
         )
+
+    def _resolve_vm_ha_route_targets(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+    ) -> tuple[VMHARouteTarget, ...]:
+        if not self.project_id:
+            raise RuntimeError("VM-HA route targets require an exact project ID")
+        if not local_prefixes:
+            raise RuntimeError("VM-HA route targets require gateway.local_prefixes")
+        _, network_id, _, subnet_client = self._resolve_gateway_network(client, spec)
+        from nebius.api.nebius.vpc.v1 import ListSubnetsByNetworkRequest  # type: ignore
+
+        from .route_manager import RouteManager
+
+        route_manager = RouteManager(project_id=self.project_id)
+
+        def observe() -> tuple[VMHARouteTarget, ...]:
+            observed = subnet_client.list_by_network(
+                ListSubnetsByNetworkRequest(network_id=network_id)
+            ).wait()
+            return route_manager.resolve_vm_ha_route_targets(
+                getattr(observed, "items", ()) or (),
+                local_prefixes,
+                project_id=self.project_id or "",
+                target_network_id=network_id,
+                gateway_subnet_name=str(self._gateway_subnet_settings(spec)["name"]),
+            )
+
+        first = observe()
+        if observe() != first:
+            raise RuntimeError("VM-HA route target membership changed during binding")
+        return first
 
     def _attach_vm_ha_shared_allocation_initially(
         self,
@@ -2628,6 +2668,9 @@ class VMManager:
                         spec,
                         provisioning.subnet_id,
                     )
+                    self._vm_ha_route_targets = self._resolve_vm_ha_route_targets(
+                        client, spec, local_prefixes
+                    )
                 for i in range(spec.instance_count):
                     needs_provisioning = recreate or not self._instance_exists(
                         client,
@@ -2679,6 +2722,7 @@ class VMManager:
             if spec.vm_ha is not None:
                 self._private_alloc_ids.clear()
                 self._vm_ha_shared_allocation_id = None
+                self._vm_ha_route_targets = None
                 raise RuntimeError(f"VM-HA provisioning failed closed: {e}") from e
             print(f"[VMManager] ensure_group failed: {e}. Proceeding in scaffold mode.")
 
@@ -2688,6 +2732,7 @@ class VMManager:
             except Exception as e:
                 self._private_alloc_ids.clear()
                 self._vm_ha_shared_allocation_id = None
+                self._vm_ha_route_targets = None
                 raise RuntimeError(f"VM-HA runtime binding failed closed: {e}") from e
             return VMProvisioningResult(vm_ips, vm_ha_runtime_binding=binding)
         return vm_ips

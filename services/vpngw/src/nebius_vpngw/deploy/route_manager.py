@@ -11,6 +11,7 @@ from pathlib import Path
 from rich import print
 
 from ..config_loader import ResolvedDeploymentPlan
+from ..schema import VMHARouteTarget
 from .vm_ha_routes import (
     ManagedRouteOwnership,
     RouteApplyResult,
@@ -750,6 +751,7 @@ class RouteManager:
         routes,
         *,
         ownership_by_route_id: t.Mapping[str, ManagedRouteOwnership],
+        route_target: VMHARouteTarget,
     ):
         """Adapt all VPC routes without granting unledgered routes mutation authority."""
 
@@ -764,6 +766,7 @@ class RouteManager:
             ),
             route_allocation_id=self._route_next_hop_allocation_id,
             route_next_hop=self._vm_ha_route_next_hop,
+            route_target=route_target,
         )
 
     @staticmethod
@@ -1684,6 +1687,66 @@ class RouteManager:
                     )
 
         return selected, diagnostics
+
+    def resolve_vm_ha_route_targets(
+        self,
+        subnets: t.Iterable[object],
+        local_prefixes: t.Iterable[str],
+        *,
+        project_id: str,
+        target_network_id: str,
+        gateway_subnet_name: str,
+    ) -> tuple[VMHARouteTarget, ...]:
+        """Resolve the exact immutable workload route-table target set for VM-HA."""
+
+        prefixes = [
+            network
+            for prefix in local_prefixes
+            if (network := self._parse_ipv4_network(str(prefix))) is not None
+        ]
+        if not project_id or not target_network_id or not prefixes:
+            raise ValueError("VM-HA route target selection requires project, network, and prefixes")
+        selected, _ = self._select_local_prefix_subnets(
+            tuple(subnets),
+            prefixes,
+            target_network_id=target_network_id,
+            gateway_subnet_name=gateway_subnet_name,
+        )
+        if not selected:
+            raise ValueError("VM-HA route target selection matched no workload subnet")
+        targets: list[VMHARouteTarget] = []
+        for subnet, _ in selected:
+            subnet_id = self._metadata_id(subnet)
+            network_id = self._subnet_network_id(subnet)
+            route_table_id = str(getattr(self._subnet_route_table(subnet), "id", "") or "")
+            if not subnet_id or not route_table_id:
+                raise ValueError("VM-HA workload subnet has no exact attached route-table ID")
+            if network_id != target_network_id:
+                raise ValueError("VM-HA route target crossed the selected network")
+            targets.append(
+                VMHARouteTarget(
+                    project_id=project_id,
+                    network_id=network_id,
+                    workload_subnet_id=subnet_id,
+                    route_table_id=route_table_id,
+                )
+            )
+        canonical = tuple(
+            sorted(
+                targets,
+                key=lambda target: (
+                    target.project_id,
+                    target.network_id,
+                    target.workload_subnet_id,
+                    target.route_table_id,
+                ),
+            )
+        )
+        if len({target.workload_subnet_id for target in canonical}) != len(canonical) or len(
+            {target.route_table_id for target in canonical}
+        ) != len(canonical):
+            raise ValueError("VM-HA route target selection is duplicate or ambiguous")
+        return canonical
 
     def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
         """List route tables attached to subnets matching gateway.local_prefixes."""

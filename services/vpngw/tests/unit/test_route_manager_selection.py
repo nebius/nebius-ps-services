@@ -15,6 +15,7 @@ from nebius_vpngw.config_loader import (
 )
 from nebius_vpngw.deploy.route_manager import RouteManager
 from nebius_vpngw.deploy.vm_ha_routes import ManagedRouteKind, ManagedRouteOwnership
+from nebius_vpngw.schema import VMHARouteTarget
 
 _LocalConfig = dict[str, t.Any]
 
@@ -90,6 +91,12 @@ def test_vm_ha_route_selection_requires_explicit_route_id_ownership() -> None:
             "route-owned": ManagedRouteOwnership(
                 cluster_id="cluster-a",
                 kind=ManagedRouteKind.STATIC,
+                route_target=VMHARouteTarget(
+                    project_id="project-test",
+                    network_id="network-test",
+                    workload_subnet_id="subnet-test",
+                    route_table_id="route-table-test",
+                ),
             )
         },
     )

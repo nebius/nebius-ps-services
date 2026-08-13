@@ -19,12 +19,23 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     ManagedRouteOwnership,
     ManagedRouteSnapshot,
     RouteMutationKind,
+    RouteOccupancySnapshot,
     RouteReconciliationContext,
     RouteTransitionState,
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
     execute_route_plan,
 )
+from nebius_vpngw.schema import VMHARouteTarget
+
+
+def _target(suffix: str = "a") -> VMHARouteTarget:
+    return VMHARouteTarget(
+        project_id="project-a",
+        network_id="network-a",
+        workload_subnet_id=f"subnet-{suffix}",
+        route_table_id=f"route-table-{suffix}",
+    )
 
 
 def _static_manifest(*prefixes: str) -> LogicalStaticRouteManifest:
@@ -104,7 +115,7 @@ def _route(
         route_id=route_id or f"route-{prefix}",
         prefix=prefix,
         allocation_id=allocation_id,
-        ownership=ManagedRouteOwnership(cluster_id=cluster_id, kind=kind),
+        ownership=ManagedRouteOwnership(cluster_id=cluster_id, kind=kind, route_target=_target()),
     )
 
 
@@ -114,6 +125,7 @@ def _reconciler(*, hold_down: float = 30, observations: int = 2) -> VMHARouteRec
         node_id="node-b",
         takeover_hold_down_seconds=hold_down,
         withdrawal_stability_observations=observations,
+        route_targets=(_target(),),
     )
 
 
@@ -209,6 +221,42 @@ def test_owner_reconciles_static_and_local_frr_routes_to_shared_allocation() -> 
         (RouteMutationKind.CREATE, "10.20.0.0/16", ManagedRouteKind.BGP),
     }
     assert {item.allocation_id for item in plan.mutations} == {"shared-allocation"}
+
+
+def test_multi_table_desire_and_foreign_conflict_are_target_aware() -> None:
+    targets = (_target("a"), _target("b"))
+    reconciler = VMHARouteReconciler(
+        cluster_id="cluster-a",
+        node_id="node-b",
+        takeover_hold_down_seconds=30,
+        withdrawal_stability_observations=2,
+        route_targets=targets,
+    )
+    arguments = dict(
+        ownership=_owner(),
+        static_manifest=_static_manifest("10.10.0.0/16"),
+        bgp=_bgp(required=(), learned=(), usable=()),
+        state=RouteTransitionState(takeover_started_at=0),
+        now=100,
+    )
+    plan = reconciler.plan(existing_routes=(), **arguments)
+    assert [(item.route_target.route_table_id, item.prefix) for item in plan.mutations] == [
+        ("route-table-a", "10.10.0.0/16"),
+        ("route-table-b", "10.10.0.0/16"),
+    ]
+    foreign = RouteOccupancySnapshot(
+        route_id="foreign-b",
+        prefix="10.10.0.0/16",
+        next_hop="allocation:foreign",
+        route_target=targets[1],
+    )
+    blocked = reconciler.plan(existing_routes=(foreign,), **arguments)
+    assert blocked.mutations == ()
+    assert blocked.blocked_reasons == ("foreign-route-conflict:route-table-b:10.10.0.0/16",)
+    undeclared = replace(foreign, route_target=_target("c"))
+    target_drift = reconciler.plan(existing_routes=(undeclared,), **arguments)
+    assert target_drift.mutations == ()
+    assert target_drift.blocked_reasons == ("undeclared-route-target:route-table-c",)
 
 
 def test_takeover_preserves_existing_bgp_route_but_allows_new_local_route() -> None:
@@ -399,7 +447,7 @@ def test_explicit_route_ownership_blocks_name_based_takeover_and_foreign_conflic
     )
 
     assert plan.mutations == ()
-    assert plan.blocked_reasons == ("foreign-route-conflict:10.10.0.0/16",)
+    assert plan.blocked_reasons == ("foreign-route-conflict:route-table-a:10.10.0.0/16",)
 
 
 def test_unledgered_occupied_prefix_flows_from_route_manager_to_conflict_plan() -> None:
@@ -415,7 +463,9 @@ def test_unledgered_occupied_prefix_flows_from_route_manager_to_conflict_plan() 
         ),
     )
 
-    observed = route_manager._vm_ha_route_snapshots((foreign,), ownership_by_route_id={})
+    observed = route_manager._vm_ha_route_snapshots(
+        (foreign,), ownership_by_route_id={}, route_target=_target()
+    )
     plan = _reconciler().plan(
         ownership=_owner(),
         static_manifest=_static_manifest("10.10.0.0/16", "10.11.0.0/16"),
@@ -426,7 +476,7 @@ def test_unledgered_occupied_prefix_flows_from_route_manager_to_conflict_plan() 
     )
 
     assert plan.mutations == ()
-    assert plan.blocked_reasons == ("foreign-route-conflict:10.10.0.0/16",)
+    assert plan.blocked_reasons == ("foreign-route-conflict:route-table-a:10.10.0.0/16",)
 
 
 @pytest.mark.parametrize(
@@ -455,7 +505,7 @@ def test_vm_ha_route_observation_rejects_ambiguous_or_missing_next_hop(
 
     with pytest.raises(ValueError, match="next hop"):
         RouteManager(project_id="project-test")._vm_ha_route_snapshots(
-            (route,), ownership_by_route_id={}
+            (route,), ownership_by_route_id={}, route_target=_target()
         )
 
 

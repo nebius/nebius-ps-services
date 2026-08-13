@@ -1044,6 +1044,14 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
                         "static_routes": digests.static_routes,
                         "bgp_policy": digests.bgp_policy,
                     },
+                    "logical_manifests": {
+                        "static_routes_json": (
+                            vm_ha_cluster.generation.logical_manifests.static_routes_json
+                        ),
+                        "bgp_policy_json": (
+                            vm_ha_cluster.generation.logical_manifests.bgp_policy_json
+                        ),
+                    },
                 },
                 "readiness": {
                     "required_node_ids": list(vm_ha_cluster.readiness.required_node_ids),

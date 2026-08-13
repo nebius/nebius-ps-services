@@ -17,6 +17,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 
+from ..schema import VMHARouteTarget
+
 
 def _normalized_prefixes(prefixes: Iterable[str]) -> frozenset[str]:
     normalized: set[str] = set()
@@ -213,6 +215,7 @@ class ManagedRouteOwnership:
 
     cluster_id: str
     kind: ManagedRouteKind
+    route_target: VMHARouteTarget
 
 
 @dataclass(frozen=True)
@@ -226,6 +229,10 @@ class ManagedRouteSnapshot:
         normalized = _normalized_prefixes((self.prefix,))
         object.__setattr__(self, "prefix", next(iter(normalized)))
 
+    @property
+    def route_target(self) -> VMHARouteTarget:
+        return self.ownership.route_target
+
 
 @dataclass(frozen=True)
 class RouteOccupancySnapshot:
@@ -234,6 +241,7 @@ class RouteOccupancySnapshot:
     route_id: str
     prefix: str
     next_hop: str
+    route_target: VMHARouteTarget
 
     def __post_init__(self) -> None:
         if not self.route_id:
@@ -251,12 +259,16 @@ class RouteMutation:
     route_kind: ManagedRouteKind
     allocation_id: str
     cluster_id: str
+    route_target: VMHARouteTarget
     route_id: str | None = None
 
     @property
     def operation_id(self) -> str:
         target = self.route_id or self.prefix
-        return f"{self.kind.value}:{target}:{self.route_kind.value}:{self.allocation_id}"
+        return (
+            f"{self.kind.value}:{self.route_target.route_table_id}:{target}:"
+            f"{self.route_kind.value}:{self.allocation_id}"
+        )
 
 
 @dataclass(frozen=True)
@@ -277,6 +289,7 @@ class RouteReconciliationPlan:
     desired_prefixes: frozenset[str]
     next_state: RouteTransitionState
     ownership: VerifiedAllocationOwnership | None = None
+    route_targets: tuple[VMHARouteTarget, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -456,6 +469,7 @@ class VMHARouteReconciler:
         node_id: str,
         takeover_hold_down_seconds: float,
         withdrawal_stability_observations: int,
+        route_targets: tuple[VMHARouteTarget, ...],
     ) -> None:
         if not cluster_id or not node_id:
             raise ValueError("cluster_id and node_id are required")
@@ -463,10 +477,13 @@ class VMHARouteReconciler:
             raise ValueError("takeover_hold_down_seconds must be finite and non-negative")
         if withdrawal_stability_observations < 1:
             raise ValueError("withdrawal_stability_observations must be positive")
+        if not route_targets:
+            raise ValueError("VM-HA route reconciliation requires exact route targets")
         self.cluster_id = cluster_id
         self.node_id = node_id
         self.takeover_hold_down_seconds = takeover_hold_down_seconds
         self.withdrawal_stability_observations = withdrawal_stability_observations
+        self.route_targets = route_targets
 
     def plan(
         self,
@@ -495,20 +512,44 @@ class VMHARouteReconciler:
                 desired_prefixes=frozenset(),
                 next_state=state,
                 ownership=None,
+                route_targets=self.route_targets,
             )
 
         routes = tuple(existing_routes)
+        undeclared_targets = sorted(
+            {
+                route.route_target.route_table_id
+                for route in routes
+                if route.route_target not in self.route_targets
+            }
+        )
+        if undeclared_targets:
+            return RouteReconciliationPlan(
+                authorized=True,
+                blocked_reasons=tuple(
+                    f"undeclared-route-target:{route_table_id}"
+                    for route_table_id in undeclared_targets
+                ),
+                mutations=(),
+                held_bgp_prefixes=frozenset(),
+                desired_prefixes=frozenset(),
+                next_state=state,
+                ownership=ownership,
+                route_targets=self.route_targets,
+            )
         owned_routes = tuple(
             route
             for route in routes
             if isinstance(route, ManagedRouteSnapshot)
             and route.ownership.cluster_id == self.cluster_id
+            and route.ownership.route_target in self.route_targets
         )
         foreign_prefixes = {
-            route.prefix
+            (route.route_target, route.prefix)
             for route in routes
             if not isinstance(route, ManagedRouteSnapshot)
             or route.ownership.cluster_id != self.cluster_id
+            or route.ownership.route_target not in self.route_targets
         }
         existing_bgp = {
             route.prefix for route in owned_routes if route.ownership.kind is ManagedRouteKind.BGP
@@ -537,10 +578,19 @@ class VMHARouteReconciler:
         )
         mutations: list[RouteMutation] = []
         blocked_reasons = list(bgp.blocked_reasons)
-        foreign_conflicts = sorted(set(desired_kinds) & foreign_prefixes)
+        foreign_conflicts = sorted(
+            (
+                (target, prefix)
+                for target in self.route_targets
+                for prefix in desired_kinds
+                if (target, prefix) in foreign_prefixes
+            ),
+            key=lambda item: (item[0].route_table_id, item[1]),
+        )
         if foreign_conflicts:
             blocked_reasons.extend(
-                f"foreign-route-conflict:{prefix}" for prefix in foreign_conflicts
+                f"foreign-route-conflict:{target.route_table_id}:{prefix}"
+                for target, prefix in foreign_conflicts
             )
             return RouteReconciliationPlan(
                 authorized=True,
@@ -550,53 +600,58 @@ class VMHARouteReconciler:
                 desired_prefixes=frozenset(desired_kinds),
                 next_state=state,
                 ownership=ownership,
+                route_targets=self.route_targets,
             )
 
-        owned_by_prefix: dict[str, list[ManagedRouteSnapshot]] = {}
+        owned_by_prefix: dict[tuple[VMHARouteTarget, str], list[ManagedRouteSnapshot]] = {}
         for route in owned_routes:
-            owned_by_prefix.setdefault(route.prefix, []).append(route)
+            owned_by_prefix.setdefault((route.ownership.route_target, route.prefix), []).append(
+                route
+            )
         retained_route_ids: set[str] = set()
 
-        for prefix, route_kind in sorted(
-            desired_kinds.items(), key=lambda item: (item[1].value, item[0])
-        ):
-            existing_candidates = owned_by_prefix.get(prefix, [])
-            if not existing_candidates:
-                mutations.append(
-                    RouteMutation(
-                        kind=RouteMutationKind.CREATE,
-                        prefix=prefix,
-                        route_kind=route_kind,
-                        allocation_id=ownership.allocation_id,
-                        cluster_id=self.cluster_id,
-                    )
-                )
-                continue
-
-            existing = next(
-                (
-                    route
-                    for route in existing_candidates
-                    if route.allocation_id == ownership.allocation_id
-                    and route.ownership.kind is route_kind
-                ),
-                existing_candidates[0],
-            )
-            retained_route_ids.add(existing.route_id)
-            if (
-                existing.allocation_id != ownership.allocation_id
-                or existing.ownership.kind is not route_kind
+        for route_target in self.route_targets:
+            for prefix, route_kind in sorted(
+                desired_kinds.items(), key=lambda item: (item[1].value, item[0])
             ):
-                mutations.append(
-                    RouteMutation(
-                        kind=RouteMutationKind.REPLACE,
-                        prefix=prefix,
-                        route_kind=route_kind,
-                        allocation_id=ownership.allocation_id,
-                        cluster_id=self.cluster_id,
-                        route_id=existing.route_id,
+                existing_candidates = owned_by_prefix.get((route_target, prefix), [])
+                if not existing_candidates:
+                    mutations.append(
+                        RouteMutation(
+                            kind=RouteMutationKind.CREATE,
+                            prefix=prefix,
+                            route_kind=route_kind,
+                            allocation_id=ownership.allocation_id,
+                            cluster_id=self.cluster_id,
+                            route_target=route_target,
+                        )
                     )
+                    continue
+                existing = next(
+                    (
+                        route
+                        for route in existing_candidates
+                        if route.allocation_id == ownership.allocation_id
+                        and route.ownership.kind is route_kind
+                    ),
+                    existing_candidates[0],
                 )
+                retained_route_ids.add(existing.route_id)
+                if (
+                    existing.allocation_id != ownership.allocation_id
+                    or existing.ownership.kind is not route_kind
+                ):
+                    mutations.append(
+                        RouteMutation(
+                            kind=RouteMutationKind.REPLACE,
+                            prefix=prefix,
+                            route_kind=route_kind,
+                            allocation_id=ownership.allocation_id,
+                            cluster_id=self.cluster_id,
+                            route_target=route_target,
+                            route_id=existing.route_id,
+                        )
+                    )
 
         for route in owned_routes:
             if route.route_id in retained_route_ids:
@@ -609,6 +664,7 @@ class VMHARouteReconciler:
                         route_kind=route.ownership.kind,
                         allocation_id=route.allocation_id,
                         cluster_id=self.cluster_id,
+                        route_target=route.ownership.route_target,
                         route_id=route.route_id,
                     )
                 )
@@ -625,6 +681,7 @@ class VMHARouteReconciler:
                     route_kind=route.ownership.kind,
                     allocation_id=route.allocation_id,
                     cluster_id=self.cluster_id,
+                    route_target=route.ownership.route_target,
                     route_id=route.route_id,
                 )
             )
@@ -641,12 +698,14 @@ class VMHARouteReconciler:
             desired_prefixes=frozenset(desired_kinds),
             next_state=next_state,
             ownership=ownership,
+            route_targets=self.route_targets,
         )
 
 
 def _route_plan_digest(plan: RouteReconciliationPlan) -> str:
     payload = {
         "desired_prefixes": sorted(plan.desired_prefixes),
+        "route_targets": [target.model_dump(mode="json") for target in plan.route_targets],
         "next_state": {
             "absent_bgp_observations": list(plan.next_state.absent_bgp_observations),
             "takeover_started_at": plan.next_state.takeover_started_at,
@@ -792,6 +851,7 @@ def route_observation_snapshots(
     route_prefix: Callable[[object], str | None],
     route_allocation_id: Callable[[object], str | None],
     route_next_hop: Callable[[object], str],
+    route_target: VMHARouteTarget,
 ) -> tuple[ManagedRouteSnapshot | RouteOccupancySnapshot, ...]:
     """Normalize every route as mutable ledger ownership or read-only occupancy."""
 
@@ -809,6 +869,7 @@ def route_observation_snapshots(
                     route_id=identifier,
                     prefix=prefix,
                     next_hop=next_hop,
+                    route_target=route_target,
                 )
             )
             continue
