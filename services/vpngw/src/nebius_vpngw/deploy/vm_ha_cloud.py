@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import typing as t
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 
@@ -93,6 +94,95 @@ class ComputeObservation:
                 f"Compute instance {self.instance_id} has no NIC {network_interface_name}"
             )
         return matches[0]
+
+
+@dataclass(frozen=True)
+class ClusterCloudObservation:
+    """One internally consistent read of both members and the allocation."""
+
+    allocation: AllocationObservation
+    former: ComputeObservation
+    candidate: ComputeObservation
+    former_owner: AllocationOwner
+    candidate_owner: AllocationOwner
+
+    @property
+    def former_attachment_absent(self) -> bool:
+        return self.former.allocation_on(self.former_owner.network_interface_name) in {
+            None,
+            "",
+        }
+
+    @property
+    def candidate_attachment_exact(self) -> bool:
+        return bool(
+            self.allocation.owner == self.candidate_owner
+            and self.candidate.allocation_on(self.candidate_owner.network_interface_name)
+            == self.allocation.allocation_id
+        )
+
+
+class NebiusSDKCloudClient:
+    """Exact synchronous Nebius SDK calls used by the on-node HA service."""
+
+    def __init__(self, sdk: t.Any) -> None:
+        self.sdk = sdk
+
+    def get_instance(self, instance_id: str) -> t.Any:
+        from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
+
+        return InstanceServiceClient(self.sdk).get(GetInstanceRequest(id=instance_id)).wait()
+
+    def stop_instance(self, instance_id: str) -> None:
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, StopInstanceRequest
+
+        InstanceServiceClient(self.sdk).stop(StopInstanceRequest(id=instance_id)).wait()
+
+    def get_allocation(self, allocation_id: str) -> t.Any:
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest
+
+        return AllocationServiceClient(self.sdk).get(GetAllocationRequest(id=allocation_id)).wait()
+
+    def set_allocation(
+        self,
+        instance_id: str,
+        network_interface_name: str,
+        allocation_id: str | None,
+    ) -> None:
+        from nebius.api.nebius.compute.v1 import (
+            InstanceServiceClient,
+            IPAddress,
+            UpdateInstanceRequest,
+        )
+
+        instance = self.get_instance(instance_id)
+        spec = deepcopy(getattr(instance, "spec", None))
+        metadata = deepcopy(getattr(instance, "metadata", None))
+        if spec is None or metadata is None:
+            raise AmbiguousHACloudError("Compute instance has no mutable spec metadata")
+        interfaces = list(getattr(spec, "network_interfaces", ()) or ())
+        matches = [
+            (index, interface)
+            for index, interface in enumerate(interfaces)
+            if str(getattr(interface, "name", "")) == network_interface_name
+        ]
+        if len(matches) != 1:
+            raise AmbiguousHACloudError("Compute instance has an ambiguous NIC identity")
+        index, interface = matches[0]
+        current = str(getattr(getattr(interface, "ip_address", None), "allocation_id", "") or "")
+        if current == (allocation_id or ""):
+            return
+        updated = deepcopy(interface)
+        updated.ip_address = (
+            IPAddress(allocation_id=allocation_id) if allocation_id else IPAddress()
+        )
+        interfaces[index] = updated
+        spec.network_interfaces = interfaces
+        InstanceServiceClient(self.sdk).update(
+            UpdateInstanceRequest(metadata=metadata, spec=spec),
+            timeout=30,
+            auth_timeout=30,
+        ).wait()
 
 
 InstanceReader = t.Callable[[str], t.Any]
@@ -302,6 +392,31 @@ class VMHACloudAdapter:
         if allocation is None:
             raise AmbiguousHACloudError(f"allocation {allocation_id} was not returned")
         return allocation_observation(allocation_id, allocation)
+
+    def observe_cluster(
+        self,
+        *,
+        allocation_id: str,
+        former_owner: AllocationOwner,
+        candidate: AllocationOwner,
+    ) -> ClusterCloudObservation:
+        """Read exact two-sided ownership, rejecting a changing allocation."""
+
+        before = self._read_allocation(allocation_id)
+        former = self._read_instance(former_owner.instance_id)
+        current = self._read_instance(candidate.instance_id)
+        after = self._read_allocation(allocation_id)
+        if before != after:
+            raise AmbiguousHACloudError(
+                f"allocation {allocation_id} ownership changed during observation"
+            )
+        return ClusterCloudObservation(
+            allocation=after,
+            former=former,
+            candidate=current,
+            former_owner=former_owner,
+            candidate_owner=candidate,
+        )
 
     def require_stopped(self, instance_id: str) -> ComputeObservation:
         """Stop a running former owner and require an authoritative STOPPED read."""
