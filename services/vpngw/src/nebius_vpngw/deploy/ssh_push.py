@@ -714,6 +714,7 @@ WantedBy=multi-user.target
 
         # Upload to /tmp then move with sudo
         if staged_receipt is not None:
+            assert runtime_binding is not None
             rendered_config = self._render_vm_ha_config(inst_cfg, runtime_binding)
             expected = self._vm_ha_receipt(inst_cfg, rendered_config)
             if staged_receipt != expected:

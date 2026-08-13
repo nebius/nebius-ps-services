@@ -630,9 +630,7 @@ class RouteManager:
                 None,
             )
             if overlapping_pool is not None:
-                skipped_network_pool_prefixes.append(
-                    (str(prefix_network), str(overlapping_pool))
-                )
+                skipped_network_pool_prefixes.append((str(prefix_network), str(overlapping_pool)))
                 continue
 
             filtered_prefix_targets[str(prefix_network)] = alloc_id
@@ -825,8 +823,7 @@ class RouteManager:
         for prefix, alloc_id in desired_prefix_targets.items():
             matching_routes = self._routes_with_destination(existing_routes, prefix)
             if any(
-                self._route_next_hop_allocation_id(route) == alloc_id
-                for route in matching_routes
+                self._route_next_hop_allocation_id(route) == alloc_id for route in matching_routes
             ):
                 installed[prefix] = alloc_id
         return installed
@@ -1084,7 +1081,11 @@ class RouteManager:
             destination = self._route_destination_network(route)
             destination_label = str(destination) if destination else "unknown"
             route_name = self._route_name(route)
-            metadata_name = route_name[:63] if route_name else f"copied-{destination_label.replace('/', '-')}"[:63]
+            metadata_name = (
+                route_name[:63]
+                if route_name
+                else f"copied-{destination_label.replace('/', '-')}"[:63]
+            )
             try:
                 rstub.Create(
                     route_service_pb2.CreateRouteRequest(
@@ -1124,8 +1125,7 @@ class RouteManager:
         for pfx, alloc_id in prefix_targets.items():
             matching_routes = self._routes_with_destination(existing_routes, pfx)
             if matching_routes and any(
-                self._route_next_hop_allocation_id(route) == alloc_id
-                for route in matching_routes
+                self._route_next_hop_allocation_id(route) == alloc_id for route in matching_routes
             ):
                 print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
                 continue
@@ -1173,11 +1173,18 @@ class RouteManager:
                         self._route_next_hop_allocation_id(route) == alloc_id
                         for route in matching_routes
                     ):
-                        print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
+                        print(
+                            f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]"
+                        )
                     else:
-                        existing_next_hops = ", ".join(
-                            sorted({self._route_next_hop_label(route) for route in matching_routes})
-                        ) or "unknown next-hop"
+                        existing_next_hops = (
+                            ", ".join(
+                                sorted(
+                                    {self._route_next_hop_label(route) for route in matching_routes}
+                                )
+                            )
+                            or "unknown next-hop"
+                        )
                         print(
                             f"[yellow]Route {pfx} already exists on {route_table_id} with "
                             f"{existing_next_hops}; expected allocation {alloc_id}. "
@@ -1189,7 +1196,9 @@ class RouteManager:
                         {pfx: alloc_id},
                     )
                     if not redundant_routes:
-                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        print(
+                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
+                        )
                         continue
 
                     print(
@@ -1203,7 +1212,9 @@ class RouteManager:
                         route_table_id=route_table_id,
                     )
                     if not deleted:
-                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        print(
+                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
+                        )
                         continue
 
                     existing_routes = [
@@ -1739,9 +1750,7 @@ class RouteManager:
             rt_id = str(getattr(rt_info, "id", "") or "")
             rt_default = bool(getattr(rt_info, "default", False))
 
-            print(
-                f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})"
-            )
+            print(f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})")
 
             if not rt_id:
                 print("[yellow]  No route table attached[/yellow]")
@@ -2231,9 +2240,7 @@ class RouteManager:
                     existing_routes,
                     prefix_targets,
                 )
-                missing_prefix_targets = sorted(
-                    set(prefix_targets) - set(installed_prefix_targets)
-                )
+                missing_prefix_targets = sorted(set(prefix_targets) - set(installed_prefix_targets))
 
                 if missing_preserved_routes or missing_prefix_targets:
                     print(
