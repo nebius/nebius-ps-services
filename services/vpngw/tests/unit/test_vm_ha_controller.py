@@ -1307,6 +1307,180 @@ def test_crash_replay_blocks_when_shared_allocation_identity_changes(
     assert changed.reasons == ("checkpointed-action-prerequisites-changed",)
 
 
+def test_attach_completion_advances_to_authoritative_candidate_revision(
+    policy: VMHAController,
+) -> None:
+    detached = _snapshot(
+        now=110.0,
+        peer_received_at=80.0,
+        cloud=_cloud(
+            owner=None,
+            state=ComputeState.STOPPED,
+            absent=True,
+            ownership_epoch="41",
+        ),
+    )
+    transfer = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+
+    attach = policy.decide(detached, transfer)
+    assert attach.action is not None
+    assert attach.action.kind is ActionKind.ATTACH_CANDIDATE
+    assert attach.action.ownership_epoch == "41"
+
+    replay = policy.decide(detached, attach.checkpoint)
+    assert replay.action == attach.action
+    assert replay.checkpoint == attach.checkpoint
+
+    attached = replace(
+        detached,
+        cloud=_cloud(
+            owner="node-b",
+            state=ComputeState.STOPPED,
+            absent=True,
+            attached=True,
+            ownership_epoch="42",
+        ),
+    )
+    confirm = policy.decide(attached, attach.checkpoint)
+    assert confirm.action is not None
+    assert confirm.action.kind is ActionKind.CONFIRM_CANDIDATE_OWNERSHIP
+    assert confirm.action.ownership_epoch == "42"
+    assert confirm.checkpoint.pending_action == confirm.action
+
+    confirm_replay = policy.decide(attached, confirm.checkpoint)
+    assert confirm_replay.action == confirm.action
+    assert confirm_replay.checkpoint == confirm.checkpoint
+
+    confirmed = replace(
+        attached,
+        cloud=replace(attached.cloud, ownership_re_read_exact=True),
+    )
+    routes = policy.decide(confirmed, confirm.checkpoint)
+    assert routes.action is not None
+    assert routes.action.kind is ActionKind.RECONCILE_ROUTES
+    assert routes.action.ownership_epoch == "42"
+
+    routed = replace(
+        confirmed,
+        routes_reconciled_context=_reconciled(
+            confirmed,
+            operation_id=routes.action.operation_id,
+            ownership_incarnation=routes.action.ownership_incarnation,
+        ),
+    )
+    enable = policy.decide(routed, routes.checkpoint)
+    assert enable.action is not None
+    assert enable.action.kind is ActionKind.ENABLE_ACTIVE
+    assert enable.action.ownership_epoch == "42"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"ownership_epoch": "41"},
+        {"ownership_epoch": "40"},
+        {"ownership_epoch": "0"},
+        {"ownership_epoch": ""},
+        {"ownership_epoch": "forged"},
+        {"ownership_epoch": "9" * 5000},
+        {"authoritative": False},
+        {"observed_owner_node_id": None},
+        {"observed_owner_node_id": "foreign"},
+        {"allocation_id": "replacement"},
+        {"former_owner_node_id": "foreign"},
+        {"former_owner_compute_state": ComputeState.RUNNING},
+        {"former_attachment_absent": False},
+        {"candidate_attachment_exact": False},
+        {"ownership_re_read_exact": True},
+    ],
+)
+def test_attach_completion_rejects_incomplete_or_stale_observation(
+    policy: VMHAController,
+    changes: dict[str, object],
+) -> None:
+    detached = _snapshot(
+        now=110.0,
+        peer_received_at=80.0,
+        cloud=_cloud(
+            owner=None,
+            state=ComputeState.STOPPED,
+            absent=True,
+            ownership_epoch="41",
+        ),
+    )
+    attach = policy.decide(
+        detached,
+        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+    )
+    assert attach.action is not None
+    assert attach.action.kind is ActionKind.ATTACH_CANDIDATE
+    observed = replace(
+        detached,
+        cloud=replace(
+            _cloud(
+                owner="node-b",
+                state=ComputeState.STOPPED,
+                absent=True,
+                attached=True,
+                ownership_epoch="42",
+            ),
+            **changes,
+        ),
+    )
+
+    decision = policy.decide(observed, attach.checkpoint)
+
+    assert decision.state is HAState.BLOCKED
+    assert decision.action is None
+    assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
+    assert not decision.forwarding_enabled
+
+
+@pytest.mark.parametrize(
+    "snapshot_changes",
+    [
+        {"local_generation_id": "d" * 64},
+        {"local_digests": replace(DIGESTS, static_routes="d" * 64)},
+    ],
+)
+def test_attach_completion_rejects_changed_generation_or_policy(
+    policy: VMHAController,
+    snapshot_changes: dict[str, object],
+) -> None:
+    detached = _snapshot(
+        now=110.0,
+        peer_received_at=80.0,
+        cloud=_cloud(
+            owner=None,
+            state=ComputeState.STOPPED,
+            absent=True,
+            ownership_epoch="41",
+        ),
+    )
+    attach = policy.decide(
+        detached,
+        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+    )
+    assert attach.action is not None
+    observed = replace(
+        detached,
+        cloud=_cloud(
+            owner="node-b",
+            state=ComputeState.STOPPED,
+            absent=True,
+            attached=True,
+            ownership_epoch="42",
+        ),
+        **snapshot_changes,
+    )
+
+    decision = policy.decide(observed, attach.checkpoint)
+
+    assert decision.state is HAState.BLOCKED
+    assert decision.action is None
+    assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
+
+
 def test_restart_cancels_old_boot_effect_and_reinstalls_guard(
     policy: VMHAController,
 ) -> None:
