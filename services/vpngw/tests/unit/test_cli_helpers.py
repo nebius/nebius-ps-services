@@ -598,7 +598,11 @@ def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
     manager.assert_not_called()
 
 
-def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failing_stage_role", [None, "passive", "active"])
+def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_partial_stage(
+    tmp_path: Path,
+    failing_stage_role: str | None,
+) -> None:
     config_path = tmp_path / "vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
     binding = object()
@@ -606,13 +610,17 @@ def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) 
     active = SimpleNamespace(
         hostname="gateway-0",
         external_ip="",
-        vm_ha_node=SimpleNamespace(node_id="node-a", role=SimpleNamespace(value="active")),
+        vm_ha_node=SimpleNamespace(
+            node_id="node-a", role=SimpleNamespace(value="active"), credential_sources=object()
+        ),
         vm_ha_generation=generation,
     )
     passive = SimpleNamespace(
         hostname="gateway-1",
         external_ip="",
-        vm_ha_node=SimpleNamespace(node_id="node-b", role=SimpleNamespace(value="passive")),
+        vm_ha_node=SimpleNamespace(
+            node_id="node-b", role=SimpleNamespace(value="passive"), credential_sources=object()
+        ),
         vm_ha_generation=generation,
     )
     plan = SimpleNamespace(
@@ -626,6 +634,7 @@ def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) 
     )
     local_cfg = {"gateway_group": {"vm_spec": {}}}
     observed: list[tuple[str, str, object]] = []
+    source_bundles: list[object] = []
 
     class BoundResult(dict):
         vm_ha_runtime_binding = binding
@@ -656,8 +665,11 @@ def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) 
             }
 
     class FakeSSHPush:
-        def stage_vm_ha_config(self, target, inst_cfg, cfg, *, runtime_binding):
+        def stage_vm_ha_config(self, target, inst_cfg, cfg, *, runtime_binding, credential_sources):
             observed.append(("stage", inst_cfg.vm_ha_node.role.value, runtime_binding))
+            source_bundles.append(credential_sources)
+            if inst_cfg.vm_ha_node.role.value == failing_stage_role:
+                raise RuntimeError("injected credential staging failure")
             return SimpleNamespace(
                 node_id=inst_cfg.vm_ha_node.node_id,
                 generation_id="a" * 64,
@@ -681,13 +693,21 @@ def test_vm_ha_apply_delivers_provisioned_binding_passive_first(tmp_path: Path) 
     ):
         result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
 
-    assert result.exit_code == 0, result.stdout
-    assert [(phase, role) for phase, role, _ in observed] == [
-        ("stage", "passive"),
-        ("stage", "active"),
-        ("activate", "passive"),
-        ("activate", "active"),
-    ]
+    if failing_stage_role is None:
+        assert result.exit_code == 0, result.stdout
+        assert [(phase, role) for phase, role, _ in observed] == [
+            ("stage", "passive"),
+            ("stage", "active"),
+            ("activate", "passive"),
+            ("activate", "active"),
+        ]
+    else:
+        assert result.exit_code == 1
+        assert all(phase != "activate" for phase, _, _ in observed)
+    expected_sources = [passive.vm_ha_node.credential_sources]
+    if failing_stage_role != "passive":
+        expected_sources.append(active.vm_ha_node.credential_sources)
+    assert source_bundles == expected_sources
     assert all(item is binding for _, _, item in observed)
 
 

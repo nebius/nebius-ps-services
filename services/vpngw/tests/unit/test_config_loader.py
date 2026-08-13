@@ -11,6 +11,7 @@ import yaml
 from nebius_vpngw.config_loader import (
     _detect_vendor,
     _validate_tunnel_inner_ips,
+    _validate_vm_ha_credential_sources,
     load_local_config,
     merge_peer_configs_into_local_config,
     merge_with_peer_configs,
@@ -70,8 +71,18 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
                 "enabled": True,
                 "cluster_id": "gateway-cluster",
                 "members": [
-                    {"node_id": "gateway-a", "instance_index": 0, "role": "active"},
-                    {"node_id": "gateway-b", "instance_index": 1, "role": "passive"},
+                    {
+                        "node_id": "gateway-a",
+                        "instance_index": 0,
+                        "role": "active",
+                        "credential_sources": _credential_sources("gateway-a"),
+                    },
+                    {
+                        "node_id": "gateway-b",
+                        "instance_index": 1,
+                        "role": "passive",
+                        "credential_sources": _credential_sources("gateway-b"),
+                    },
                 ],
             },
         }
@@ -120,6 +131,65 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
         manifest["readiness"]["required_node_ids"] == ["gateway-a", "gateway-b"]
         for manifest in manifests
     )
+    assert all("credential_sources" not in yaml.safe_dump(manifest) for manifest in manifests)
+
+
+def _credential_sources(node_id: str) -> dict[str, str]:
+    base = f"/operator-secrets/{node_id}"
+    return {
+        "certificate_authority": f"{base}/peer-ca.pem",
+        "certificate": f"{base}/peer.crt",
+        "private_key": f"{base}/peer.key",
+        "nebius_credentials": f"{base}/nebius-credentials.json",
+    }
+
+
+def test_vm_ha_credential_preflight_accepts_regular_files_and_redacts_paths(
+    tmp_path: Path,
+) -> None:
+    sources: dict[str, str] = {}
+    for name in ("certificate_authority", "certificate", "private_key", "nebius_credentials"):
+        source = tmp_path / name
+        source.write_bytes(f"fixture-{name}".encode())
+        sources[name] = str(source)
+    config = {
+        "gateway_group": {
+            "vm_ha": {
+                "enabled": True,
+                "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+            }
+        }
+    }
+
+    _validate_vm_ha_credential_sources(config)
+
+    missing = tmp_path / "missing-private-value"
+    sources["private_key"] = str(missing)
+    with pytest.raises(ValueError) as exc_info:
+        _validate_vm_ha_credential_sources(config)
+    assert str(missing) not in str(exc_info.value)
+    assert "private_key for gateway-a is unavailable" in str(exc_info.value)
+
+
+def test_vm_ha_credential_preflight_rejects_symlinks_without_reading_them(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.write_bytes(b"fixture-secret")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    sources = {name: str(real) for name in _credential_sources("node")}
+    sources["private_key"] = str(link)
+
+    with pytest.raises(ValueError, match="non-symlink regular file"):
+        _validate_vm_ha_credential_sources(
+            {
+                "gateway_group": {
+                    "vm_ha": {
+                        "enabled": True,
+                        "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+                    }
+                }
+            }
+        )
 
 
 def test_template_and_vm_ha_example_match_the_schema() -> None:
