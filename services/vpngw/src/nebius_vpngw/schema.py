@@ -15,7 +15,9 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import re
 import typing as t
 from enum import Enum
@@ -940,6 +942,17 @@ class VMHARuntimeNodeBinding(BaseModel):
     credentials: VMHACredentialReferences
 
 
+class VMHARouteTarget(BaseModel):
+    """One exact workload-subnet route-table parent authorized for VM-HA."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    project_id: str = Field(..., min_length=1)
+    network_id: str = Field(..., min_length=1)
+    workload_subnet_id: str = Field(..., min_length=1)
+    route_table_id: str = Field(..., min_length=1)
+
+
 class VMHARuntimeBinding(BaseModel):
     """Secret-free authoritative inputs required by the VM-HA service shell."""
 
@@ -948,11 +961,29 @@ class VMHARuntimeBinding(BaseModel):
     cluster_id: str
     shared_allocation_id: str
     nodes: tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding]
+    route_targets: tuple[VMHARouteTarget, ...]
     route_runtime_id: str
     generation_id: str
     configuration_digest: str
     static_routes_digest: str
     bgp_policy_digest: str
+
+    @staticmethod
+    def derive_route_runtime_id(
+        cluster_id: str,
+        allocation_id: str,
+        route_targets: tuple[VMHARouteTarget, ...],
+    ) -> str:
+        route_identity = json.dumps(
+            {
+                "allocation_id": allocation_id,
+                "cluster_id": cluster_id,
+                "targets": [target.model_dump(mode="json") for target in route_targets],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(route_identity.encode("utf-8")).hexdigest()
 
     @model_validator(mode="after")
     def validate_runtime_identity(self) -> VMHARuntimeBinding:
@@ -962,6 +993,37 @@ class VMHARuntimeBinding(BaseModel):
             raise ValueError("VM-HA runtime binding requires two distinct Compute identities")
         if not self.shared_allocation_id:
             raise ValueError("VM-HA runtime binding requires a shared allocation identity")
+        if not self.route_targets:
+            raise ValueError("VM-HA runtime binding requires at least one exact route target")
+        canonical_targets = tuple(
+            sorted(
+                self.route_targets,
+                key=lambda target: (
+                    target.project_id,
+                    target.network_id,
+                    target.workload_subnet_id,
+                    target.route_table_id,
+                ),
+            )
+        )
+        if self.route_targets != canonical_targets:
+            raise ValueError("VM-HA route targets must be canonically sorted")
+        if len({target.workload_subnet_id for target in self.route_targets}) != len(
+            self.route_targets
+        ) or len({target.route_table_id for target in self.route_targets}) != len(
+            self.route_targets
+        ):
+            raise ValueError("VM-HA route targets must name unique subnets and route tables")
+        if (
+            len({target.project_id for target in self.route_targets}) != 1
+            or len({target.network_id for target in self.route_targets}) != 1
+        ):
+            raise ValueError("VM-HA route targets must share one project and network")
+        expected_route_runtime_id = self.derive_route_runtime_id(
+            self.cluster_id, self.shared_allocation_id, self.route_targets
+        )
+        if self.route_runtime_id != expected_route_runtime_id:
+            raise ValueError("VM-HA route runtime identity does not match exact route targets")
         digests = (
             self.generation_id,
             self.configuration_digest,

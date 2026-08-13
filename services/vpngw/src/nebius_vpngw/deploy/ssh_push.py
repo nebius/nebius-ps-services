@@ -85,6 +85,20 @@ class SSHPush:
             and runtime_binding.bgp_policy_digest == generation.digests.bgp_policy
         ):
             raise ValueError("VM-HA runtime binding does not match the staged generation")
+        manifests = (payload["vm_ha"].get("generation") or {}).get("logical_manifests")
+        expected_manifests = generation.logical_manifests
+        if manifests != {
+            "static_routes_json": expected_manifests.static_routes_json,
+            "bgp_policy_json": expected_manifests.bgp_policy_json,
+        }:
+            raise ValueError("VM-HA staged logical manifests differ from the committed generation")
+        if (
+            hashlib.sha256(manifests["static_routes_json"].encode()).hexdigest()
+            != runtime_binding.static_routes_digest
+            or hashlib.sha256(manifests["bgp_policy_json"].encode()).hexdigest()
+            != runtime_binding.bgp_policy_digest
+        ):
+            raise ValueError("VM-HA staged logical manifest digest mismatch")
 
         payload["vm_ha"]["runtime_binding"] = runtime_binding.model_dump(mode="json")
         return yaml.safe_dump(payload, sort_keys=False)

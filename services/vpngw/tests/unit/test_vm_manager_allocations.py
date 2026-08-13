@@ -11,7 +11,18 @@ from nebius_vpngw.deploy.vm_manager import (
     VMProvisioningConfig,
     VMProvisioningResult,
 )
-from nebius_vpngw.schema import VMHARole
+from nebius_vpngw.schema import VMHARole, VMHARouteTarget
+
+
+def _route_targets() -> tuple[VMHARouteTarget, ...]:
+    return (
+        VMHARouteTarget(
+            project_id="project-1",
+            network_id="network-1",
+            workload_subnet_id="workload-subnet-1",
+            route_table_id="route-table-1",
+        ),
+    )
 
 
 def _public_allocation(
@@ -362,6 +373,7 @@ def test_vm_ha_operation_sync_propagates_failure() -> None:
 def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    vm_mgr._vm_ha_route_targets = _route_targets()
     allocation = SimpleNamespace(
         id="shared-private",
         status=SimpleNamespace(
@@ -405,6 +417,7 @@ def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
 def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    vm_mgr._vm_ha_route_targets = _route_targets()
     allocation = SimpleNamespace(
         id="shared-private",
         status=SimpleNamespace(
@@ -520,12 +533,13 @@ def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -
             side_effect=lambda *_: setattr(vm_mgr, "_vm_ha_shared_allocation_id", "shared-private"),
         ) as ensure_shared,
         patch.object(vm_mgr, "_instance_exists", return_value=False),
+        patch.object(vm_mgr, "_resolve_vm_ha_route_targets", return_value=_route_targets()),
         patch.object(vm_mgr, "_provision_instance") as provision,
         patch.object(vm_mgr, "_get_ha_instance_by_name", return_value=active),
         patch.object(vm_mgr, "_attach_vm_ha_shared_allocation_initially") as attach,
         patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding) as reread,
     ):
-        result = vm_mgr.ensure_group(spec)
+        result = vm_mgr.ensure_group(spec, local_prefixes=["10.0.0.0/8"])
 
     assert isinstance(result, VMProvisioningResult)
     assert result.vm_ha_runtime_binding is binding

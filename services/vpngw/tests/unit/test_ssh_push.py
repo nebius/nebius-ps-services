@@ -23,6 +23,7 @@ from nebius_vpngw.schema import (
     VMHACredentialReferences,
     VMHACredentialSourceReferences,
     VMHARole,
+    VMHARouteTarget,
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
@@ -136,10 +137,12 @@ def test_build_wheel_falls_back_to_original_local_wheel_when_build_fails(
 
 def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBinding]:
     digest = "a" * 64
+    static_routes_digest = hashlib.sha256(b"[]").hexdigest()
+    bgp_policy_digest = hashlib.sha256(b"[]").hexdigest()
     digests = VMHADigestRecord(
         configuration=digest,
-        static_routes="b" * 64,
-        bgp_policy="c" * 64,
+        static_routes=static_routes_digest,
+        bgp_policy=bgp_policy_digest,
     )
     generation = VMHAGenerationRecord(
         generation_id=digest,
@@ -166,7 +169,14 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
                 "vm_ha": {
                     "cluster_id": "cluster-a",
                     "node": {"node_id": "node-a", "instance_index": 0, "role": "active"},
-                    "generation": {"generation_id": digest, "digests": digests.__dict__},
+                    "generation": {
+                        "generation_id": digest,
+                        "digests": digests.__dict__,
+                        "logical_manifests": {
+                            "static_routes_json": "[]",
+                            "bgp_policy_json": "[]",
+                        },
+                    },
                 }
             },
             sort_keys=False,
@@ -194,6 +204,14 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
             ),
         )
 
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-a",
+            network_id="network-a",
+            workload_subnet_id="subnet-a",
+            route_table_id="route-table-a",
+        ),
+    )
     binding = VMHARuntimeBinding(
         cluster_id="cluster-a",
         shared_allocation_id="allocation-a",
@@ -201,11 +219,14 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
             bound_node("node-a", VMHARole.ACTIVE, "10"),
             bound_node("node-b", VMHARole.PASSIVE, "11"),
         ),
-        route_runtime_id="cluster-a:allocation-a",
+        route_targets=route_targets,
+        route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+            "cluster-a", "allocation-a", route_targets
+        ),
         generation_id=digest,
         configuration_digest=digest,
-        static_routes_digest="b" * 64,
-        bgp_policy_digest="c" * 64,
+        static_routes_digest=static_routes_digest,
+        bgp_policy_digest=bgp_policy_digest,
     )
     return manifest, binding
 

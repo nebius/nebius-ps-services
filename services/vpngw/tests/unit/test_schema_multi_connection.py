@@ -6,6 +6,7 @@ import pytest
 
 from nebius_vpngw.schema import (
     VMHACredentialReferences,
+    VMHARouteTarget,
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
     validate_config,
@@ -157,6 +158,14 @@ def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references()
         certificate="/etc/nebius-vpngw/vm-ha/node.crt",
         private_key="/etc/nebius-vpngw/vm-ha/node.key",
     )
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-1",
+            network_id="network-1",
+            workload_subnet_id="subnet-1",
+            route_table_id="route-table-1",
+        ),
+    )
     binding = VMHARuntimeBinding(
         cluster_id="gateway-cluster",
         shared_allocation_id="allocation-1",
@@ -178,7 +187,10 @@ def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references()
                 credentials=references,
             ),
         ),
-        route_runtime_id="gateway-cluster:allocation-1",
+        route_targets=route_targets,
+        route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+            "gateway-cluster", "allocation-1", route_targets
+        ),
         generation_id=digest,
         configuration_digest=digest,
         static_routes_digest="b" * 64,

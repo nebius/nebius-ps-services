@@ -102,6 +102,7 @@ def _snapshot(**changes: object) -> ControllerSnapshot:
         guard_boot_id="local-boot",
         data_plane_mode=DataPlaneMode.PASSIVE,
         routes_reconciled_context=None,
+        route_runtime_id="route-runtime-a",
     )
     return replace(snapshot, **changes)
 
@@ -116,6 +117,18 @@ def _reconciled(
     if ownership_incarnation is not None:
         context = replace(context, ownership_incarnation=ownership_incarnation)
     return replace(context, operation_id=operation_id)
+
+
+def test_route_target_runtime_change_invalidates_reconciliation(policy: VMHAController) -> None:
+    snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.PASSIVE)
+    changed = replace(
+        snapshot,
+        route_runtime_id="route-runtime-b",
+        routes_reconciled_context=_reconciled(snapshot),
+    )
+    result = policy.decide(changed, ControllerCheckpoint())
+    assert result.action is not None
+    assert result.action.kind is ActionKind.RECONCILE_ROUTES
 
 
 @pytest.fixture

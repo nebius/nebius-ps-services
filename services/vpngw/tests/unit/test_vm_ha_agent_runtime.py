@@ -23,6 +23,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     DataPlaneMode,
     LocalReadiness,
 )
+from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
 
 
 def _runtime_config() -> dict[str, object]:
@@ -32,6 +33,14 @@ def _runtime_config() -> dict[str, object]:
         "certificate": "/etc/nebius-vpngw/vm-ha/node.crt",
         "private_key": "/etc/nebius-vpngw/vm-ha/node.key",
     }
+    route_targets = (
+        VMHARouteTarget(
+            project_id="project-a",
+            network_id="network-a",
+            workload_subnet_id="subnet-a",
+            route_table_id="route-table-a",
+        ),
+    )
     return {
         "cluster_id": "cluster-a",
         "node": {"node_id": "node-a", "role": "active"},
@@ -60,7 +69,10 @@ def _runtime_config() -> dict[str, object]:
                     "credentials": credentials,
                 },
             ],
-            "route_runtime_id": "cluster-a:allocation-a",
+            "route_targets": [target.model_dump(mode="json") for target in route_targets],
+            "route_runtime_id": VMHARuntimeBinding.derive_route_runtime_id(
+                "cluster-a", "allocation-a", route_targets
+            ),
             "generation_id": digest,
             "configuration_digest": digest,
             "static_routes_digest": "b" * 64,
@@ -90,6 +102,8 @@ def test_snapshot_adapter_requires_binding_and_observes_current_guard(tmp_path: 
     snapshot = adapter.observe()
     assert (snapshot.local_node_id, snapshot.peer_node_id) == ("node-a", "node-b")
     assert snapshot.guard_boot_id == "boot-a"
+    with pytest.raises(ValueError, match="route runtime identity"):
+        _ = snapshot.route_reconciliation_context
     config = _runtime_config()
     config.pop("runtime_binding")
     with pytest.raises(ValueError, match="runtime binding"):
@@ -179,11 +193,10 @@ def test_service_executes_verified_controller_from_authoritative_binding(tmp_pat
     )
 
     _run_vm_ha_controller(runtime, once=True, config_path=config_path)
-
     status = json.loads((tmp_path / "status.json").read_text())
-    assert status["schema"] == "nebius-vpngw/vm-ha-status-v1"
-    assert status["promotion_ready"] is False
-    assert len(calls) == 1
+    assert status["state"] == "blocked"
+    assert status["reasons"] == ["route-runtime-identity-missing"]
+    assert calls == []
 
 
 def test_service_fails_closed_without_bound_runtime(tmp_path: Path, monkeypatch) -> None:
