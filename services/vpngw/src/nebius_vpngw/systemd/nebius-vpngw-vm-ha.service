@@ -10,7 +10,9 @@ Type=simple
 Environment="PYTHONUNBUFFERED=1"
 ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-preflight
 ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-controller
-Restart=no
+ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard
+Restart=on-failure
+RestartSec=3
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
