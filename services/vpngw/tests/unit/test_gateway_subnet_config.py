@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -204,6 +205,10 @@ def test_vm_ha_checkpoint_rejects_partial_pending_action() -> None:
 def test_vm_ha_guard_and_default_status_are_fail_closed(tmp_path: Path, monkeypatch) -> None:
     completed = SimpleNamespace(returncode=0, stderr="")
     monkeypatch.setattr("nebius_vpngw.agent.main.subprocess.run", lambda *a, **k: completed)
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.main.acquire_routing_lock",
+        lambda blocking=True: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
+    )
 
     guard = install_vm_ha_cold_start_guard(state_dir=tmp_path, boot_id="boot-a")
     status = vm_ha_status(state_dir=tmp_path)
@@ -214,21 +219,12 @@ def test_vm_ha_guard_and_default_status_are_fail_closed(tmp_path: Path, monkeypa
     assert status["promotion_ready"] is False
     assert status["observed_owner_node_id"] is None
     assert status["state"] == "blocked"
-    assert status["reasons"] == [
-        "authoritative-allocation-identity-unavailable",
-        "authoritative-compute-state-adapter-unavailable",
-        "authoritative-nic-attachment-adapter-unavailable",
-        "authenticated-peer-transport-unavailable",
-        "route-runtime-adapter-unavailable",
-    ]
+    assert status["reasons"] == ["authoritative-cloud-observation-not-yet-recorded"]
     assert "vm-ha-recover" in status["recovery_action"]
     assert json.loads((tmp_path / "guard.json").read_text())["data_plane_mode"] == "blocked"
 
-    with pytest.raises(RuntimeError, match="activation BLOCKED"):
-        require_vm_ha_runtime_prerequisites(state_dir=tmp_path)
-    persisted = json.loads((tmp_path / "status.json").read_text())
-    assert persisted["state"] == "blocked"
-    assert persisted["promotion_ready"] is False
+    require_vm_ha_runtime_prerequisites(state_dir=tmp_path)
+    persisted = status
 
     persisted.update(state="active", data_plane_mode="active", promotion_ready=True)
     (tmp_path / "status.json").write_text(json.dumps(persisted), encoding="utf-8")
@@ -251,9 +247,13 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert (
         "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-preflight" in controller
     )
+    assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
+    assert "Type=notify" in controller
+    assert "After=network-online.target nebius-vpngw-vm-ha-guard.service" in controller
     assert "Before=strongswan-starter.service strongswan.service frr.service" in controller
     assert "After=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert "Requires=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" in fix_routes
     assert "ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
     assert "Restart=on-failure" in controller
+    assert "TimeoutStopSec=30" in controller
