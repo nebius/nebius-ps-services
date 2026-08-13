@@ -88,6 +88,52 @@ class NebiusSDKRouteBackend:
             page_token = next_token
         raise RuntimeError("VM-HA route listing exceeded the bounded page limit")
 
+    def verify_target(self, target: VMHARouteTarget) -> None:
+        """Freshly prove the full declared parent chain before route authority is used."""
+
+        from nebius.api.nebius.vpc.v1 import (
+            GetRouteTableRequest,
+            GetSubnetRequest,
+            RouteTableServiceClient,
+            SubnetServiceClient,
+        )
+
+        subnet = (
+            SubnetServiceClient(self.sdk)
+            .get(
+                GetSubnetRequest(id=target.workload_subnet_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
+        route_table = (
+            RouteTableServiceClient(self.sdk)
+            .get(
+                GetRouteTableRequest(id=target.route_table_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
+        subnet_metadata = getattr(subnet, "metadata", None)
+        subnet_spec = getattr(subnet, "spec", None)
+        table_metadata = getattr(route_table, "metadata", None)
+        table_spec = getattr(route_table, "spec", None)
+        observed = VMHARouteTarget(
+            project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
+            network_id=str(getattr(subnet_spec, "network_id", "") or ""),
+            workload_subnet_id=str(getattr(subnet_metadata, "id", "") or ""),
+            route_table_id=str(getattr(table_metadata, "id", "") or ""),
+        )
+        if (
+            observed != target
+            or str(getattr(subnet_spec, "route_table_id", "") or "") != target.route_table_id
+            or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
+            or str(getattr(table_spec, "network_id", "") or "") != target.network_id
+        ):
+            raise RuntimeError("VM-HA route target membership changed")
+
     def list_routes(
         self,
         target: VMHARouteTarget,

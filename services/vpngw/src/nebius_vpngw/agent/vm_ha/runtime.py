@@ -13,11 +13,15 @@ import ipaddress
 import json
 import math
 import os
+import re
+import ssl
+import stat
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -62,7 +66,11 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
 )
-from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding, VMHARuntimeNodeBinding
+from nebius_vpngw.schema import (
+    VMHARouteTarget,
+    VMHARuntimeBinding,
+    VMHARuntimeNodeBinding,
+)
 
 
 def _default_sdk_factory(*, credentials_file_name: str) -> Any:
@@ -87,6 +95,131 @@ def _credential_file(path: str, name: str) -> Path:
     except (OSError, ValueError):
         raise ValueError(f"installed VM-HA {name} is not a private readable regular file") from None
     return candidate
+
+
+_CREDENTIAL_LABELS = (
+    "certificate_authority",
+    "certificate",
+    "private_key",
+    "nebius_credentials",
+)
+
+
+@dataclass(frozen=True)
+class InstalledCredentialBundle:
+    """One immutable root-owned installed credential bundle."""
+
+    node_id: str
+    generation_id: str
+    bundle_digest: str
+    files: tuple[tuple[str, Path], ...]
+
+    def revalidate(self) -> None:
+        digests: list[tuple[str, str]] = []
+        for label, path in self.files:
+            ancestors = tuple(dict.fromkeys((path.parent, *path.parents)))
+            try:
+                install_root_index = ancestors.index(Path("/etc/nebius-vpngw"))
+            except ValueError:
+                raise ValueError(
+                    "installed VM-HA credentials are outside the install root"
+                ) from None
+            for ancestor in ancestors[: install_root_index + 1]:
+                metadata = ancestor.lstat()
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or metadata.st_uid != 0
+                    or metadata.st_mode & 0o022
+                ):
+                    raise ValueError("installed VM-HA credential ancestors are not immutable")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != 0
+                    or metadata.st_mode & 0o077
+                    or metadata.st_nlink != 1
+                ):
+                    raise ValueError("installed VM-HA credential file is not immutable")
+                digest = hashlib.sha256()
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    digest.update(chunk)
+            finally:
+                os.close(descriptor)
+            if path.lstat().st_ino != metadata.st_ino or path.lstat().st_dev != metadata.st_dev:
+                raise ValueError("installed VM-HA credential identity changed during validation")
+            digests.append((label, digest.hexdigest()))
+        identity = "\n".join(f"{label}:{digest}" for label, digest in digests)
+        if hashlib.sha256(identity.encode("ascii")).hexdigest() != self.bundle_digest:
+            raise ValueError("installed VM-HA credential bundle digest mismatch")
+
+        paths = dict(self.files)
+        try:
+            credentials = json.loads(paths["nebius_credentials"].read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise ValueError("installed VM-HA Nebius credentials are malformed") from None
+        if not isinstance(credentials, Mapping) or not credentials:
+            raise ValueError("installed VM-HA Nebius credentials are malformed")
+        try:
+            context = ssl.create_default_context(
+                ssl.Purpose.SERVER_AUTH,
+                cafile=str(paths["certificate_authority"]),
+            )
+            context.load_cert_chain(str(paths["certificate"]), str(paths["private_key"]))
+            decoded = ssl._ssl._test_decode_cert(str(paths["certificate"]))  # type: ignore[attr-defined]
+        except (OSError, ssl.SSLError, ValueError):
+            raise ValueError("installed VM-HA TLS credential bundle is invalid") from None
+        now = datetime.now(timezone.utc).timestamp()
+        if not (
+            ssl.cert_time_to_seconds(str(decoded.get("notBefore")))
+            <= now
+            < ssl.cert_time_to_seconds(str(decoded.get("notAfter")))
+        ):
+            raise ValueError("installed VM-HA node certificate is outside its validity window")
+        identities = {value for kind, value in decoded.get("subjectAltName", ()) if kind == "URI"}
+        if identities != {f"urn:nebius-vpngw:node:{self.node_id}"}:
+            raise ValueError("installed VM-HA node certificate identity is invalid")
+
+
+class CredentialBundle(Protocol):
+    def revalidate(self) -> None: ...
+
+
+def validate_installed_credential_bundle(
+    binding: VMHARuntimeBinding,
+    local: VMHARuntimeNodeBinding,
+) -> InstalledCredentialBundle:
+    references = local.credentials
+    files = tuple((label, Path(str(getattr(references, label)))) for label in _CREDENTIAL_LABELS)
+    parents = {path.parent for _label, path in files}
+    if len(parents) != 1:
+        raise ValueError("installed VM-HA credentials do not share one bundle identity")
+    parent = parents.pop()
+    expected_names = {
+        "certificate_authority": "ca.crt",
+        "certificate": f"{local.node_id}.crt",
+        "private_key": f"{local.node_id}.key",
+        "nebius_credentials": "nebius-credentials.json",
+    }
+    if (
+        parent.parent.name != local.node_id
+        or parent.parent.parent.name != binding.generation_id
+        or any(path.name != expected_names[label] for label, path in files)
+    ):
+        raise ValueError("installed VM-HA credentials have a non-canonical bundle path")
+    bundle = InstalledCredentialBundle(
+        node_id=local.node_id,
+        generation_id=binding.generation_id,
+        bundle_digest=parent.name,
+        files=files,
+    )
+    if len(bundle.bundle_digest) != 64 or any(
+        c not in "0123456789abcdef" for c in bundle.bundle_digest
+    ):
+        raise ValueError("installed VM-HA credential bundle identity is invalid")
+    bundle.revalidate()
+    return bundle
 
 
 def _compute_state(value: InstanceCloudState) -> ComputeState:
@@ -127,8 +260,11 @@ class RenewableNebiusSDK:
         credentials_file_name: str,
         *,
         factory: Callable[..., Any] = _default_sdk_factory,
+        credential_check: Callable[[], None] | None = None,
     ) -> None:
         credentials = _credential_file(credentials_file_name, "Nebius credentials")
+        if credential_check is not None:
+            credential_check()
         self.client = factory(credentials_file_name=str(credentials))
         if self.client is None or not callable(getattr(self.client, "sync_close", None)):
             raise RuntimeError("Nebius SDK does not provide the required synchronous lifecycle")
@@ -447,6 +583,45 @@ def _usable_xfrm_devices(links: object, state: object, policies: object) -> set[
     return devices
 
 
+def _policy_digest(value: Mapping[str, Iterable[str]]) -> str:
+    normalized = {
+        peer: sorted(str(ipaddress.ip_network(prefix, strict=True)) for prefix in prefixes)
+        for peer, prefixes in sorted(value.items())
+    }
+    return hashlib.sha256(
+        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+
+
+def _observed_import_policy_digest(running_config: str, sessions: frozenset[str]) -> str:
+    prefix_lists: dict[str, list[str]] = {}
+    bindings: dict[str, str] = {}
+    for raw_line in running_config.splitlines():
+        line = raw_line.strip()
+        match = re.fullmatch(r"ip prefix-list (\S+) seq \d+ permit (\S+)", line)
+        if match:
+            prefix_lists.setdefault(match.group(1), []).append(match.group(2))
+            continue
+        match = re.fullmatch(r"neighbor (\S+) prefix-list (\S+) in", line)
+        if match:
+            peer, list_name = match.groups()
+            if peer in bindings and bindings[peer] != list_name:
+                raise RuntimeError("FRR import policy has ambiguous neighbor bindings")
+            bindings[peer] = list_name
+    if set(bindings) - sessions:
+        raise RuntimeError("FRR import policy contains an unexpected VM-HA neighbor")
+    policy: dict[str, Iterable[str]] = {}
+    for peer in sessions:
+        list_name = bindings.get(peer)
+        policy[peer] = () if list_name is None else prefix_lists.get(list_name, ())
+        if list_name is not None and list_name not in prefix_lists:
+            raise RuntimeError("FRR import policy references a missing prefix list")
+    try:
+        return _policy_digest(policy)
+    except ValueError:
+        raise RuntimeError("FRR import policy contains an invalid prefix") from None
+
+
 class SystemDataPlaneRuntime:
     """Bounded command adapter for local service, FRR, XFRM, and forwarding truth."""
 
@@ -455,7 +630,7 @@ class SystemDataPlaneRuntime:
         *,
         state_path: Path,
         configured_bgp_sessions: Iterable[str],
-        bgp_policy_digest: str,
+        expected_bgp_policy_digest: str,
         runner: CommandRunner = _run_command,
         command_timeout: float = 5.0,
         commands: DataPlaneCommandSet = DataPlaneCommandSet(),
@@ -464,7 +639,7 @@ class SystemDataPlaneRuntime:
             raise ValueError("local command timeout must be finite and positive")
         self.state_path = state_path
         self.configured_bgp_sessions = frozenset(str(item) for item in configured_bgp_sessions)
-        self.bgp_policy_digest = bgp_policy_digest
+        self.expected_bgp_policy_digest = expected_bgp_policy_digest
         self.runner = runner
         self.command_timeout = command_timeout
         self.commands = commands
@@ -507,6 +682,9 @@ class SystemDataPlaneRuntime:
             self._run(self.commands.ip, "-j", "link", "show", "type", "xfrm"),
             "XFRM interfaces",
         )
+        running_config = self._run(self.commands.vtysh, "-c", "show running-config")
+        if running_config.returncode != 0:
+            raise RuntimeError("unable to observe current FRR import policy")
         established = _established_bgp_sessions(summary)
         learned = _learned_bgp_prefixes(rib)
         static_prefixes: set[str] = set()
@@ -530,7 +708,9 @@ class SystemDataPlaneRuntime:
             established_bgp_sessions=frozenset(established),
             learned_bgp_prefixes=frozenset(learned),
             usable_xfrm_prefixes=frozenset(usable_xfrm),
-            observed_bgp_policy_digest=self.bgp_policy_digest,
+            observed_bgp_policy_digest=_observed_import_policy_digest(
+                running_config.stdout, self.configured_bgp_sessions
+            ),
         )
 
     def _set_mode(self, action: ControllerAction, mode: DataPlaneMode) -> None:
@@ -554,15 +734,31 @@ class SystemDataPlaneRuntime:
             )
             if terminate.returncode != 0:
                 raise RuntimeError("cluster tunnel initiation could not be disabled")
-        _atomic_write_json(
-            self.state_path,
-            {
-                "boot_id": action.boot_id,
-                "mode": mode.value,
-                "operation_id": action.operation_id,
-                "schema": "nebius-vpngw/vm-ha-data-plane-v1",
-            },
-        )
+            unload = self._run(self.commands.swanctl, "--unload-conns")
+            if unload.returncode != 0:
+                raise RuntimeError("cluster tunnel start actions could not be disabled")
+        elif mode is DataPlaneMode.PASSIVE:
+            load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
+            if load.returncode != 0:
+                raise RuntimeError("cluster tunnel configuration could not be loaded")
+        try:
+            _atomic_write_json(
+                self.state_path,
+                {
+                    "boot_id": action.boot_id,
+                    "mode": mode.value,
+                    "operation_id": action.operation_id,
+                    "schema": "nebius-vpngw/vm-ha-data-plane-v1",
+                },
+            )
+        except Exception:
+            if mode is DataPlaneMode.ACTIVE:
+                rollback = self._run(self.commands.sysctl, "-w", "net.ipv4.ip_forward=0")
+                if rollback.returncode != 0 or self._forwarding():
+                    raise RuntimeError(
+                        "active authority persistence failed and forwarding rollback was not verified"
+                    ) from None
+            raise
 
     def install_guard(self, action: ControllerAction) -> None:
         self._set_mode(action, DataPlaneMode.BLOCKED)
@@ -599,6 +795,8 @@ class SystemDataPlaneRuntime:
 
 
 class RouteBackend(Protocol):
+    def verify_target(self, target: VMHARouteTarget) -> None: ...
+
     def list_routes(
         self, target: VMHARouteTarget, ownership: Mapping[str, ManagedRouteOwnership]
     ) -> tuple[ManagedRouteSnapshot | RouteOccupancySnapshot, ...]: ...
@@ -769,6 +967,7 @@ class BoundRouteRuntime:
         store: RuntimeStateStore,
         static_manifest_json: str,
         bgp_policy_json: str,
+        expected_import_policy_digest: str,
         clock: Callable[[], float] = time.time,
         takeover_hold_down_seconds: float = 30.0,
         withdrawal_stability_observations: int = 3,
@@ -787,6 +986,7 @@ class BoundRouteRuntime:
         self.bgp_policies = json.loads(bgp_policy_json)
         if not isinstance(self.bgp_policies, list):
             raise ValueError("Committed BGP policy manifest must be a list")
+        self.expected_import_policy_digest = expected_import_policy_digest
         self.clock = clock
         self.reconciler = VMHARouteReconciler(
             cluster_id=binding.cluster_id,
@@ -804,8 +1004,8 @@ class BoundRouteRuntime:
                 required_prefixes=(),
                 learned_prefixes=(),
                 usable_xfrm_prefixes=(),
-                observed_import_policy_digest=self.binding.bgp_policy_digest,
-                committed_import_policy_digest=self.binding.bgp_policy_digest,
+                observed_import_policy_digest=observed.observed_bgp_policy_digest,
+                committed_import_policy_digest=self.expected_import_policy_digest,
             )
         required: set[str] = set()
         for policy in self.bgp_policies:
@@ -821,7 +1021,7 @@ class BoundRouteRuntime:
             learned_prefixes=observed.learned_bgp_prefixes,
             usable_xfrm_prefixes=observed.usable_xfrm_prefixes,
             observed_import_policy_digest=observed.observed_bgp_policy_digest,
-            committed_import_policy_digest=self.binding.bgp_policy_digest,
+            committed_import_policy_digest=self.expected_import_policy_digest,
         )
 
     def readiness(self) -> LocalReadiness:
@@ -836,10 +1036,12 @@ class BoundRouteRuntime:
             xfrm_ready=required_xfrm_prefixes.issubset(observed.usable_xfrm_prefixes),
         )
 
-    def _ownership(self) -> VerifiedAllocationOwnership:
+    def _ownership(self, *, require_takeover_fence: bool) -> VerifiedAllocationOwnership:
         observed = self.cloud.observe()
-        if not observed.transfer_complete(self.local_node_id):
-            raise RuntimeError("route reconciliation requires exact fenced local ownership")
+        exact_local = observed.local_attachment_exact(self.local_node_id)
+        fenced = observed.transfer_complete(self.local_node_id)
+        if not exact_local or (require_takeover_fence and not fenced):
+            raise RuntimeError("route reconciliation requires exact current ownership authority")
         return VerifiedAllocationOwnership(
             cluster_id=self.binding.cluster_id,
             candidate_node_id=self.local_node_id,
@@ -849,11 +1051,11 @@ class BoundRouteRuntime:
         )
 
     def _routes(self, ledger: Mapping[str, ManagedRouteOwnership]):
-        return tuple(
-            route
-            for target in self.binding.route_targets
-            for route in self.backend.list_routes(target, ledger)
-        )
+        routes: list[ManagedRouteSnapshot | RouteOccupancySnapshot] = []
+        for target in self.binding.route_targets:
+            self.backend.verify_target(target)
+            routes.extend(self.backend.list_routes(target, ledger))
+        return tuple(routes)
 
     def _plan(self, ownership: VerifiedAllocationOwnership, state: RouteTransitionState):
         observed = self.data_plane.observe()
@@ -882,7 +1084,7 @@ class BoundRouteRuntime:
         )
 
     def reconcile(self, action: ControllerAction) -> None:
-        ownership = self._ownership()
+        ownership = self._ownership(require_takeover_fence=action.ownership_incarnation > 0)
         context = self._context(action, self.binding.cluster_id)
         if not context.matches(ownership):
             raise RuntimeError("route action does not match fresh current ownership")
@@ -912,8 +1114,13 @@ class BoundRouteRuntime:
             plan,
             context=context,
             apply_mutation=apply,
-            reobserve_ownership=self._ownership,
-            reobserve_plan=lambda: self._plan(self._ownership(), state),
+            reobserve_ownership=lambda: self._ownership(
+                require_takeover_fence=action.ownership_incarnation > 0
+            ),
+            reobserve_plan=lambda: self._plan(
+                self._ownership(require_takeover_fence=action.ownership_incarnation > 0),
+                state,
+            ),
             receipt_store=self.store,
         )
         if result.receipt is None or result.committed_state is None:
@@ -937,7 +1144,9 @@ class BoundRouteRuntime:
                 )
             ):
                 raise RuntimeError("route mutation lacks exact durable management authority")
+        self.backend.verify_target(mutation.route_target)
         route_id = self.backend.apply_mutation(mutation)
+        self.backend.verify_target(mutation.route_target)
         if mutation.kind is RouteMutationKind.DELETE:
             if mutation.route_id:
                 ledger.pop(mutation.route_id, None)
@@ -960,6 +1169,18 @@ class BoundRouteRuntime:
         if value is None:
             return None
         receipt = RouteReconciliationReceipt.from_mapping(value)
+        ownership = self._ownership(
+            require_takeover_fence=receipt.context.ownership_incarnation > 0
+        )
+        state = self.store.load_transition(now=self.clock())
+        current_plan = self._plan(ownership, state)
+        if (
+            current_plan.blocked_reasons
+            or current_plan.mutations
+            or not receipt.context.matches(ownership)
+            or receipt.plan_digest != self._plan_digest(current_plan)
+        ):
+            return None
         context = receipt.context
         return ControllerRouteContext(
             owner_node_id=context.owner_node_id,
@@ -975,6 +1196,12 @@ class BoundRouteRuntime:
             ownership_incarnation=context.ownership_incarnation,
             operation_id=context.operation_id,
         )
+
+    @staticmethod
+    def _plan_digest(plan: object) -> str:
+        from nebius_vpngw.deploy.vm_ha_routes import _route_plan_digest
+
+        return _route_plan_digest(plan)  # type: ignore[arg-type]
 
 
 class BoundPeerRuntime:
@@ -1011,6 +1238,7 @@ class VMHARuntimePorts:
     data_plane: LocalDataPlanePort
     routes: BoundRouteRuntime
     peer_runtime: BoundPeerRuntime
+    credential_bundle: CredentialBundle
 
     def providers(self) -> dict[str, Callable[..., object]]:
         return {
@@ -1053,17 +1281,28 @@ class VMHARuntimePorts:
             return apply
 
         def enable(action: ControllerAction) -> None:
+            self.credential_bundle.revalidate()
             if not self.cloud.observe().local_attachment_exact(self.local.node_id):
                 raise RuntimeError("active forwarding requires exact current allocation ownership")
             if not self.routes.readiness().promotion_ready:
                 raise RuntimeError("active forwarding requires fresh local readiness")
             expected = BoundRouteRuntime._context(action, self.binding.cluster_id)
-            receipt = self.routes.store.load_route_reconciliation_receipt()
-            if receipt is None:
+            current_receipt = self.routes.receipt_context()
+            if current_receipt is None:
                 raise RuntimeError("active forwarding requires the exact current route receipt")
-            receipt_context = RouteReconciliationReceipt.from_mapping(receipt).context
-            if not receipt_context.operation_id or receipt_context != replace(
-                expected, operation_id=receipt_context.operation_id
+            if not current_receipt.operation_id or current_receipt != ControllerRouteContext(
+                owner_node_id=expected.owner_node_id,
+                allocation_id=expected.allocation_id,
+                ownership_epoch=expected.ownership_epoch,
+                generation_id=expected.generation_id,
+                digests=DigestSet(
+                    expected.configuration_digest,
+                    expected.static_routes_digest,
+                    expected.bgp_policy_digest,
+                ),
+                route_runtime_id=self.binding.route_runtime_id,
+                ownership_incarnation=expected.ownership_incarnation,
+                operation_id=current_receipt.operation_id,
             ):
                 raise RuntimeError("active forwarding requires the exact current route receipt")
             self.data_plane.enable_active(action)
@@ -1155,6 +1394,34 @@ def _configured_bgp_sessions(
     return frozenset(sessions)
 
 
+def _expected_import_policy_digest(config: Mapping[str, object], bgp_records: list[object]) -> str:
+    expected_by_connection = {
+        str(record.get("connection")): tuple(record.get("remote_prefixes") or ())
+        for record in bgp_records
+        if isinstance(record, Mapping) and record.get("connection")
+    }
+    policy: dict[str, Iterable[str]] = {}
+    connections = config.get("connections")
+    if not isinstance(connections, list):
+        connections = []
+    for connection in connections:
+        if not isinstance(connection, Mapping):
+            raise ValueError("VM-HA resolved connection is malformed")
+        connection_name = str(connection.get("name") or "")
+        if connection_name not in expected_by_connection:
+            continue
+        tunnels = connection.get("tunnels")
+        if not isinstance(tunnels, list):
+            raise ValueError("VM-HA BGP connection has no resolved tunnels")
+        for tunnel in tunnels:
+            if not isinstance(tunnel, Mapping):
+                raise ValueError("VM-HA BGP tunnel is malformed")
+            peer = str(tunnel.get("inner_remote_ip") or "")
+            if peer:
+                policy[peer] = expected_by_connection[connection_name]
+    return _policy_digest(policy)
+
+
 def build_runtime_ports(
     config: Mapping[str, object],
     *,
@@ -1163,6 +1430,9 @@ def build_runtime_ports(
     sdk_factory: Callable[..., Any] = _default_sdk_factory,
     route_backend_factory: Callable[[Any], RouteBackend] = NebiusSDKRouteBackend,
     data_plane_factory: Callable[..., LocalDataPlanePort] = SystemDataPlaneRuntime,
+    credential_bundle_factory: Callable[
+        [VMHARuntimeBinding, VMHARuntimeNodeBinding], CredentialBundle
+    ] = validate_installed_credential_bundle,
     runner: CommandRunner = _run_command,
     clock: Callable[[], float] = time.time,
 ) -> VMHARuntimePorts:
@@ -1208,13 +1478,19 @@ def build_runtime_ports(
     if not isinstance(bgp_records, list):
         raise ValueError("VM-HA BGP policy manifest must be a list")
     configured_sessions = _configured_bgp_sessions(config, bgp_records)
-    sdk = RenewableNebiusSDK(local.credentials.nebius_credentials, factory=sdk_factory)
+    expected_import_policy_digest = _expected_import_policy_digest(config, bgp_records)
+    credential_bundle = credential_bundle_factory(binding, local)
+    sdk = RenewableNebiusSDK(
+        local.credentials.nebius_credentials,
+        factory=sdk_factory,
+        credential_check=credential_bundle.revalidate,
+    )
     try:
         cloud = build_cloud_runtime(binding, local_node_id, sdk.client)
         data_plane = data_plane_factory(
             state_path=state_dir / "data-plane.json",
             configured_bgp_sessions=configured_sessions,
-            bgp_policy_digest=binding.bgp_policy_digest,
+            expected_bgp_policy_digest=binding.bgp_policy_digest,
             runner=runner,
         )
         backend = route_backend_factory(sdk.client)
@@ -1227,6 +1503,7 @@ def build_runtime_ports(
             store=RuntimeStateStore(state_dir),
             static_manifest_json=static_json,
             bgp_policy_json=bgp_json,
+            expected_import_policy_digest=expected_import_policy_digest,
             clock=clock,
         )
         peer_host, peer_port = _split_endpoint(peer.peer_endpoint)
@@ -1238,6 +1515,7 @@ def build_runtime_ports(
             certificate=_credential_file(local.credentials.certificate, "peer certificate"),
             private_key=_credential_file(local.credentials.private_key, "peer private key"),
             server_hostname=peer_host,
+            credential_check=credential_bundle.revalidate,
         )
         exchange = PeerStateExchange(
             MutualTLSPeerTransport(
@@ -1263,6 +1541,7 @@ def build_runtime_ports(
             data_plane=data_plane,
             routes=routes,
             peer_runtime=BoundPeerRuntime(exchange, clock=clock),
+            credential_bundle=credential_bundle,
         )
         return ports
     except Exception:
