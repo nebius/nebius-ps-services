@@ -1383,6 +1383,7 @@ def apply(
                 inst_cfg,
                 local_cfg,
                 runtime_binding=vm_ha_runtime_binding,
+                credential_sources=inst_cfg.vm_ha_node.credential_sources,
             )
             staged.append((inst_cfg, target, receipt))
             print(

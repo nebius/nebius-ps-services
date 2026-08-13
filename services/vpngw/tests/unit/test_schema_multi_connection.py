@@ -78,8 +78,18 @@ def _enable_vm_ha(cfg: dict) -> None:
         "enabled": True,
         "cluster_id": "gateway-cluster",
         "members": [
-            {"node_id": "gateway-a", "instance_index": 0, "role": "active"},
-            {"node_id": "gateway-b", "instance_index": 1, "role": "passive"},
+            {
+                "node_id": "gateway-a",
+                "instance_index": 0,
+                "role": "active",
+                "credential_sources": _credential_sources("gateway-a"),
+            },
+            {
+                "node_id": "gateway-b",
+                "instance_index": 1,
+                "role": "passive",
+                "credential_sources": _credential_sources("gateway-b"),
+            },
         ],
     }
     second_tunnel = deepcopy(cfg["connections"][0]["tunnels"][0])
@@ -94,6 +104,16 @@ def _enable_vm_ha(cfg: dict) -> None:
         }
     )
     cfg["connections"][0]["tunnels"].append(second_tunnel)
+
+
+def _credential_sources(node_id: str) -> dict[str, str]:
+    base = f"/operator-secrets/{node_id}"
+    return {
+        "certificate_authority": f"{base}/peer-ca.pem",
+        "certificate": f"{base}/peer.crt",
+        "private_key": f"{base}/peer.key",
+        "nebius_credentials": f"{base}/nebius-credentials.json",
+    }
 
 
 def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
@@ -113,6 +133,21 @@ def test_schema_accepts_explicit_vm_ha_with_roles_distinct_from_tunnel_roles(
         "active",
         "active",
     ]
+
+
+def test_schema_requires_exact_node_scoped_credential_sources(sample_config: dict) -> None:
+    cfg = _base_bgp_config(sample_config)
+    _enable_vm_ha(cfg)
+    cfg["gateway_group"]["vm_ha"]["members"][1]["credential_sources"]["private_key"] = cfg[
+        "gateway_group"
+    ]["vm_ha"]["members"][0]["credential_sources"]["private_key"]
+
+    with pytest.raises(ValueError, match="private_key values must be node-scoped"):
+        validate_config(cfg)
+
+    del cfg["gateway_group"]["vm_ha"]["members"][1]["credential_sources"]
+    with pytest.raises(ValueError, match="credential_sources"):
+        validate_config(cfg)
 
 
 def test_vm_ha_runtime_binding_is_secret_free_and_requires_absolute_references() -> None:

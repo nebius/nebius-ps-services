@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,11 @@ from urllib.request import url2pathname, urlopen
 import yaml
 
 from ..config_loader import InstanceResolvedConfig
-from ..schema import VMHARuntimeBinding
+from ..schema import (
+    VMHACredentialReferences,
+    VMHACredentialSourceReferences,
+    VMHARuntimeBinding,
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,7 @@ class VMHAStageReceipt:
     static_routes_digest: str
     bgp_policy_digest: str
     staged_file_sha256: str
+    credential_sha256: tuple[tuple[str, str], ...]
 
 
 class SSHPush:
@@ -84,9 +90,124 @@ class SSHPush:
         return yaml.safe_dump(payload, sort_keys=False)
 
     @staticmethod
+    def _credential_targets(
+        node_id: str,
+        generation_id: str,
+        bundle_digest: str,
+        references: VMHACredentialReferences,
+    ) -> tuple[tuple[str, str], ...]:
+        base = f"/etc/nebius-vpngw/vm-ha-credentials/{generation_id}/{node_id}/{bundle_digest}"
+        expected = (
+            ("certificate_authority", f"{base}/ca.crt"),
+            ("certificate", f"{base}/{node_id}.crt"),
+            ("private_key", f"{base}/{node_id}.key"),
+            ("nebius_credentials", f"{base}/nebius-credentials.json"),
+        )
+        actual = tuple((name, str(getattr(references, name))) for name, _ in expected)
+        if actual != expected:
+            raise ValueError("VM-HA runtime binding has non-canonical credential targets")
+        return actual
+
+    @staticmethod
+    def _read_credential_file(path_text: str, *, label: str, node_id: str) -> bytes:
+        try:
+            descriptor = os.open(path_text, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError
+                chunks: list[bytes] = []
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    chunks.append(chunk)
+            finally:
+                os.close(descriptor)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"VM-HA credential source {label} for {node_id} is not a readable regular file"
+            ) from exc
+        return b"".join(chunks)
+
+    @classmethod
+    def _credential_source_payloads(
+        cls,
+        *,
+        node_id: str,
+        sources: VMHACredentialSourceReferences,
+    ) -> tuple[tuple[str, bytes, str], ...]:
+        payloads: list[tuple[str, bytes, str]] = []
+        for label in (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        ):
+            content = cls._read_credential_file(
+                str(getattr(sources, label)), label=label, node_id=node_id
+            )
+            payloads.append((label, content, hashlib.sha256(content).hexdigest()))
+        return tuple(payloads)
+
+    @staticmethod
+    def _credential_bundle_digest(payloads: tuple[tuple[str, bytes, str], ...]) -> str:
+        identity = "\n".join(f"{label}:{digest}" for label, _, digest in payloads)
+        return hashlib.sha256(identity.encode("ascii")).hexdigest()
+
+    @classmethod
+    def _runtime_binding_for_credential_bundle(
+        cls,
+        *,
+        inst_cfg: InstanceResolvedConfig,
+        runtime_binding: VMHARuntimeBinding,
+        credential_digests: tuple[tuple[str, str], ...],
+    ) -> VMHARuntimeBinding:
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        if node is None or generation is None or len(credential_digests) != 4:
+            raise ValueError("VM-HA credential bundle identity is incomplete")
+        labels = (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        )
+        payload_identity = tuple(
+            (label, b"", digest)
+            for label, (_target, digest) in zip(labels, credential_digests, strict=True)
+        )
+        bundle_digest = cls._credential_bundle_digest(payload_identity)
+        base = (
+            f"/etc/nebius-vpngw/vm-ha-credentials/{generation.generation_id}/"
+            f"{node.node_id}/{bundle_digest}"
+        )
+        references = VMHACredentialReferences(
+            certificate_authority=f"{base}/ca.crt",
+            certificate=f"{base}/{node.node_id}.crt",
+            private_key=f"{base}/{node.node_id}.key",
+            nebius_credentials=f"{base}/nebius-credentials.json",
+        )
+        expected_targets = cls._credential_targets(
+            node.node_id,
+            generation.generation_id,
+            bundle_digest,
+            references,
+        )
+        if tuple(target for target, _ in credential_digests) != tuple(
+            target for _, target in expected_targets
+        ):
+            raise ValueError("VM-HA credential receipt has non-canonical target paths")
+        nodes = tuple(
+            item.model_copy(update={"credentials": references})
+            if item.node_id == node.node_id
+            else item
+            for item in runtime_binding.nodes
+        )
+        return runtime_binding.model_copy(update={"nodes": nodes})
+
+    @staticmethod
     def _vm_ha_receipt(
         inst_cfg: InstanceResolvedConfig,
         rendered_config: str,
+        credential_sha256: tuple[tuple[str, str], ...] = (),
     ) -> VMHAStageReceipt:
         node = inst_cfg.vm_ha_node
         generation = inst_cfg.vm_ha_generation
@@ -104,12 +225,38 @@ class SSHPush:
             static_routes_digest=generation.digests.static_routes,
             bgp_policy_digest=generation.digests.bgp_policy,
             staged_file_sha256=hashlib.sha256(rendered_config.encode("utf-8")).hexdigest(),
+            credential_sha256=credential_sha256,
         )
 
     @staticmethod
     def _vm_ha_staged_verify_command(receipt: VMHAStageReceipt) -> str:
         path = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
-        return f"echo '{receipt.staged_file_sha256}  {path}' | sudo sha256sum --check --status"
+        checks = [f"echo '{receipt.staged_file_sha256}  {path}' | sudo sha256sum --check --status"]
+        for target, digest in receipt.credential_sha256:
+            checks.append(
+                f"sudo test \"$(sudo stat -c '%U:%G:%a' {target})\" = root:root:600 && "
+                f"echo '{digest}  {target}' | sudo sha256sum --check --status"
+            )
+        return " && ".join(checks)
+
+    @staticmethod
+    def _credential_install_commands(
+        *,
+        base: str,
+        temporary: str,
+        target: str,
+        digest: str,
+    ) -> tuple[str, ...]:
+        pending = f"{target}.new"
+        return (
+            f"sudo install -d -o root -g root -m 0700 {base}",
+            f"sudo install -o root -g root -m 0600 {temporary} {pending}",
+            f"sudo test \"$(sudo stat -c '%U:%G:%a' {pending})\" = root:root:600",
+            f"echo '{digest}  {pending}' | sudo sha256sum --check --status",
+            f"sudo mv {pending} {target}",
+            f"sudo test \"$(sudo stat -c '%U:%G:%a' {target})\" = root:root:600",
+            f"echo '{digest}  {target}' | sudo sha256sum --check --status",
+        )
 
     def stage_vm_ha_config(
         self,
@@ -118,11 +265,50 @@ class SSHPush:
         local_cfg: dict,
         *,
         runtime_binding: VMHARuntimeBinding,
+        credential_sources: VMHACredentialSourceReferences,
     ) -> VMHAStageReceipt:
         """Stage and verify one node without activating it or reloading services."""
 
-        rendered_config = self._render_vm_ha_config(inst_cfg, runtime_binding)
-        receipt = self._vm_ha_receipt(inst_cfg, rendered_config)
+        node = inst_cfg.vm_ha_node
+        assert node is not None
+        if credential_sources != node.credential_sources:
+            raise ValueError("VM-HA credential source bundle does not match the staged node")
+        source_payloads = self._credential_source_payloads(
+            node_id=node.node_id,
+            sources=credential_sources,
+        )
+        generation = inst_cfg.vm_ha_generation
+        assert generation is not None
+        bundle_digest = self._credential_bundle_digest(source_payloads)
+        base = (
+            f"/etc/nebius-vpngw/vm-ha-credentials/{generation.generation_id}/"
+            f"{node.node_id}/{bundle_digest}"
+        )
+        references = VMHACredentialReferences(
+            certificate_authority=f"{base}/ca.crt",
+            certificate=f"{base}/{node.node_id}.crt",
+            private_key=f"{base}/{node.node_id}.key",
+            nebius_credentials=f"{base}/nebius-credentials.json",
+        )
+        targets = self._credential_targets(
+            node.node_id, generation.generation_id, bundle_digest, references
+        )
+        credentials = tuple(
+            (label, target, content, digest)
+            for (label, content, digest), (_, target) in zip(source_payloads, targets, strict=True)
+        )
+        credential_digests = tuple((target, digest) for _, target, _, digest in credentials)
+        staged_binding = self._runtime_binding_for_credential_bundle(
+            inst_cfg=inst_cfg,
+            runtime_binding=runtime_binding,
+            credential_digests=credential_digests,
+        )
+        rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
+        receipt = self._vm_ha_receipt(
+            inst_cfg,
+            rendered_config,
+            credential_digests,
+        )
         paramiko = self._ensure_paramiko()
         gg = local_cfg.get("gateway_group") or {}
         vm_spec = gg.get("vm_spec") or {}
@@ -133,6 +319,7 @@ class SSHPush:
         key_file = Path(key_path).expanduser() if key_path else None
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        upload_directory: str | None = None
         try:
             client.connect(
                 hostname=ssh_target,
@@ -146,6 +333,30 @@ class SSHPush:
             destination = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
             with client.open_sftp() as sftp, sftp.file(temporary, "w") as stream:
                 stream.write(rendered_config)
+            upload_directory = f"/tmp/nebius-vpngw-vm-ha-upload-{inst_cfg.instance_index}"
+            stdin, stdout, stderr = client.exec_command(
+                f"install -d -m 0700 {upload_directory}", timeout=30
+            )
+            if stdout.channel.recv_exit_status() != 0:
+                raise RuntimeError(
+                    f"VM-HA credential upload preparation failed for {receipt.node_id}"
+                )
+            for label, target, content, digest in credentials:
+                credential_temporary = f"{upload_directory}/{label}"
+                with client.open_sftp() as sftp, sftp.file(credential_temporary, "wb") as stream:
+                    stream.write(content)
+                    sftp.chmod(credential_temporary, 0o600)
+                for command in self._credential_install_commands(
+                    base=base,
+                    temporary=credential_temporary,
+                    target=target,
+                    digest=digest,
+                ):
+                    stdin, stdout, stderr = client.exec_command(command, timeout=30)
+                    if stdout.channel.recv_exit_status() != 0:
+                        raise RuntimeError(
+                            f"VM-HA credential installation failed for {receipt.node_id}:{label}"
+                        )
             command = (
                 "sudo install -d -m 0700 /etc/nebius-vpngw/vm-ha-staged && "
                 f"sudo install -o root -g root -m 0600 {temporary} {destination} && "
@@ -155,12 +366,14 @@ class SSHPush:
             return_code = stdout.channel.recv_exit_status()
             observed = stdout.read().decode().strip().split(maxsplit=1)[0]
             if return_code != 0 or observed != receipt.staged_file_sha256:
-                detail = stderr.read().decode().strip()
-                raise RuntimeError(
-                    f"VM-HA stage verification failed for {receipt.node_id}: {detail or observed}"
-                )
+                raise RuntimeError(f"VM-HA stage verification failed for {receipt.node_id}")
             return receipt
         finally:
+            if upload_directory is not None:
+                try:
+                    client.exec_command(f"find {upload_directory} -depth -delete", timeout=30)
+                except Exception:
+                    pass
             client.close()
 
     def deactivate_vm_ha(self, ssh_target: str, local_cfg: dict) -> bool:
@@ -180,7 +393,7 @@ class SSHPush:
         command = """sudo /bin/bash -lc '
 set -eu
 stale=0
-for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
   if [ -e "$path" ]; then stale=1; fi
 done
 for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
@@ -204,7 +417,7 @@ rm -f /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf
 rm -f /etc/systemd/system/strongswan.service.d/30-vm-ha.conf
 rm -f /etc/systemd/system/frr.service.d/30-vm-ha.conf
 rm -f /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf
-for path in /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+for path in /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
   if [ -d "$path" ]; then find "$path" -depth -delete; fi
 done
 systemctl daemon-reload
@@ -715,8 +928,15 @@ WantedBy=multi-user.target
         # Upload to /tmp then move with sudo
         if staged_receipt is not None:
             assert runtime_binding is not None
-            rendered_config = self._render_vm_ha_config(inst_cfg, runtime_binding)
-            expected = self._vm_ha_receipt(inst_cfg, rendered_config)
+            staged_binding = self._runtime_binding_for_credential_bundle(
+                inst_cfg=inst_cfg,
+                runtime_binding=runtime_binding,
+                credential_digests=staged_receipt.credential_sha256,
+            )
+            rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
+            expected = self._vm_ha_receipt(
+                inst_cfg, rendered_config, staged_receipt.credential_sha256
+            )
             if staged_receipt != expected:
                 client.close()
                 raise ValueError("VM-HA activation receipt does not match the node manifest")

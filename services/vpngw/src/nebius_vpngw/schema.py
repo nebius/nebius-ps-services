@@ -803,6 +803,40 @@ class GatewaySubnetConfig(BaseModel):
         return validate_private_ipv4_cidr(v)
 
 
+class VMHACredentialSourceReferences(BaseModel):
+    """Operator-local credential files for one VM-HA member."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    certificate_authority: str
+    certificate: str
+    private_key: str
+    nebius_credentials: str
+
+    @field_validator("certificate_authority", "certificate", "private_key", "nebius_credentials")
+    @classmethod
+    def require_absolute_source(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("VM-HA credential source references must be absolute paths")
+        return value
+
+    @model_validator(mode="after")
+    def require_distinct_sources(self) -> VMHACredentialSourceReferences:
+        if (
+            len(
+                {
+                    self.certificate_authority,
+                    self.certificate,
+                    self.private_key,
+                    self.nebius_credentials,
+                }
+            )
+            != 4
+        ):
+            raise ValueError("VM-HA credential source references must name four distinct files")
+        return self
+
+
 class VMHAMemberConfig(BaseModel):
     """Stable identity and initial ownership role for one VM-HA node."""
 
@@ -817,6 +851,10 @@ class VMHAMemberConfig(BaseModel):
     )
     instance_index: int = Field(..., ge=0, le=1, description="Gateway VM index (0 or 1)")
     role: VMHARole = Field(..., description="Initial VM ownership role")
+    credential_sources: VMHACredentialSourceReferences = Field(
+        ...,
+        description="Operator-local files installed separately from node manifests",
+    )
 
 
 class VMHAConfig(BaseModel):
@@ -861,6 +899,13 @@ class VMHAConfig(BaseModel):
         if roles.count(VMHARole.ACTIVE) != 1 or roles.count(VMHARole.PASSIVE) != 1:
             raise ValueError("vm_ha members must define exactly one active and one passive role")
 
+        for field_name in ("certificate", "private_key", "nebius_credentials"):
+            paths = [str(getattr(member.credential_sources, field_name)) for member in self.members]
+            if len(set(paths)) != 2:
+                raise ValueError(
+                    f"vm_ha member credential_sources.{field_name} values must be node-scoped"
+                )
+
         return self
 
 
@@ -872,8 +917,9 @@ class VMHACredentialReferences(BaseModel):
     certificate_authority: str
     certificate: str
     private_key: str
+    nebius_credentials: str = "/etc/nebius-vpngw/vm-ha/nebius-credentials.json"
 
-    @field_validator("certificate_authority", "certificate", "private_key")
+    @field_validator("certificate_authority", "certificate", "private_key", "nebius_credentials")
     @classmethod
     def require_absolute_reference(cls, value: str) -> str:
         if not value.startswith("/"):

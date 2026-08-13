@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import typing as t
 from dataclasses import dataclass, field
 from enum import Enum
@@ -59,6 +60,7 @@ class VMHANodeRecord:
     node_id: str
     instance_index: int
     role: schema.VMHARole
+    credential_sources: schema.VMHACredentialSourceReferences
 
 
 @dataclass(frozen=True)
@@ -238,6 +240,9 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
             node_id=str(member["node_id"]),
             instance_index=int(member["instance_index"]),
             role=schema.VMHARole(member["role"]),
+            credential_sources=schema.VMHACredentialSourceReferences.model_validate(
+                member["credential_sources"]
+            ),
         )
         for member in sorted(vm_ha["members"], key=lambda item: int(item["instance_index"]))
     )
@@ -287,6 +292,8 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
         canonical_config["gateway_group"]["vm_ha"]["members"],
         key=lambda item: int(item["instance_index"]),
     )
+    for member in canonical_config["gateway_group"]["vm_ha"]["members"]:
+        member.pop("credential_sources", None)
     canonical_configuration = _canonical_json(canonical_config)
     logical_manifests = VMHALogicalManifests(
         static_routes_json=_canonical_json(static_routes),
@@ -400,6 +407,8 @@ def load_local_config(
             expanded = validated_config.model_dump(mode="python", exclude_none=False)
             if not vm_ha_was_provided:
                 expanded["gateway_group"].pop("vm_ha", None)
+            else:
+                _validate_vm_ha_credential_sources(expanded)
         except ValidationError as e:
             # Format Pydantic errors into user-friendly messages
             errors = []
@@ -416,6 +425,36 @@ def load_local_config(
             ) from e
 
     return expanded
+
+
+def _validate_vm_ha_credential_sources(config: dict) -> None:
+    """Fail closed on unsafe operator files without disclosing their paths."""
+
+    vm_ha = (config.get("gateway_group") or {}).get("vm_ha") or {}
+    if not vm_ha.get("enabled", False):
+        return
+    for member in vm_ha.get("members") or []:
+        node_id = str(member.get("node_id") or "unknown")
+        sources = member.get("credential_sources") or {}
+        for name in (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        ):
+            path = Path(str(sources.get(name) or ""))
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ValueError(
+                    f"VM-HA credential source {name} for {node_id} is unavailable"
+                ) from exc
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"VM-HA credential source {name} for {node_id} must be a non-symlink regular file"
+                )
+            if not os.access(path, os.R_OK):
+                raise ValueError(f"VM-HA credential source {name} for {node_id} is not readable")
 
 
 def _detect_vendor(text: str) -> str:
