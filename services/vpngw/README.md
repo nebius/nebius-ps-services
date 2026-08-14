@@ -161,12 +161,16 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 VM-HA apply also requires an operator-enrolled SSH identity before any cloud
 resource is created or changed. Set `VPNGW_SSH_KNOWN_HOSTS_FILE` to an absolute,
 readable, non-empty OpenSSH known-hosts file containing the pinned identities of
-both members. Set `VPNGW_SSH_HOST_KEYS_DIR` to an absolute directory containing
-one unencrypted private host key named `<gateway-hostname>.key` for every
-member. Apply validates that each private key is usable by `sshd` and matches
-its exact known-hosts pin, then installs it through cloud-init before the first
-SSH connection. Public-only, encrypted, malformed, mismatched, or subsequently
-changed trust material fails closed. Trust-on-first-use and disabled host
+both members. Apply copies that public trust into a protected immutable
+snapshot shared by OpenSSH and Paramiko, then verifies every existing member's
+remote identity before service-account or infrastructure mutation. Set
+`VPNGW_SSH_HOST_KEYS_DIR` to an absolute directory containing one unencrypted
+private host key named `<gateway-hostname>.key` for every fresh or recreated
+member; retained members do not require their server private keys on the
+operator host. Apply validates each required private key against its exact pin
+and proves the cloud-init enrollment anchors before deletion, allocation, disk,
+or instance work. Public-only, encrypted, malformed, mismatched, unreachable,
+or identity-rejected members fail closed. Trust-on-first-use and disabled host
 verification are not supported. During clean bootstrap, each member may render
 its deterministic local strongSwan and FRR files behind the cold-start guard, but it cannot enable
 forwarding, tunnels, firewall changes, XFRM routes, or cloud effects until the

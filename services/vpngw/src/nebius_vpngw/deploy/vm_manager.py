@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import importlib.resources as resources
 import ipaddress
+import os
+import subprocess
 import textwrap
 import time
 import typing as t
@@ -877,7 +879,11 @@ class VMManager:
 
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
-        ssh_base = build_openssh_base_command(connect_timeout=5, policy=self._ssh_policy)
+        ssh_base = build_openssh_base_command(
+            connect_timeout=5,
+            policy=self._ssh_policy,
+            hostname=vm_name if self._ssh_policy is not None else None,
+        )
 
         # Test SSH connectivity
         try:
@@ -1144,6 +1150,174 @@ class VMManager:
             if vm_obj:
                 existing.append(vm_obj)
         return existing
+
+    @staticmethod
+    def _vm_public_ip_from_object(vm_obj: t.Any) -> str | None:
+        for owner in (getattr(vm_obj, "status", None), getattr(vm_obj, "spec", None)):
+            interfaces = list(getattr(owner, "network_interfaces", []) or []) if owner else []
+            if not interfaces:
+                continue
+            public = getattr(interfaces[0], "public_ip_address", None)
+            address = getattr(public, "address", None) if public else None
+            if address:
+                return str(address).split("/", 1)[0]
+        return None
+
+    def _get_vm_by_name_for_vm_ha_preflight(self, client: t.Any, name: str) -> t.Any | None:
+        if not self.project_id:
+            raise RuntimeError("VM-HA member discovery requires an exact project ID")
+        try:
+            from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
+            from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
+
+            response = (
+                InstanceServiceClient(client)
+                .get_by_name(GetByNameRequest(parent_id=self.project_id, name=name))
+                .wait()
+            )
+        except Exception as error:
+            code = getattr(error, "code", None)
+            try:
+                code = code() if callable(code) else code
+            except Exception:
+                code = None
+            code_name = str(getattr(code, "name", code) or "").upper()
+            if code_name == "NOT_FOUND" or "NOT_FOUND" in str(error).upper():
+                return None
+            raise RuntimeError(
+                f"VM-HA member {name} could not be classified as existing or fresh"
+            ) from error
+        if response is None:
+            raise RuntimeError(f"VM-HA member discovery returned no result for {name}")
+        return response
+
+    def _discover_vm_ha_members(
+        self, client: t.Any, spec: GatewayGroupSpec
+    ) -> dict[str, tuple[t.Any, str]]:
+        existing: dict[str, tuple[t.Any, str]] = {}
+        for index in range(spec.instance_count):
+            name = f"{spec.name}-{index}"
+            vm_obj = self._get_vm_by_name_for_vm_ha_preflight(client, name)
+            if vm_obj is None:
+                continue
+            public_ip = self._vm_public_ip_from_object(vm_obj)
+            if not public_ip:
+                raise RuntimeError(
+                    f"Existing VM-HA member {name} has no readable public SSH address"
+                )
+            existing[name] = (vm_obj, public_ip)
+        return existing
+
+    def _require_vm_ha_member_snapshot(
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        expected: dict[str, tuple[t.Any, str]],
+    ) -> None:
+        current = self._discover_vm_ha_members(client, spec)
+        if set(current) != set(expected):
+            raise RuntimeError("VM-HA member set changed after SSH identity verification")
+        for name, (expected_vm, expected_ip) in expected.items():
+            current_vm, current_ip = current[name]
+            expected_id = self._resource_id(expected_vm)
+            current_id = self._resource_id(current_vm)
+            if not expected_id or current_id != expected_id or current_ip != expected_ip:
+                raise RuntimeError(f"VM-HA member {name} changed identity after SSH verification")
+
+    def discover_vm_ha_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+        """Classify existing members with read-only Compute calls only."""
+
+        if spec.vm_ha is None:
+            return {}
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("VM-HA member discovery requires the Nebius SDK")
+        return {
+            name: public_ip
+            for name, (_, public_ip) in self._discover_vm_ha_members(client, spec).items()
+        }
+
+    def verify_vm_ha_existing_identities(
+        self,
+        existing: t.Mapping[str, str],
+        *,
+        policy: SSHTrustPolicy | None = None,
+        username: str = "ubuntu",
+    ) -> None:
+        """Verify every existing member's exact pin without changing remote state."""
+
+        selected_policy = policy or self._ssh_policy
+        if selected_policy is None:
+            raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
+        for name, public_ip in existing.items():
+            ssh_base = build_openssh_base_command(
+                connect_timeout=5,
+                policy=selected_policy,
+                hostname=name,
+            )
+            try:
+                result = subprocess.run(
+                    ssh_base + [f"{username}@{public_ip}", "true"],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    f"Existing VM-HA member {name} is unreachable before cloud mutation"
+                ) from error
+            if result.returncode == 0:
+                continue
+            detail = result.stderr.decode(errors="replace").lower()
+            if (
+                "host key verification failed" in detail
+                or "remote host identification has changed" in detail
+            ):
+                raise RuntimeError(
+                    f"SSH host identity verification failed for existing VM-HA member {name}"
+                )
+            raise RuntimeError(f"Existing VM-HA member {name} is unreachable before cloud mutation")
+
+    @staticmethod
+    def _render_vm_ha_enrollment_cloud_init(cloud_init: str, identity: t.Any) -> str:
+        write_files_anchor = "write_files:\n"
+        sshd_anchor = "            Port 22\n"
+        if cloud_init.count(write_files_anchor) != 1:
+            raise RuntimeError("VM-HA cloud-init must contain exactly one write_files anchor")
+        if cloud_init.count(sshd_anchor) != 1:
+            raise RuntimeError("VM-HA cloud-init must contain exactly one sshd HostKey anchor")
+        return cloud_init.replace(
+            write_files_anchor,
+            write_files_anchor + identity.cloud_init_entries(),
+            1,
+        ).replace(
+            sshd_anchor,
+            sshd_anchor + "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
+            1,
+        )
+
+    def _prepare_vm_ha_enrollment_cloud_inits(
+        self,
+        spec: GatewayGroupSpec,
+        local_prefixes: list[str] | None,
+        existing_names: set[str],
+        recreate: bool,
+    ) -> dict[str, str]:
+        if self._ssh_policy is None:
+            raise RuntimeError("VM-HA provisioning requires a validated immutable SSH policy")
+        base = self._build_cloud_init(
+            ssh_key=spec.vm_spec.get("ssh_public_key"),
+            local_prefixes=local_prefixes,
+        )
+        rendered: dict[str, str] = {}
+        for index in range(spec.instance_count):
+            name = f"{spec.name}-{index}"
+            if name in existing_names and not recreate:
+                continue
+            rendered[name] = self._render_vm_ha_enrollment_cloud_init(
+                base,
+                self._ssh_policy.identity_for(name),
+            )
+        return rendered
 
     def _collect_preserved_allocations(self, existing: list[t.Any]) -> dict[str, list[str]]:
         preserved_allocations: dict[str, list[str]] = {}
@@ -2534,9 +2708,14 @@ class VMManager:
         provisioning: VMProvisioningConfig | None,
         preserved_allocations: dict[str, list[str]],
         vm_ips: dict[str, str],
+        expected_vm_exists: bool | None = None,
     ) -> None:
         inst_name = f"{spec.name}-{instance_index}"
         vm_exists = self._instance_exists(client, instance_api, inst_name)
+        if expected_vm_exists is not None and vm_exists != expected_vm_exists:
+            raise RuntimeError(
+                f"VM-HA member {inst_name} changed existence after identity preflight"
+            )
         if vm_exists and not recreate:
             print(f"[VMManager] VM {inst_name} already exists (recreate=False), skipping creation")
             vm_ip = self.get_vm_public_ip(inst_name)
@@ -2554,22 +2733,6 @@ class VMManager:
             raise RuntimeError(
                 f"[VMManager] Internal error: provisioning config missing for {inst_name}."
             )
-
-        if spec.vm_ha is not None:
-            if self._ssh_policy is None:
-                raise RuntimeError("VM-HA provisioning requires a validated immutable SSH policy")
-            identity = self._ssh_policy.identity_for(inst_name)
-            cloud_init = provisioning.cloud_init.replace(
-                "write_files:\n",
-                "write_files:\n" + identity.cloud_init_entries(),
-                1,
-            ).replace(
-                "            Port 22\n",
-                "            Port 22\n"
-                "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
-                1,
-            )
-            provisioning = replace(provisioning, cloud_init=cloud_init)
 
         boot_disk_name, boot_disk_id = self._ensure_boot_disk(
             client,
@@ -2647,7 +2810,26 @@ class VMManager:
         try:
             if client is not None:
                 instance_api, disk_api, alloc_api, alloc_client = self._resolve_client_apis(client)
-                existing = self._discover_existing_instances(client, spec)
+                vm_ha_existing: dict[str, tuple[t.Any, str]] = {}
+                vm_ha_cloud_inits: dict[str, str] = {}
+                if spec.vm_ha is not None:
+                    vm_ha_existing = self._discover_vm_ha_members(client, spec)
+                    self.verify_vm_ha_existing_identities(
+                        {name: public_ip for name, (_, public_ip) in vm_ha_existing.items()},
+                        username=(
+                            spec.vm_spec.get("ssh_username")
+                            or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                        ),
+                    )
+                    vm_ha_cloud_inits = self._prepare_vm_ha_enrollment_cloud_inits(
+                        spec,
+                        local_prefixes,
+                        set(vm_ha_existing),
+                        recreate,
+                    )
+                    existing = [vm_obj for vm_obj, _ in vm_ha_existing.values()]
+                else:
+                    existing = self._discover_existing_instances(client, spec)
 
                 if not existing:
                     print("[VMManager] No existing VMs found")
@@ -2658,6 +2840,13 @@ class VMManager:
                 if recreate and existing:
                     preserved_allocations = self._collect_preserved_allocations(existing)
                     self._delete_existing_instances_and_boot_disks(client, existing, spec)
+
+                if spec.vm_ha is not None:
+                    self._require_vm_ha_member_snapshot(
+                        client,
+                        spec,
+                        {} if recreate else vm_ha_existing,
+                    )
 
                 provisioning: VMProvisioningConfig | None = None
                 if spec.vm_ha is not None:
@@ -2675,16 +2864,32 @@ class VMManager:
                         client, spec, local_prefixes
                     )
                 for i in range(spec.instance_count):
-                    needs_provisioning = recreate or not self._instance_exists(
-                        client,
-                        instance_api,
-                        f"{spec.name}-{i}",
-                    )
+                    inst_name = f"{spec.name}-{i}"
+                    if spec.vm_ha is not None:
+                        expected_vm_exists: bool | None = (
+                            False if recreate else inst_name in vm_ha_existing
+                        )
+                        needs_provisioning = recreate or not expected_vm_exists
+                    else:
+                        expected_vm_exists = None
+                        needs_provisioning = not self._instance_exists(
+                            client,
+                            instance_api,
+                            inst_name,
+                        )
                     if needs_provisioning and provisioning is None:
                         provisioning = self._build_vm_provisioning_config(
                             client,
                             spec,
                             local_prefixes,
+                        )
+                    instance_provisioning = provisioning
+                    if needs_provisioning and spec.vm_ha is not None:
+                        if provisioning is None or f"{spec.name}-{i}" not in vm_ha_cloud_inits:
+                            raise RuntimeError("VM-HA enrollment cloud-init was not prevalidated")
+                        instance_provisioning = replace(
+                            provisioning,
+                            cloud_init=vm_ha_cloud_inits[f"{spec.name}-{i}"],
                         )
                     self._provision_instance(
                         client,
@@ -2695,9 +2900,10 @@ class VMManager:
                         spec,
                         i,
                         recreate,
-                        provisioning,
+                        instance_provisioning,
                         preserved_allocations,
                         vm_ips,
+                        expected_vm_exists=expected_vm_exists,
                     )
                 if spec.vm_ha is not None:
                     active_index = spec.vm_ha.active_instance_index

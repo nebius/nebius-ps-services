@@ -227,6 +227,14 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(
+            self, existing, *, policy=None, username="ubuntu"
+        ) -> None:
+            assert existing == {}
+
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
             return []
 
@@ -668,6 +676,14 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
         def __init__(self, *args, **kwargs) -> None:
             pass
 
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(
+            self, existing, *, policy=None, username="ubuntu"
+        ) -> None:
+            assert existing == {}
+
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
             return []
 
@@ -713,6 +729,7 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
         patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
         patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
         patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file", return_value=tmp_path),
         patch(
             "nebius_vpngw.cli.require_vm_ha_ssh_policy",
             return_value=object(),
@@ -792,11 +809,13 @@ def test_vm_ha_service_account_requires_verified_non_broad_roles(monkeypatch) ->
 def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> None:
     generation = SimpleNamespace(generation_id="a" * 64)
     active = SimpleNamespace(
+        hostname="gateway-0",
         external_ip="203.0.113.10",
         vm_ha_node=SimpleNamespace(node_id="node-a", role=SimpleNamespace(value="active")),
         vm_ha_generation=generation,
     )
     passive = SimpleNamespace(
+        hostname="gateway-1",
         external_ip="203.0.113.11",
         vm_ha_node=SimpleNamespace(node_id="node-b", role=SimpleNamespace(value="passive")),
         vm_ha_generation=generation,
@@ -808,7 +827,7 @@ def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> Non
     local_cfg = {"gateway_group": {"vm_spec": {}}}
     monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: local_cfg)
     monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_: plan)
-    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_: None)
+    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_, **__: None)
     monkeypatch.setattr(
         "nebius_vpngw.cli.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(
