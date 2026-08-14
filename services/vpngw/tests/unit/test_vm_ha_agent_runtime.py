@@ -294,9 +294,10 @@ def test_service_executes_verified_controller_from_authoritative_binding(tmp_pat
 
     _run_vm_ha_controller(runtime, once=True, config_path=config_path)
     status = json.loads((tmp_path / "status.json").read_text())
-    assert status["state"] == "blocked"
-    assert status["reasons"] == ["peer-generation-unavailable"]
-    assert calls == []
+    assert status["state"] == "normal"
+    assert status["reasons"] == ["owner-must-materialize-passive-dataplane"]
+    assert len(calls) == 1
+    assert calls[0].endswith(":enter-passive:node-a")
 
 
 def test_service_fails_closed_without_bound_runtime(tmp_path: Path, monkeypatch) -> None:

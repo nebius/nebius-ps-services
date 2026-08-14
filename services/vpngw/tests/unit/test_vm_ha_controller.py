@@ -161,6 +161,25 @@ def test_non_owner_enters_passive_before_suspicion(policy: VMHAController) -> No
     assert decision.action.kind is ActionKind.ENTER_PASSIVE
 
 
+def test_initial_owner_enters_passive_before_promotion_readiness(
+    policy: VMHAController,
+) -> None:
+    decision = policy.decide(
+        _snapshot(
+            configured_role=ConfiguredRole.ACTIVE,
+            cloud=_owned_cloud(),
+            data_plane_mode=DataPlaneMode.BLOCKED,
+            readiness=LocalReadiness(False, False, False, False),
+        ),
+        ControllerCheckpoint(),
+    )
+
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.ENTER_PASSIVE
+    assert decision.reasons == ("owner-must-materialize-passive-dataplane",)
+    assert not decision.forwarding_enabled
+
+
 def test_timeout_boundary_begins_bounded_suspicion(policy: VMHAController) -> None:
     first = policy.decide(
         _snapshot(peer_received_at=90.0),

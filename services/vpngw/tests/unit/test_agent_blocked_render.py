@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -46,6 +47,82 @@ def test_vm_ha_blocked_boot_renders_without_data_plane_effects(
     agent.reload()
 
     assert calls == [("strongswan", False), ("frr", False)]
+
+
+def test_passive_authority_materializes_locally_without_active_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    vm_ha = {
+        "node": {"node_id": "node-a"},
+        "generation": {"generation_id": "a" * 64},
+    }
+    calls: list[tuple[str, object]] = []
+
+    class Renderer:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def render_and_apply(self, cfg, *, activate=True):
+            calls.append((self.name, activate))
+            return [{"name": "xfrm0"}] if self.name == "strongswan" else None
+
+    class XFRM:
+        def setup_interfaces(self, endpoints):
+            calls.append(("xfrm", endpoints))
+
+    monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(agent_main, "VM_HA_MATERIALIZATION_PATH", tmp_path / "material.json")
+    monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: None)
+    monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path: vm_ha)
+    monkeypatch.setattr(
+        agent_main,
+        "require_vm_ha_current_boot_readiness",
+        lambda: (_ for _ in ()).throw(RuntimeError("passive")),
+    )
+    monkeypatch.setattr(agent_main, "_vm_ha_materialization_authorized", lambda: vm_ha)
+    monkeypatch.setattr(
+        agent_main,
+        "update_firewall_from_config",
+        lambda cfg: (_ for _ in ()).throw(AssertionError("firewall effect escaped passive")),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "enforce_routing_invariants",
+        lambda cfg: (_ for _ in ()).throw(AssertionError("active route effect escaped passive")),
+    )
+
+    agent = agent_main.Agent()
+    agent.ss = Renderer("strongswan")
+    agent.frr = Renderer("frr")
+    agent.xfrm = XFRM()
+    agent.reload()
+
+    assert calls == [
+        ("strongswan", True),
+        ("xfrm", [{"name": "xfrm0"}]),
+        ("frr", True),
+    ]
+    assert json.loads((tmp_path / "material.json").read_text()) == {
+        "schema": "nebius-vpngw/vm-ha-materialization-v1",
+        "boot_id": "boot-a",
+        "node_id": "node-a",
+        "generation_id": "a" * 64,
+    }
+
+
+def test_ordinary_unit_lane_runs_production_composed_bootstrap_oracle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tests.integration.test_vm_ha_runtime_composed import (
+        test_clean_owner_bootstrap_materializes_passive_before_promotion,
+    )
+
+    test_clean_owner_bootstrap_materializes_passive_before_promotion(tmp_path, monkeypatch)
 
 
 def test_blocked_frr_render_does_not_install_kernel_routes(
