@@ -175,7 +175,7 @@ class FRRRenderer:
                     if bfd_enabled:
                         bfd_peers.add(remote_ip)
 
-        if bfd_enabled and bfd_peers:
+        if activate and bfd_enabled and bfd_peers:
             lines.append("!")
             lines.append("! BFD peers for fast failure detection (if supported by peer)")
             lines.append("bfd")
@@ -260,6 +260,9 @@ class FRRRenderer:
             lines.append(" bgp graceful-restart")
         # Disable policy requirement for eBGP (FRR 8.4+)
         lines.append(" no bgp ebgp-requires-policy")
+        # Require explicit address-family activation so a blocked render cannot
+        # establish IPv4-unicast sessions if bgpd starts independently.
+        lines.append(" no bgp default ipv4-unicast")
         # Disable network import-check to allow advertising local_prefixes without kernel routes
         # This is critical for VPN gateways where local_prefixes are source subnets
         lines.append(" no bgp network import-check")
@@ -296,7 +299,7 @@ class FRRRenderer:
                 lines.append(f" neighbor {remote_ip} remote-as {rasn}")
                 lines.append(f" neighbor {remote_ip} timers {keep} {hold}")
                 lines.append(f" neighbor {remote_ip} maximum-prefix {max_prefixes_default}")
-                if bfd_enabled:
+                if activate and bfd_enabled:
                     lines.append(f" neighbor {remote_ip} bfd")
 
                 # CRITICAL: Configure update-source to use tunnel interface IP
