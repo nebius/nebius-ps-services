@@ -72,6 +72,83 @@ def test_blocked_frr_render_does_not_install_kernel_routes(
     ensure_routes.assert_not_called()
 
 
+def test_blocked_frr_render_disables_neighbor_and_bfd_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.BGPD_CONF", tmp_path / "bgpd.conf")
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.FRR_CONF", tmp_path / "frr.conf")
+
+    FRRRenderer().render_and_apply(_bgp_config(), activate=False)
+
+    rendered = (tmp_path / "frr.conf").read_text(encoding="utf-8")
+    assert " no bgp default ipv4-unicast\n" in rendered
+    assert " neighbor 169.254.10.2 remote-as 65020\n" in rendered
+    assert " neighbor 169.254.10.2 activate\n" not in rendered
+    assert " neighbor 169.254.10.2 bfd\n" not in rendered
+    assert "\nbfd\n" not in rendered
+    assert " peer 169.254.10.2\n" not in rendered
+
+
+def test_active_frr_render_explicitly_activates_neighbor_and_bfd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.BGPD_CONF", tmp_path / "bgpd.conf")
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.FRR_CONF", tmp_path / "frr.conf")
+    monkeypatch.setattr(
+        FRRRenderer,
+        "_ensure_bgpd_enabled",
+        lambda self, enable_bfd=False: False,
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.frr_renderer.subprocess.run",
+        lambda *args, **kwargs: None,
+    )
+
+    FRRRenderer().render_and_apply(_bgp_config(), activate=True)
+
+    rendered = (tmp_path / "frr.conf").read_text(encoding="utf-8")
+    assert " no bgp default ipv4-unicast\n" in rendered
+    assert " neighbor 169.254.10.2 activate\n" in rendered
+    assert " neighbor 169.254.10.2 bfd\n" in rendered
+    assert "\nbfd\n" in rendered
+    assert " peer 169.254.10.2\n" in rendered
+
+
+def _bgp_config() -> dict:
+    return {
+        "defaults": {
+            "routing": {
+                "mode": "bgp",
+                "bgp": {
+                    "bfd": {
+                        "enabled": True,
+                        "transmit_interval_ms": 300,
+                        "receive_interval_ms": 300,
+                        "detect_multiplier": 3,
+                    }
+                },
+            }
+        },
+        "gateway": {"local_asn": 65010, "local_prefixes": ["10.0.0.0/24"]},
+        "connections": [
+            {
+                "name": "peer",
+                "routing_mode": "bgp",
+                "bgp": {"remote_asn": 65020},
+                "tunnels": [
+                    {
+                        "name": "tunnel-1",
+                        "inner_local_ip": "169.254.10.1",
+                        "inner_remote_ip": "169.254.10.2",
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def test_blocked_strongswan_render_is_inert(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(strongswan_module, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d")
     monkeypatch.setattr(strongswan_module, "IPSEC_CONF", tmp_path / "ipsec.conf")
