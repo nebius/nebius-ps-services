@@ -22,6 +22,7 @@ from ..schema import (
     VMHACredentialSourceReferences,
     VMHARuntimeBinding,
 )
+from .ssh_policy import configure_paramiko_host_verification
 
 
 @dataclass(frozen=True)
@@ -332,9 +333,9 @@ class SSHPush:
         )
         key_file = Path(key_path).expanduser() if key_path else None
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         upload_directory: str | None = None
         try:
+            configure_paramiko_host_verification(client, paramiko)
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -403,7 +404,6 @@ class SSHPush:
         )
         key_file = Path(key_path).expanduser() if key_path else None
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         command = """sudo /bin/bash -lc '
 set -eu
 stale=0
@@ -438,6 +438,7 @@ systemctl daemon-reload
 printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
 '"""
         try:
+            configure_paramiko_host_verification(client, paramiko)
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -682,9 +683,8 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
 
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
-        # codeql[py/unsafe-ssh-host-key-policy] - VMs are created on demand; auto-add avoids breaking apply while still using SSH key auth.
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
+            configure_paramiko_host_verification(client, paramiko)
             client.connect(
                 hostname=ssh_target,
                 username=username,

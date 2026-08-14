@@ -352,6 +352,24 @@ class RouteReconciliationContext:
             and ownership.ownership_epoch == self.ownership_epoch
         )
 
+    def has_same_authority(self, other: RouteReconciliationContext) -> bool:
+        """Compare reboot-stable authority while excluding the per-boot operation ID."""
+
+        return all(
+            getattr(self, field) == getattr(other, field)
+            for field in (
+                "cluster_id",
+                "owner_node_id",
+                "allocation_id",
+                "ownership_epoch",
+                "generation_id",
+                "configuration_digest",
+                "static_routes_digest",
+                "bgp_policy_digest",
+                "ownership_incarnation",
+            )
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "allocation_id": self.allocation_id,

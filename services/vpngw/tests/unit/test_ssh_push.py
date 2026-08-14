@@ -409,6 +409,12 @@ class _StageClient:
         self.upload_counter = [0]
         self.closed = False
 
+    def load_system_host_keys(self) -> None:
+        return None
+
+    def load_host_keys(self, _path: str) -> None:
+        return None
+
     def set_missing_host_key_policy(self, policy) -> None:
         return None
 
@@ -461,7 +467,7 @@ def test_vm_ha_stage_installs_exact_private_bundle_before_manifest(tmp_path) -> 
     manifest, binding, sources = _credential_stage_fixture(tmp_path)
     client = _StageClient()
     push = SSHPush()
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client, AutoAddPolicy=lambda: object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
 
     receipt = push.stage_vm_ha_config(
         "203.0.113.10",
@@ -488,6 +494,29 @@ def test_vm_ha_stage_installs_exact_private_bundle_before_manifest(tmp_path) -> 
     )
 
 
+def test_vm_ha_stage_rejects_missing_explicit_host_pin_before_remote_io(
+    tmp_path, monkeypatch
+) -> None:
+    manifest, binding, sources = _credential_stage_fixture(tmp_path)
+    client = _StageClient()
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(tmp_path / "missing-known-hosts"))
+
+    with pytest.raises(ValueError, match="non-empty readable regular file"):
+        push.stage_vm_ha_config(
+            "203.0.113.10",
+            manifest,
+            {},
+            runtime_binding=binding,
+            credential_sources=sources,
+        )
+
+    assert client.commands == []
+    assert client.writes == []
+    assert client.closed
+
+
 @pytest.mark.parametrize("fail_command_index", range(0, 30))
 def test_vm_ha_stage_aborts_on_every_remote_credential_step(
     tmp_path,
@@ -496,7 +525,7 @@ def test_vm_ha_stage_aborts_on_every_remote_credential_step(
     manifest, binding, sources = _credential_stage_fixture(tmp_path)
     client = _StageClient(fail_command_index=fail_command_index)
     push = SSHPush()
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client, AutoAddPolicy=lambda: object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
 
     with pytest.raises(RuntimeError):
         push.stage_vm_ha_config(
@@ -517,7 +546,7 @@ def test_vm_ha_stage_aborts_on_every_manifest_or_credential_upload(
     manifest, binding, sources = _credential_stage_fixture(tmp_path)
     client = _StageClient(fail_upload=fail_upload)
     push = SSHPush()
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client, AutoAddPolicy=lambda: object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
 
     with pytest.raises((OSError, RuntimeError)):
         push.stage_vm_ha_config(
@@ -537,6 +566,12 @@ class _DeactivationClient:
         self.command = ""
         self.closed = False
 
+    def load_system_host_keys(self) -> None:
+        return None
+
+    def load_host_keys(self, _path: str) -> None:
+        return None
+
     def set_missing_host_key_policy(self, policy) -> None:
         return None
 
@@ -554,7 +589,7 @@ class _DeactivationClient:
 
 def test_vm_ha_deactivation_is_ordered_and_fail_closed() -> None:
     client = _DeactivationClient(return_code=0)
-    paramiko = SimpleNamespace(SSHClient=lambda: client, AutoAddPolicy=lambda: object())
+    paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
     push = SSHPush()
     push._paramiko = paramiko
 
@@ -566,12 +601,18 @@ def test_vm_ha_deactivation_is_ordered_and_fail_closed() -> None:
     assert client.closed
 
     failing = _DeactivationClient(return_code=1)
-    push._paramiko = SimpleNamespace(SSHClient=lambda: failing, AutoAddPolicy=lambda: object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: failing, RejectPolicy=lambda: object())
     with pytest.raises(RuntimeError, match="deactivation failed"):
         push.deactivate_vm_ha("203.0.113.10", {"gateway_group": {"vm_spec": {}}})
 
 
 class _ConnectFailClient:
+    def load_system_host_keys(self) -> None:
+        return None
+
+    def load_host_keys(self, _path: str) -> None:
+        return None
+
     def set_missing_host_key_policy(self, policy) -> None:
         return None
 
@@ -588,7 +629,7 @@ def test_vm_ha_activation_fails_closed_on_ssh_connect(monkeypatch) -> None:
     receipt = SSHPush._vm_ha_receipt(manifest, rendered)
     push = SSHPush()
     push._paramiko = SimpleNamespace(
-        SSHClient=lambda: _ConnectFailClient(), AutoAddPolicy=lambda: object()
+        SSHClient=lambda: _ConnectFailClient(), RejectPolicy=lambda: object()
     )
     monkeypatch.setattr(
         "nebius_vpngw.agent.main.vm_ha_runtime_blockers",
@@ -608,7 +649,7 @@ def test_vm_ha_activation_fails_closed_on_ssh_connect(monkeypatch) -> None:
 def test_ha_to_non_ha_push_fails_closed_after_deactivation() -> None:
     push = SSHPush()
     push._paramiko = SimpleNamespace(
-        SSHClient=lambda: _ConnectFailClient(), AutoAddPolicy=lambda: object()
+        SSHClient=lambda: _ConnectFailClient(), RejectPolicy=lambda: object()
     )
     ordinary = SimpleNamespace(instance_index=0)
 

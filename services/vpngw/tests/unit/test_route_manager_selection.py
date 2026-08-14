@@ -547,7 +547,7 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     calls: list[str] = []
 
     def fake_run(cmd, capture_output, text, timeout, input=None):
-        calls.append(cmd[5].removeprefix("ubuntu@"))
+        calls.append(cmd[-2].removeprefix("ubuntu@"))
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -626,12 +626,14 @@ def test_get_bgp_learned_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ]
@@ -684,12 +686,14 @@ def test_get_bgp_learned_routes_honors_env_ssh_fallback(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             "/tmp/env-key",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "env-user@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ]
@@ -992,23 +996,27 @@ def test_list_bgp_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ],
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=5",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "ip route get 169.254.20.2",
         ],
@@ -1053,12 +1061,14 @@ def test_list_static_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "ip route show",
         ]

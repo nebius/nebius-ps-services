@@ -740,3 +740,152 @@ def test_completed_route_effect_recovers_if_pending_clear_was_interrupted(tmp_pa
 
     assert ports.routes.store.load_pending_mutation() is None
     ports.close()
+
+
+@pytest.mark.parametrize(
+    ("mutation_kind", "route_id"),
+    [
+        (RouteMutationKind.CREATE, None),
+        (RouteMutationKind.DELETE, "old-route"),
+        (RouteMutationKind.REPLACE, "old-route"),
+    ],
+)
+def test_pending_route_mutation_recovers_across_new_controller_operation(
+    tmp_path: Path,
+    mutation_kind: RouteMutationKind,
+    route_id: str | None,
+) -> None:
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    ports.cloud.observe = lambda: CloudObservation(
+        authoritative=True,
+        allocation_id="allocation-a",
+        observed_owner_node_id="node-a",
+        former_owner_node_id="node-b",
+        former_owner_compute_state=ComputeState.STOPPED,
+        former_attachment_absent=True,
+        candidate_attachment_exact=True,
+        ownership_re_read_exact=True,
+        ownership_epoch="7",
+    )
+    target = ports.binding.route_targets[0]
+    mutation = RouteMutation(
+        kind=mutation_kind,
+        prefix="10.0.0.0/24",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="allocation-a",
+        cluster_id="cluster-a",
+        route_target=target,
+        route_id=route_id,
+    )
+    old_context = RouteReconciliationContext(
+        operation_id="route-op-before-reboot",
+        cluster_id="cluster-a",
+        owner_node_id="node-a",
+        allocation_id="allocation-a",
+        ownership_epoch="7",
+        generation_id="a" * 64,
+        configuration_digest="a" * 64,
+        static_routes_digest=ports.binding.static_routes_digest,
+        bgp_policy_digest=ports.binding.bgp_policy_digest,
+        ownership_incarnation=2,
+    )
+    ports.routes.store.save_pending_mutation(mutation, old_context)
+    action = ControllerAction(
+        ActionKind.RECONCILE_ROUTES,
+        "route-op-after-reboot",
+        "boot-after-reboot",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet(
+            "a" * 64,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+        ownership_incarnation=2,
+    )
+
+    ports.routes.reconcile(action)
+
+    assert ports.routes.store.load_pending_mutation() is None
+    receipt = ports.routes.store.load_route_reconciliation_receipt()
+    assert receipt is not None
+    assert receipt["context"]["operation_id"] == "route-op-after-reboot"
+    ports.close()
+
+
+def test_pending_route_mutation_rejects_changed_reboot_authority(tmp_path: Path) -> None:
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    ports.cloud.observe = lambda: CloudObservation(
+        authoritative=True,
+        allocation_id="allocation-a",
+        observed_owner_node_id="node-a",
+        former_owner_node_id="node-b",
+        former_owner_compute_state=ComputeState.STOPPED,
+        former_attachment_absent=True,
+        candidate_attachment_exact=True,
+        ownership_re_read_exact=True,
+        ownership_epoch="7",
+    )
+    mutation = RouteMutation(
+        kind=RouteMutationKind.DELETE,
+        prefix="10.0.0.0/24",
+        route_kind=ManagedRouteKind.STATIC,
+        allocation_id="allocation-a",
+        cluster_id="cluster-a",
+        route_target=ports.binding.route_targets[0],
+        route_id="old-route",
+    )
+    ports.routes.store.save_pending_mutation(
+        mutation,
+        RouteReconciliationContext(
+            operation_id="route-op-before-reboot",
+            cluster_id="cluster-a",
+            owner_node_id="node-a",
+            allocation_id="allocation-a",
+            ownership_epoch="7",
+            generation_id="b" * 64,
+            configuration_digest="a" * 64,
+            static_routes_digest=ports.binding.static_routes_digest,
+            bgp_policy_digest=ports.binding.bgp_policy_digest,
+            ownership_incarnation=2,
+        ),
+    )
+    action = ControllerAction(
+        ActionKind.RECONCILE_ROUTES,
+        "route-op-after-reboot",
+        "boot-after-reboot",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet(
+            "a" * 64,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+        ownership_incarnation=2,
+    )
+
+    with pytest.raises(RuntimeError, match="does not match the current controller authority"):
+        ports.routes.reconcile(action)
+
+    assert ports.routes.store.load_pending_mutation() is not None
+    ports.close()

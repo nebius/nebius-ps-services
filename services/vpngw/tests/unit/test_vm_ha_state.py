@@ -303,7 +303,7 @@ def test_replay_guard_rejects_sequences_and_retired_boot_id_across_restart() -> 
         )
 
 
-def test_replay_guard_requires_authenticated_identity_and_zero_sequence_for_new_boot() -> None:
+def test_replay_guard_requires_authenticated_identity_and_tracks_first_new_boot_sequence() -> None:
     guard = PeerReplayGuard()
     with pytest.raises(StateValidationError, match="authenticated peer"):
         guard.accept(
@@ -318,9 +318,16 @@ def test_replay_guard_requires_authenticated_identity_and_zero_sequence_for_new_
         expected_cluster_id="cluster-a",
         expected_node_id="node-b",
     )
-    with pytest.raises(StalePeerStateError, match="sequence zero"):
+    next_state = guard.accept(
+        _heartbeat(boot_id="boot-b", sequence=7),
+        authenticated_node_id="node-b",
+        expected_cluster_id="cluster-a",
+        expected_node_id="node-b",
+    )
+    assert next_state == ReplayState("boot-b", 7, ("boot-a",))
+    with pytest.raises(StalePeerStateError, match="stale or replayed"):
         guard.accept(
-            _heartbeat(boot_id="boot-b", sequence=1),
+            _heartbeat(boot_id="boot-b", sequence=7),
             authenticated_node_id="node-b",
             expected_cluster_id="cluster-a",
             expected_node_id="node-b",

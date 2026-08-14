@@ -941,12 +941,50 @@ def test_add_routes_local_swap_route_table_passes_mode_and_rollback_dir(
     assert captured["ensured_bgp"] == (plan, local_cfg)
 
 
-def test_build_ssh_base_cmd_suppresses_host_key_noise(tmp_path: Path) -> None:
+def test_build_ssh_base_cmd_enforces_host_verification(tmp_path: Path) -> None:
     from nebius_vpngw.cli import _build_ssh_base_cmd
 
     ssh_cmd = _build_ssh_base_cmd(tmp_path / "id_ed25519")
 
     assert "LogLevel=ERROR" in ssh_cmd
+    assert "StrictHostKeyChecking=yes" in ssh_cmd
+    assert "StrictHostKeyChecking=no" not in ssh_cmd
+    assert not any(option.startswith("UserKnownHostsFile=") for option in ssh_cmd)
+
+
+def test_build_ssh_base_cmd_uses_exact_explicit_known_hosts(tmp_path: Path, monkeypatch) -> None:
+    from nebius_vpngw.cli import _build_ssh_base_cmd
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("host ssh-ed25519 AAAAfixture\n", encoding="utf-8")
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(known_hosts))
+
+    ssh_cmd = _build_ssh_base_cmd(None)
+
+    assert f"UserKnownHostsFile={known_hosts}" in ssh_cmd
+    assert "GlobalKnownHostsFile=none" in ssh_cmd
+    assert "KnownHostsCommand=none" in ssh_cmd
+
+
+def test_build_ssh_base_cmd_rejects_missing_explicit_known_hosts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from nebius_vpngw.cli import _build_ssh_base_cmd
+
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(tmp_path / "missing"))
+
+    with pytest.raises(ValueError, match="non-empty readable regular file"):
+        _build_ssh_base_cmd(None)
+
+
+def test_ssh_policy_honors_an_explicit_empty_environment(tmp_path: Path, monkeypatch) -> None:
+    from nebius_vpngw.deploy.ssh_policy import build_openssh_base_command
+
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(tmp_path / "missing"))
+
+    ssh_cmd = build_openssh_base_command(environment={})
+
+    assert not any(option.startswith("UserKnownHostsFile=") for option in ssh_cmd)
 
 
 def test_restart_tunnel_uses_inline_remote_python_and_shows_real_failure_output(
