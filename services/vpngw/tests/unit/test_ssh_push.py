@@ -632,10 +632,54 @@ def test_vm_ha_deactivation_is_ordered_and_fail_closed() -> None:
     assert client.command.index("30-vm-ha.conf") < client.command.index("daemon-reload")
     assert client.closed
 
+    retired = _DeactivationClient(return_code=0)
+    push._paramiko = SimpleNamespace(SSHClient=lambda: retired, RejectPolicy=lambda: object())
+    push.deactivate_vm_ha("203.0.113.11", {"gateway_group": {"vm_spec": {}}}, retire_member=True)
+    assert "stale=1" in retired.command
+    assert "nebius-vpngw-agent.service" in retired.command
+    assert "nebius-vpngw-health-monitor.service" in retired.command
+    assert "nebius-vpngw-fix-routes.timer" in retired.command
+    assert "nebius-vpngw-fix-routes.service" in retired.command
+    assert "config-resolved.yaml" in retired.command
+
     failing = _DeactivationClient(return_code=1)
     push._paramiko = SimpleNamespace(SSHClient=lambda: failing, RejectPolicy=lambda: object())
     with pytest.raises(RuntimeError, match="deactivation failed"):
         push.deactivate_vm_ha("203.0.113.10", {"gateway_group": {"vm_spec": {}}})
+
+
+class _VerificationClient(_DeactivationClient):
+    def exec_command(self, command: str, **kwargs):
+        self.command = command
+        output = b"VM_HA_TERMINAL_NON_HA=1\n" if self.return_code == 0 else b""
+        return BytesIO(), _CommandStream(output, self.return_code), BytesIO(b"incomplete")
+
+
+def test_vm_ha_deactivation_verification_checks_terminal_state() -> None:
+    client = _VerificationClient(return_code=0)
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+
+    push.verify_vm_ha_deactivated(
+        "203.0.113.11", {"gateway_group": {"vm_spec": {}}}, retire_member=True
+    )
+
+    assert "VM_HA_TERMINAL_NON_HA=1" in client.command
+    assert "/etc/nebius-vpngw/vm-ha-credentials" in client.command
+    assert "nebius-vpngw-agent.service" in client.command
+    assert "nebius-vpngw-health-monitor.service" in client.command
+    assert "nebius-vpngw-fix-routes.timer" in client.command
+    assert "nebius-vpngw-fix-routes.service" in client.command
+    assert 'systemctl is-active --quiet "$unit"' in client.command
+    assert 'systemctl is-enabled --quiet "$unit"' in client.command
+    assert client.closed
+
+    failing = _VerificationClient(return_code=1)
+    push._paramiko = SimpleNamespace(SSHClient=lambda: failing, RejectPolicy=lambda: object())
+    with pytest.raises(RuntimeError, match="terminal deactivation verification failed"):
+        push.verify_vm_ha_deactivated(
+            "203.0.113.11", {"gateway_group": {"vm_spec": {}}}, retire_member=True
+        )
 
 
 class _ConnectFailClient:

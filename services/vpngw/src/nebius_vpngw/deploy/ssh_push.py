@@ -417,7 +417,13 @@ class SSHPush:
                     pass
             client.close()
 
-    def deactivate_vm_ha(self, ssh_target: str, local_cfg: dict) -> bool:
+    def deactivate_vm_ha(
+        self,
+        ssh_target: str,
+        local_cfg: dict,
+        *,
+        retire_member: bool = False,
+    ) -> bool:
         """Remove stale HA activation state before an ordinary agent restart."""
 
         if not ssh_target:
@@ -430,9 +436,22 @@ class SSHPush:
         )
         key_file = Path(key_path).expanduser() if key_path else None
         client = paramiko.SSHClient()
-        command = """sudo /bin/bash -lc '
+        retire_commands = (
+            """
+for unit in nebius-vpngw-agent.service nebius-vpngw-health-monitor.service nebius-vpngw-fix-routes.timer nebius-vpngw-fix-routes.service strongswan-starter.service strongswan.service strongswan-swanctl.service frr.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    systemctl disable --now "$unit"
+  fi
+done
+rm -f /etc/nebius-vpngw/config-resolved.yaml
+"""
+            if retire_member
+            else ""
+        )
+        initial_stale = 1 if retire_member else 0
+        command = f"""sudo /bin/bash -lc '
 set -eu
-stale=0
+stale={initial_stale}
 for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
   if [ -e "$path" ]; then stale=1; fi
 done
@@ -460,6 +479,7 @@ rm -f /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf
 for path in /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
   if [ -d "$path" ]; then find "$path" -depth -delete; fi
 done
+{retire_commands}
 systemctl daemon-reload
 printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
 '"""
@@ -479,6 +499,74 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
                 detail = stderr.read().decode().strip()
                 raise RuntimeError(f"VM-HA deactivation failed: {detail or return_code}")
             return "VM_HA_DEACTIVATED=1" in stdout.read().decode().splitlines()
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
+
+    def verify_vm_ha_deactivated(
+        self,
+        ssh_target: str,
+        local_cfg: dict,
+        *,
+        retire_member: bool = False,
+    ) -> None:
+        """Independently prove one former member has no remaining HA authority."""
+
+        if not ssh_target:
+            raise ValueError("VM-HA deactivation verification requires an SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        retire_checks = (
+            """
+test ! -e /etc/nebius-vpngw/config-resolved.yaml
+for unit in nebius-vpngw-agent.service nebius-vpngw-health-monitor.service nebius-vpngw-fix-routes.timer nebius-vpngw-fix-routes.service strongswan-starter.service strongswan.service strongswan-swanctl.service frr.service; do
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then exit 1; fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then exit 1; fi
+done
+"""
+            if retire_member
+            else ""
+        )
+        command = f"""sudo /bin/bash -lc '
+set -eu
+for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  test ! -e "$path"
+done
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then exit 1; fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then exit 1; fi
+done
+{retire_checks}
+printf "VM_HA_TERMINAL_NON_HA=1\\n"
+'"""
+        client = paramiko.SSHClient()
+        try:
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=60)
+            return_code = stdout.channel.recv_exit_status()
+            output = stdout.read().decode().splitlines()
+            if return_code != 0 or "VM_HA_TERMINAL_NON_HA=1" not in output:
+                detail = stderr.read().decode().strip()
+                raise RuntimeError(
+                    f"VM-HA terminal deactivation verification failed: {detail or return_code}"
+                )
         except Exception as error:
             identity_failure = _host_identity_failure(error, paramiko, ssh_target)
             if identity_failure is not None:

@@ -689,3 +689,66 @@ def test_omitted_vm_ha_preserves_scaffold_return_shape() -> None:
 
     assert result == {}
     assert type(result) is dict
+
+
+def test_former_vm_ha_discovery_forces_two_members_and_retains_identity_snapshot() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    members = {
+        "gateway-0": (SimpleNamespace(id="compute-0"), "203.0.113.10"),
+        "gateway-1": (SimpleNamespace(id="compute-1"), "203.0.113.11"),
+    }
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_has_durable_vm_ha_allocation", return_value=True),
+        patch.object(vm_mgr, "_discover_vm_ha_members", return_value=members) as discover,
+    ):
+        result = vm_mgr.discover_former_vm_ha_members(spec)
+
+    assert result == {name: target for name, (_, target) in members.items()}
+    assert discover.call_args.args[1].instance_count == 2
+    assert vm_mgr._former_vm_ha_snapshot == members
+
+
+def test_former_vm_ha_discovery_rejects_an_omitted_member() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    incomplete = {
+        "gateway-0": (SimpleNamespace(id="compute-0"), "203.0.113.10"),
+    }
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_has_durable_vm_ha_allocation", return_value=True),
+        patch.object(vm_mgr, "_discover_vm_ha_members", return_value=incomplete),
+        pytest.raises(RuntimeError, match="member set is incomplete"),
+    ):
+        vm_mgr.discover_former_vm_ha_members(spec)
+
+
+def test_former_vm_ha_identity_recheck_uses_exact_discovery_snapshot() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    members = {
+        "gateway-0": (SimpleNamespace(id="compute-0"), "203.0.113.10"),
+        "gateway-1": (SimpleNamespace(id="compute-1"), "203.0.113.11"),
+    }
+    vm_mgr._former_vm_ha_snapshot = members
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_require_vm_ha_member_snapshot") as recheck,
+    ):
+        vm_mgr.verify_former_vm_ha_member_snapshot(
+            spec, {name: target for name, (_, target) in members.items()}
+        )
+
+    assert recheck.call_args.args[1].instance_count == 2
+    assert recheck.call_args.args[2] == members

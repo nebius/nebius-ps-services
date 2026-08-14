@@ -111,7 +111,7 @@
 #### Acceptance criteria
 
 - Non-HA command syntax, defaults, output meaning, and exit behavior remain supported.
-- Removing explicit VM HA performs a fail-closed deactivation transaction that stops and disables HA services, removes HA-only systemd state and credential references, reloads service state, and only then resumes the ordinary non-HA path.
+- Removing explicit VM HA acquires only the operator credential needed for read-only cloud access, uses durable shared-allocation evidence to discover both former members independently of the new instance count, completes read-only change analysis and any required operator confirmation before touching either member, strictly authenticates and identity-rechecks both, stops and disables HA services and every product mutation service on a retired member, removes HA-only systemd state and credential references, verifies the terminal non-HA state, and only then creates or switches to a requested service account or starts provisioning.
 - VM-HA status explains why a passive is promotable or blocked and names the safe operator recovery action.
 - Manual failback follows the same fencing, ownership-transfer, readiness, and route-reconciliation invariants as automatic failover.
 - HA activation aborts on the first critical remote failure, revalidates the remote generation and digest immediately before installation, and never reports success from stale staging acknowledgements or unverified guard/controller state.
@@ -131,6 +131,10 @@
 
 ## Task Implementer Requirements Change Log
 
+- 2026-08-14: Strengthened TI-REQ-006 so HA removal independently discovers,
+  authenticates, deactivates, and verifies both former members before any
+  ordinary mutation, while abort and confirmation paths leave the live cluster
+  untouched and retired members retain no product mutation service.
 - 2026-08-14: Clarified TI-REQ-005 and TI-REQ-006 after integration review: clean HA members may render and validate node-local configuration while the data plane remains blocked, and every SSH operator/staging path requires one prevalidated pinned trust source before any cloud mutation. Added automatic CI selection for the composed bootstrap and trust regressions.
 - 2026-08-13: Reconciled TI-REQ-001 through TI-REQ-006 after implementation: the explicit two-node path now has secret-free authoritative bindings, immutable credential bundles, strict stopped-owner fencing, exact target-aware route reconciliation, a production-composed current-boot guard/controller, guarded recovery and failback, and preserved omitted/disabled behavior. Live readiness remains a separately authorized non-production gate.
 - 2026-08-12: Reconciled TI-REQ-001 through TI-REQ-006 with the proven post-provision runtime-binding, authoritative ownership-revision, exact route-receipt, guard-closure, fail-closed deactivation, credential-reference, IAM-allowlist, and activation-verification requirements.

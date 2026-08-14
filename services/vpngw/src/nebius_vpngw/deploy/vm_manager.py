@@ -104,6 +104,7 @@ class VMManager:
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
+        self._former_vm_ha_snapshot: dict[str, tuple[t.Any, str]] | None = None
         self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
@@ -1239,6 +1240,70 @@ class VMManager:
             name: public_ip
             for name, (_, public_ip) in self._discover_vm_ha_members(client, spec).items()
         }
+
+    def _has_durable_vm_ha_allocation(self, client: t.Any, spec: GatewayGroupSpec) -> bool:
+        """Find the shared allocation that durably identifies a former HA cluster."""
+
+        if not self.project_id:
+            return False
+        try:
+            from nebius.api.nebius.common.v1 import ResourceMetadataFilter  # type: ignore
+            from nebius.api.nebius.vpc.v1 import (  # type: ignore
+                AllocationServiceClient,
+                ListAllocationsRequest,
+            )
+
+            request = ListAllocationsRequest(
+                parent_id=self.project_id,
+                metadata_filter=ResourceMetadataFilter(resource_prefix=f"{spec.name}-"),
+            )
+            response = AllocationServiceClient(client).list(request)
+            if hasattr(response, "wait"):
+                response = response.wait()
+            items = list(getattr(response, "items", response) or [])
+        except Exception as error:
+            raise RuntimeError("Former VM-HA allocation evidence could not be read") from error
+        matches = []
+        for allocation in items:
+            name = str(getattr(getattr(allocation, "metadata", None), "name", ""))
+            if name.startswith(f"{spec.name}-") and name.endswith("-shared-private-ip"):
+                matches.append(name)
+        if len(matches) > 1:
+            raise RuntimeError("Former VM-HA allocation evidence is ambiguous")
+        return bool(matches)
+
+    def discover_former_vm_ha_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+        """Discover both former HA members independently of the new member count."""
+
+        if spec.vm_ha is not None or not self.project_id:
+            return {}
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
+        if not self._has_durable_vm_ha_allocation(client, spec):
+            return {}
+        former_spec = replace(spec, instance_count=2)
+        members = self._discover_vm_ha_members(client, former_spec)
+        expected_names = {f"{spec.name}-0", f"{spec.name}-1"}
+        if set(members) != expected_names:
+            raise RuntimeError("Former VM-HA member set is incomplete")
+        self._former_vm_ha_snapshot = members
+        return {name: public_ip for name, (_, public_ip) in members.items()}
+
+    def verify_former_vm_ha_member_snapshot(
+        self, spec: GatewayGroupSpec, expected: t.Mapping[str, str]
+    ) -> None:
+        """Re-read every former Compute identity immediately before teardown."""
+
+        snapshot = self._former_vm_ha_snapshot
+        if snapshot is None or {
+            name: public_ip for name, (_, public_ip) in snapshot.items()
+        } != dict(expected):
+            raise RuntimeError("Former VM-HA discovery snapshot is unavailable or stale")
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("Former VM-HA identity recheck requires the Nebius SDK")
+        self._require_vm_ha_member_snapshot(client, replace(spec, instance_count=2), snapshot)
 
     def verify_vm_ha_existing_identities(
         self,
