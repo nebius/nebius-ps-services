@@ -580,7 +580,9 @@ def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
 ) -> None:
     config_path = tmp_path / "vm-ha-blocked.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
-    plan = SimpleNamespace(vm_ha=object(), validate=lambda: None)
+    plan = SimpleNamespace(
+        vm_ha=object(), validate=lambda: None, iter_instance_configs=lambda: iter(())
+    )
 
     with (
         patch("nebius_vpngw.cli.load_local_config", return_value={}),
@@ -603,7 +605,9 @@ def test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager(
 ) -> None:
     config_path = tmp_path / "vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
-    plan = SimpleNamespace(vm_ha=object(), validate=lambda: None)
+    plan = SimpleNamespace(
+        vm_ha=object(), validate=lambda: None, iter_instance_configs=lambda: iter(())
+    )
     monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
 
     with (
@@ -710,8 +714,8 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
         patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
         patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
         patch(
-            "nebius_vpngw.cli.require_explicit_known_hosts_file",
-            return_value=tmp_path / "known_hosts",
+            "nebius_vpngw.cli.require_vm_ha_ssh_policy",
+            return_value=object(),
         ),
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
@@ -804,6 +808,7 @@ def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> Non
     local_cfg = {"gateway_group": {"vm_spec": {}}}
     monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: local_cfg)
     monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_: plan)
+    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_: None)
     monkeypatch.setattr(
         "nebius_vpngw.cli.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(

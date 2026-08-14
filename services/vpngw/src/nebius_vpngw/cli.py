@@ -24,7 +24,11 @@ from .config_loader import (
 )
 from .config_template import DEFAULT_CONFIG_TEMPLATE
 from .deploy.route_manager import RouteManager
-from .deploy.ssh_policy import build_openssh_base_command, require_explicit_known_hosts_file
+from .deploy.ssh_policy import (
+    SSHTrustPolicy,
+    build_openssh_base_command,
+    require_vm_ha_ssh_policy,
+)
 from .deploy.ssh_push import SSHPush
 from .deploy.vm_manager import VMManager
 
@@ -114,9 +118,11 @@ def _ensure_ssh_available() -> None:
     raise typer.Exit(code=1)
 
 
-def _build_ssh_base_cmd(key_path: Path | None) -> list[str]:
+def _build_ssh_base_cmd(
+    key_path: Path | None, *, ssh_policy: SSHTrustPolicy | None = None
+) -> list[str]:
     _ensure_ssh_available()
-    return build_openssh_base_command(key_path=key_path)
+    return build_openssh_base_command(key_path=key_path, policy=ssh_policy)
 
 
 def _normalize_role_value(value: t.Any) -> str:
@@ -1088,6 +1094,7 @@ def apply(
         # Skip VM ensure and SSH push in dry-run; just show summary.
         raise typer.Exit(code=0)
 
+    ssh_policy: SSHTrustPolicy | None = None
     if plan.vm_ha is not None:
         blockers = _vm_ha_activation_blockers()
         if blockers:
@@ -1096,7 +1103,13 @@ def apply(
                 print(f"[yellow]  - {blocker}[/yellow]")
             raise typer.Exit(code=1)
         try:
-            require_explicit_known_hosts_file()
+            ssh_policy = require_vm_ha_ssh_policy(
+                (
+                    instance.hostname,
+                    (instance.external_ip or "").strip() or instance.hostname,
+                )
+                for instance in plan.iter_instance_configs()
+            )
         except ValueError as error:
             print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
@@ -1166,8 +1179,9 @@ def apply(
         auth_token=auth_token,
         tenant_id=tenant_id,
         region_id=region_id,
+        ssh_policy=ssh_policy,
     )
-    ssh = SSHPush()
+    ssh = SSHPush(ssh_policy=ssh_policy)
 
     # Check for destructive changes BEFORE making any changes
     print("[bold]Analyzing configuration changes...[/bold]")
@@ -4625,6 +4639,13 @@ def _run_vm_ha_operator_command(
     plan = merge_with_peer_configs(local_cfg, [])
     if plan.vm_ha is None:
         raise typer.BadParameter("VM HA is not enabled in this configuration")
+    ssh_policy = require_vm_ha_ssh_policy(
+        (
+            instance.hostname,
+            (instance.external_ip or "").strip() or instance.hostname,
+        )
+        for instance in plan.iter_instance_configs()
+    )
     vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
     username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
     raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
@@ -4640,7 +4661,7 @@ def _run_vm_ha_operator_command(
         target = (instance.external_ip or "").strip()
         if not target:
             raise RuntimeError(f"VM-HA node {node.node_id} has no SSH target")
-        command = _build_ssh_base_cmd(key_path)
+        command = _build_ssh_base_cmd(key_path, ssh_policy=ssh_policy)
         command.extend(
             [
                 f"{username}@{target}",

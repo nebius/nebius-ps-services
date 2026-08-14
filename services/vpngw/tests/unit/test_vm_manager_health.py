@@ -72,6 +72,27 @@ def test_check_vm_health_reports_esp4_states(
     assert message_fragment in health["message"]
 
 
+def test_check_vm_health_fails_immediately_on_host_identity_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=255,
+            stdout=b"",
+            stderr=b"Host key verification failed.\n",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="SSH host identity verification failed"):
+        VMManager(project_id="project-test", zone="eu-west1").check_vm_health(
+            "nebius-vpn-gw-0",
+            "203.0.113.10",
+        )
+
+
 @pytest.mark.parametrize(
     ("operation", "args"),
     [
