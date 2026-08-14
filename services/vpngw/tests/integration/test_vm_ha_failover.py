@@ -364,6 +364,7 @@ def test_healthy_nodes_keep_one_exact_owner_and_one_passive() -> None:
     assert active.forwarding_enabled
     assert active.action is None
     assert passive.state is HAState.NORMAL
+    assert not passive.forwarding_enabled
     assert passive.action is None
     assert passive.reasons == ("authoritative-owner-peer-is-healthy",)
     assert scenario.trace == []
