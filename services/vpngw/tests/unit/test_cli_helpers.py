@@ -757,6 +757,77 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
     assert all(item is binding for _, _, item in observed)
 
 
+@pytest.mark.parametrize(
+    ("configured_key", "environment_key", "expected_key"),
+    [
+        ("~/configured-key", "/tmp/environment-key", Path("~/configured-key").expanduser()),
+        (None, "~/environment-key", Path("~/environment-key").expanduser()),
+        (None, None, None),
+    ],
+)
+def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_key: str | None,
+    environment_key: str | None,
+    expected_key: Path | None,
+) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    vm_spec = {"ssh_private_key_path": configured_key} if configured_key else {}
+    local_cfg = {"gateway_group": {"vm_spec": vm_spec}}
+    plan = SimpleNamespace(
+        vm_ha=object(),
+        gateway_group=SimpleNamespace(region="eu-west1"),
+        gateway={},
+        manage_routes=False,
+        should_manage_routes=lambda: False,
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter(()),
+    )
+    manager_keys: list[Path | None] = []
+
+    class BoundResult(dict):
+        vm_ha_runtime_binding = object()
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            manager_keys.append(kwargs.get("management_key_path"))
+
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            return None
+
+        def check_changes(self, spec):
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            return BoundResult()
+
+    if environment_key is None:
+        monkeypatch.delenv("VPNGW_SSH_KEY", raising=False)
+    else:
+        monkeypatch.setenv("VPNGW_SSH_KEY", environment_key)
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli._vm_ha_apply_order", return_value=[]),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush"),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "staged acknowledgements do not have exact generation parity" in result.stdout
+    assert manager_keys == [expected_key, expected_key]
+
+
 def test_vm_ha_activation_has_no_static_runtime_blockers_after_complete_wiring() -> None:
     assert _vm_ha_activation_blockers() == ()
 
