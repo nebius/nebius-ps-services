@@ -1287,12 +1287,27 @@ def _append_promotion_review_corrections(
 
     repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
     integration = Path(str(wave["integration_worktree"]))
-    integrated_head = required_string(wave, "integrated_head", "reviewed wave")
+    integrated_head = wave.get("integrated_head")
+    if integrated_head is not None and (
+        not isinstance(integrated_head, str) or SHA_RE.fullmatch(integrated_head) is None
+    ):
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "correction wave integrated head is invalid"
+        )
     adopted_contract_head = active_contract_delta_head(
         workspace, run_dir, coordinator, wave
     )
     adopted_contract = adopted_contract_head is not None
     correction_base = _head(integration)
+    blocked_worker_frontier = (
+        integrated_head is None
+        and wave.get("contract_commit") == correction_base
+        and bool(wave["task_ids"])
+        and all(
+            wave["task_states"].get(task_id) == "superseded"
+            for task_id in wave["task_ids"]
+        )
+    )
     _verify_linked_worktree(
         repo,
         integration,
@@ -1304,7 +1319,10 @@ def _append_promotion_review_corrections(
         or _head(repo) != wave["base_commit"]
         or (not _clean(repo) and not adopted_contract)
         or _branch(integration) != wave["integration_branch"]
-        or correction_base not in {integrated_head, adopted_contract_head}
+        or (
+            correction_base not in {integrated_head, adopted_contract_head}
+            and not blocked_worker_frontier
+        )
         or not _clean(integration)
         or wave.get("active_batch_index") is not None
         or any(state != "done" for state in wave["batch_states"])
@@ -1315,7 +1333,7 @@ def _append_promotion_review_corrections(
     ):
         raise PromptWorkspaceError(
             "WORKTREE_CONFLICT",
-            "promotion review corrections require the exact clean retained wave",
+            "corrections require the exact clean retained integration boundary",
         )
     text = read_handoff_text(run_dir)
     if text is None:
@@ -1778,6 +1796,122 @@ def plan_waves(
         return state
 
 
+def _failed_worker_archive_ref(run_id: str, wave_id: str, task_id: str) -> str:
+    return f"refs/codex/task-worker-rejections/{run_id}/{wave_id}/{task_id}"
+
+
+def _archive_failed_worker_dirt(
+    *,
+    repo: Path,
+    run_dir: Path,
+    wave_id: str,
+    task_id: str,
+    worker: Path,
+    base: str,
+    changed_paths: list[str],
+    clock: Callable[[], datetime],
+) -> str:
+    """Quarantine exact tracked failed-worker dirt before correction replan."""
+
+    if not changed_paths or changed_paths != _dirty_paths(worker):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "failed worker dirt differs from its terminal result"
+        )
+    if any(
+        _git(
+            worker,
+            ["ls-files", "--error-unmatch", "--", path],
+            "verify failed worker tracked path",
+            check=False,
+        ).returncode
+        != 0
+        for path in changed_paths
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT",
+            "failed worker quarantine does not discard untracked paths",
+        )
+    archive_ref = _failed_worker_archive_ref(run_dir.name, wave_id, task_id)
+    journal = _journal_path(run_dir, wave_id)
+    created = _journaled_git(
+        journal,
+        worker,
+        ["stash", "create", "task-implementer rejected worker dirt"],
+        "archive failed worker dirt",
+        clock,
+    )
+    current_archive = created.stdout.decode("utf-8", errors="strict").strip()
+    if (
+        SHA_RE.fullmatch(current_archive) is None
+        or _git_text(
+            repo,
+            ["rev-parse", f"{current_archive}^1"],
+            "inspect current failed worker quarantine parent",
+        )
+        != base
+        or _changed_paths(repo, base, current_archive) != changed_paths
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "current failed worker quarantine evidence differs"
+        )
+    observed_ref = _git(
+        repo,
+        ["rev-parse", "--verify", archive_ref],
+        "inspect failed worker quarantine ref",
+        check=False,
+    )
+    if observed_ref.returncode == 0:
+        archive_commit = observed_ref.stdout.decode("utf-8", errors="strict").strip()
+        if _git_text(
+            repo,
+            ["rev-parse", f"{archive_commit}^{{tree}}"],
+            "inspect retained failed worker quarantine tree",
+        ) != _git_text(
+            repo,
+            ["rev-parse", f"{current_archive}^{{tree}}"],
+            "inspect current failed worker quarantine tree",
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT",
+                "failed worker quarantine bytes changed before replay",
+            )
+    else:
+        archive_commit = current_archive
+        _journaled_git(
+            journal,
+            repo,
+            ["update-ref", archive_ref, archive_commit, "0" * 40],
+            "publish failed worker quarantine ref",
+            clock,
+        )
+    if (
+        SHA_RE.fullmatch(archive_commit) is None
+        or _git_text(
+            repo,
+            ["rev-parse", f"{archive_commit}^1"],
+            "inspect failed worker quarantine parent",
+        )
+        != base
+        or _changed_paths(repo, base, archive_commit) != changed_paths
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "failed worker quarantine evidence differs"
+        )
+    if not _clean(worker):
+        _journaled_git(
+            _journal_path(run_dir, wave_id),
+            worker,
+            ["restore", "--staged", "--worktree", "--", *changed_paths],
+            "restore quarantined worker paths",
+            clock,
+        )
+    if _head(worker) != base or not _clean(worker):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "failed worker quarantine did not restore clean base"
+        )
+    return archive_commit
+
+
 def replan_waves(
     manifest_path: Path,
     run_id: str,
@@ -1867,19 +2001,48 @@ def replan_waves(
                     str(assignment["branch"]),
                     expected_head=base,
                 )
-                if (
-                    plane.get("state") != "failed"
-                    or result.get("status") == "committed"
-                    or result.get("result_sha256") != sha256_json(unsigned)
-                    or plane.get("result_sha256") != result.get("result_sha256")
-                    or result.get("commit") != base
-                    or result.get("changed_paths") != []
-                    or _head(worker) != base
-                    or not _clean(worker)
-                ):
+                common_evidence_valid = (
+                    plane.get("state") == "failed"
+                    and result.get("status") != "committed"
+                    and result.get("result_sha256") == sha256_json(unsigned)
+                    and plane.get("result_sha256") == result.get("result_sha256")
+                    and result.get("commit") == base
+                    and _head(worker) == base
+                )
+                clean_noop = (
+                    common_evidence_valid
+                    and result.get("changed_paths") == []
+                    and _clean(worker)
+                )
+                if not clean_noop:
+                    changed_paths = result.get("changed_paths")
+                    if (
+                        common_evidence_valid
+                        and result.get("status") == "REPLAN_REQUIRED"
+                        and isinstance(changed_paths, list)
+                        and bool(changed_paths)
+                        and all(isinstance(path, str) and path for path in changed_paths)
+                        and sorted(changed_paths) == _dirty_paths(worker)
+                    ):
+                        _archive_failed_worker_dirt(
+                            repo=repo,
+                            run_dir=run_dir,
+                            wave_id=str(active["wave_id"]),
+                            task_id=task_id,
+                            worker=worker,
+                            base=base,
+                            changed_paths=sorted(changed_paths),
+                            clock=clock,
+                        )
+                    else:
+                        raise PromptWorkspaceError(
+                            "WORKTREE_CONFLICT",
+                            "blocked correction task is not exact recoverable evidence",
+                        )
+                if not _clean(worker) or _head(worker) != base:
                     raise PromptWorkspaceError(
                         "WORKTREE_CONFLICT",
-                        "blocked correction task is not an exact clean no-op",
+                        "blocked correction task did not return to its exact clean base",
                     )
                 plane["state"] = "superseded"
                 plane["commit"] = base
@@ -2782,6 +2945,14 @@ def authorize_lifecycle_impact(
     if flags is None or set(flags) not in (
         {"--workspace", "--run-id", "--capacity"},
         {"--workspace", "--run-id", "--capacity", "--json"},
+        {"--workspace", "--run-id", "--capacity", "--resume-token"},
+        {
+            "--workspace",
+            "--run-id",
+            "--capacity",
+            "--resume-token",
+            "--json",
+        },
     ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "wave-plan command flags are invalid"
@@ -2800,6 +2971,52 @@ def authorize_lifecycle_impact(
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "wave-plan binding is invalid"
         )
+    resume_token = flags.get("--resume-token")
+    if resume_token is not None:
+        control_path = orchestration_dir(run_dir) / "resume-control.json"
+        try:
+            metadata = control_path.lstat()
+            control = load_json_object(control_path, "resume control")
+        except (OSError, PromptWorkspaceError) as error:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "resume-controlled wave-plan binding is unavailable",
+            ) from error
+        expected_arguments = {"capacity": capacity}
+        common_invalid = (
+            control_path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or control.get("schema") != "task-implementer/resume-control-v1"
+            or control.get("run_id") != run_id
+            or re.fullmatch(r"[0-9a-f]{64}", str(resume_token)) is None
+        )
+        active_invalid = control.get("phase") == "intent" and (
+            control.get("transition") != "wave-plan"
+            or control.get("resume_token") != resume_token
+            or control.get("arguments") != expected_arguments
+            or control.get("arguments_sha256")
+            != hashlib.sha256(stable_json(expected_arguments)).hexdigest()
+        )
+        idle_invalid = control.get("phase") == "idle" and any(
+            control.get(key) is not None
+            for key in (
+                "transition",
+                "arguments",
+                "arguments_sha256",
+                "resume_token",
+            )
+        )
+        if (
+            common_invalid
+            or control.get("phase") not in {"idle", "intent"}
+            or active_invalid
+            or idle_invalid
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "resume-controlled wave-plan binding is invalid",
+            )
     checkpoint = load_checkpoint_receipt(run_dir, required=False)
     return {
         "status": "authorized",
@@ -3292,12 +3509,12 @@ def recover_wave_resources(
                     "promotion-pending wave still has an active capacity batch",
                 )
             if any(
-                wave["task_states"].get(task_id) != "merged"
+                wave["task_states"].get(task_id) not in {"merged", "superseded"}
                 for task_id in wave["task_ids"]
             ):
                 raise PromptWorkspaceError(
                     "EXECUTION_STATE_INVALID",
-                    "promotion-pending wave tasks are not all merged",
+                    "promotion-pending wave tasks are not all merged or superseded",
                 )
             integration_head = required_string(wave, "integrated_head", "wave state")
         else:
@@ -4219,6 +4436,7 @@ def publish_task_result(
         or draft.get("wave_id") != assignment.get("wave_id")
         or draft.get("task_id") != assignment.get("task_id")
         or draft.get("assignment_sha256") != assignment.get("assignment_sha256")
+        or draft.get("status") not in {"committed", "REPLAN_REQUIRED"}
         or not isinstance(draft.get("changed_paths"), list)
         or not all(isinstance(path, str) and path for path in draft["changed_paths"])
         or not isinstance(draft.get("decisions"), list)
@@ -4705,6 +4923,11 @@ def _worker_guard_status(
     scope_violation = any(
         not _path_allowed(path, assignment["write_claims"]) for path in observed_paths
     )
+    scope_violation_paths = sorted(
+        path
+        for path in observed_paths
+        if not _path_allowed(path, assignment["write_claims"])
+    )
     progress_observed = bool(observed_paths) and not scope_violation
     if scope_violation:
         status = "WORKER_SCOPE_VIOLATION"
@@ -4728,6 +4951,8 @@ def _worker_guard_status(
         "heartbeat_age_seconds": heartbeat_age,
         "progress_observed": progress_observed,
         "scope_violation": scope_violation,
+        "changed_paths": sorted(observed_paths),
+        "scope_violation_paths": scope_violation_paths,
         "heartbeat_sequence": plane["heartbeat_sequence"],
         "heartbeat_phase": plane["heartbeat_phase"],
         "observed_at": now_text,
@@ -4941,11 +5166,11 @@ def recover_task(
             )
         changed = _changed_paths(worktree, base, observed) if observed != base else []
         changed = sorted(set(changed) | set(_dirty_paths(worktree)))
-        if any(not _path_allowed(path, assignment["write_claims"]) for path in changed):
-            raise PromptWorkspaceError(
-                "REPLAN_REQUIRED",
-                "interrupted worker state exceeds the locked write claims",
-            )
+        scope_violation_paths = sorted(
+            path
+            for path in changed
+            if not _path_allowed(path, assignment["write_claims"])
+        )
         raw_session = (
             session_id if session_id is not None else os.environ.get("CODEX_THREAD_ID")
         )
@@ -4969,7 +5194,7 @@ def recover_task(
                 _task_commit_authorization(
                     worktree, assignment, plane_path, raw_session
                 )
-                if observed == base
+                if observed == base and not scope_violation_paths
                 else None
             )
             return {
@@ -4977,6 +5202,8 @@ def recover_task(
                 "worker_session_fingerprint_sha256": worker_session,
                 "observed_head": observed,
                 "changed_paths": changed,
+                "replan_required": bool(scope_violation_paths),
+                "scope_violation_paths": scope_violation_paths,
                 "commit_authorization": (
                     str(commit_paths[0]) if commit_paths is not None else None
                 ),
@@ -5007,7 +5234,7 @@ def recover_task(
         _save_task_plane(run_dir, plane)
         commit_paths = (
             _task_commit_authorization(worktree, assignment, plane_path, raw_session)
-            if observed == base
+            if observed == base and not scope_violation_paths
             else None
         )
         return {
@@ -5015,6 +5242,8 @@ def recover_task(
             "worker_session_fingerprint_sha256": worker_session,
             "observed_head": observed,
             "changed_paths": changed,
+            "replan_required": bool(scope_violation_paths),
+            "scope_violation_paths": scope_violation_paths,
             "commit_authorization": (
                 str(commit_paths[0]) if commit_paths is not None else None
             ),
@@ -5147,11 +5376,19 @@ def accept_task_result(
             plane["state"] == "failed"
             and wave["status"] == "blocked"
             and wave["task_states"].get(task_id) == "failed"
-            and result.get("status") != "committed"
+            and result.get("status") == "REPLAN_REQUIRED"
             and plane.get("result_sha256") == recorded_result_digest
         )
         if retrying_terminal_replan:
             return result
+        retrying_publisher_completed = (
+            plane["state"] == "failed"
+            and wave["status"] == "blocked"
+            and wave["task_states"].get(task_id) == "failed"
+            and result.get("status") == "COMPLETED"
+            and plane.get("result_sha256") == recorded_result_digest
+            and plane.get("commit") is None
+        )
         retrying_rejected_paths = (
             plane["state"] == "failed"
             and wave["status"] == "blocked"
@@ -5165,12 +5402,15 @@ def accept_task_result(
                 if other_task != task_id
             )
         )
-        if plane["state"] != "running" and not retrying_rejected_paths:
+        retrying_rejected_result = (
+            retrying_rejected_paths or retrying_publisher_completed
+        )
+        if plane["state"] != "running" and not retrying_rejected_result:
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID",
                 "worker result requires an authorized task plane",
             )
-        if result.get("status") != "committed":
+        if result.get("status") != "committed" and not retrying_publisher_completed:
             wave["task_states"][task_id] = "failed"
             wave["status"] = "blocked"
             wave["updated_at"] = _utc(clock)
@@ -5182,7 +5422,7 @@ def accept_task_result(
             return result
         guard = (
             None
-            if retrying_rejected_paths
+            if retrying_rejected_result
             else _worker_guard_status(assignment, plane, clock=clock)
         )
         if guard is not None and guard["status"] != "ACTIVE":
@@ -5265,7 +5505,7 @@ def accept_task_result(
                 "worker validation and review evidence is incomplete",
             )
         wave["task_states"][task_id] = "committed"
-        if retrying_rejected_paths:
+        if retrying_rejected_result:
             wave["status"] = "running"
         wave["updated_at"] = _utc(clock)
         _save_wave(run_dir, wave)
@@ -5958,6 +6198,44 @@ def _promote_terminal_lifecycle_seal(
         )
 
 
+def _cleanup_failed_worker_archives(
+    repo: Path,
+    run_dir: Path,
+    wave: dict[str, object],
+    clock: Callable[[], datetime],
+) -> list[str]:
+    retained: list[str] = []
+    for task_id in wave["task_ids"]:
+        archive_ref = _failed_worker_archive_ref(
+            run_dir.name, str(wave["wave_id"]), str(task_id)
+        )
+        observed = _git(
+            repo,
+            ["rev-parse", "--verify", archive_ref],
+            "inspect failed worker quarantine ref",
+            check=False,
+        )
+        if observed.returncode != 0:
+            continue
+        archive_commit = observed.stdout.decode("utf-8", errors="strict").strip()
+        deleted = _journaled_git(
+            _journal_path(run_dir, str(wave["wave_id"])),
+            repo,
+            ["update-ref", "-d", archive_ref, archive_commit],
+            "remove resolved failed worker quarantine ref",
+            clock,
+            check=False,
+        )
+        if deleted.returncode != 0 or _git(
+            repo,
+            ["rev-parse", "--verify", archive_ref],
+            "verify failed worker quarantine removal",
+            check=False,
+        ).returncode == 0:
+            retained.append(archive_ref)
+    return retained
+
+
 def cleanup_wave(
     manifest_path: Path,
     run_id: str,
@@ -6047,6 +6325,10 @@ def cleanup_wave(
                 clock=clock,
             ):
                 retained.append(f"{worktree} ({branch})")
+        if not retained:
+            retained.extend(
+                _cleanup_failed_worker_archives(repo, run_dir, wave, clock)
+            )
         wave["cleanup_retained"] = retained
         wave["updated_at"] = _utc(clock)
         if retained:

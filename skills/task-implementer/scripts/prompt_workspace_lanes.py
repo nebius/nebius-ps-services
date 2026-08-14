@@ -141,7 +141,12 @@ def claim_generation(
 
 
 def integrate_lane(
-    workspace: dict[str, object], *, validated_head: str | None, restart: bool
+    workspace: dict[str, object],
+    *,
+    validated_head: str | None,
+    restart: bool,
+    review_rejected_head: str | None = None,
+    review_findings_sha256: str | None = None,
 ) -> dict[str, object]:
     arguments = [
         "task-lane-integrate",
@@ -152,6 +157,10 @@ def integrate_lane(
         arguments.extend(("--validated-head", validated_head))
     if restart:
         arguments.append("--restart")
+    if review_rejected_head is not None:
+        arguments.extend(("--review-rejected-head", review_rejected_head))
+    if review_findings_sha256 is not None:
+        arguments.extend(("--review-findings-sha256", review_findings_sha256))
     return workspace_lane_call(workspace, arguments)
 
 

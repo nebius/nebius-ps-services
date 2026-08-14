@@ -157,6 +157,14 @@ candidate for non-mutating alignment/tests. Only that validated SHA may
 fast-forward the clean checked-out source branch. Cleanup remains a separate
 proof-gated action.
 
+Task Implementer adds one private recovery transition at this boundary. When
+combined review rejects an exact clean lane candidate, Worktree archives that
+commit under a candidate-specific compare-and-set ref, journals the findings
+digest, removes only the temporary candidate worktree and branch, releases the
+reservation, and returns the still-pending lane to correction-ready state. The
+source branch is unchanged. Repeating the transition is idempotent, and a later
+successful corrected integration removes the temporary archive ref.
+
 Agentic SDLC may use private nested worktrees inside one child. Its lease blocks
 outer integration until internal promotion, cleanup, alignment, and evidence
 gates finish. Managed Agentic SDLC remains pending

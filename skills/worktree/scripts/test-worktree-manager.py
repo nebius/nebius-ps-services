@@ -3003,6 +3003,214 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertEqual(next_generation["generation"], 3)
 
+    def test_task_lane_review_rejection_reopens_serial_correction_generation(
+        self,
+    ) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        initial = str(lane["lane_head"])
+        acquired = self.open_lane_generation(
+            cwd=lane_root / "skills",
+            workspace=self.root / "review-rejection.json",
+            run_id="run-review-rejection",
+            task_scope="skills",
+            expected_head=initial,
+            claims=[],
+        )
+        (lane_root / "skills" / "skill.txt").write_text(
+            "reviewed but rejected\n", encoding="utf-8"
+        )
+        git("add", "skills/skill.txt", cwd=lane_root)
+        git("commit", "-qm", "candidate rejected by review", cwd=lane_root)
+        promoted = git("rev-parse", "HEAD", cwd=lane_root)
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+            expected_head=initial,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=1,
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+        )
+        source_before = git("rev-parse", "HEAD", cwd=self.repo)
+        ready = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        candidate = str(ready["candidate_head"])
+        source_dirt = self.repo / "unrelated-source-dirt.txt"
+        source_dirt.write_text("preserve\n", encoding="utf-8")
+        rejected = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+            review_rejected_head=candidate,
+            review_findings_sha256="f" * 64,
+        )
+        self.assertEqual(rejected["status"], "correction-required")
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), source_before)
+        self.assertEqual(source_dirt.read_text(encoding="utf-8"), "preserve\n")
+        self.assertEqual(
+            git(
+                "rev-parse",
+                "--verify",
+                wm._task_lane_rejection_ref(str(lane["lane_id"]), candidate),
+                cwd=self.repo,
+            ),
+            candidate,
+        )
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["state"], "pending")
+        self.assertIsNone(state["integration"])
+        self.assertFalse(Path(str(ready["candidate_worktree"])).exists())
+        self.assertIsNone(wm.load_reservation(self.repo, str(lane["name"])))
+        repeated = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+            review_rejected_head=candidate,
+            review_findings_sha256="f" * 64,
+        )
+        self.assertEqual(repeated["status"], "correction-required")
+        source_dirt.unlink()
+        correction = self.open_lane_generation(
+            cwd=lane_root / "skills",
+            workspace=self.root / "review-correction.json",
+            run_id="run-review-correction",
+            task_scope="skills",
+            expected_head=promoted,
+            claims=[],
+        )
+        self.assertEqual(correction["generation"], 2)
+        (lane_root / "skills" / "skill.txt").write_text(
+            "review correction\n", encoding="utf-8"
+        )
+        git("add", "skills/skill.txt", cwd=lane_root)
+        git("commit", "-qm", "correct rejected candidate", cwd=lane_root)
+        corrected_head = git("rev-parse", "HEAD", cwd=lane_root)
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(correction["token"]),
+            promoted_head=corrected_head,
+            expected_head=promoted,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=2,
+            lease_id=str(correction["token"]),
+            promoted_head=corrected_head,
+        )
+        corrected = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        integrated = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=str(corrected["candidate_head"]),
+            restart=False,
+        )
+        self.assertEqual(integrated["integrated_generations"], [1, 2])
+        self.assertEqual(
+            git(
+                "rev-parse",
+                "--verify",
+                wm._task_lane_rejection_ref(str(lane["lane_id"]), candidate),
+                cwd=self.repo,
+                check=False,
+            ),
+            "",
+        )
+
+    def test_task_lane_review_rejection_recovers_after_reservation_release(
+        self,
+    ) -> None:
+        lane = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
+        lane_root = Path(str(lane["worktree"]))
+        initial = str(lane["lane_head"])
+        acquired = self.open_lane_generation(
+            cwd=lane_root / "skills",
+            workspace=self.root / "review-recovery.json",
+            run_id="run-review-recovery",
+            task_scope="skills",
+            expected_head=initial,
+            claims=[],
+        )
+        (lane_root / "skills" / "skill.txt").write_text(
+            "recovery candidate\n", encoding="utf-8"
+        )
+        git("add", "skills/skill.txt", cwd=lane_root)
+        git("commit", "-qm", "recovery candidate", cwd=lane_root)
+        promoted = git("rev-parse", "HEAD", cwd=lane_root)
+        wm.task_lease_promote(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+            expected_head=initial,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=lane_root,
+            name=str(lane["name"]),
+            generation=1,
+            lease_id=str(acquired["token"]),
+            promoted_head=promoted,
+        )
+        ready = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+        )
+        original_write = wm.write_lane
+
+        def interrupt_pending(primary: Path, value: dict[str, object]) -> Path:
+            if value["state"] == "pending" and value["integration"] is None:
+                raise wm.TaskLaneStateError("simulated rejection checkpoint loss")
+            return original_write(primary, value)
+
+        with (
+            mock.patch.object(wm, "write_lane", side_effect=interrupt_pending),
+            self.assertRaisesRegex(wm.WorktreeError, "checkpoint loss"),
+        ):
+            wm.task_lane_integrate(
+                cwd=self.repo,
+                lane_id=str(lane["lane_id"]),
+                validated_head=None,
+                restart=False,
+                review_rejected_head=str(ready["candidate_head"]),
+                review_findings_sha256="e" * 64,
+            )
+        recovered = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+            review_rejected_head=str(ready["candidate_head"]),
+            review_findings_sha256="e" * 64,
+        )
+        self.assertEqual(recovered["status"], "correction-required")
+        state = wm.load_lane(self.repo, str(lane["lane_id"]))
+        assert state is not None
+        self.assertEqual(state["state"], "pending")
+
     def test_task_lane_claims_conflict_across_project_scopes(self) -> None:
         first = wm.task_lane_ensure(cwd=self.repo / "skills", project=None)
         second = wm.task_lane_ensure(

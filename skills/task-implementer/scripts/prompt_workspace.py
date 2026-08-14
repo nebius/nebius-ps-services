@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 
@@ -233,6 +235,127 @@ def add_common_workspace(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true")
 
 
+def _launch_codex_worker(
+    result: dict[str, object], *, reasoning_effort: str = "medium"
+) -> dict[str, object]:
+    """Run one fresh worker while managed worktree resources remain visible."""
+
+    context = result.get("start_context")
+    if not isinstance(context, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch requires the exact task start context",
+        )
+    scope_cwd = Path(required_string(context, "scope_cwd", "task start context"))
+    assignment_path = Path(
+        required_string(context, "assignment_path", "task start context")
+    )
+    start_argv = context.get("start_argv")
+    if (
+        not scope_cwd.is_absolute()
+        or not assignment_path.is_absolute()
+        or not isinstance(start_argv, list)
+        or not start_argv
+        or any(not isinstance(item, str) or not item for item in start_argv)
+    ):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch context must contain absolute paths and exact start argv",
+        )
+    if not scope_cwd.is_dir() or not assignment_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker launch resources are unavailable before process start",
+        )
+    codex = shutil.which("codex")
+    if codex is None or not Path(codex).is_absolute():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_UNAVAILABLE",
+            "codex executable is unavailable for the sequential worker fallback",
+        )
+    exact_start = shlex.join(start_argv)
+    prompt = (
+        "You are one isolated Task Implementer worker. You are not alone in the "
+        "repository; preserve other work and never revert changes you did not make. "
+        f"Your first tool action must run this exact command from the current cwd: "
+        f"{exact_start}. After it succeeds, read only the immutable assignment at "
+        f"{assignment_path} and its referenced incoming handoff, then follow every "
+        "embedded guardrail and context exactly. Implement only the assigned task, "
+        "heartbeat as required, validate and review it, create exactly the authorized "
+        "worker commit, and publish the immutable result. Publish successful work "
+        "with status exactly lower-case committed. If the first transition "
+        "returns replan_required, make no further edit or commit and immediately "
+        "publish a truthful terminal REPLAN_REQUIRED result with its exact changed "
+        "paths. Do not exit merely because start or recovery succeeded: successful "
+        "completion requires the assignment's exact immutable result file. Do not "
+        "access network, "
+        "credentials, external services, or live runtimes."
+    )
+    completed = subprocess.run(
+        [
+            codex,
+            "exec",
+            "--ephemeral",
+            "-C",
+            str(scope_cwd),
+            "-s",
+            "danger-full-access",
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+            prompt,
+        ],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_FAILED",
+            f"sequential worker exited with status {completed.returncode}",
+        )
+    try:
+        assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker assignment became unreadable after sequential execution",
+        ) from exc
+    if not isinstance(assignment, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "worker assignment must remain a JSON object after sequential execution",
+        )
+    result_path = Path(required_string(assignment, "result_path", "worker assignment"))
+    if not result_path.is_absolute() or not result_path.is_file():
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_INCOMPLETE",
+            "sequential worker exited without its exact immutable result",
+        )
+    return {"mode": "codex-exec", "returncode": completed.returncode}
+
+
+def _launch_codex_recovery_worker(result: dict[str, object]) -> dict[str, object]:
+    context = result.get("worker_context")
+    if not isinstance(context, dict):
+        raise PromptWorkspaceError(
+            "WORKER_EXEC_CONTEXT_INVALID",
+            "recovery worker launch requires the exact recovery context",
+        )
+    return _launch_codex_worker(
+        {
+            "start_context": {
+                "scope_cwd": context.get("scope_cwd"),
+                "assignment_path": context.get("assignment_path"),
+                "start_argv": context.get("recover_argv"),
+            }
+        },
+        reasoning_effort="low",
+    )
+
+
 def parse_lifecycle_authorization(argv: list[str]) -> argparse.Namespace:
     """Parse the hook-only adapter without adding it to discoverable CLI help."""
 
@@ -342,6 +465,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     integrate_parser.add_argument("--validated-head", help=argparse.SUPPRESS)
     integrate_parser.add_argument(
         "--restart", action="store_true", help=argparse.SUPPRESS
+    )
+    integrate_parser.add_argument("--review-rejected-head", help=argparse.SUPPRESS)
+    integrate_parser.add_argument(
+        "--review-findings-sha256", help=argparse.SUPPRESS
     )
     integrate_parser.add_argument("--json", action="store_true")
 
@@ -490,6 +617,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common_workspace(task_arm)
     task_arm.add_argument("--run-id", required=True)
     task_arm.add_argument("--task-id", required=True)
+    task_arm.add_argument(
+        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+    )
 
     task_heartbeat = subparsers.add_parser(
         "task-heartbeat", help="Internal: record bounded worker progress."
@@ -534,6 +664,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     task_rearm.add_argument("--task-id", required=True)
     task_rearm.add_argument("--expected-start-lease", required=True)
     task_rearm.add_argument("--confirmed-stopped", action="store_true")
+    task_rearm.add_argument(
+        "--launch-codex-worker", action="store_true", help=argparse.SUPPRESS
+    )
 
     task_recover = subparsers.add_parser(
         "task-recover", help="Internal: transfer one interrupted running task."
@@ -599,6 +732,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_resume.add_argument("--run-id", required=True)
     run_resume.add_argument("--capacity", type=int)
     run_resume.add_argument("--alignment")
+    run_resume.add_argument(
+        "--launch-codex-recovery-worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     for transition_parser in (
         checkpoint_prepare,
@@ -778,6 +916,8 @@ def main(argv: list[str]) -> int:
                 workspace,
                 validated_head=args.validated_head,
                 restart=args.restart,
+                review_rejected_head=args.review_rejected_head,
+                review_findings_sha256=args.review_findings_sha256,
             )
         elif args.command == "remove":
             workspace_path = project_workspace_manifest(
@@ -996,6 +1136,34 @@ def main(argv: list[str]) -> int:
                     "resume-controlled transition returned an invalid result",
                 )
             result = {**result, "resume": next_resume}
+        if args.command in {"task-arm", "task-rearm"} and getattr(
+            args, "launch_codex_worker", False
+        ):
+            if not isinstance(result, dict):
+                raise PromptWorkspaceError(
+                    "WORKER_EXEC_CONTEXT_INVALID",
+                    "worker launch requires a mapping result",
+                )
+            if resume_guard is not None:
+                resume_guard.__exit__(None, None, None)
+                resume_guard = None
+            result = {**result, "worker_launch": _launch_codex_worker(result)}
+        if args.command == "run-resume" and getattr(
+            args, "launch_codex_recovery_worker", False
+        ):
+            if (
+                not isinstance(result, dict)
+                or result.get("outcome") != "requires_confirmation"
+                or result.get("next_transition") != "task-recover"
+            ):
+                raise PromptWorkspaceError(
+                    "WORKER_EXEC_CONTEXT_INVALID",
+                    "recovery worker launch requires a current confirmed-recovery plan",
+                )
+            result = {
+                **result,
+                "worker_launch": _launch_codex_recovery_worker(result),
+            }
     except PromptWorkspaceError as exc:
         if resume_context is not None:
             try:

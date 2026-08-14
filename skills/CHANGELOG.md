@@ -6,6 +6,45 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed Task Implementer promotion-pending resource recovery so a missing
+  registered integration checkout can be safely rehydrated when immutable task
+  history contains both merged corrections and superseded no-op predecessors.
+  Every active or failed non-superseded task state still blocks recovery.
+- Fixed Task Implementer source integration after combined review requests
+  changes. The exact rejected two-parent candidate is now digest-bound to the
+  blocking findings, archived behind compare-and-set proof, and released
+  through an interruption-safe private journal before the lane becomes
+  correction-ready; the source branch remains unchanged. The same explicit
+  integration workflow owns the serial correction continuation and repeats all
+  validation and review gates. Wave guidance now treats shared semantic
+  invariants, not only changed paths, as serialization boundaries. Lifecycle
+  authorization now also accepts the sole safe resume-controlled `wave-plan`
+  form only when its private token and capacity exactly match the active
+  mode-0600 resume journal. Resume also detects a changed resource-free task
+  contract and forces `wave-replan` before creating integration or worker
+  resources. A hidden atomic sequential-worker path now launches fresh
+  ephemeral `codex exec` inside `task-arm` or `task-rearm`, preserving managed
+  worktree visibility across host process-lifetime boundaries without
+  reconstructing resources or transferring work to the coordinator. Resume
+  now also routes hard worker-guard outcomes directly to confirmed recovery
+  instead of waiting for a fresh final heartbeat to become stale. The matching
+  hidden atomic `run-resume` recovery launch preserves the exact recovery cwd
+  and fresh-session ownership across the same host process-lifetime boundary.
+  Atomic normal launches now pin medium reasoning effort and recovery-only
+  launches pin low effort so a single worker turn cannot consume the hard
+  heartbeat-staleness lease and cause a false recovery loop.
+  A sequential child exit now succeeds only when the assignment's exact
+  immutable result exists, preventing a start-only or recovery-only exit from
+  being misreported as completed work.
+  Worker-result publication now accepts only canonical `committed` or
+  `REPLAN_REQUIRED` status. Exact pre-fix `COMPLETED` evidence already retained
+  in a blocked failed state has a bounded strict migration after all commit,
+  tree, claim, digest, and evidence checks pass; new publication fails fast.
+  Worker-watch output now identifies the bounded changed and violating paths
+  needed for an evidence-based claim correction without exposing file bodies.
+  Recovery of such dirty scope expansion is now reporting-only and supplies no
+  commit authorization, allowing a fresh worker to publish terminal
+  `REPLAN_REQUIRED` evidence without silently discarding or adopting the dirt.
 - Fixed Task Implementer promotion after an adopted selected-lane contract was
   legitimately reconciled by the one claim-bound final coordinator commit.
   Resume now recognizes the exact unchanged lane overlay through its immutable
@@ -30,8 +69,11 @@ All notable changes to the reusable Codex skills are tracked here.
   terminal result idempotently; an exact clean no-op failed task can be
   retained as first-class `superseded` history, have only its proven worker
   resource cleaned, and be followed by a corrected immutable assignment.
-  Committed or dirty failed partials remain blocked evidence and cannot use
-  this path.
+  Exact tracked dirty evidence at the base can now be quarantined behind a
+  compare-and-set internal ref, tree-byte/path/parent verified on replay, and
+  restored by exact path before correction; the ref survives promotion and is
+  deleted only by successful cleanup. Untracked, committed, mismatched, or
+  unverifiable dirt remains blocked.
 - Fixed Task Implementer worker-result completion in two related failure
   boundaries: commands without a `--json` option no longer crash during common
   output emission after publication, and `changed_paths` are now canonicalized

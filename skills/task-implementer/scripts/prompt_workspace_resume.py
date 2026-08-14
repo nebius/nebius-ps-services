@@ -37,6 +37,7 @@ from prompt_workspace_execution import (
     RESULT_SCHEMA,
     WORKER_START_SECONDS,
     WORKER_STALL_SECONDS,
+    build_dependency_waves,
     load_coordinator_state,
     orchestration_dir,
     sha256_json,
@@ -49,10 +50,12 @@ from prompt_workspace_waves import (
     _load_task_plane,
     _load_wave,
     _result_path,
+    _task_record,
     _validated_assignment,
     _validated_incoming_handoff,
     _validate_assignment_context,
     _validate_wave_git_identity,
+    _worker_guard_status,
     parse_task_plans,
 )
 
@@ -415,7 +418,8 @@ def _machine_observation(
                                 accepted=False,
                             )
                             if (
-                                failed_result.get("status") == "committed"
+                                failed_result.get("status")
+                                not in {"REPLAN_REQUIRED", "COMPLETED"}
                                 or plane.get("result_sha256")
                                 != failed_result.get("result_sha256")
                                 or wave.get("status") != "blocked"
@@ -579,6 +583,51 @@ def _pending_unindexed_tasks(
     return [
         task.task_id for task in parse_task_plans(text) if task.task_id not in indexed
     ]
+
+
+def _planned_tail_drifted(
+    run_dir: Path, observation: dict[str, object]
+) -> bool:
+    """Return whether live pending task bytes differ from a resource-free plan."""
+
+    coordinator = observation["coordinator"]
+    if not isinstance(coordinator, dict):
+        return False
+    plan_sha256 = coordinator.get("plan_sha256")
+    active_wave = coordinator.get("active_wave")
+    waves = coordinator.get("waves")
+    if (
+        not isinstance(plan_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None
+        or not isinstance(active_wave, str)
+        or not isinstance(waves, list)
+    ):
+        # Unit-level or legacy observations without a v7 immutable plan cannot
+        # prove drift. The normal coordinator validator owns those schemas.
+        return False
+    try:
+        active_index = next(
+            index
+            for index, wave in enumerate(waves)
+            if isinstance(wave, dict) and wave.get("wave_id") == active_wave
+        )
+    except StopIteration as error:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "active wave is absent from the coordinator plan"
+        ) from error
+    text = read_handoff_text(run_dir)
+    if text is None:
+        raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
+    current_tail = [
+        [_task_record(task) for task in wave]
+        for wave in build_dependency_waves(parse_task_plans(text))
+    ]
+    completed_prefix = [
+        wave["tasks"]
+        for wave in waves[:active_index]
+        if isinstance(wave, dict) and isinstance(wave.get("tasks"), list)
+    ]
+    return sha256_json([*completed_prefix, *current_tail]) != plan_sha256
 
 
 def _resume_capacity(
@@ -745,12 +794,44 @@ def _choose_transition(
             reason="a Git journal intent has no observed outcome",
         )
     if status == "blocked":
+        publisher_migrations = [
+            task
+            for task in observation["tasks"]
+            if task.get("wave_id") == active_wave
+            and isinstance(task.get("plane"), dict)
+            and task["plane"].get("state") == "failed"
+            and wave.get("task_states", {}).get(task.get("task_id")) == "failed"
+            and isinstance(task.get("result"), dict)
+            and task["result"].get("status") == "COMPLETED"
+        ]
+        if len(publisher_migrations) == 1:
+            return _transition(
+                "execute",
+                next_transition="task-finish",
+                reason=(
+                    "a retained pre-fix successful result requires strict "
+                    "coordinator revalidation"
+                ),
+                arguments={"task_id": str(publisher_migrations[0]["task_id"])},
+            )
         return _transition(
             "blocked",
             next_transition=None,
             reason="the active wave is blocked and its evidence is retained",
         )
     if status == "planned":
+        if _planned_tail_drifted(run_dir, observation):
+            return _transition(
+                "execute",
+                next_transition="wave-replan",
+                reason=(
+                    "the resource-free planned tail differs from the current "
+                    "task contract"
+                ),
+                arguments={
+                    "capacity": _resume_capacity(coordinator, requested_arguments)
+                },
+            )
         return _transition(
             "execute",
             next_transition="wave-prepare",
@@ -828,6 +909,19 @@ def _choose_transition(
                         reason="a worker result is ready for coordinator acceptance",
                         arguments={"task_id": task_id},
                     )
+                assignment = task.get("assignment")
+                if isinstance(assignment, dict):
+                    guard = _worker_guard_status(assignment, plane, clock=clock)
+                    if guard["status"] != "ACTIVE":
+                        return _transition(
+                            "requires_confirmation",
+                            next_transition="task-recover",
+                            reason=(
+                                f"worker guard reported {guard['status']} and prior "
+                                "ownership must be confirmed stopped"
+                            ),
+                            arguments={"task_id": task_id},
+                        )
                 heartbeat = datetime.fromisoformat(str(plane["last_heartbeat_at"]))
                 age = (clock() - heartbeat).total_seconds()
                 if age < WORKER_STALL_SECONDS:

@@ -294,6 +294,11 @@ $worktree remove <generated-worktree-name>
   at the recorded base.
 - Merge conflict retains the private candidate and integration reservation;
   other integration into the same source is blocked until reconciliation.
+- A Task Implementer candidate rejected by combined review is archived by its
+  exact SHA behind a private compare-and-set ref before only its clean temporary
+  candidate resources and reservation are released. The source ref stays
+  unchanged and the pending lane becomes correction-ready; ordinary Worktree
+  integration has no review-rejection transition.
 - Source or child movement, malformed state, wrong merge parents, failed
   validation, failed fast-forward, or uncertain cleanup fails closed and
   preserves evidence.

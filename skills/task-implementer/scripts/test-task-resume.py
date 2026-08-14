@@ -6,6 +6,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -87,6 +88,155 @@ def observation(
 
 
 class ResumeDecisionTest(unittest.TestCase):
+    def test_atomic_codex_worker_launch_uses_exact_start_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scope_cwd = root / "worker" / "services" / "example"
+            scope_cwd.mkdir(parents=True)
+            assignment_path = root / "private" / "task-1.json"
+            assignment_path.parent.mkdir()
+            result_path = root / "private" / "task-1-result.json"
+            result_path.write_text("{}\n", encoding="utf-8")
+            assignment_path.write_text(
+                json.dumps({"result_path": str(result_path)}) + "\n",
+                encoding="utf-8",
+            )
+            start_argv = [
+                "/usr/bin/python3",
+                "/installed/prompt_workspace.py",
+                "task-start",
+                "--workspace",
+                "/private/workspace.json",
+                "--run-id",
+                "run-test",
+                "--task-id",
+                "task-1",
+                "--assignment-sha256",
+                "1" * 64,
+                "--start-lease",
+                "2026-08-14T00:00:00+00:00",
+                "--json",
+            ]
+            completed = subprocess.CompletedProcess([], 0)
+            with (
+                mock.patch.object(cli.shutil, "which", return_value="/usr/bin/codex"),
+                mock.patch.object(
+                    cli.subprocess, "run", return_value=completed
+                ) as launched,
+            ):
+                result = cli._launch_codex_worker(
+                    {
+                        "start_context": {
+                            "scope_cwd": str(scope_cwd),
+                            "assignment_path": str(assignment_path),
+                            "start_argv": start_argv,
+                        }
+                    }
+                )
+
+        self.assertEqual(result, {"mode": "codex-exec", "returncode": 0})
+        call = launched.call_args
+        self.assertEqual(
+            call.args[0][0:5],
+            [
+                "/usr/bin/codex",
+                "exec",
+                "--ephemeral",
+                "-C",
+                str(scope_cwd),
+            ],
+        )
+        self.assertIn(" ".join(start_argv), call.args[0][-1])
+        self.assertIn(str(assignment_path), call.args[0][-1])
+        self.assertIn('model_reasoning_effort="medium"', call.args[0])
+        self.assertIs(call.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(call.kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(call.kwargs["stderr"], subprocess.DEVNULL)
+
+    def test_atomic_codex_worker_launch_rejects_success_without_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scope_cwd = root / "worker"
+            scope_cwd.mkdir()
+            assignment_path = root / "task-1.json"
+            assignment_path.write_text(
+                json.dumps({"result_path": str(root / "missing-result.json")})
+                + "\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(cli.shutil, "which", return_value="/usr/bin/codex"),
+                mock.patch.object(
+                    cli.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ),
+                self.assertRaises(PromptWorkspaceError) as raised,
+            ):
+                cli._launch_codex_worker(
+                    {
+                        "start_context": {
+                            "scope_cwd": str(scope_cwd),
+                            "assignment_path": str(assignment_path),
+                            "start_argv": ["/usr/bin/python3", "task-start"],
+                        }
+                    }
+                )
+        self.assertEqual(raised.exception.code, "WORKER_EXEC_INCOMPLETE")
+
+    def test_atomic_codex_worker_launch_reports_child_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scope_cwd = root / "worker"
+            scope_cwd.mkdir()
+            assignment_path = root / "task-1.json"
+            assignment_path.write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch.object(cli.shutil, "which", return_value="/usr/bin/codex"),
+                mock.patch.object(
+                    cli.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 17),
+                ),
+                self.assertRaises(PromptWorkspaceError) as raised,
+            ):
+                cli._launch_codex_worker(
+                    {
+                        "start_context": {
+                            "scope_cwd": str(scope_cwd),
+                            "assignment_path": str(assignment_path),
+                            "start_argv": ["/usr/bin/python3", "task-start"],
+                        }
+                    }
+                )
+        self.assertEqual(raised.exception.code, "WORKER_EXEC_FAILED")
+
+    def test_atomic_recovery_worker_launch_uses_exact_resume_context(self) -> None:
+        context = {
+            "scope_cwd": "/private/task-1/services/example",
+            "assignment_path": "/private/task-1.json",
+            "recover_argv": ["/usr/bin/python3", "task-recover", "--json"],
+        }
+        with mock.patch.object(
+            cli,
+            "_launch_codex_worker",
+            return_value={"mode": "codex-exec", "returncode": 0},
+        ) as launched:
+            result = cli._launch_codex_recovery_worker(
+                {"worker_context": context}
+            )
+        self.assertEqual(result, {"mode": "codex-exec", "returncode": 0})
+        launched.assert_called_once_with(
+            {
+                "start_context": {
+                    "scope_cwd": context["scope_cwd"],
+                    "assignment_path": context["assignment_path"],
+                    "start_argv": context["recover_argv"],
+                }
+            },
+            reasoning_effort="low",
+        )
+
     def test_planned_wave_executes_prepare(self) -> None:
         decision = resume._choose_transition(
             Path("/tmp/run"), observation(), clock=lambda: NOW
@@ -95,6 +245,39 @@ class ResumeDecisionTest(unittest.TestCase):
             (decision["outcome"], decision["next_transition"]),
             ("execute", "wave-prepare"),
         )
+
+    def test_planned_wave_handoff_contract_drift_routes_to_replan(self) -> None:
+        value = observation()
+        value["coordinator"]["plan_sha256"] = "0" * 64
+        value["coordinator"]["waves"][0]["tasks"] = [{"stale": True}]
+        handoff = """# Task Implementer Handoff
+
+## Task Queue
+
+### task-1
+
+- Status: pending
+- Depends on: none
+- Write claims:
+  - prefix: services/example/agent
+  - exact: services/example/cli.py
+- Conflict domains: example:safety
+- Implementation steps: implement the complete safety correction
+- Validation: run the focused safety regressions
+- End-to-end validation: prove the corrected offline workflow
+- Done criteria: all correction oracles pass
+- Stop conditions: stop before unclaimed effects
+"""
+        with mock.patch.object(resume, "read_handoff_text", return_value=handoff):
+            decision = resume._choose_transition(
+                Path("/tmp/run"),
+                value,
+                clock=lambda: NOW,
+                requested_arguments={"capacity": 3},
+            )
+        self.assertEqual(decision["next_transition"], "wave-replan")
+        self.assertEqual(decision["arguments"], {"capacity": 3})
+        self.assertIn("task contract", decision["reason"])
 
     def test_fresh_armed_and_running_workers_wait(self) -> None:
         for state, dispatched, heartbeat in (
@@ -143,6 +326,31 @@ class ResumeDecisionTest(unittest.TestCase):
                 self.assertEqual(decision["outcome"], "requires_confirmation")
                 self.assertEqual(decision["next_transition"], transition)
 
+    def test_hard_worker_guard_routes_immediate_confirmed_recovery(self) -> None:
+        value = observation(
+            wave_status="running",
+            task_state="running",
+            heartbeat_at=(NOW - timedelta(seconds=1)).isoformat(),
+        )
+        value["tasks"][0]["assignment"] = {
+            "task_id": "task-1",
+            "worktree": "/tmp/task-1",
+        }
+        value["git"]["resources"].append(
+            {"path": "/tmp/task-1", "present": True, "head": "a" * 40}
+        )
+        with mock.patch.object(
+            resume,
+            "_worker_guard_status",
+            return_value={"status": "WORKER_READ_ONLY_TIMEOUT"},
+        ):
+            decision = resume._choose_transition(
+                Path("/tmp/run"), value, clock=lambda: NOW
+            )
+        self.assertEqual(decision["outcome"], "requires_confirmation")
+        self.assertEqual(decision["next_transition"], "task-recover")
+        self.assertIn("WORKER_READ_ONLY_TIMEOUT", decision["reason"])
+
     def test_blocked_and_complete_are_distinct(self) -> None:
         blocked = observation(coordinator_status="blocked")
         self.assertEqual(
@@ -186,6 +394,14 @@ class ResumeDecisionTest(unittest.TestCase):
                 Path("/tmp/run"), recovered, clock=lambda: NOW
             )
         self.assertEqual(recovered_decision["outcome"], "complete")
+
+    def test_blocked_prefixed_completed_result_routes_to_strict_finish(self) -> None:
+        value = observation(wave_status="blocked", task_state="failed")
+        value["tasks"][0]["result"] = {"status": "COMPLETED"}
+        decision = resume._choose_transition(Path("/tmp/run"), value, clock=lambda: NOW)
+        self.assertEqual(decision["outcome"], "execute")
+        self.assertEqual(decision["next_transition"], "task-finish")
+        self.assertEqual(decision["arguments"], {"task_id": "task-1"})
 
     def test_final_promoted_wave_waits_for_terminal_lifecycle_seal(self) -> None:
         value = observation(wave_status="promoted", task_state="merged")
@@ -537,6 +753,119 @@ class ResumeControlTest(unittest.TestCase):
         routed.assert_called_once_with(Path("/private/workspace.json"), "run-test")
         emitted.assert_called_once_with(
             {"status": "prepared", "resume": next_plan}, True
+        )
+
+    def test_controlled_task_arm_can_launch_worker_atomically(self) -> None:
+        current_token = "4" * 64
+        events: list[str] = []
+        guard = mock.MagicMock()
+        guard.__enter__.return_value = None
+        guard.__exit__.side_effect = lambda *_args: events.append("lock-released")
+        armed = {
+            "status": "armed",
+            "start_context": {
+                "scope_cwd": "/private/task-1/services/example",
+                "assignment_path": "/private/task-1.json",
+                "start_argv": ["/usr/bin/python3", "task-start"],
+            },
+        }
+        next_plan = {"outcome": "wait", "next_transition": None}
+
+        def launch_worker(result: dict[str, object]) -> dict[str, object]:
+            self.assertEqual(events, ["transition-complete", "lock-released"])
+            self.assertEqual(result, {**armed, "resume": next_plan})
+            events.append("worker-launched")
+            return {"mode": "codex-exec", "returncode": 0}
+
+        with (
+            mock.patch.object(cli, "verify_workspace", return_value=self.workspace),
+            mock.patch.object(cli, "resume_execution_lock", return_value=guard),
+            mock.patch.object(
+                cli,
+                "begin_resume_transition",
+                return_value={"resume_token": current_token},
+            ),
+            mock.patch.object(cli, "arm_task", return_value=armed),
+            mock.patch.object(
+                cli,
+                "complete_resume_transition",
+                side_effect=lambda *_args: events.append("transition-complete"),
+            ) as complete,
+            mock.patch.object(cli, "resume_run", return_value=next_plan),
+            mock.patch.object(
+                cli,
+                "_launch_codex_worker",
+                side_effect=launch_worker,
+            ) as launched,
+            mock.patch.object(cli, "emit") as emitted,
+        ):
+            return_code = cli.main(
+                [
+                    "task-arm",
+                    "--workspace",
+                    "/private/workspace.json",
+                    "--run-id",
+                    "run-test",
+                    "--task-id",
+                    "task-1",
+                    "--resume-token",
+                    current_token,
+                    "--launch-codex-worker",
+                    "--json",
+                ]
+            )
+        self.assertEqual(return_code, 0)
+        self.assertEqual(
+            events, ["transition-complete", "lock-released", "worker-launched"]
+        )
+        complete.assert_called_once_with(
+            self.workspace, "run-test", "task-arm", current_token
+        )
+        launched.assert_called_once_with({**armed, "resume": next_plan})
+        emitted.assert_called_once_with(
+            {
+                **armed,
+                "resume": next_plan,
+                "worker_launch": {"mode": "codex-exec", "returncode": 0},
+            },
+            True,
+        )
+
+    def test_run_resume_can_launch_fresh_recovery_worker_atomically(self) -> None:
+        plan = {
+            "outcome": "requires_confirmation",
+            "next_transition": "task-recover",
+            "worker_context": {
+                "scope_cwd": "/private/task-1/services/example",
+                "assignment_path": "/private/task-1.json",
+                "recover_argv": ["/usr/bin/python3", "task-recover", "--json"],
+            },
+        }
+        launched_result = {"mode": "codex-exec", "returncode": 0}
+        with (
+            mock.patch.object(cli, "resume_run", return_value=plan),
+            mock.patch.object(
+                cli,
+                "_launch_codex_recovery_worker",
+                return_value=launched_result,
+            ) as launched,
+            mock.patch.object(cli, "emit") as emitted,
+        ):
+            return_code = cli.main(
+                [
+                    "run-resume",
+                    "--workspace",
+                    "/private/workspace.json",
+                    "--run-id",
+                    "run-test",
+                    "--launch-codex-recovery-worker",
+                    "--json",
+                ]
+            )
+        self.assertEqual(return_code, 0)
+        launched.assert_called_once_with(plan)
+        emitted.assert_called_once_with(
+            {**plan, "worker_launch": launched_result}, True
         )
 
     def test_begin_rejects_arguments_not_bound_to_token(self) -> None:

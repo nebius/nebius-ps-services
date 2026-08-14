@@ -174,6 +174,17 @@ canonical digest and exact lease validation, so workers do not recompute the
 digest with ad hoc JSON or reuse another launch. The worker reads the incoming
 handoff and does deeper preflight only afterward. An armed worker must reach
 `task-start` within 60 seconds.
+When the host releases managed worktree visibility as soon as the arming
+process exits, use the hidden atomic sequential-worker form on `task-arm` or
+`task-rearm`. It launches one fresh ephemeral `codex exec` child while that
+process still owns the resource lifetime, injects only the exact immutable
+worker context, pins medium reasoning effort for normal work and low effort for
+recovery-only continuation so a single model turn remains inside the hard
+heartbeat-staleness contract, releases the completed resume
+transition lock before the child starts, and waits for the child. It never reconstructs a checkout, widens
+claims, or transfers implementation ownership to the coordinator.
+A zero child exit is accepted only when the assignment's exact immutable result
+file exists; `task-start` or `task-recover` success by itself is incomplete.
 
 The successful transition returns one transient
 `task-implementer/worker-commit-context-v1`. Invoke its exact `prepare_argv`
@@ -195,6 +206,11 @@ publication. The publisher sorts and de-duplicates validation of
 than worker-authored list order. If the helper exits after the immutable file
 appears, verify the published result before deciding whether any replay is
 needed.
+Publish successful work only with exact lower-case `committed`; publish a safe
+terminal correction stop only as `REPLAN_REQUIRED`. The publisher rejects all
+other spellings. Retained pre-fix `COMPLETED` evidence has one bounded migration
+from its already-blocked failed state after full commit, tree, claim, digest,
+and evidence revalidation.
 
 A terminal `REPLAN_REQUIRED` result remains valid immutable evidence. Resume
 replays its acceptance and finish projections idempotently. Correction
@@ -203,9 +219,13 @@ the task result and task plane are failed, the reported commit equals the
 assignment base, `changed_paths` is empty, the assigned worktree is clean at
 that base, and the failed batch is the exact blocked frontier. The superseded
 task stays in history and predecessor handoffs; dispatch cleans only its exact
-resource before starting the appended correction. Any committed or dirty
-failed partial stays blocked and must be corrected through an explicit
-dependency.
+resource before starting the appended correction. Exact tracked dirty
+`REPLAN_REQUIRED` evidence at the base may follow this path only after an
+internal compare-and-set quarantine ref proves the base parent, exact tree
+bytes, and complete changed-path set on replay, then exact-path restore returns
+the worker to the clean base. Retain that ref through correction promotion and
+delete it only during successful wave cleanup. Untracked, committed,
+mismatched, or unverifiable dirt stays blocked.
 
 When `run-resume` requires confirmed `task-recover`, give the replacement its
 returned `worker_context` and invoke `recover_argv` from `scope_cwd` verbatim.
@@ -258,7 +278,16 @@ seconds. `WORKER_PRESTART_TIMEOUT`, `WORKER_PRESTART_MUTATION`,
 `WORKER_STALLED`, `WORKER_READ_ONLY_TIMEOUT`, or `WORKER_TIMEOUT` requires
 immediate interruption, stopped-status confirmation, and explicit recovery or
 blocking. Treat `WORKER_SCOPE_VIOLATION` the same way. Never silently wait or
-blind-retry no-progress work.
+blind-retry no-progress work. Resume routes a hard guard result to confirmed
+recovery immediately; a fresh final heartbeat never overrides that stop.
+When the returned recovery cwd is scoped to the observing helper's process
+lifetime, use the hidden atomic recovery-worker form on `run-resume`. It starts
+one fresh ephemeral child before returning and uses the exact `recover_argv` as
+that child's first transition; the coordinator never impersonates recovery.
+Out-of-claim recovered dirt is reporting-only. Return `replan_required`, the
+exact violating path names, and no commit authorization; the fresh worker then
+publishes terminal `REPLAN_REQUIRED` evidence without another edit. Preserve
+the dirty resource until the ordinary correction dependency owns its outcome.
 At the profile-specific `READ_ONLY_DEADLINE_NEAR`, require an immediate
 claimed-file edit or blocker before the hard cutoff.
 
@@ -500,7 +529,9 @@ owning scope. The command requires the active generation's exact resource tuple
 and a unique locked Git registration, then checks branch and registered HEAD,
 administrative HEAD, clean index, and the running integration contract,
 recorded integrated head, or worker base/direct-child rule before using Git's
-locked-worktree rehydration form. It journals and revalidates the checkout,
+locked-worktree rehydration form. A promotion-pending wave may contain only
+immutable `merged` and safely `superseded` task history; every other task state
+blocks recovery. It journals and revalidates the checkout,
 keeps the lease `present`, changes no task or promotion state, and reports that
 filesystem-only edits cannot be recovered. Only then may the fresh replacement
 invoke normal `task-recover`, or promotion validation continue. Any staged

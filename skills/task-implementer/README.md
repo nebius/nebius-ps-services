@@ -279,6 +279,8 @@ primary checkout, which reviews and commits the complete repository diff, and
 then to repeat `integrate`.
 
 Before resources exist, replanning replaces the resource-free planned tail.
+Resume compares the live pending task contract with the immutable plan and
+forces that replan before preparation whenever either one has drifted.
 The coordinator index keeps completed waves plus the replacement schedule;
 superseded planned wave files remain blocked history outside final completion.
 The active lane generation reserves every newly introduced repository claim
@@ -363,6 +365,11 @@ hand-compute or patch the checksum. Publication canonicalizes `changed_paths`
 as a sorted unique set, while acceptance treats their order as non-semantic and
 can safely revalidate the exact result/commit pair after an older ordering-only
 false rejection.
+The publisher accepts only exact lower-case `committed` for success or
+`REPLAN_REQUIRED` for a terminal safe stop. A retained pre-fix `COMPLETED`
+result can migrate only from its exact blocked failed state after its digest,
+direct-child commit, clean tree, claims, and evidence are revalidated; new
+publication never accepts that spelling.
 
 A worker may also publish a truthful terminal `REPLAN_REQUIRED` result. Resume
 accepts that immutable result idempotently instead of waiting for another
@@ -370,8 +377,13 @@ publication. A later correction plan may mark the failed task `superseded` only
 when its result and Git state prove an exact clean no-op: the reported commit is
 the assignment base, the changed-path set is empty, and the assigned worktree
 is clean at that base. The coordinator then cleans only that exact worker
-resource and appends the correction task. Committed or dirty failed partials
-remain retained evidence and require normal dependency-ordered correction.
+resource and appends the correction task. Exact tracked dirty
+`REPLAN_REQUIRED` evidence at the base may also proceed after Task archives its
+tree behind a compare-and-set internal ref, verifies the parent, exact tree
+bytes, and complete path set on replay, and restores only those tracked paths.
+The archive remains until the correction promotes and successful cleanup
+deletes it. Untracked, committed, mismatched, or unverifiable dirt remains
+blocked.
 
 ## Dependency Waves
 
@@ -456,6 +468,9 @@ locked registrations with exact lease, branch, HEAD, administrative HEAD,
 clean-index, and ancestry proof, journals the operation, and keeps each lease
 row `present`. Running integration is bound to the contract commit;
 promotion-pending integration is bound to the recorded integrated head. The
+promotion-pending recovery gate accepts immutable task history only when every
+task is already `merged` or safely `superseded`; a retained failed, running,
+assigned, committed, or planned task still blocks recovery. The
 result reports filesystem-only state as lost and changes no task, commit,
 integration, or promotion state. A fresh replacement invokes the exact
 `recover_argv` from the `worker_context.scope_cwd` returned by `run-resume`;
@@ -466,8 +481,10 @@ Tasks may share a wave only when dependencies are already satisfied and their
 ownership is completely disjoint. Shared interfaces, schemas, migration
 chains, dependency files, abstractions, Kubernetes/Terraform identities,
 exclusive test resources, external mutations, and architecture decisions
-serialize. Unknown ownership forces a singleton wave. External database,
-Kubernetes, Terraform, migration execution, and publication domains also
+serialize. Disjoint paths are insufficient when tasks establish, recover, or
+validate the same invariant; those tasks require a shared conflict domain or
+an explicit dependency. Unknown semantic ownership forces a singleton wave.
+External database, Kubernetes, Terraform, migration execution, and publication domains also
 reserve class-wide repository claims, so separate lanes cannot run those
 live-action classes concurrently merely by using different keys.
 
@@ -530,6 +547,17 @@ input. `task-start` performs authoritative canonical digest and exact lease
 validation, so workers never guess JSON serialization or reuse another launch.
 Incoming-handoff reading and deeper preflight follow. The start budget is 60
 seconds.
+If the execution environment releases the managed worktree when the arming
+process exits, Task Implementer can use its hidden atomic sequential-worker
+form. That form starts one fresh ephemeral `codex exec` child before
+`task-arm` or `task-rearm` returns, passes only the exact immutable worker
+context, releases the completed coordinator transition lock so `task-start`
+can acquire the task scope normally, pins medium reasoning effort for normal
+work and low effort for recovery-only continuation so one model turn stays
+within the heartbeat lease, and waits for completion. It does not
+recreate the worktree, widen claims, or let the coordinator implement the task.
+A zero child exit is accepted only after the assignment's exact immutable
+result file exists; successful start or recovery alone never completes a task.
 If an armed worker misses that deadline without changing its exact assigned
 base, the coordinator confirms that the old worker stopped and invokes private
 `task-rearm --confirmed-stopped` with the exact observed start lease. The
@@ -545,6 +573,20 @@ background or autonomous heartbeat loops are forbidden. Workers do not reread th
 managed prompt or coordinator-only state after validating their assignment.
 `task-start` is single-use, and mutations outside immutable write claims stop as
 `WORKER_SCOPE_VIOLATION` instead of extending any liveness budget.
+The watch result reports the bounded changed-path set and exact violating paths
+so the coordinator can distinguish a missing claim from an unrelated mutation
+without reading or copying file contents.
+Resume routes any hard worker-guard result directly to confirmed recovery even
+when the final heartbeat is fresh; heartbeat freshness cannot override a
+read-only, scope, stall, or total-time stop condition.
+If the exact recovery cwd is visible only while `run-resume` is still active,
+Task Implementer uses its hidden atomic recovery-worker form. It starts a fresh
+ephemeral child in that cwd before returning and makes the returned exact
+`recover_argv` the child's first transition, preserving fresh-session ownership.
+If recovered dirt exceeds the immutable claims, recovery becomes reporting-only:
+it returns `replan_required` and the exact violating paths without commit
+authorization. The fresh worker publishes terminal `REPLAN_REQUIRED` evidence
+without another edit; Task neither discards nor adopts the dirty bytes.
 
 Workers never edit the shared handoff, managed specs, common docs, other refs
 or worktrees, or the source checkout. An undeclared path requirement stops
@@ -591,9 +633,16 @@ lane to be clean and free of Git operations, with no active generation. It
 serializes by source ref, builds one exact two-parent candidate from the current
 source head and latest lane head, runs combined validation and review on that
 candidate, and promotes only the validated SHA through an expected-old
-compare-and-set. Conflicts and uncertain state are retained. Success consumes
-all pending generations, releases their claims, and rearms the same lane at the
-merge head.
+compare-and-set. A `REQUEST CHANGES` review is not treated as a Git conflict:
+Task Implementer binds the findings digest to the exact candidate, archives
+that immutable commit privately, removes only the exact clean candidate
+resources, releases the reservation, and reopens the pending lane for a
+correction generation. The same explicit integration workflow owns that
+correction and repeats validation and review before promotion. Merge conflicts
+and uncertain state are retained. Review rejection may preserve unrelated
+primary dirt because it neither stages nor advances the source; candidate
+creation and promotion still require a completely clean primary. Success consumes all pending generations,
+releases their claims, and rearms the same lane at the merge head.
 
 ## Recommended Post-Run Workflow
 

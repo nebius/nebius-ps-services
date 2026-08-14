@@ -20,6 +20,14 @@ GENERATION_KIND = "task-implementer-generation"
 CHECKPOINT_SCHEMA = 1
 CHECKPOINT_KIND = "task-implementer-lane-checkpoint"
 CHECKPOINT_STATES = {"prepared", "staged", "committed", "review-required"}
+REVIEW_REJECTION_SCHEMA = 1
+REVIEW_REJECTION_KIND = "task-implementer-integration-review-rejection"
+REVIEW_REJECTION_PHASES = {
+    "archived",
+    "candidate-removed",
+    "reservation-released",
+    "correction-ready",
+}
 LANE_STATES = {
     "creating",
     "idle",
@@ -301,6 +309,7 @@ def validate_lane(value: dict[str, object], lane_id: str) -> dict[str, object]:
                 "no-change",
                 "conflicted",
                 "candidate-ready",
+                "review-rejecting",
                 "source-promoted",
             }
         ):
@@ -354,7 +363,12 @@ def validate_lane(value: dict[str, object], lane_id: str) -> dict[str, object]:
         raise TaskLaneStateError("active task lane retains another transition")
     integration_phase = integration.get("phase") if integration is not None else None
     expected_integration_phases = {
-        "integrating": {"planned", "no-change", "candidate-ready"},
+        "integrating": {
+            "planned",
+            "no-change",
+            "candidate-ready",
+            "review-rejecting",
+        },
         "conflicted": {"conflicted"},
         "source-promoted": {"source-promoted"},
     }
@@ -400,6 +414,93 @@ def write_lane(primary: Path, value: dict[str, object]) -> Path:
     lane_id = str(value.get("lane_id", ""))
     validated = validate_lane(value, lane_id)
     path = _root(primary, create=True) / f"{lane_id}.json"
+    _atomic_json(path, validated)
+    return path
+
+
+def review_rejection_path(
+    primary: Path, lane_id: str, candidate_head: str, *, create: bool = False
+) -> Path:
+    if LANE_ID_RE.fullmatch(lane_id) is None:
+        raise TaskLaneStateError("task lane review rejection identity is invalid")
+    if OBJECT_ID_RE.fullmatch(candidate_head) is None:
+        raise TaskLaneStateError("review-rejected candidate head is invalid")
+    root = _root(primary, create=create) / "review-rejections" / lane_id
+    if create:
+        _private_dir(root.parent, create=True)
+        _private_dir(root, create=True)
+    return root / f"{candidate_head}.json"
+
+
+def validate_review_rejection(
+    value: dict[str, object], lane_id: str, candidate_head: str
+) -> dict[str, object]:
+    required = {
+        "schema",
+        "kind",
+        "lane_id",
+        "candidate_head",
+        "source_head",
+        "child_head",
+        "first_generation",
+        "last_generation",
+        "findings_sha256",
+        "archive_ref",
+        "phase",
+    }
+    if set(value) != required or value.get("schema") != REVIEW_REJECTION_SCHEMA:
+        raise TaskLaneStateError("review rejection fields or schema are invalid")
+    if (
+        value.get("kind") != REVIEW_REJECTION_KIND
+        or value.get("lane_id") != lane_id
+        or value.get("candidate_head") != candidate_head
+    ):
+        raise TaskLaneStateError("review rejection identity is invalid")
+    _sha(value.get("source_head"), "review rejection source head")
+    _sha(value.get("child_head"), "review rejection child head")
+    findings = value.get("findings_sha256")
+    if not isinstance(findings, str) or re.fullmatch(r"[0-9a-f]{64}", findings) is None:
+        raise TaskLaneStateError("review rejection findings digest is invalid")
+    first = value.get("first_generation")
+    last = value.get("last_generation")
+    if (
+        not isinstance(first, int)
+        or not isinstance(last, int)
+        or first < 1
+        or last < first
+    ):
+        raise TaskLaneStateError("review rejection generation range is invalid")
+    expected_ref = f"refs/codex/task-integration-rejections/{lane_id}/{candidate_head}"
+    if value.get("archive_ref") != expected_ref:
+        raise TaskLaneStateError("review rejection archive ref is invalid")
+    if value.get("phase") not in REVIEW_REJECTION_PHASES:
+        raise TaskLaneStateError("review rejection phase is invalid")
+    return value
+
+
+def load_review_rejection(
+    primary: Path,
+    lane_id: str,
+    candidate_head: str,
+    *,
+    required: bool = True,
+) -> dict[str, object] | None:
+    value = _load_json(
+        review_rejection_path(primary, lane_id, candidate_head),
+        "task lane review rejection",
+    )
+    if value is None:
+        if required:
+            raise TaskLaneStateError("task lane review rejection is missing")
+        return None
+    return validate_review_rejection(value, lane_id, candidate_head)
+
+
+def write_review_rejection(primary: Path, value: dict[str, object]) -> Path:
+    lane_id = str(value.get("lane_id", ""))
+    candidate_head = str(value.get("candidate_head", ""))
+    validated = validate_review_rejection(value, lane_id, candidate_head)
+    path = review_rejection_path(primary, lane_id, candidate_head, create=True)
     _atomic_json(path, validated)
     return path
 

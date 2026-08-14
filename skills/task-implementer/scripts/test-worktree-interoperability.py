@@ -18,6 +18,7 @@ from unittest import mock
 import prompt_workspace as pw
 import prompt_workspace_contract_delta as contract_delta
 import prompt_workspace_interop as task_interop
+import prompt_workspace_lanes as task_lanes
 import prompt_workspace_waves as waves
 from prompt_workspace_core import PromptWorkspaceError
 from prompt_workspace_execution import RESULT_SCHEMA, sha256_json
@@ -377,6 +378,34 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             ):
                 task_interop._call(workspace, [action])
             popen.assert_not_called()
+
+    def test_integration_review_rejection_is_forwarded_to_lane_owner(self) -> None:
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        with mock.patch.object(
+            task_lanes,
+            "workspace_lane_call",
+            return_value={"status": "correction-required"},
+        ) as lane_call:
+            result = task_lanes.integrate_lane(
+                workspace,
+                validated_head=None,
+                restart=False,
+                review_rejected_head="a" * 40,
+                review_findings_sha256="b" * 64,
+            )
+        self.assertEqual(result["status"], "correction-required")
+        lane_call.assert_called_once_with(
+            workspace,
+            [
+                "task-lane-integrate",
+                "--lane-id",
+                self.lane_id,
+                "--review-rejected-head",
+                "a" * 40,
+                "--review-findings-sha256",
+                "b" * 64,
+            ],
+        )
 
     def test_non_run_adapters_never_checkpoint_an_idle_dirty_lane(self) -> None:
         before = git("rev-parse", "HEAD", cwd=self.outer)

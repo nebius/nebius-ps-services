@@ -38,6 +38,8 @@ from task_lane_state import (
     LANE_KIND,
     LANE_SCHEMA,
     OBJECT_ID_RE,
+    REVIEW_REJECTION_KIND,
+    REVIEW_REJECTION_SCHEMA,
     TaskLaneStateError,
     all_checkpoints,
     all_lanes,
@@ -45,10 +47,12 @@ from task_lane_state import (
     load_checkpoint,
     load_generation,
     load_lane,
+    load_review_rejection,
     validate_lane,
     write_checkpoint,
     write_generation,
     write_lane,
+    write_review_rejection,
 )
 from worktree_state import (
     SCHEMA as MANIFEST_SCHEMA,
@@ -4045,6 +4049,58 @@ def _integration_path(primary: Path, name: str) -> Path:
     return state_directory(primary) / "integrations" / name
 
 
+def _task_lane_rejection_ref(lane_id: str, candidate_head: str) -> str:
+    return f"refs/codex/task-integration-rejections/{lane_id}/{candidate_head}"
+
+
+def _archive_task_lane_rejected_candidate(
+    primary: Path, *, lane_id: str, candidate_head: str
+) -> str:
+    archive_ref = _task_lane_rejection_ref(lane_id, candidate_head)
+    existing = _git(
+        primary, "rev-parse", "--verify", archive_ref, allowed=(0, 128)
+    )
+    if existing:
+        if existing != candidate_head:
+            raise WorktreeError("review rejection archive identity changed")
+        return archive_ref
+    result = _run(
+        [
+            "git",
+            "update-ref",
+            archive_ref,
+            candidate_head,
+            "0" * len(candidate_head),
+        ],
+        cwd=primary,
+        allowed=(0, 128),
+    )
+    if result.returncode != 0:
+        raise WorktreeError("could not archive the exact review-rejected candidate")
+    return archive_ref
+
+
+def _cleanup_task_lane_rejection_refs(primary: Path, lane_id: str) -> None:
+    prefix = f"refs/codex/task-integration-rejections/{lane_id}/"
+    lines = _git(
+        primary,
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        prefix,
+    ).splitlines()
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 2 or not fields[0].startswith(prefix):
+            raise WorktreeError("review rejection archive inventory is invalid")
+        result = _run(
+            ["git", "update-ref", "-d", fields[0], fields[1]],
+            cwd=primary,
+            allowed=(0, 128),
+        )
+        if result.returncode != 0:
+            raise WorktreeError("review rejection archive changed before cleanup")
+
+
 def _source_snapshot(primary: Path, manifest: Manifest) -> str:
     head = _source_identity_snapshot(primary, manifest)
     if status_paths(primary):
@@ -5104,6 +5160,7 @@ def _task_lane_rearm(primary: Path, lane: dict[str, object]) -> dict[str, Any]:
             raise WorktreeError(
                 "Task Implementer lane rearm checkpoint cannot be reconciled"
             )
+        _cleanup_task_lane_rejection_refs(primary, str(lane["lane_id"]))
         lane = {
             **lane,
             "state": "idle",
@@ -5161,6 +5218,7 @@ def _task_lane_rearm(primary: Path, lane: dict[str, object]) -> dict[str, Any]:
                 lease_token=None,
             ),
         )
+        _cleanup_task_lane_rejection_refs(primary, str(lane["lane_id"]))
         lane = {
             **lane,
             "state": "idle",
@@ -5259,9 +5317,172 @@ def _task_lane_finish_no_change(
     }
 
 
-def task_lane_integrate(
-    *, cwd: Path, lane_id: str, validated_head: str | None, restart: bool
+def _task_lane_reject_candidate_review(
+    primary: Path,
+    lane: dict[str, object],
+    manifest: Manifest,
+    managed: ManagedWorktree,
+    *,
+    candidate_head: str,
+    findings_sha256: str,
 ) -> dict[str, Any]:
+    """Archive one rejected candidate and reopen its generations for correction."""
+
+    lane_id = str(lane["lane_id"])
+    if OBJECT_ID_RE.fullmatch(candidate_head) is None:
+        raise WorktreeError("review-rejected candidate head is invalid")
+    if re.fullmatch(r"[0-9a-f]{64}", findings_sha256) is None:
+        raise WorktreeError("review findings digest is invalid")
+    receipt = load_review_rejection(
+        primary, lane_id, candidate_head, required=False
+    )
+    if receipt is not None and receipt["findings_sha256"] != findings_sha256:
+        raise WorktreeError("review findings changed for the retained candidate")
+    if lane["state"] == "pending" and lane["integration"] is None:
+        if receipt is None or receipt["phase"] not in {
+            "reservation-released",
+            "correction-ready",
+        }:
+            raise WorktreeError("review rejection recovery receipt is unavailable")
+        if receipt["phase"] != "correction-ready":
+            receipt = {**receipt, "phase": "correction-ready"}
+            write_review_rejection(primary, receipt)
+        return {
+            "action": "task-lane-integrate",
+            "status": "correction-required",
+            "lane_id": lane_id,
+            "name": lane["name"],
+            "source_branch": lane["source_branch"],
+            "source_head": receipt["source_head"],
+            "lane_head": receipt["child_head"],
+            "review_rejected_head": candidate_head,
+            "pending_generations": list(lane["pending_generations"]),
+            "next_action": (
+                "append a serial correction generation for the blocking review "
+                "findings, then repeat integration"
+            ),
+        }
+    journal = lane.get("integration")
+    if (
+        lane["state"] != "integrating"
+        or not isinstance(journal, dict)
+        or journal.get("phase") not in {"candidate-ready", "review-rejecting"}
+        or journal.get("candidate_head") != candidate_head
+    ):
+        raise WorktreeError(
+            "only the exact candidate-ready integration can reject review"
+        )
+    source_head = str(journal["source_head"])
+    child_head = str(journal["child_head"])
+    if (
+        _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
+        != source_head
+        or managed.head != child_head
+        or manifest.status != "active"
+    ):
+        raise WorktreeError("review rejection identity changed before correction")
+    first_parent, second_parent = _merge_parents(primary, candidate_head)
+    if first_parent != source_head or second_parent != child_head:
+        raise WorktreeError("review-rejected candidate merge proof is invalid")
+    archive_ref = _archive_task_lane_rejected_candidate(
+        primary, lane_id=lane_id, candidate_head=candidate_head
+    )
+    if receipt is None:
+        receipt = {
+            "schema": REVIEW_REJECTION_SCHEMA,
+            "kind": REVIEW_REJECTION_KIND,
+            "lane_id": lane_id,
+            "candidate_head": candidate_head,
+            "source_head": source_head,
+            "child_head": child_head,
+            "first_generation": journal["first_generation"],
+            "last_generation": journal["last_generation"],
+            "findings_sha256": findings_sha256,
+            "archive_ref": archive_ref,
+            "phase": "archived",
+        }
+        write_review_rejection(primary, receipt)
+    elif any(
+        receipt[key] != value
+        for key, value in {
+            "source_head": source_head,
+            "child_head": child_head,
+            "first_generation": journal["first_generation"],
+            "last_generation": journal["last_generation"],
+            "archive_ref": archive_ref,
+        }.items()
+    ):
+        raise WorktreeError("review rejection receipt identity changed")
+    if journal["phase"] != "review-rejecting":
+        lane = {
+            **lane,
+            "integration": {**journal, "phase": "review-rejecting"},
+        }
+        write_lane(primary, lane)
+    reservation = load_reservation(primary, str(lane["name"]))
+    if reservation is not None:
+        if (
+            reservation["state"] != "ready"
+            or reservation["integration_head"] != candidate_head
+            or reservation["source_head"] != source_head
+            or reservation["child_head"] != child_head
+        ):
+            raise WorktreeError("review-rejected candidate reservation changed")
+        _remove_integration_candidate(primary, reservation, abort_merge=False)
+        if receipt["phase"] == "archived":
+            receipt = {**receipt, "phase": "candidate-removed"}
+            write_review_rejection(primary, receipt)
+        try:
+            end_integration(
+                primary,
+                name=str(lane["name"]),
+                reservation_id=str(reservation["token"]),
+            )
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+    elif _orphan_candidate_blockers(primary, str(lane["name"])):
+        raise WorktreeError("review-rejected candidate cleanup is incomplete")
+    if receipt["phase"] != "reservation-released":
+        receipt = {**receipt, "phase": "reservation-released"}
+        write_review_rejection(primary, receipt)
+    lane = {**lane, "state": "pending", "integration": None}
+    write_lane(primary, lane)
+    receipt = {**receipt, "phase": "correction-ready"}
+    write_review_rejection(primary, receipt)
+    return {
+        "action": "task-lane-integrate",
+        "status": "correction-required",
+        "lane_id": lane_id,
+        "name": lane["name"],
+        "source_branch": lane["source_branch"],
+        "source_head": source_head,
+        "lane_head": child_head,
+        "review_rejected_head": candidate_head,
+        "pending_generations": list(lane["pending_generations"]),
+        "next_action": (
+            "append a serial correction generation for the blocking review "
+            "findings, then repeat integration"
+        ),
+    }
+
+
+def task_lane_integrate(
+    *,
+    cwd: Path,
+    lane_id: str,
+    validated_head: str | None,
+    restart: bool,
+    review_rejected_head: str | None = None,
+    review_findings_sha256: str | None = None,
+) -> dict[str, Any]:
+    if (review_rejected_head is None) != (review_findings_sha256 is None):
+        raise WorktreeError(
+            "review rejection requires both candidate head and findings digest"
+        )
+    if review_rejected_head is not None and (validated_head is not None or restart):
+        raise WorktreeError(
+            "review rejection cannot validate or restart the same candidate"
+        )
     primary, _ = discover_repository(cwd)
     try:
         lane = load_lane(primary, lane_id)
@@ -5287,6 +5508,7 @@ def task_lane_integrate(
                 )
             pending = list(lane["pending_generations"])
             if not pending:
+                _cleanup_task_lane_rejection_refs(primary, lane_id)
                 return {
                     "action": "task-lane-integrate",
                     "status": "already-integrated",
@@ -5316,13 +5538,6 @@ def task_lane_integrate(
                 )
             source_dirty = status_paths(primary)
             child_dirty = status_paths(managed.path)
-            if source_dirty:
-                raise WorktreeError(
-                    "source checkout must be completely clean before Task Implementer "
-                    "integration; run one fresh explicit $commit in the primary "
-                    "checkout, review and commit the complete repository diff, then "
-                    "repeat integrate. Dirty paths: " + ", ".join(source_dirty)
-                )
             if child_dirty:
                 raise WorktreeError(
                     "Task Implementer lane must be completely clean before integration: "
@@ -5330,6 +5545,23 @@ def task_lane_integrate(
                 )
             source_head = _source_identity_snapshot(primary, manifest)
             journal = lane["integration"]
+            if review_rejected_head is not None:
+                assert review_findings_sha256 is not None
+                return _task_lane_reject_candidate_review(
+                    primary,
+                    lane,
+                    manifest,
+                    managed,
+                    candidate_head=review_rejected_head,
+                    findings_sha256=review_findings_sha256,
+                )
+            if source_dirty:
+                raise WorktreeError(
+                    "source checkout must be completely clean before Task Implementer "
+                    "integration; run one fresh explicit $commit in the primary "
+                    "checkout, review and commit the complete repository diff, then "
+                    "repeat integrate. Dirty paths: " + ", ".join(source_dirty)
+                )
             if isinstance(journal, dict) and journal.get("phase") == "no-change":
                 if journal["source_head"] != source_head:
                     if not restart:
@@ -6066,6 +6298,8 @@ def _parser() -> argparse.ArgumentParser:
     task_lane_integrate_parser.add_argument("--lane-id", required=True)
     task_lane_integrate_parser.add_argument("--validated-head")
     task_lane_integrate_parser.add_argument("--restart", action="store_true")
+    task_lane_integrate_parser.add_argument("--review-rejected-head")
+    task_lane_integrate_parser.add_argument("--review-findings-sha256")
 
     task_lane_remove_parser = subparsers.add_parser(
         "task-lane-remove",
@@ -6280,6 +6514,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lane_id=arguments.lane_id,
                 validated_head=arguments.validated_head,
                 restart=arguments.restart,
+                review_rejected_head=arguments.review_rejected_head,
+                review_findings_sha256=arguments.review_findings_sha256,
             )
         elif arguments.action == "task-lane-remove":
             result = task_lane_remove(cwd=Path.cwd(), lane_id=arguments.lane_id)

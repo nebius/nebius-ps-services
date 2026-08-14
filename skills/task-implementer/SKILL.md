@@ -324,7 +324,9 @@ and private result record.
    may dispatch in capacity-sized batches, but batching never changes its wave.
 5. Reconcile queued steering only at a safe wave boundary. Contradictory
    steering preserves work and stops before promotion. Before preparation,
-   private `wave-replan` may replace the resource-free planned tail. After the
+   private `wave-replan` may replace the resource-free planned tail. Resume
+   compares that immutable tail with the live pending task contract and routes
+   any pre-resource drift through the replan before preparation. After the
    final promoted wave is cleaned, it may also append a newly discovered
    isolated correction tail before finalization. When combined review blocks a
    `promotion_pending` wave, the same action appends only the currently ready
@@ -374,6 +376,19 @@ and private result record.
 3. Run nonmutating combined validation, integration `code-review`, and the
    required changed-surface checks in the exact candidate worktree. Promote
    only that validated candidate with expected-old source-head compare-and-set.
+   If review returns `REQUEST CHANGES`, canonicalize the blocking findings,
+   bind their SHA-256 to the exact candidate, and invoke the private review-
+   rejection transition. That transition archives the candidate behind an
+   expected-old internal ref, removes only its clean temporary worktree and
+   branch, releases the integration reservation, leaves the source unchanged,
+   and returns the lane to `pending`. The same explicit `integrate` invocation
+   then appends a correction generation and repeats this workflow; do not make
+   the user manually repair private state or invoke another public action.
+   Because review rejection never advances or stages the source checkout, it
+   may preserve unrelated primary dirt; candidate creation and promotion still
+   require a completely clean source.
+   Correction tasks are serial whenever they touch one shared invariant or
+   their semantic independence is uncertain.
 4. Fast-forward the same persistent lane to the promoted merge head, mark the
    entire pending generation range integrated, release its repository claims,
    and rearm the lane for the next `run`.
@@ -396,6 +411,9 @@ Build deterministic earliest-fit waves in stable task order:
 - dependencies must be in earlier completed waves;
 - write claims must be pairwise disjoint;
 - conflict-domain keys must be pairwise disjoint;
+- file-path disjointness alone never proves semantic independence: tasks that
+  read, establish, recover, or validate one invariant must share a conflict
+  domain or an explicit dependency;
 - unknown or incomplete ownership forces a singleton wave;
 - external database, Kubernetes, Terraform, migration execution, and
   publication actions are singleton domains and still need explicit authority.
@@ -469,6 +487,19 @@ For each wave:
    and passes the embedded digest plus the exact returned `start_lease` unchanged.
    Use `start_context.scope_cwd` and `start_context.start_argv` verbatim; never
    transcribe or reconstruct visually similar private worktree paths.
+   When a separately spawned worker cannot retain the managed worktree across
+   the launcher process boundary, use the hidden atomic sequential-worker form
+   on `task-arm` or `task-rearm`. It starts one fresh ephemeral `codex exec`
+   child before the helper releases its resource lifetime, supplies only the
+   immutable start context, assignment, and incoming handoff, and waits for
+   that child. The fallback pins medium reasoning effort, and a recovery-only
+   child pins low effort, so one model turn remains comfortably inside the hard
+   heartbeat-staleness contract. Release
+   the completed resume transition lock before the child
+   starts so its first `task-start` can acquire the task scope normally. Never
+   recreate the worktree or transfer the task to the coordinator. A zero child
+   exit is accepted only when the assignment's exact immutable result file now
+   exists; start or recovery success alone is incomplete.
    `task-start` performs authoritative canonical digest and exact lease checks,
    so the worker never invents JSON serialization or reuses another launch. It
    reads the incoming handoff and performs deeper preflight only after that
@@ -494,7 +525,9 @@ For each wave:
    unsigned final JSON to its exact `draft_path`, then invoke its exact
    `publish_argv`; the helper computes the canonical digest and atomically
    publishes the immutable result, with `changed_paths` canonicalized as a
-   sorted unique set. Never hand-compute or patch `result_sha256`, and never
+   sorted unique set. The only result statuses are exact lower-case
+   `committed` for successful one-commit work and `REPLAN_REQUIRED` for a
+   terminal safe stop. Never hand-compute or patch `result_sha256`, and never
    replay publication merely because post-publication output rendering failed;
    inspect the immutable result first.
    A truthful `REPLAN_REQUIRED` result is terminal evidence, not a missing
@@ -502,8 +535,12 @@ For each wave:
    exact clean no-op (`commit == base_commit`, no changed paths, clean worker
    at the same base), a correction plan may retain the immutable task as
    `superseded`, clean only its exact resource, and append a replacement task.
-   A committed or dirty failed partial is never superseded by this path and
-   remains retained evidence that requires an ordinary correction dependency.
+   An exact tracked dirty `REPLAN_REQUIRED` result at the base may use the same
+   path only after Task archives its tree behind a compare-and-set internal ref,
+   proves the archive parent, exact tree bytes, and changed paths on replay,
+   restores only those tracked paths, and retains the ref through correction
+   promotion. Untracked, committed, mismatched, or unverifiable dirt remains
+   blocked. Delete the archive ref only during successful wave cleanup.
    It then
    verifies the incoming-handoff digest and claims; starts from a
    worker session never used by another task in the run; implements one task; validates; runs
@@ -545,7 +582,14 @@ For each wave:
    `recover_argv` verbatim; that transition transfers only declared dirty state
    or one direct-child commit. The coordinator must not invoke running-worker
    recovery on the worker's behalf because session ownership is bound to the
-   caller. Session hashes are append-only history: a
+   caller. If that recovery cwd exists only during the observing helper's
+   resource lifetime, use the hidden atomic recovery-worker form on
+   `run-resume`; it launches a fresh ephemeral child before returning and makes
+   the exact `recover_argv` its first transition. Session hashes are append-only history: a
+   Recovery of dirty paths outside immutable claims is reporting-only: return
+   `replan_required` with the exact violating names, no commit authorization,
+   and let the fresh worker publish terminal `REPLAN_REQUIRED` evidence without
+   another edit. Never silently discard or adopt those bytes.
    recovered-away or completed identity can never be reused.
    If a running-wave integration or worker directory, or a promotion-pending
    integration directory, is missing while its lease remains `present`, keep
@@ -555,7 +599,8 @@ For each wave:
    an exact locked registration with matching lease, branch, head,
    administrative HEAD, and clean index. Running integration is bound to the
    contract commit; promotion-pending integration is bound to the recorded
-   integrated head. Treat filesystem-only worker edits as lost and reported,
+   integrated head and requires every retained task to be `merged` or safely
+   `superseded`. Treat filesystem-only worker edits as lost and reported,
    never reconstructed. Staged state, symlink collisions, drift, or ambiguous
    registration stays blocked and retained.
 8. The coordinator independently verifies a clean branch, exactly one
@@ -568,8 +613,14 @@ For each wave:
    `WORKER_READ_ONLY_TIMEOUT`, `WORKER_SCOPE_VIOLATION`, or `WORKER_TIMEOUT`;
    confirm it stopped before recovery. Never wait silently or blind-retry a
    no-progress worker.
+   Resume must route a hard worker-guard outcome directly to confirmed
+   `task-recover` even when the last heartbeat is still fresh; a heartbeat
+   never overrides a read-only, scope, stall, or total-time stop condition.
    On the profile-specific `READ_ONLY_DEADLINE_NEAR`, require an immediate
    claimed-file edit or blocker instead of waiting for the hard cutoff.
+   Watch output includes the bounded changed-path set and exact paths outside
+   claims; use those names to decide replan versus retained unrelated mutation,
+   never copy file contents through the coordinator.
 9. Invoke private `wave-integrate`. Merge task branches into the integration
    branch in stable task-ID order with `git merge --no-ff --no-edit`. Never
    cherry-pick, rebase, squash, push, or merge workers directly into the
