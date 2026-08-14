@@ -1112,6 +1112,12 @@ def apply(
     management_key_path = Path(raw_management_key).expanduser() if raw_management_key else None
 
     ssh_policy: SSHTrustPolicy | None = None
+    former_vm_ha_members: dict[str, str] = {}
+    discovery_manager: VMManager | None = None
+    # Read-only cloud discovery needs the operator credential even when a later
+    # --sa flow will provision and switch to a service-account token. Token
+    # acquisition itself is non-mutating; SA creation remains after teardown.
+    discovery_auth_token = _ensure_authentication(required=False, show_progress=False)
     if plan.vm_ha is not None:
         blockers = _vm_ha_activation_blockers()
         if blockers:
@@ -1120,12 +1126,12 @@ def apply(
                 print(f"[yellow]  - {blocker}[/yellow]")
             raise typer.Exit(code=1)
         try:
-            planned_instances = tuple(plan.iter_instance_configs())
             require_explicit_known_hosts_file()
+            planned_instances = tuple(plan.iter_instance_configs())
             discovery_manager = VMManager(
                 project_id=proj_id,
                 zone=zone or plan.gateway_group.region,
-                auth_token=None,
+                auth_token=discovery_auth_token,
                 tenant_id=tenant_id,
                 region_id=region_id,
                 management_key_path=management_key_path,
@@ -1157,9 +1163,126 @@ def apply(
             print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
+    else:
+        try:
+            discovery_manager = VMManager(
+                project_id=proj_id,
+                zone=zone or plan.gateway_group.region,
+                auth_token=discovery_auth_token,
+                tenant_id=tenant_id,
+                region_id=region_id,
+                management_key_path=management_key_path,
+            )
+            former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                plan.gateway_group
+            )
+            if former_vm_ha_members:
+                require_explicit_known_hosts_file()
+                ssh_policy = require_vm_ha_ssh_policy(
+                    tuple(former_vm_ha_members.items()),
+                    enrollment_hosts=set(),
+                )
+                discovery_manager.verify_vm_ha_existing_identities(
+                    former_vm_ha_members,
+                    policy=ssh_policy,
+                    username=(
+                        vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                    ),
+                )
+        except (RuntimeError, ValueError) as error:
+            print("[red]Former VM-HA discovery failed before ordinary provisioning:[/red]")
+            print(f"[yellow]  - {error}[/yellow]")
+            raise typer.Exit(code=1) from error
+
+    # Analyze the desired infrastructure and obtain any destructive-change approval while
+    # every current HA member is still untouched. The discovery manager performs read-only
+    # calls only and deliberately has no mutation-capable service-account token.
+    assert discovery_manager is not None
+    print("[bold]Analyzing configuration changes...[/bold]")
+    changes = discovery_manager.check_changes(plan.gateway_group)
+
+    has_destructive = False
+    has_no_change = True
+    for inst_name, diff in changes:
+        if diff.requires_recreation():
+            has_destructive = True
+            has_no_change = False
+            print(f"[red]{inst_name}:[/red]")
+            print(diff.format_warning())
+        elif diff.has_changes():
+            has_no_change = False
+            print(f"[yellow]{inst_name}:[/yellow]")
+            print(diff.format_warning())
+        else:
+            print(f"[green]{inst_name}: No infrastructure changes[/green]")
+
+    if has_destructive and not recreate_gw:
+        print("\n[red]⚠️  ERROR: Destructive changes require VM recreation[/red]")
+        print("[yellow]To proceed with VM recreation, run:[/yellow]")
+        print("  nebius-vpngw apply --recreate-gw")
+        raise typer.Exit(code=1)
+
+    if has_no_change and recreate_gw:
+        print("\n[yellow]⚠️  WARNING: No configuration changes detected[/yellow]")
+        print(
+            "[yellow]VM recreation will use identical specifications (unnecessary downtime).[/yellow]"
+        )
+        print("\nDo you want to proceed? [y/N]: ", end="")
+        import sys
+
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
+        print("[yellow]Proceeding with VM recreation (user confirmed)...[/yellow]")
+    elif has_destructive and recreate_gw:
+        print("\n[yellow]⚠️  This will:[/yellow]")
+        print("[yellow]  • Delete existing VM(s) and boot disk(s)[/yellow]")
+        print("[yellow]  • Recreate VM(s) with new specifications[/yellow]")
+        print("[yellow]  • Cause downtime for all VPN tunnels[/yellow]")
+        print("[yellow]  • Preserve and reassign public IP allocations[/yellow]")
+        print("")
+        import sys
+
+        sys.stdout.write("\033[1mProceed with VM recreation? [y/N]:\033[0m ")
+        sys.stdout.flush()
+        response = input().strip().lower()
+        if response not in ("y", "yes"):
+            print("[green]Aborted. No changes made.[/green]")
+            raise typer.Exit(code=0)
+        print("[yellow]Proceeding with destructive changes...[/yellow]")
+    elif recreate_gw:
+        print(
+            "\n[yellow]Proceeding with VM recreation for safe changes (--recreate-gw flag provided)...[/yellow]"
+        )
+
+    if former_vm_ha_members:
+        assert discovery_manager is not None
+        try:
+            discovery_manager.verify_former_vm_ha_member_snapshot(
+                plan.gateway_group, former_vm_ha_members
+            )
+            planned_names = {instance.hostname for instance in plan.iter_instance_configs()}
+            transition_ssh = SSHPush(ssh_policy=ssh_policy)
+            for name, target in sorted(former_vm_ha_members.items()):
+                transition_ssh.deactivate_vm_ha(
+                    target,
+                    local_cfg,
+                    retire_member=name not in planned_names,
+                )
+            for name, target in sorted(former_vm_ha_members.items()):
+                transition_ssh.verify_vm_ha_deactivated(
+                    target,
+                    local_cfg,
+                    retire_member=name not in planned_names,
+                )
+        except (RuntimeError, ValueError) as error:
+            print("[red]Former VM-HA teardown failed before ordinary provisioning:[/red]")
+            print(f"[yellow]  - {error}[/yellow]")
+            raise typer.Exit(code=1) from error
 
     # Optional Service Account provisioning/auth
-    auth_token = None
+    auth_token = discovery_auth_token
     if sa:
         print(f"[bold]Ensuring Service Account '{sa}' and obtaining token...[/bold]")
         try:
@@ -1203,7 +1326,6 @@ def apply(
             print(f"[yellow]Service Account setup skipped due to error:[/yellow] {e}")
     else:
         # No SA requested; if NEBIUS_IAM_TOKEN is missing, try to read it from CLI config
-        _ensure_authentication(required=False, show_progress=False)
         if os.environ.get("NEBIUS_IAM_TOKEN"):
             print("[green]Using IAM token from Nebius CLI (auto-fetched).[/green]")
         else:
@@ -1221,68 +1343,6 @@ def apply(
         management_key_path=management_key_path,
     )
     ssh = SSHPush(ssh_policy=ssh_policy)
-
-    # Check for destructive changes BEFORE making any changes
-    print("[bold]Analyzing configuration changes...[/bold]")
-    changes = vm_mgr.check_changes(plan.gateway_group)
-
-    has_destructive = False
-    has_no_change = True
-
-    for inst_name, diff in changes:
-        if diff.requires_recreation():
-            has_destructive = True
-            has_no_change = False
-            print(f"[red]{inst_name}:[/red]")
-            print(diff.format_warning())
-        elif diff.has_changes():
-            has_no_change = False
-            print(f"[yellow]{inst_name}:[/yellow]")
-            print(diff.format_warning())
-        else:
-            print(f"[green]{inst_name}: No infrastructure changes[/green]")
-
-    # If destructive changes detected and --recreate-gw not provided, abort
-    if has_destructive and not recreate_gw:
-        print("\n[red]⚠️  ERROR: Destructive changes require VM recreation[/red]")
-        print("[yellow]To proceed with VM recreation, run:[/yellow]")
-        print("  nebius-vpngw apply --recreate-gw")
-        raise typer.Exit(code=1)
-
-    # Warn if --recreate-gw provided but no changes detected (unnecessary recreation)
-    if has_no_change and recreate_gw:
-        print("\n[yellow]⚠️  WARNING: No configuration changes detected[/yellow]")
-        print(
-            "[yellow]VM recreation will use identical specifications (unnecessary downtime).[/yellow]"
-        )
-        print("\nDo you want to proceed? [y/N]: ", end="")
-        import sys
-
-        response = input().strip().lower()
-        if response not in ("y", "yes"):
-            print("[green]Aborted. No changes made.[/green]")
-            raise typer.Exit(code=0)
-        print("[yellow]Proceeding with VM recreation (user confirmed)...[/yellow]")
-    elif has_destructive and recreate_gw:
-        print("\n[yellow]⚠️  This will:[/yellow]")
-        print("[yellow]  • Delete existing VM(s) and boot disk(s)[/yellow]")
-        print("[yellow]  • Recreate VM(s) with new specifications[/yellow]")
-        print("[yellow]  • Cause downtime for all VPN tunnels[/yellow]")
-        print("[yellow]  • Preserve and reassign public IP allocations[/yellow]")
-        print("")
-        import sys
-
-        sys.stdout.write("\033[1mProceed with VM recreation? [y/N]:\033[0m ")
-        sys.stdout.flush()
-        response = input().strip().lower()
-        if response not in ("y", "yes"):
-            print("[green]Aborted. No changes made.[/green]")
-            raise typer.Exit(code=0)
-        print("[yellow]Proceeding with destructive changes...[/yellow]")
-    elif recreate_gw:
-        print(
-            "\n[yellow]Proceeding with VM recreation for safe changes (--recreate-gw flag provided)...[/yellow]"
-        )
 
     show_add_routes_hint = _should_prompt_add_routes_after_apply(
         plan,
@@ -1398,7 +1458,9 @@ def apply(
                     f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
                 )
                 continue
-            stale_vm_ha_removed = ssh.deactivate_vm_ha(target, local_cfg)
+            stale_vm_ha_removed = bool(former_vm_ha_members) or ssh.deactivate_vm_ha(
+                target, local_cfg
+            )
             ssh.push_config_and_reload(
                 target,
                 inst_cfg,

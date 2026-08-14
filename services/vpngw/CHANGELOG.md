@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed HA-to-ordinary apply ordering so both former HA members are discovered
+  independently of the new instance count, pinned and identity-rechecked,
+  deactivated and verified (including retired-node services), and only then
+  allowed to enter ordinary provisioning.
 - Fixed the VM-HA clean-node bootstrap cycle by moving both initial owners
   through a non-forwarding passive materialization state, verifying that
   current-boot postcondition during passive-first activation, and reserving
