@@ -23,7 +23,7 @@ from ..schema import (
     VMHACredentialSourceReferences,
     VMHARuntimeBinding,
 )
-from .ssh_policy import configure_paramiko_host_verification
+from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 
 
 def _host_identity_failure(
@@ -63,11 +63,12 @@ class SSHPush:
       - ssh_private_key_path (if omitted, relies on SSH agent/known defaults)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, ssh_policy: SSHTrustPolicy | None = None) -> None:
         # Lazy import to avoid hard dependency when running dry-run
         self._paramiko = None
         self._wheel_path: Path | None = None
         self._temp_wheel_dir: Path | None = None
+        self._ssh_policy = ssh_policy
 
     def _ensure_paramiko(self):
         if self._paramiko is None:
@@ -351,7 +352,7 @@ class SSHPush:
         client = paramiko.SSHClient()
         upload_directory: str | None = None
         try:
-            configure_paramiko_host_verification(client, paramiko)
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -459,7 +460,7 @@ systemctl daemon-reload
 printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
 '"""
         try:
-            configure_paramiko_host_verification(client, paramiko)
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -710,7 +711,7 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
         try:
-            configure_paramiko_host_verification(client, paramiko)
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
             client.connect(
                 hostname=ssh_target,
                 username=username,

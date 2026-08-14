@@ -6,7 +6,7 @@ import ipaddress
 import textwrap
 import time
 import typing as t
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..config_loader import GatewayGroupSpec
@@ -17,7 +17,7 @@ from ..schema import (
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
-from .ssh_policy import build_openssh_base_command
+from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
 from .vm_diff import VMDiffAnalyzer, VMSpec
 
 if t.TYPE_CHECKING:
@@ -89,12 +89,14 @@ class VMManager:
         auth_token: str | None = None,
         tenant_id: str | None = None,
         region_id: str | None = None,
+        ssh_policy: SSHTrustPolicy | None = None,
     ) -> None:
         self.project_id = project_id
         self.zone = zone
         self.auth_token = auth_token
         self.tenant_id = tenant_id
         self.region_id = region_id
+        self._ssh_policy = ssh_policy
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
@@ -875,7 +877,7 @@ class VMManager:
 
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
-        ssh_base = build_openssh_base_command(connect_timeout=5)
+        ssh_base = build_openssh_base_command(connect_timeout=5, policy=self._ssh_policy)
 
         # Test SSH connectivity
         try:
@@ -888,13 +890,19 @@ class VMManager:
                 capture_output=True,
                 timeout=10,
             )
-            if ssh_test.returncode != 0:
-                result["message"] = "SSH not ready yet"
-                return result
-            result["reachable"] = True
         except Exception as e:
             result["message"] = f"SSH connection failed: {e}"
             return result
+        if ssh_test.returncode != 0:
+            detail = ssh_test.stderr.decode(errors="replace").lower()
+            if (
+                "host key verification failed" in detail
+                or "remote host identification has changed" in detail
+            ):
+                raise RuntimeError(f"SSH host identity verification failed for {public_ip}")
+            result["message"] = "SSH not ready yet"
+            return result
+        result["reachable"] = True
 
         # Check cloud-init status
         try:
@@ -2546,6 +2554,22 @@ class VMManager:
             raise RuntimeError(
                 f"[VMManager] Internal error: provisioning config missing for {inst_name}."
             )
+
+        if spec.vm_ha is not None:
+            if self._ssh_policy is None:
+                raise RuntimeError("VM-HA provisioning requires a validated immutable SSH policy")
+            identity = self._ssh_policy.identity_for(inst_name)
+            cloud_init = provisioning.cloud_init.replace(
+                "write_files:\n",
+                "write_files:\n" + identity.cloud_init_entries(),
+                1,
+            ).replace(
+                "            Port 22\n",
+                "            Port 22\n"
+                "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
+                1,
+            )
+            provisioning = replace(provisioning, cloud_init=cloud_init)
 
         boot_disk_name, boot_disk_id = self._ensure_boot_disk(
             client,
