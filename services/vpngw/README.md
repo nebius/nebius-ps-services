@@ -158,6 +158,15 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 - **Required:** Ensure `.gitignore` includes your config file patterns
 - **Best practice:** Use environment variables for secrets with `${VAR}` syntax
 
+VM-HA apply also requires an operator-enrolled SSH identity before any cloud
+resource is created or changed. Set `VPNGW_SSH_KNOWN_HOSTS_FILE` to an absolute,
+readable, non-empty OpenSSH known-hosts file containing the pinned identities of
+both members. Trust-on-first-use and disabled host verification are not
+supported. During clean bootstrap, each member may render its deterministic
+local strongSwan and FRR files behind the cold-start guard, but it cannot enable
+forwarding, tunnels, firewall changes, XFRM routes, or cloud effects until the
+controller proves current-boot authority.
+
 ## Features
 
 - **IPsec:** IKEv2 (default) + IKEv1 fallback, PSK auth, modern crypto (AES-256, SHA-256/384/512)

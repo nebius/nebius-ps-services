@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname, urlopen
 
@@ -23,6 +24,21 @@ from ..schema import (
     VMHARuntimeBinding,
 )
 from .ssh_policy import configure_paramiko_host_verification
+
+
+def _host_identity_failure(
+    error: Exception, paramiko: Any, ssh_target: str
+) -> RuntimeError | None:
+    bad_host_key = getattr(paramiko, "BadHostKeyException", ())
+    if isinstance(error, bad_host_key):
+        return RuntimeError(f"SSH host identity verification failed for {ssh_target}")
+    ssh_exception = getattr(paramiko, "SSHException", ())
+    message = str(error).lower()
+    if isinstance(error, ssh_exception) and (
+        "known_hosts" in message or "host key" in message or "known host" in message
+    ):
+        return RuntimeError(f"SSH host identity verification failed for {ssh_target}")
+    return None
 
 
 @dataclass(frozen=True)
@@ -383,6 +399,11 @@ class SSHPush:
             if return_code != 0 or observed != receipt.staged_file_sha256:
                 raise RuntimeError(f"VM-HA stage verification failed for {receipt.node_id}")
             return receipt
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
         finally:
             if upload_directory is not None:
                 try:
@@ -453,6 +474,11 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
                 detail = stderr.read().decode().strip()
                 raise RuntimeError(f"VM-HA deactivation failed: {detail or return_code}")
             return "VM_HA_DEACTIVATED=1" in stdout.read().decode().splitlines()
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
         finally:
             client.close()
 
@@ -696,6 +722,10 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
         except Exception as e:
             error_msg = str(e).lower()
             print(f"[SSHPush] SSH connect failed to {ssh_target}: {e}")
+
+            identity_failure = _host_identity_failure(e, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from e
 
             # Provide helpful guidance for common network issues
             if "timed out" in error_msg or "timeout" in error_msg:

@@ -94,7 +94,7 @@ class FRRRenderer:
         )
         return
 
-    def render_and_apply(self, cfg: dict[str, Any]) -> None:
+    def render_and_apply(self, cfg: dict[str, Any], *, activate: bool = True) -> None:
         """Render FRR bgpd.conf for BGP tunnels and prefix advertisement.
 
         When routing_mode is bgp, configures neighbors for each active tunnel with APIPA link IPs.
@@ -108,7 +108,7 @@ class FRRRenderer:
         bfd_rx = int(bfd_cfg.get("receive_interval_ms", 300))
         bfd_multiplier = int(bfd_cfg.get("detect_multiplier", 3))
 
-        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled)
+        daemons_changed = self._ensure_bgpd_enabled(enable_bfd=bfd_enabled) if activate else False
         BGPD_CONF.parent.mkdir(parents=True, exist_ok=True)
 
         gateway = cfg.get("gateway", {})
@@ -117,7 +117,7 @@ class FRRRenderer:
         gateway_local_prefixes: list[str] = gateway.get("local_prefixes", [])
 
         # Ensure kernel routes exist for local_prefixes so BGP can advertise them
-        if gateway_local_prefixes:
+        if activate and gateway_local_prefixes:
             self.ensure_local_prefix_routes(cfg)
 
         hold = d_bgp.get("hold_time_seconds", 60)
@@ -392,7 +392,7 @@ class FRRRenderer:
                     continue
                 tbgp = tun.get("bgp", {}) or {}
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
-                if remote_ip:
+                if remote_ip and activate:
                     lines.append(f"  neighbor {remote_ip} activate")
 
         lines.append(" exit-address-family")
@@ -401,6 +401,8 @@ class FRRRenderer:
         # FRR 8+ uses integrated config in frr.conf
         FRR_CONF.write_text(rendered, encoding="utf-8")
         print(f"[FRR] Wrote bgp config with {len(advertised_prefixes)} advertised prefix(es)")
+        if not activate:
+            return
         # Reload bgpd to apply config (soft reload if only bgp changed; restart if daemons changed)
         cmd = ["systemctl", "restart" if daemons_changed else "reload", "frr"]
         try:

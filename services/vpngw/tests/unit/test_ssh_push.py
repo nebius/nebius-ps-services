@@ -517,6 +517,38 @@ def test_vm_ha_stage_rejects_missing_explicit_host_pin_before_remote_io(
     assert client.closed
 
 
+def test_vm_ha_stage_classifies_missing_pinned_host_identity(tmp_path, monkeypatch) -> None:
+    manifest, binding, sources = _credential_stage_fixture(tmp_path)
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("gateway ssh-ed25519 AAAAfixture\n", encoding="utf-8")
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(known_hosts))
+
+    class RejectingStageClient(_StageClient):
+        def connect(self, **kwargs) -> None:
+            raise _HostIdentityRejected("Server not found in known_hosts")
+
+    client = RejectingStageClient()
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(
+        SSHClient=lambda: client,
+        RejectPolicy=lambda: object(),
+        SSHException=_HostIdentityRejected,
+        BadHostKeyException=(),
+    )
+
+    with pytest.raises(RuntimeError, match="SSH host identity verification failed"):
+        push.stage_vm_ha_config(
+            "203.0.113.10",
+            manifest,
+            {},
+            runtime_binding=binding,
+            credential_sources=sources,
+        )
+
+    assert client.commands == []
+    assert client.closed
+
+
 @pytest.mark.parametrize("fail_command_index", range(0, 30))
 def test_vm_ha_stage_aborts_on_every_remote_credential_step(
     tmp_path,
@@ -621,6 +653,37 @@ class _ConnectFailClient:
 
     def close(self) -> None:
         return None
+
+
+class _HostIdentityRejected(Exception):
+    pass
+
+
+class _HostIdentityRejectingClient(_ConnectFailClient):
+    def connect(self, **kwargs) -> None:
+        raise _HostIdentityRejected("pinned host key does not match")
+
+
+def test_vm_ha_activation_classifies_host_identity_rejection(monkeypatch) -> None:
+    manifest, binding = _vm_ha_manifest_and_binding()
+    rendered = SSHPush._render_vm_ha_config(manifest, binding)
+    receipt = SSHPush._vm_ha_receipt(manifest, rendered)
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(
+        SSHClient=lambda: _HostIdentityRejectingClient(),
+        RejectPolicy=lambda: object(),
+        BadHostKeyException=_HostIdentityRejected,
+    )
+    monkeypatch.setattr("nebius_vpngw.agent.main.vm_ha_runtime_blockers", lambda: ())
+
+    with pytest.raises(RuntimeError, match="SSH host identity verification failed"):
+        push.push_config_and_reload(
+            "203.0.113.10",
+            manifest,
+            {"gateway_group": {"vm_spec": {}}},
+            staged_receipt=receipt,
+            runtime_binding=binding,
+        )
 
 
 def test_vm_ha_activation_fails_closed_on_ssh_connect(monkeypatch) -> None:

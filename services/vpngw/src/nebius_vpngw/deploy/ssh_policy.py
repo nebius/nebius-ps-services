@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import stat
 from collections.abc import Mapping
@@ -27,6 +28,26 @@ def explicit_known_hosts_file(environment: Mapping[str, str] | None = None) -> P
             stream.read(1)
     except (OSError, ValueError):
         raise ValueError(f"{KNOWN_HOSTS_ENV} must name a non-empty readable regular file") from None
+    return path
+
+
+def require_explicit_known_hosts_file(
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Require a usable operator-pinned trust store for a mutating HA workflow."""
+
+    path = explicit_known_hosts_file(environment)
+    if path is None:
+        raise ValueError(
+            f"{KNOWN_HOSTS_ENV} is required for VM-HA apply and must name a pinned known-hosts file"
+        )
+    try:
+        paramiko = importlib.import_module("paramiko")
+        keys = paramiko.HostKeys(filename=str(path))
+    except Exception as error:
+        raise ValueError(f"{KNOWN_HOSTS_ENV} does not contain usable SSH host keys") from error
+    if not keys:
+        raise ValueError(f"{KNOWN_HOSTS_ENV} does not contain usable SSH host keys")
     return path
 
 
