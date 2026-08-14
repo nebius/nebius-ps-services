@@ -12,6 +12,7 @@ from rich import print
 
 from ..config_loader import ResolvedDeploymentPlan
 from ..schema import VMHARouteTarget
+from .ssh_policy import build_openssh_base_command
 from .vm_ha_routes import (
     ManagedRouteOwnership,
     RouteApplyResult,
@@ -627,16 +628,11 @@ class RouteManager:
         vm_spec = gateway_group.get("vm_spec", {}) or {}
         ssh_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
 
-        cmd = [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            f"ConnectTimeout={connect_timeout}",
-        ]
-        if ssh_key:
-            cmd.extend(["-i", str(Path(str(ssh_key)).expanduser())])
-        return cmd
+        key_path = Path(str(ssh_key)).expanduser() if ssh_key else None
+        return build_openssh_base_command(
+            key_path=key_path,
+            connect_timeout=connect_timeout,
+        )
 
     @staticmethod
     def _ssh_target(local_cfg: dict, external_ip: str) -> str:

@@ -406,8 +406,6 @@ class PeerReplayGuard:
 
         if heartbeat.boot_id in current.retired_boot_ids:
             raise StalePeerStateError("heartbeat uses a retired boot identity")
-        if heartbeat.sequence != 0:
-            raise StalePeerStateError("a new boot identity must begin at sequence zero")
 
         retired = (*current.retired_boot_ids, current.current_boot_id)
         self._state = ReplayState(heartbeat.boot_id, heartbeat.sequence, retired)

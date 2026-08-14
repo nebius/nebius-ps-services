@@ -1147,7 +1147,7 @@ class BoundRouteRuntime:
         if pending is not None:
             pending_mutation, pending_context = pending
             if not (
-                pending_context == context
+                pending_context.has_same_authority(context)
                 and pending_mutation.cluster_id == self.binding.cluster_id
                 and pending_mutation.allocation_id == self.binding.shared_allocation_id
                 and pending_mutation.route_target in self.binding.route_targets

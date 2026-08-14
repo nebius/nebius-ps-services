@@ -389,7 +389,16 @@ def test_build_vm_ha_runtime_binding_rereads_exact_active_owner() -> None:
         suffix = "a" if name.endswith("-0") else "b"
         return SimpleNamespace(
             id=f"compute-{suffix}",
-            spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+            spec=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        name="eth0",
+                        ip_address=SimpleNamespace(
+                            allocation_id="shared-private" if suffix == "a" else ""
+                        ),
+                    )
+                ]
+            ),
             status=SimpleNamespace(
                 network_interfaces=[
                     SimpleNamespace(
@@ -433,7 +442,16 @@ def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
         suffix = "a" if name.endswith("-0") else "b"
         return SimpleNamespace(
             id=f"compute-{suffix}",
-            spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
+            spec=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        name="eth0",
+                        ip_address=SimpleNamespace(
+                            allocation_id="shared-private" if suffix == "a" else ""
+                        ),
+                    )
+                ]
+            ),
             status=SimpleNamespace(
                 network_interfaces=[
                     SimpleNamespace(ip_address=SimpleNamespace(address="10.0.0.10/32"))
@@ -447,6 +465,50 @@ def test_build_vm_ha_runtime_binding_rejects_non_active_owner() -> None:
             vm_mgr, "_get_ha_instance_by_name", side_effect=lambda _, name: instance(name)
         ),
         pytest.raises(RuntimeError, match="not exact on configured active"),
+    ):
+        vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
+
+
+def test_build_vm_ha_runtime_binding_rejects_conflicting_passive_compute_owner() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    vm_mgr._vm_ha_shared_allocation_id = "shared-private"
+    vm_mgr._vm_ha_route_targets = _route_targets()
+    allocation = SimpleNamespace(
+        id="shared-private",
+        status=SimpleNamespace(
+            state="ASSIGNED",
+            assignment=SimpleNamespace(
+                network_interface=SimpleNamespace(instance_id="compute-a", name="eth0"),
+                load_balancer=None,
+            ),
+        ),
+    )
+
+    def instance(name: str) -> SimpleNamespace:
+        suffix = "a" if name.endswith("-0") else "b"
+        return SimpleNamespace(
+            id=f"compute-{suffix}",
+            spec=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        name="eth0",
+                        ip_address=SimpleNamespace(allocation_id="shared-private"),
+                    )
+                ]
+            ),
+            status=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(ip_address=SimpleNamespace(address="10.0.0.10/32"))
+                ]
+            ),
+        )
+
+    with (
+        patch.object(vm_mgr, "get_ha_allocation", return_value=allocation),
+        patch.object(
+            vm_mgr, "_get_ha_instance_by_name", side_effect=lambda _, name: instance(name)
+        ),
+        pytest.raises(RuntimeError, match="passive Compute NIC conflicts"),
     ):
         vm_mgr._build_vm_ha_runtime_binding(object(), _ha_spec())
 

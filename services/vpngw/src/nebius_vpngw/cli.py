@@ -24,6 +24,7 @@ from .config_loader import (
 )
 from .config_template import DEFAULT_CONFIG_TEMPLATE
 from .deploy.route_manager import RouteManager
+from .deploy.ssh_policy import build_openssh_base_command
 from .deploy.ssh_push import SSHPush
 from .deploy.vm_manager import VMManager
 
@@ -95,11 +96,6 @@ def _is_windows() -> bool:
     return os.name == "nt" or platform.system().lower() == "windows"
 
 
-def _ssh_null_device() -> str:
-    # os.devnull is "nul" on Windows and "/dev/null" on POSIX.
-    return os.devnull
-
-
 def _ensure_ssh_available() -> None:
     if shutil.which("ssh"):
         return
@@ -120,22 +116,7 @@ def _ensure_ssh_available() -> None:
 
 def _build_ssh_base_cmd(key_path: Path | None) -> list[str]:
     _ensure_ssh_available()
-    cmd = ["ssh"]
-    if key_path:
-        cmd.extend(["-i", str(key_path)])
-    cmd.extend(
-        [
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            f"UserKnownHostsFile={_ssh_null_device()}",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "LogLevel=ERROR",
-        ]
-    )
-    return cmd
+    return build_openssh_base_command(key_path=key_path)
 
 
 def _normalize_role_value(value: t.Any) -> str:
@@ -2248,12 +2229,8 @@ def status(
             try:
                 # Try JSON output first
                 bgp_out = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=10",
+                    _build_ssh_base_cmd(None)
+                    + [
                         f"ubuntu@{target}",
                         "sudo vtysh -c 'show bgp ipv4 unicast summary json'",
                     ],
@@ -2301,12 +2278,8 @@ def status(
                 # If JSON parsing didn't work (or no uptime), fall back to text parsing
                 if not bgp_states or not bgp_uptime:
                     bgp_out = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=10",
+                        _build_ssh_base_cmd(None)
+                        + [
                             f"ubuntu@{target}",
                             "sudo vtysh -c 'show bgp summary'",
                         ],
@@ -2367,12 +2340,8 @@ def status(
 
             try:
                 route_out = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=10",
+                    _build_ssh_base_cmd(None)
+                    + [
                         f"ubuntu@{target}",
                         "sudo vtysh -c 'show bgp ipv4 unicast json'",
                     ],
@@ -2405,12 +2374,8 @@ def status(
             for peer_ip in sorted(missing_peers):
                 try:
                     neigh_out = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=10",
+                        _build_ssh_base_cmd(None)
+                        + [
                             f"ubuntu@{target}",
                             f"sudo vtysh -c 'show bgp neighbors {peer_ip}'",
                         ],
@@ -2438,12 +2403,8 @@ def status(
         # Run swanctl status command (preferred for VICI-based configs)
         try:
             result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=10",
+                _build_ssh_base_cmd(None)
+                + [
                     f"ubuntu@{target}",
                     "sudo swanctl --list-sas",
                 ],
@@ -2595,12 +2556,8 @@ def status(
 
             # Fall back to ipsec statusall if swanctl is unavailable
             result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=10",
+                _build_ssh_base_cmd(None)
+                + [
                     f"ubuntu@{target}",
                     "sudo ipsec statusall",
                 ],
@@ -2852,12 +2809,8 @@ def status(
                 # Special handling for strongSwan - check if charon daemon is running
                 if service_name == "strongswan":
                     result = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=10",
+                        _build_ssh_base_cmd(None)
+                        + [
                             f"ubuntu@{target}",
                             "pgrep -x charon >/dev/null && echo active || echo inactive",
                         ],
@@ -2868,12 +2821,8 @@ def status(
                     )
                 else:
                     result = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=10",
+                        _build_ssh_base_cmd(None)
+                        + [
                             f"ubuntu@{target}",
                             f"systemctl is-active {service_name}",
                         ],
@@ -2895,12 +2844,8 @@ def status(
                         if service_name == "strongswan":
                             detail_cmd = "systemctl status strongswan-starter --no-pager -n 20 || systemctl status strongswan --no-pager -n 20"
                         detail = subprocess.run(
-                            [
-                                "ssh",
-                                "-o",
-                                "StrictHostKeyChecking=no",
-                                "-o",
-                                "ConnectTimeout=10",
+                            _build_ssh_base_cmd(None)
+                            + [
                                 f"ubuntu@{target}",
                                 detail_cmd,
                             ],
@@ -2982,12 +2927,8 @@ print(json.dumps(health))
 " """
 
             result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=10",
+                _build_ssh_base_cmd(None)
+                + [
                     f"ubuntu@{target}",
                     check_cmd,
                 ],

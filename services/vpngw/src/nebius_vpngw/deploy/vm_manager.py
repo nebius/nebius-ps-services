@@ -17,6 +17,7 @@ from ..schema import (
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
+from .ssh_policy import build_openssh_base_command
 from .vm_diff import VMDiffAnalyzer, VMSpec
 
 if t.TYPE_CHECKING:
@@ -249,6 +250,8 @@ class VMManager:
             raise RuntimeError("VM-HA shared allocation changed identity during final re-read")
         from .vm_ha_cloud import AllocationOwner, allocation_observation
 
+        allocation_owner = allocation_observation(allocation_id, allocation).owner
+
         nodes: list[VMHARuntimeNodeBinding] = []
         for member in vm_ha.members:
             instance_name = f"{spec.name}-{member.instance_index}"
@@ -262,6 +265,17 @@ class VMManager:
             if len(interfaces) != 1 or not getattr(interfaces[0], "name", None):
                 raise RuntimeError(f"VM-HA {instance_name} must have one authoritative NIC")
             interface_name = str(interfaces[0].name)
+            compute_allocation_id = str(
+                getattr(getattr(interfaces[0], "ip_address", None), "allocation_id", None) or ""
+            )
+            if member.role.value == "active" and compute_allocation_id != allocation_id:
+                raise RuntimeError(
+                    "VM-HA configured active Compute NIC does not own the shared allocation"
+                )
+            if member.role.value != "active" and compute_allocation_id == allocation_id:
+                raise RuntimeError(
+                    "VM-HA passive Compute NIC conflicts with shared allocation ownership"
+                )
             status_interfaces = list(
                 getattr(getattr(instance, "status", None), "network_interfaces", []) or []
             )
@@ -283,12 +297,16 @@ class VMManager:
             )
 
         active = next(node for node in nodes if node.role is VMHARole.ACTIVE)
-        observed_owner = allocation_observation(allocation_id, allocation).owner
-        if observed_owner != AllocationOwner(
+        if allocation_owner != AllocationOwner(
             active.compute_id,
             active.network_interface_name,
         ):
             raise RuntimeError("VM-HA shared allocation is not exact on configured active")
+        final_allocation = self.get_ha_allocation(allocation_id)
+        if self._resource_id(final_allocation) != allocation_id or (
+            allocation_observation(allocation_id, final_allocation).owner != allocation_owner
+        ):
+            raise RuntimeError("VM-HA shared allocation ownership changed during final binding")
 
         digests = vm_ha.generation.digests
         return VMHARuntimeBinding(
@@ -857,20 +875,13 @@ class VMManager:
 
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
+        ssh_base = build_openssh_base_command(connect_timeout=5)
 
         # Test SSH connectivity
         try:
             ssh_test = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
+                ssh_base
+                + [
                     f"ubuntu@{public_ip}",
                     "echo connected",
                 ],
@@ -888,16 +899,8 @@ class VMManager:
         # Check cloud-init status
         try:
             cloud_init_check = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
+                ssh_base
+                + [
                     f"ubuntu@{public_ip}",
                     "cloud-init status --wait --long 2>/dev/null || cloud-init status",
                 ],
@@ -912,16 +915,8 @@ class VMManager:
                 result["cloud_init_complete"] = True
                 # Also verify pip module is available (critical for package installation)
                 pip_check = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "ConnectTimeout=5",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "UserKnownHostsFile=/dev/null",
-                        "-o",
-                        "LogLevel=ERROR",
+                    ssh_base
+                    + [
                         f"ubuntu@{public_ip}",
                         "python3 -m pip --version 2>/dev/null",
                     ],
@@ -938,16 +933,8 @@ class VMManager:
         if result["cloud_init_complete"]:
             try:
                 esp4_check = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "ConnectTimeout=5",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "UserKnownHostsFile=/dev/null",
-                        "-o",
-                        "LogLevel=ERROR",
+                    ssh_base
+                    + [
                         f"ubuntu@{public_ip}",
                         (
                             "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then "
@@ -976,16 +963,8 @@ class VMManager:
         # Check installed packages
         try:
             pkg_check = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
+                ssh_base
+                + [
                     f"ubuntu@{public_ip}",
                     'dpkg -l strongswan frr 2>/dev/null | grep "^ii" && systemctl is-active nebius-vpngw-agent 2>/dev/null',
                 ],

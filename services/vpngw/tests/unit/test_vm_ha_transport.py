@@ -113,6 +113,24 @@ def test_peer_exchange_persists_replay_boundary_before_restart_acceptance(tmp_pa
         restarted.receive(timeout_seconds=1)
 
 
+def test_peer_exchange_accepts_first_observed_sequence_for_authenticated_new_boot() -> None:
+    store = MemoryReplayStore(ReplayState("boot-a", 4))
+    initial = _heartbeat(sequence=9)
+    heartbeat = PeerHeartbeat.from_mapping({**initial.to_dict(), "boot_id": "boot-b"})
+    exchange = PeerStateExchange(
+        FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-b")]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+    )
+
+    received, replay = exchange.receive(timeout_seconds=1)
+
+    assert received == heartbeat
+    assert replay == ReplayState("boot-b", 9, ("boot-a",))
+    assert store.state == replay
+
+
 def test_peer_exchange_rejects_unauthenticated_identity_and_wrong_outbound_cluster() -> None:
     heartbeat = _heartbeat()
     transport = FakeTransport([AuthenticatedPeerMessage(heartbeat, "node-c")])
