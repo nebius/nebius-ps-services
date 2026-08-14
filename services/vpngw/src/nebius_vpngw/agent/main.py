@@ -60,6 +60,7 @@ BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 VM_HA_STATE_DIR = Path("/var/lib/nebius-vpngw/vm-ha")
 VM_HA_CHECKPOINT_PATH = VM_HA_STATE_DIR / "controller-checkpoint.json"
 VM_HA_STATUS_PATH = VM_HA_STATE_DIR / "status.json"
+VM_HA_MATERIALIZATION_PATH = VM_HA_STATE_DIR / "materialization.json"
 VM_HA_GUARD_PATH = VM_HA_STATE_DIR / "guard.json"
 VM_HA_FAILBACK_PATH = VM_HA_STATE_DIR / "manual-failback.json"
 VM_HA_EFFECT_RECEIPT_PATH = VM_HA_STATE_DIR / "effect-receipt.json"
@@ -529,6 +530,7 @@ class DefaultVMHAControllerRuntime:
         self.peer_retry_seconds = peer_retry_seconds
         self.sleeper = sleeper
         self.started_guarded = False
+        self.active_reconcile_requested = False
         self.closed = False
         self.listener_stop = threading.Event()
         self.listener_thread: threading.Thread | None = None
@@ -621,6 +623,16 @@ class DefaultVMHAControllerRuntime:
                     "installed_at": self.clock(),
                 },
             )
+            request_reconcile = getattr(
+                getattr(self.ports, "data_plane", None), "request_agent_reconcile", None
+            )
+            if callable(request_reconcile) and not self.active_reconcile_requested:
+                try:
+                    request_reconcile()
+                except Exception:
+                    self.ports.install_shutdown_guard(boot_id=self.boot_id)
+                    raise
+                self.active_reconcile_requested = True
             if (
                 self.manual_failback_path is not None
                 and self.ports.local.role.value == "active"
@@ -633,6 +645,8 @@ class DefaultVMHAControllerRuntime:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
+        else:
+            self.active_reconcile_requested = False
         return status
 
     def close(self, *, restore_guard: bool = True) -> None:
@@ -671,6 +685,9 @@ def build_default_vm_ha_controller_runtime(
         state_dir=state_dir,
         replay_store=AtomicGenerationStore(state_dir / "generation-store"),
         clock=clock,
+        active_preparer=lambda: update_firewall_from_config(
+            yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        ),
     )
     try:
         manual_failback = _manual_failback_provider(state_dir=state_dir, config=config)
@@ -831,6 +848,71 @@ def require_vm_ha_current_boot_readiness(*, state_dir: Path = VM_HA_STATE_DIR) -
     )
 
 
+def _vm_ha_materialization_authorized(*, state_dir: Path = VM_HA_STATE_DIR) -> dict[str, Any]:
+    config = _read_vm_ha_config(CONFIG_PATH)
+    if config is None:
+        return {}
+    try:
+        boot_id = _boot_id()
+        guard = json.loads((state_dir / VM_HA_GUARD_PATH.name).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("VM-HA passive materialization authority is unavailable") from error
+    if not (
+        isinstance(guard, dict)
+        and guard.get("guard_boot_id") == boot_id
+        and guard.get("data_plane_mode") == "passive"
+    ):
+        raise RuntimeError("VM-HA passive materialization is not authorized on this boot")
+    return config
+
+
+def require_vm_ha_current_boot_materialization(
+    *, state_dir: Path = VM_HA_STATE_DIR
+) -> None:
+    """Require the current generation's non-forwarding materialization postcondition."""
+
+    config = _vm_ha_materialization_authorized(state_dir=state_dir)
+    if not config:
+        return
+    try:
+        record = json.loads(
+            (state_dir / VM_HA_MATERIALIZATION_PATH.name).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("VM-HA passive materialization is incomplete") from error
+    generation = config.get("generation") or {}
+    node = config.get("node") or {}
+    if not (
+        isinstance(record, dict)
+        and record.get("schema") == "nebius-vpngw/vm-ha-materialization-v1"
+        and record.get("boot_id") == _boot_id()
+        and record.get("generation_id") == generation.get("generation_id")
+        and record.get("node_id") == node.get("node_id")
+    ):
+        raise RuntimeError("VM-HA passive materialization is incomplete")
+
+
+def _install_vm_ha_cold_start_guard_locked(
+    *, state_dir: Path, boot_id: str
+) -> dict[str, Any]:
+    result = subprocess.run(
+            ["/usr/sbin/sysctl", "-w", "net.ipv4.ip_forward=0"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if result.returncode != 0:
+        raise RuntimeError(f"cannot install VM-HA forwarding guard: {result.stderr.strip()}")
+    record = {
+        "schema": _STATUS_SCHEMA,
+        "guard_boot_id": boot_id,
+        "data_plane_mode": "blocked",
+        "installed_at": time.time(),
+    }
+    _atomic_write_json(state_dir / VM_HA_GUARD_PATH.name, record)
+    return record
+
+
 def install_vm_ha_cold_start_guard(
     *, state_dir: Path = VM_HA_STATE_DIR, boot_id: str | None = None
 ) -> dict[str, Any]:
@@ -841,22 +923,9 @@ def install_vm_ha_cold_start_guard(
     if lock_fd is None:
         raise RuntimeError("cannot acquire VM-HA routing guard lock")
     try:
-        result = subprocess.run(
-            ["/usr/sbin/sysctl", "-w", "net.ipv4.ip_forward=0"],
-            capture_output=True,
-            text=True,
-            check=False,
+        return _install_vm_ha_cold_start_guard_locked(
+            state_dir=state_dir, boot_id=current_boot_id
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"cannot install VM-HA forwarding guard: {result.stderr.strip()}")
-        record = {
-            "schema": _STATUS_SCHEMA,
-            "guard_boot_id": current_boot_id,
-            "data_plane_mode": "blocked",
-            "installed_at": time.time(),
-        }
-        _atomic_write_json(state_dir / VM_HA_GUARD_PATH.name, record)
-        return record
     finally:
         os.close(lock_fd)
 
@@ -959,22 +1028,35 @@ def _run_vm_ha_controller(
             previous_handlers[stop_signal] = signal.getsignal(stop_signal)
             signal.signal(stop_signal, request_stop)
     try:
+        if isinstance(runtime, DefaultVMHAControllerRuntime):
+            notify_socket = os.environ.get("NOTIFY_SOCKET")
+            if not notify_socket:
+                raise RuntimeError("VM-HA systemd readiness socket is unavailable")
+            subprocess.run(
+                [
+                    "/usr/bin/systemd-notify",
+                    "--ready",
+                    "--status=VM-HA guard installed; materializing passive data plane",
+                ],
+                check=True,
+                timeout=5,
+            )
+            ready_notified = True
         while True:
-            status = runtime.step()
-            if (
-                isinstance(runtime, DefaultVMHAControllerRuntime)
-                and not ready_notified
-                and status.get("data_plane_mode") in {"blocked", "passive", "active"}
-            ):
-                notify_socket = os.environ.get("NOTIFY_SOCKET")
-                if not notify_socket:
-                    raise RuntimeError("VM-HA systemd readiness socket is unavailable")
-                subprocess.run(
-                    ["/usr/bin/systemd-notify", "--ready", "--status=VM-HA guard resolved"],
-                    check=True,
-                    timeout=5,
-                )
-                ready_notified = True
+            try:
+                runtime.step()
+            except RuntimeError:
+                if not (
+                    isinstance(runtime, DefaultVMHAControllerRuntime)
+                    and ready_notified
+                    and not once
+                ):
+                    raise
+                # The guard is already current-boot authoritative.  Local
+                # services ordered after this notify boundary may still be
+                # starting; keep retrying observations with forwarding off.
+                time.sleep(5)
+                continue
             if once:
                 return
             time.sleep(5)
@@ -1008,16 +1090,54 @@ class Agent:
                 return
             cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
             vm_ha_blocked = False
+            vm_ha_materialization = False
             if _read_vm_ha_config(CONFIG_PATH) is not None:
                 try:
                     require_vm_ha_current_boot_readiness()
                 except RuntimeError:
                     vm_ha_blocked = True
+                    try:
+                        _vm_ha_materialization_authorized()
+                    except RuntimeError:
+                        try:
+                            guard = json.loads(VM_HA_GUARD_PATH.read_text(encoding="utf-8"))
+                        except (OSError, json.JSONDecodeError):
+                            guard = {}
+                        if isinstance(guard, dict) and guard.get("data_plane_mode") == "active":
+                            if lock_fd is not None:
+                                _install_vm_ha_cold_start_guard_locked(
+                                    state_dir=VM_HA_STATE_DIR, boot_id=_boot_id()
+                                )
+                            else:
+                                install_vm_ha_cold_start_guard()
+                    else:
+                        vm_ha_materialization = True
 
-            if vm_ha_blocked:
+            if vm_ha_blocked and not vm_ha_materialization:
                 self.ss.render_and_apply(cfg, activate=False)
                 self.frr.render_and_apply(cfg, activate=False)
                 print("[Agent] Rendered VM-HA configuration behind the blocked data-plane guard")
+                return
+
+            if vm_ha_materialization:
+                interface_endpoints = self.ss.render_and_apply(cfg)
+                if interface_endpoints:
+                    self.xfrm.setup_interfaces(interface_endpoints)
+                self.frr.render_and_apply(cfg)
+                self.state.save_last_applied(cfg)
+                vm_ha = _read_vm_ha_config(CONFIG_PATH) or {}
+                _atomic_write_json(
+                    VM_HA_MATERIALIZATION_PATH,
+                    {
+                        "schema": "nebius-vpngw/vm-ha-materialization-v1",
+                        "boot_id": _boot_id(),
+                        "node_id": (vm_ha.get("node") or {}).get("node_id"),
+                        "generation_id": (vm_ha.get("generation") or {}).get(
+                            "generation_id"
+                        ),
+                    },
+                )
+                print("[Agent] Materialized passive VM-HA data plane with forwarding fenced")
                 return
 
             try:
@@ -1085,6 +1205,7 @@ def main() -> None:
     group.add_argument("--vm-ha-preflight", action="store_true")
     group.add_argument("--vm-ha-status", action="store_true")
     group.add_argument("--vm-ha-ready", action="store_true")
+    group.add_argument("--vm-ha-materialized", action="store_true")
     group.add_argument("--vm-ha-recover", action="store_true")
     group.add_argument("--vm-ha-manual-failback", action="store_true")
     args = parser.parse_args()
@@ -1105,6 +1226,9 @@ def main() -> None:
         return
     if args.vm_ha_ready:
         require_vm_ha_current_boot_readiness()
+        return
+    if args.vm_ha_materialized:
+        require_vm_ha_current_boot_materialization()
         return
     if args.vm_ha_recover:
         # Recovery is deliberately non-bypassing: validate durable state and report

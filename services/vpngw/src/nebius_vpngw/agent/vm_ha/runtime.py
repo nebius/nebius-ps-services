@@ -649,6 +649,7 @@ class SystemDataPlaneRuntime:
         command_timeout: float = 5.0,
         commands: DataPlaneCommandSet = DataPlaneCommandSet(),
         routing_lock_path: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
+        active_preparer: Callable[[], None] | None = None,
     ) -> None:
         if not math.isfinite(command_timeout) or command_timeout <= 0:
             raise ValueError("local command timeout must be finite and positive")
@@ -660,6 +661,7 @@ class SystemDataPlaneRuntime:
         self.command_timeout = command_timeout
         self.commands = commands
         self.routing_lock_path = routing_lock_path
+        self.active_preparer = active_preparer
 
     def _write_guard(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         _atomic_write_json(
@@ -819,12 +821,33 @@ class SystemDataPlaneRuntime:
 
     def enter_passive(self, action: ControllerAction) -> None:
         self._set_mode(action, DataPlaneMode.PASSIVE)
+        reload_agent = self._run(
+            self.commands.systemctl,
+            "reload-or-restart",
+            "nebius-vpngw-agent",
+        )
+        if reload_agent.returncode != 0:
+            raise RuntimeError("passive data-plane materialization could not be requested")
 
     def disable_active(self, action: ControllerAction) -> None:
         self._set_mode(action, DataPlaneMode.BLOCKED)
 
     def enable_active(self, action: ControllerAction) -> None:
+        # Promotion prerequisites must be installed and verified while the
+        # forwarding fence is still closed.  A failed preparation therefore
+        # cannot expose an incompletely protected gateway.
+        if self.active_preparer is not None:
+            self.active_preparer()
         self._set_mode(action, DataPlaneMode.ACTIVE)
+
+    def request_agent_reconcile(self) -> None:
+        reload_agent = self._run(
+            self.commands.systemctl,
+            "reload-or-restart",
+            "nebius-vpngw-agent",
+        )
+        if reload_agent.returncode != 0:
+            raise RuntimeError("active data-plane reconciliation could not be requested")
 
     def mode(self) -> DataPlaneMode:
         forwarding = self._forwarding()
@@ -1546,6 +1569,7 @@ def build_runtime_ports(
     ] = validate_installed_credential_bundle,
     runner: CommandRunner = _run_command,
     clock: Callable[[], float] = time.time,
+    active_preparer: Callable[[], None] | None = None,
 ) -> VMHARuntimePorts:
     """Construct every runtime port without connecting it to the default service."""
 
@@ -1598,12 +1622,17 @@ def build_runtime_ports(
     )
     try:
         cloud = build_cloud_runtime(binding, local_node_id, sdk.client)
+        data_plane_kwargs: dict[str, object] = {
+            "state_path": state_dir / "data-plane.json",
+            "guard_path": state_dir / "guard.json",
+            "configured_bgp_sessions": configured_sessions,
+            "expected_bgp_policy_digest": binding.bgp_policy_digest,
+            "runner": runner,
+        }
+        if active_preparer is not None:
+            data_plane_kwargs["active_preparer"] = active_preparer
         data_plane = data_plane_factory(
-            state_path=state_dir / "data-plane.json",
-            guard_path=state_dir / "guard.json",
-            configured_bgp_sessions=configured_sessions,
-            expected_bgp_policy_digest=binding.bgp_policy_digest,
-            runner=runner,
+            **data_plane_kwargs,
         )
         backend = route_backend_factory(sdk.client)
         routes = BoundRouteRuntime(

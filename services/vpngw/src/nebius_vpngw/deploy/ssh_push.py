@@ -1063,17 +1063,24 @@ WantedBy=multi-user.target
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
             # Enable and start health monitoring service (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
-            # Run route fix immediately before starting agent (non-fatal if unavailable)
-            'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
-            # Apply firewall rules (including MSS clamp and ICMP allowances)
-            "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+            *(
+                [
+                    # Ordinary non-HA setup retains the established eager
+                    # route/firewall path. VM-HA defers both until the
+                    # controller has granted active authority.
+                    'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
+                    "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+                ]
+                if staged_receipt is None
+                else []
+            ),
             # Start or reload agent
             agent_cmd,
             *(
                 [
                     "sudo systemctl is-active --quiet nebius-vpngw-vm-ha-guard.service",
                     "sudo systemctl is-active --quiet nebius-vpngw-vm-ha.service",
-                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready",
+                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-materialized",
                 ]
                 if staged_receipt is not None
                 else []

@@ -561,6 +561,11 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
     assert runtime.mode() is DataPlaneMode.PASSIVE
     assert forwarding == "0"
     assert not any("--terminate" in argv for argv in calls)
+    assert (
+        DataPlaneCommandSet().systemctl,
+        "reload-or-restart",
+        "nebius-vpngw-agent",
+    ) in calls
 
 
 def test_current_frr_import_policy_digest_detects_live_drift() -> None:
@@ -626,6 +631,40 @@ def test_active_persistence_failure_rolls_forwarding_back_off(
     )
 
     with pytest.raises(OSError, match="injected"):
+        runtime.enable_active(action)
+
+    assert forwarding == "0"
+
+
+def test_active_preparation_failure_keeps_forwarding_fenced(tmp_path: Path) -> None:
+    forwarding = "0"
+
+    def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
+        if argv[-1] == "net.ipv4.ip_forward":
+            return CommandResult(0, forwarding)
+        raise AssertionError(f"forwarding changed before active preparation: {argv}")
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+        active_preparer=lambda: (_ for _ in ()).throw(RuntimeError("firewall failed")),
+    )
+    action = ControllerAction(
+        ActionKind.ENABLE_ACTIVE,
+        "enable-op",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+    )
+
+    with pytest.raises(RuntimeError, match="firewall failed"):
         runtime.enable_active(action)
 
     assert forwarding == "0"

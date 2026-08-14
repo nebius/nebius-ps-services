@@ -572,6 +572,19 @@ class VMHAController:
                 ),
             )
 
+        # Even the authoritative owner must first enter the non-forwarding
+        # passive mode.  That transition authorizes only node-local tunnel
+        # materialization; promotion readiness and owner-only effects are
+        # evaluated on a later observation.
+        if snapshot.data_plane_mode is not DataPlaneMode.PASSIVE:
+            return self._action(
+                HAState.NORMAL,
+                ("owner-must-materialize-passive-dataplane",),
+                snapshot,
+                checkpoint,
+                ActionKind.ENTER_PASSIVE,
+            )
+
         promotion_blockers: tuple[str, ...] = ()
         if snapshot.apply_locked:
             promotion_blockers = ("apply-lock-held",)

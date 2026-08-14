@@ -14,9 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
-- Fixed the VM-HA clean-node bootstrap cycle by allowing deterministic local
-  configuration rendering behind the blocked data-plane guard, and made VM-HA
-  apply reject missing or unusable pinned SSH host trust before cloud mutation.
+- Fixed the VM-HA clean-node bootstrap cycle by moving both initial owners
+  through a non-forwarding passive materialization state, verifying that
+  current-boot postcondition during passive-first activation, and reserving
+  forwarding, firewall, cloud, and VPC route effects for exact active authority.
+  VM-HA apply also rejects missing or unusable pinned SSH host trust before cloud mutation.
   Fresh members now receive prevalidated unencrypted private host keys matching
   their exact pins, while retained members are identity-verified before any
   mutation without requiring operator retention of server private keys. All

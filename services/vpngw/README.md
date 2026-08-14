@@ -171,10 +171,13 @@ operator host. Apply validates each required private key against its exact pin
 and proves the cloud-init enrollment anchors before deletion, allocation, disk,
 or instance work. Public-only, encrypted, malformed, mismatched, unreachable,
 or identity-rejected members fail closed. Trust-on-first-use and disabled host
-verification are not supported. During clean bootstrap, each member may render
-its deterministic local strongSwan and FRR files behind the cold-start guard, but it cannot enable
-forwarding, tunnels, firewall changes, XFRM routes, or cloud effects until the
-controller proves current-boot authority.
+verification are not supported. During clean bootstrap, each member first
+renders inert deterministic local strongSwan and FRR files behind the cold-start
+guard. After the controller grants current-boot passive authority, the member
+may establish only its local tunnel, XFRM, and BGP materialization needed to
+measure promotion readiness. Forwarding, firewall changes, allocation transfer,
+VPC route effects, and owner-only reconciliation remain fenced until exact
+active authority is proven.
 
 ## Features
 
