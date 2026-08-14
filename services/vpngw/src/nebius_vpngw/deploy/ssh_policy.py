@@ -6,8 +6,9 @@ import importlib
 import os
 import stat
 import subprocess
+import tempfile
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,9 @@ class SSHTrustPolicy:
 
     known_hosts_file: Path
     known_hosts_sha256: str
+    pin_targets: tuple[tuple[str, str], ...] = ()
     identities: tuple[SSHHostIdentity, ...] = ()
+    _snapshot_owner: Any = field(default=None, repr=False, compare=False)
 
     def assert_current(self) -> None:
         if (
@@ -60,6 +63,12 @@ class SSHTrustPolicy:
         matching = tuple(item for item in self.identities if item.hostname == hostname)
         if len(matching) != 1:
             raise ValueError(f"VM-HA SSH host identity is unavailable for {hostname}")
+        return matching[0]
+
+    def pin_target_for(self, hostname: str) -> str:
+        matching = tuple(target for name, target in self.pin_targets if name == hostname)
+        if len(matching) != 1:
+            raise ValueError(f"VM-HA SSH host pin is unavailable for {hostname}")
         return matching[0]
 
 
@@ -110,27 +119,50 @@ def _validated_private_host_key(path: Path, hostname: str) -> tuple[bytes, str, 
 
 
 def require_vm_ha_ssh_policy(
-    hosts: Iterable[str | tuple[str, str]], environment: Mapping[str, str] | None = None
+    hosts: Iterable[str | tuple[str, str]],
+    environment: Mapping[str, str] | None = None,
+    *,
+    enrollment_hosts: Iterable[str] | None = None,
 ) -> SSHTrustPolicy:
     """Validate exact pins and unattended private host keys before cloud mutation."""
 
     source = os.environ if environment is None else environment
     known_hosts = require_explicit_known_hosts_file(source)
-    raw_directory = source.get(HOST_KEYS_DIR_ENV)
-    if not raw_directory:
-        raise ValueError(f"{HOST_KEYS_DIR_ENV} is required for VM-HA fresh-host enrollment")
-    directory = Path(raw_directory).expanduser()
-    if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
-        raise ValueError(f"{HOST_KEYS_DIR_ENV} must name an absolute non-symlink directory")
+    known_hosts_content = _regular_file(known_hosts, KNOWN_HOSTS_ENV)
+    snapshot_owner = tempfile.TemporaryDirectory(prefix="nebius-vpngw-known-hosts-")
+    snapshot = Path(snapshot_owner.name) / "known_hosts"
+    snapshot.write_bytes(known_hosts_content)
+    snapshot.chmod(0o400)
     paramiko = importlib.import_module("paramiko")
-    pins = paramiko.HostKeys(filename=str(known_hosts))
+    pins = paramiko.HostKeys(filename=str(snapshot))
+    host_pairs = tuple((host, host) if isinstance(host, str) else host for host in hosts)
+    enrollment = (
+        {hostname for hostname, _ in host_pairs}
+        if enrollment_hosts is None
+        else set(enrollment_hosts)
+    )
+    unknown_enrollment = enrollment - {hostname for hostname, _ in host_pairs}
+    if unknown_enrollment:
+        raise ValueError("VM-HA enrollment host is not present in the deployment plan")
+    directory: Path | None = None
+    if enrollment:
+        raw_directory = source.get(HOST_KEYS_DIR_ENV)
+        if not raw_directory:
+            raise ValueError(f"{HOST_KEYS_DIR_ENV} is required for VM-HA fresh-host enrollment")
+        directory = Path(raw_directory).expanduser()
+        if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
+            raise ValueError(f"{HOST_KEYS_DIR_ENV} must name an absolute non-symlink directory")
     identities: list[SSHHostIdentity] = []
-    for host in tuple(hosts):
-        hostname, pin_target = (host, host) if isinstance(host, str) else host
+    for hostname, pin_target in host_pairs:
+        entries = pins.lookup(pin_target) or {}
+        if not entries:
+            raise ValueError(f"VM-HA SSH host pin is unavailable for {pin_target}")
+        if hostname not in enrollment:
+            continue
+        assert directory is not None
         content, key_type, key_data = _validated_private_host_key(
             directory / f"{hostname}.key", hostname
         )
-        entries = pins.lookup(pin_target) or {}
         pinned = entries.get(key_type)
         if pinned is None or pinned.get_base64() != key_data:
             raise ValueError(
@@ -138,9 +170,11 @@ def require_vm_ha_ssh_policy(
             )
         identities.append(SSHHostIdentity(hostname=hostname, private_key=content))
     return SSHTrustPolicy(
-        known_hosts_file=known_hosts,
-        known_hosts_sha256=hashlib.sha256(known_hosts.read_bytes()).hexdigest(),
+        known_hosts_file=snapshot,
+        known_hosts_sha256=hashlib.sha256(known_hosts_content).hexdigest(),
+        pin_targets=host_pairs,
         identities=tuple(identities),
+        _snapshot_owner=snapshot_owner,
     )
 
 
@@ -149,6 +183,8 @@ def configure_paramiko_host_verification(
     paramiko: Any,
     *,
     policy: SSHTrustPolicy | None = None,
+    hostname: str | None = None,
+    transport_host: str | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> None:
     if policy is not None:
@@ -160,6 +196,14 @@ def configure_paramiko_host_verification(
         client.load_system_host_keys()
     else:
         client.load_host_keys(str(known_hosts))
+        if policy is not None and hostname is not None and transport_host is not None:
+            pin_target = policy.pin_target_for(hostname)
+            pinned = client.get_host_keys().lookup(pin_target) or {}
+            if not pinned:
+                raise RuntimeError(f"VM-HA SSH host pin is unavailable for {pin_target}")
+            if transport_host != pin_target:
+                for key_type, key in tuple(pinned.items()):
+                    client.get_host_keys().add(transport_host, key_type, key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
 
@@ -168,6 +212,7 @@ def build_openssh_base_command(
     key_path: Path | None = None,
     connect_timeout: int = 10,
     policy: SSHTrustPolicy | None = None,
+    hostname: str | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> list[str]:
     if connect_timeout <= 0:
@@ -192,5 +237,7 @@ def build_openssh_base_command(
                 "KnownHostsCommand=none",
             ]
         )
+    if policy is not None and hostname is not None:
+        command.extend(["-o", f"HostKeyAlias={policy.pin_target_for(hostname)}"])
     command.extend(["-o", f"ConnectTimeout={connect_timeout}", "-o", "LogLevel=ERROR"])
     return command

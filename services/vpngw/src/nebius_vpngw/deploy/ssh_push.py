@@ -26,9 +26,7 @@ from ..schema import (
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 
 
-def _host_identity_failure(
-    error: Exception, paramiko: Any, ssh_target: str
-) -> RuntimeError | None:
+def _host_identity_failure(error: Exception, paramiko: Any, ssh_target: str) -> RuntimeError | None:
     bad_host_key = getattr(paramiko, "BadHostKeyException", ())
     if isinstance(error, bad_host_key):
         return RuntimeError(f"SSH host identity verification failed for {ssh_target}")
@@ -352,7 +350,13 @@ class SSHPush:
         client = paramiko.SSHClient()
         upload_directory: str | None = None
         try:
-            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
+                transport_host=ssh_target if self._ssh_policy is not None else None,
+            )
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -711,7 +715,13 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
         try:
-            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
+                transport_host=ssh_target if self._ssh_policy is not None else None,
+            )
             client.connect(
                 hostname=ssh_target,
                 username=username,

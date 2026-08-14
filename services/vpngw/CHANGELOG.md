@@ -18,8 +18,10 @@ All notable changes to this project are tracked here. This changelog follows
   configuration rendering behind the blocked data-plane guard, and made VM-HA
   apply reject missing or unusable pinned SSH host trust before cloud mutation.
   Fresh members now receive prevalidated unencrypted private host keys matching
-  their exact pins, and all VM-HA SSH paths consume one mutation-detecting policy
-  snapshot with host-identity rejection kept distinct from reachability retry.
+  their exact pins, while retained members are identity-verified before any
+  mutation without requiring operator retention of server private keys. All
+  VM-HA SSH paths consume one protected policy snapshot, and cloud-init
+  enrollment fails before resource mutation when its structural anchors drift.
 - Added explicit, default-disabled two-node VM-level active/passive HA with
   immutable generation and credential staging, authenticated peer state,
   authoritative stopped-owner and shared-allocation fencing, owner-gated static

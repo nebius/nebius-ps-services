@@ -577,7 +577,17 @@ def test_vm_ha_instance_allocations_use_shared_id_only_on_configured_active() ->
 def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     spec = _ha_spec()
-    provisioning = SimpleNamespace(subnet_id="subnet-1")
+    provisioning = VMProvisioningConfig(
+        subnet_id="subnet-1",
+        num_nics=1,
+        platform="cpu-d3",
+        preset=None,
+        boot_image="ubuntu",
+        disk_gb=20,
+        disk_type="NETWORK_SSD",
+        disk_block_bytes=4096,
+        cloud_init="#cloud-config\n",
+    )
     active = SimpleNamespace(
         id="compute-a",
         spec=SimpleNamespace(network_interfaces=[SimpleNamespace(name="eth0")]),
@@ -587,7 +597,13 @@ def test_vm_ha_ensure_group_returns_binding_only_after_attachment_and_reread() -
     with (
         patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
         patch.object(vm_mgr, "_resolve_client_apis", return_value=(None, None, None, object())),
-        patch.object(vm_mgr, "_discover_existing_instances", return_value=[]),
+        patch.object(vm_mgr, "_discover_vm_ha_members", return_value={}),
+        patch.object(vm_mgr, "verify_vm_ha_existing_identities"),
+        patch.object(
+            vm_mgr,
+            "_prepare_vm_ha_enrollment_cloud_inits",
+            return_value={"gateway-0": "cloud-0", "gateway-1": "cloud-1"},
+        ),
         patch.object(vm_mgr, "_build_vm_provisioning_config", return_value=provisioning),
         patch.object(
             vm_mgr,

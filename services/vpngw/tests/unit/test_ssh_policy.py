@@ -8,6 +8,8 @@ import pytest
 from nebius_vpngw.deploy.ssh_policy import (
     HOST_KEYS_DIR_ENV,
     KNOWN_HOSTS_ENV,
+    build_openssh_base_command,
+    configure_paramiko_host_verification,
     require_explicit_known_hosts_file,
     require_vm_ha_ssh_policy,
 )
@@ -85,7 +87,7 @@ def test_vm_ha_policy_rejects_public_only_host_key(tmp_path: Path) -> None:
         )
 
 
-def test_vm_ha_policy_rejects_trust_source_mutation(tmp_path: Path) -> None:
+def test_vm_ha_policy_consumes_protected_snapshot_after_source_mutation(tmp_path: Path) -> None:
     hostname = "gateway-0"
     private_directory = tmp_path / "host-keys"
     private_directory.mkdir()
@@ -105,5 +107,38 @@ def test_vm_ha_policy_rejects_trust_source_mutation(tmp_path: Path) -> None:
 
     known_hosts.write_text("changed\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="changed after preflight"):
-        policy.assert_current()
+    policy.assert_current()
+    assert policy.known_hosts_file != known_hosts
+    assert key.get_base64() in policy.known_hosts_file.read_text(encoding="utf-8")
+    command = build_openssh_base_command(policy=policy, hostname=hostname)
+    assert f"UserKnownHostsFile={policy.known_hosts_file}" in command
+    assert f"HostKeyAlias={hostname}" in command
+
+
+def test_existing_only_policy_does_not_require_private_host_key_source(tmp_path: Path) -> None:
+    hostname = "gateway-0"
+    key = paramiko.RSAKey.generate(1024)
+    known_hosts = tmp_path / "known_hosts"
+    pins = paramiko.HostKeys()
+    pins.add(hostname, key.get_name(), key)
+    pins.save(str(known_hosts))
+
+    policy = require_vm_ha_ssh_policy(
+        [hostname],
+        {KNOWN_HOSTS_ENV: str(known_hosts)},
+        enrollment_hosts=(),
+    )
+
+    assert policy.identities == ()
+    assert policy.pin_target_for(hostname) == hostname
+
+    known_hosts.write_text("replaced\n", encoding="utf-8")
+    client = paramiko.SSHClient()
+    configure_paramiko_host_verification(
+        client,
+        paramiko,
+        policy=policy,
+        hostname=hostname,
+        transport_host="203.0.113.10",
+    )
+    assert client.get_host_keys().lookup("203.0.113.10")[key.get_name()] == key

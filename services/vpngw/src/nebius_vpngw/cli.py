@@ -27,6 +27,7 @@ from .deploy.route_manager import RouteManager
 from .deploy.ssh_policy import (
     SSHTrustPolicy,
     build_openssh_base_command,
+    require_explicit_known_hosts_file,
     require_vm_ha_ssh_policy,
 )
 from .deploy.ssh_push import SSHPush
@@ -119,10 +120,17 @@ def _ensure_ssh_available() -> None:
 
 
 def _build_ssh_base_cmd(
-    key_path: Path | None, *, ssh_policy: SSHTrustPolicy | None = None
+    key_path: Path | None,
+    *,
+    ssh_policy: SSHTrustPolicy | None = None,
+    hostname: str | None = None,
 ) -> list[str]:
     _ensure_ssh_available()
-    return build_openssh_base_command(key_path=key_path, policy=ssh_policy)
+    return build_openssh_base_command(
+        key_path=key_path,
+        policy=ssh_policy,
+        hostname=hostname,
+    )
 
 
 def _normalize_role_value(value: t.Any) -> str:
@@ -1094,6 +1102,12 @@ def apply(
         # Skip VM ensure and SSH push in dry-run; just show summary.
         raise typer.Exit(code=0)
 
+    # Resolve read-only context before VM-HA trust/member preflight. No cloud mutation is
+    # allowed until every planned member is classified and every existing identity is pinned.
+    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
+    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
+    region_id = (local_cfg.get("region_id") or "").strip() or None
+
     ssh_policy: SSHTrustPolicy | None = None
     if plan.vm_ha is not None:
         blockers = _vm_ha_activation_blockers()
@@ -1103,22 +1117,43 @@ def apply(
                 print(f"[yellow]  - {blocker}[/yellow]")
             raise typer.Exit(code=1)
         try:
-            ssh_policy = require_vm_ha_ssh_policy(
-                (
-                    instance.hostname,
-                    (instance.external_ip or "").strip() or instance.hostname,
-                )
-                for instance in plan.iter_instance_configs()
+            planned_instances = tuple(plan.iter_instance_configs())
+            require_explicit_known_hosts_file()
+            discovery_manager = VMManager(
+                project_id=proj_id,
+                zone=zone or plan.gateway_group.region,
+                auth_token=None,
+                tenant_id=tenant_id,
+                region_id=region_id,
             )
-        except ValueError as error:
+            existing_members = discovery_manager.discover_vm_ha_members(plan.gateway_group)
+            enrollment_hosts = {
+                instance.hostname
+                for instance in planned_instances
+                if recreate_gw or instance.hostname not in existing_members
+            }
+            ssh_policy = require_vm_ha_ssh_policy(
+                tuple(
+                    (
+                        instance.hostname,
+                        (instance.external_ip or "").strip() or instance.hostname,
+                    )
+                    for instance in planned_instances
+                ),
+                enrollment_hosts=enrollment_hosts,
+            )
+            discovery_manager.verify_vm_ha_existing_identities(
+                existing_members,
+                policy=ssh_policy,
+                username=(
+                    (local_cfg.get("gateway_group") or {}).get("vm_spec", {}).get("ssh_username")
+                    or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                ),
+            )
+        except (RuntimeError, ValueError) as error:
             print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
-
-    # Resolve context from CLI args or config
-    tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
-    proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
-    region_id = (local_cfg.get("region_id") or "").strip() or None
 
     # Optional Service Account provisioning/auth
     auth_token = None
@@ -4640,11 +4675,14 @@ def _run_vm_ha_operator_command(
     if plan.vm_ha is None:
         raise typer.BadParameter("VM HA is not enabled in this configuration")
     ssh_policy = require_vm_ha_ssh_policy(
-        (
-            instance.hostname,
-            (instance.external_ip or "").strip() or instance.hostname,
-        )
-        for instance in plan.iter_instance_configs()
+        tuple(
+            (
+                instance.hostname,
+                (instance.external_ip or "").strip() or instance.hostname,
+            )
+            for instance in plan.iter_instance_configs()
+        ),
+        enrollment_hosts=(),
     )
     vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
     username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
@@ -4661,7 +4699,11 @@ def _run_vm_ha_operator_command(
         target = (instance.external_ip or "").strip()
         if not target:
             raise RuntimeError(f"VM-HA node {node.node_id} has no SSH target")
-        command = _build_ssh_base_cmd(key_path, ssh_policy=ssh_policy)
+        command = _build_ssh_base_cmd(
+            key_path,
+            ssh_policy=ssh_policy,
+            hostname=instance.hostname,
+        )
         command.extend(
             [
                 f"{username}@{target}",
