@@ -36,7 +36,7 @@ baseline.
 | --- | --- | --- |
 | `planning-required` | Canonical requirements/design only | Validate and `plan`, or bounded `waive` |
 | `planned` | None directly; only the exact project-instructions coordinator may apply the terminal `AGENTS.md` decision | `open` or verified final `seal` |
-| `implementation-open` | Declared selected-project implementation paths | First material write |
+| `implementation-open` | Declared selected-project implementation paths | First material write or initial Stop continuation |
 | `reconciliation-required` | Implementation paths and canonical specs | Validate and `plan` |
 | `seal-armed` | None; only project-instructions verification and lifecycle seal | Verified `seal` |
 | `sealed` | None | New user prompt |
@@ -52,7 +52,11 @@ The first implementation write marks reconciliation required. Later edits do
 not deadlock; each successful material selected-project write silently advances
 the write epoch while scope and protected-path gates remain active until
 completion. Routine PostToolUse accounting emits no additional context. Stop is
-the sole routine prompt for one accumulated semantic reconciliation. Canonical
+the sole routine prompt for one accumulated semantic reconciliation. Its first
+continuation from `implementation-open` atomically enters
+`reconciliation-required`, preserves the write epoch, and clears stale
+planning bindings before the continuation runs. This transition does not rely
+on a synthetic continuation emitting `UserPromptSubmit`. Canonical
 requirements/design writes admitted during planning or reconciliation are
 epoch-neutral. A late successful material write admitted before a concurrent
 plan, armed seal, or seal advances the epoch and returns the lifecycle to
@@ -82,6 +86,36 @@ coordinator-shaped command with malformed bindings is denied rather
 than classified as an ordinary Python read. The inspect action additionally
 requires an explicit active Codex home and absolute current-session receipt,
 runtime, private-root, and output paths in one uncomposed command.
+The sole alternate evidence namespace is Task Implementer's active run-owned
+bundle for inspect and render against its exact prepared integration checkout.
+The hook invokes the canonical installed or exact sibling-source Task helper
+as a read-only adapter; that helper revalidates
+the workspace, run, wave, clean Git identity, selected integration project,
+canonical project-instructions helper, and every private path. The hook then
+rechecks the submitted command digest and selected outer project before
+requiring implementation-open or reconciliation-required. Apply and verify
+remain on the ordinary terminal seal path. Arbitrary runs, projects, bundles, helpers, flags, and stale
+integration identities remain invalid.
+For first preparation, exact Git identity uses the original wave base. A
+retained correction uses only its exact recorded contract commit; an adopted
+sealed-contract head additionally requires the Task owner's authoritative
+journal. The correction checkout must remain the registered linked worktree in
+the selected lane's common Git directory; an independent repository at the
+same path, branch, and commit is not equivalent.
+An exact Task Implementer worker commit may arrive while the hook payload still
+identifies the outer lifecycle session. The read-only adapter must first bind
+the command-derived worker session to one active running plane, assignment,
+worker checkout, and canonical authorization or claim. Only then does the hook
+rerun ordinary commit validation with that attested worker root and session.
+Direct commits never use this path and remain bound to the payload session.
+The delegated command interpreter may be the hook runtime or an exact
+PATH-canonical executable named `python3` or `python3.N`. This bounded
+resolution permits a worker Python version to differ from the hook's Python
+without trusting arbitrary same-name paths, wrappers, or alternate helpers.
+The prepared integration Git identity remains on its recorded branch and base
+head. It may be clean or contain only staged selected-project requirements and
+design, which are the canonical Task contract-compilation inputs. Unstaged,
+untracked, deleted, symlinked, sibling, or other staged paths fail closed.
 For nonempty effective root markers, project-instructions discovery starts at
 the nearest matching directory from the selected project through its Git root
 and then scans down to the selected project. Empty markers use the selected
@@ -131,6 +165,15 @@ recorder invalidates that evidence by reopening reconciliation. Canonical spec
 reconciliation in its admitted phases is not implementation accounting.
 Recording errors, invalid completed coordinator-shaped calls, and the verified
 terminal project-instructions apply remain visible.
+The initial non-recursive `Stop` transition is lifecycle-owner state: from
+`implementation-open` it compare-and-swaps to `reconciliation-required`, clears
+stale receipt, spec, rules, and planned-epoch bindings, and leaves the write
+epoch unchanged before returning a continuation. Concurrent PostToolUse
+recording is retried from current state. Recursive Stop remains fail-closed.
+The first successful authenticated Task Implementer `wave-plan` is explicit
+selected-lane material accounting: after its run-owned checkpoint receipt is
+observable, an open lifecycle advances to reconciliation-required before
+worker dispatch. A failed or unbound command cannot claim that transition.
 The hook is a project-mutation lifecycle guard, not a general executable trust
 policy. Ordinary reads, read-only pipelines, common Git inspection, and
 user-owned package-manager tools remain available. This includes exact

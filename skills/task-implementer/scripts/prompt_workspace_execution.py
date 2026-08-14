@@ -53,8 +53,11 @@ WORKER_GUARDRAILS = (
     "canonical digest validation, so never recompute it with ad hoc JSON. Read the "
     "incoming handoff and perform deeper preflight only after task-start. Treat "
     "the immutable assignment and incoming handoff as the complete task context; "
-    "do not reread the full managed prompt or coordinator-only state. Stop before "
-    "any unassigned side effect."
+    "do not reread the full managed prompt or coordinator-only state. Publish the "
+    "worker result only through the exact transient result_context returned by "
+    "task-start or task-recover, using its publication_cwd as the explicit external "
+    "working directory and its exact draft_path and publish_argv for canonical "
+    "digesting and atomic publication. Stop before any unassigned side effect."
 )
 INCOMING_HANDOFF_SCHEMA = "task-implementer/incoming-handoff-v1"
 LEGACY_EXECUTION_SCHEMA = "task-implementer/execution-plane-v1"
@@ -71,7 +74,15 @@ WAVE_STATES = (
     "done",
     "blocked",
 )
-TASK_STATES = ("planned", "assigned", "running", "committed", "merged", "failed")
+TASK_STATES = (
+    "planned",
+    "assigned",
+    "running",
+    "committed",
+    "merged",
+    "failed",
+    "superseded",
+)
 ACTIVE_WAVE_STATES = set(WAVE_STATES) - {"done", "blocked"}
 EXCLUSIVE_CONFLICT_CLASSES = {
     "external-database",
@@ -458,7 +469,7 @@ def assert_no_unfinished_v1(run_dir: Path) -> None:
             )
     raise PromptWorkspaceError(
         "WORKFLOW_UPGRADE_REQUIRED",
-        "execution-plane-v1 is unsupported; start a new v5 run",
+        "execution-plane-v1 is unsupported; start a new v7 run",
     )
 
 

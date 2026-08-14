@@ -200,6 +200,102 @@ def test_external_soperator_discovery_refresh_defers_during_jail_mutation_bounda
     assert not cli_module._external_soperator_discovery_refresh_deferred(None)  # noqa: SLF001
 
 
+def test_external_soperator_discovery_refresh_defers_during_bridge_provider_operation() -> None:
+    checkpoint = {
+        "completed_phases": ["discovery-and-plan", "customer-approval"],
+        "pending_phase": "controller-ha-bridge",
+        "controller_bridge": {
+            "stage": "planned",
+            "node_groups": [
+                {
+                    "role": "external-a",
+                    "name": "cxcli-bridge-a-campaign",
+                    "operation": {
+                        "operation_kind": "mk8s-node-group-create",
+                        "requested_at": "2026-08-13T18:30:39Z",
+                        "provider_operation_id": "operation-bridge-a",
+                        "attempt_state": "provider-pending",
+                    },
+                },
+                {
+                    "role": "external-b",
+                    "name": "cxcli-bridge-b-campaign",
+                    "operation": {},
+                },
+            ],
+        },
+    }
+
+    assert cli_module._external_soperator_discovery_refresh_deferred(checkpoint)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("operation_kind", ""),
+        ("requested_at", ""),
+        ("provider_operation_id", "pending"),
+    ),
+)
+def test_external_soperator_discovery_refresh_rejects_unaccepted_bridge_provider_operation(
+    field: str,
+    value: str,
+) -> None:
+    operation = {
+        "operation_kind": "mk8s-node-group-create",
+        "requested_at": "2026-08-13T18:30:39Z",
+        "provider_operation_id": "operation-bridge-a",
+        "attempt_state": "provider-pending",
+    }
+    operation[field] = value
+    checkpoint = {
+        "completed_phases": ["discovery-and-plan", "customer-approval"],
+        "pending_phase": "controller-ha-bridge",
+        "controller_bridge": {
+            "stage": "planned",
+            "node_groups": [{"role": "external-a", "operation": operation}],
+        },
+    }
+
+    assert not cli_module._external_soperator_discovery_refresh_deferred(checkpoint)  # noqa: SLF001
+
+
+def test_external_soperator_deferred_discovery_retains_checkpoint_waypoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_external_soperator_campaign_live_waypoint_index",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deferred discovery must not reclassify an intermediate report")
+        ),
+    )
+
+    assert (
+        cli_module._external_soperator_command_entry_live_waypoint_index(  # noqa: SLF001
+            campaign={"segments": []},
+            source_report={"intermediate": True},
+            completed_segment_ids=("segment-1", "segment-2"),
+            resume_current_segment=True,
+            node_group_transitions={},
+            discovery_refresh_deferred=True,
+        )
+        == 2
+    )
+
+
+def test_external_soperator_deferred_discovery_requires_exact_current_segment() -> None:
+    with pytest.raises(RuntimeError, match="does not prove the exact current campaign segment"):
+        cli_module._external_soperator_command_entry_live_waypoint_index(  # noqa: SLF001
+            campaign={"segments": []},
+            source_report={},
+            completed_segment_ids=(),
+            resume_current_segment=False,
+            node_group_transitions={},
+            discovery_refresh_deferred=True,
+        )
+
+
 def test_external_soperator_discovery_refresh_defers_during_target_controller_gate() -> None:
     checkpoint = {
         "completed_phases": [
@@ -1546,21 +1642,30 @@ def _assert_soperator_onboard_next_steps(
     assert f"nebius-cxcli validate {config_arg}" not in lines
     assert f"nebius-cxcli render {config_arg}" not in lines
     if migration_required:
+        dry_run_command = (
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run"
+        )
+        execute_command = (
+            "nebius-cxcli ext-soperator upgrade "
+            f"{config_arg} --target {target_arg} --execute --approve"
+        )
         assert "Accepted onboarding actions:" in output
         assert "Soperator onboarding route:" not in output
         assert "Route: render -> ext-soperator upgrade, not render -> deploy." not in output
         assert "deploy only reconciles the rendered Terraform/Flux desired state" not in output
         assert "Existing storage and compute layout were accepted" not in output
         assert f"nebius-cxcli deploy {config_arg}" not in lines
+        assert dry_run_command in lines
+        assert execute_command in lines
+        assert cli_module._EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING in output
+        assert cli_module._EXT_SOPERATOR_EXECUTE_HEADING in output
         assert (
-            f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run"
-            in lines
+            lines.index(cli_module._EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING)
+            < lines.index(dry_run_command)
+            < lines.index(cli_module._EXT_SOPERATOR_EXECUTE_HEADING)
+            < lines.index(execute_command)
         )
-        assert (
-            "nebius-cxcli ext-soperator upgrade "
-            f"{config_arg} --target {target_arg} --execute --approve" in lines
-        )
-        assert "After the dry run is accepted:" in output
+        assert "After the dry run is accepted:" not in output
         assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in output
     else:
         assert f"nebius-cxcli deploy {config_arg}" not in lines
@@ -6201,7 +6306,7 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     assert "Route: render -> ext-soperator upgrade, not render -> deploy." not in output
     assert "external-cluster" in output
     assert "second-cluster" in output
-    assert "Next step: dry-run each external-upgrade-required Soperator target:" in lines
+    assert cli_module._EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING in lines
     assert (
         cli_module.copy_paste_command_markup(
             f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --dry-run"
@@ -6214,7 +6319,7 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
         )
         in lines
     )
-    assert "After accepting each dry-run plan, execute that target:" in lines
+    assert cli_module._EXT_SOPERATOR_EXECUTE_HEADING in lines
     assert (
         cli_module.copy_paste_command_markup(
             f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster "
@@ -6229,6 +6334,7 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
         )
         in lines
     )
+    assert "After accepting each dry-run plan, execute that target:" not in output
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in output
 
 
@@ -6331,6 +6437,9 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
     assert "nebius-cxcli ext-soperator upgrade" in message
     assert "--dry-run" in message
     assert "--execute --approve" in message
+    assert cli_module._EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING in message
+    assert cli_module._EXT_SOPERATOR_EXECUTE_HEADING in message
+    assert "Execute after the dry run is accepted:" not in message
     assert (
         "Use `ext-soperator upgrade` for reruns/resume while these actions remain selected"
         in message
@@ -17219,6 +17328,39 @@ def test_ext_soperator_upgrade_rejects_removed_rollout_options(
     assert "No such option" in normalized_output
 
 
+@pytest.mark.parametrize("command", [("soperator", "upgrade"), ("ext-soperator", "upgrade")])
+@pytest.mark.parametrize("removed_option", ["--approve-remediation", "--no-approve-remediation"])
+def test_soperator_upgrade_commands_reject_removed_remediation_approval_options(
+    command: tuple[str, str],
+    removed_option: str,
+) -> None:
+    result = runner.invoke(
+        app,
+        [*command, "config.yaml", "--dry-run", removed_option],
+    )
+
+    assert result.exit_code == 2
+    assert "No such option" in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize("command", [("soperator", "upgrade"), ("ext-soperator", "upgrade")])
+def test_soperator_upgrade_help_exposes_only_stop_for_remediation_approval(
+    command: tuple[str, str],
+) -> None:
+    result = runner.invoke(
+        app,
+        [*command, "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+
+    assert result.exit_code == 0, result.output
+    normalized_output = " ".join(result.output.split())
+    assert "--stop-for-remediation-approval" in normalized_output
+    assert "--approve-remediation" not in normalized_output
+    assert "--no-approve-remediation" not in normalized_output
+
+
 def test_soperator_migration_plan_styles_topic_labels() -> None:
     required_line = cli_module._style_soperator_migration_plan_line(
         "External upgrade required: yes"
@@ -19299,7 +19441,6 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
             "external-cluster",
             "--execute",
             "--approve",
-            "--approve-remediation",
         ],
     )
 
@@ -19652,7 +19793,6 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
             "external-cluster",
             "--execute",
             "--approve",
-            "--approve-remediation",
         ],
     )
 

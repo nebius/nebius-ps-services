@@ -6,11 +6,12 @@
   `task-implementer`.
 - `agents/openai.yaml` keeps `allow_implicit_invocation: false`.
 - The public interface contains only `workspace init [project-folder]`,
-  `run <prompt-ref-or-file>`, `integrate [project-folder]`, and
-  `workspace remove [project-folder]`.
+  `workspace reuse [project-folder]`, `run <prompt-ref-or-file>`,
+  `integrate [project-folder]`, and `workspace remove [project-folder]`.
 - Source and installed copies match when an installed copy is present.
 - The current contract, prompt workspace, managed specs, scheduler, real
-  temporary-Git wave lifecycle, and persistent-lane suites pass.
+  digest-bound resume, temporary-Git wave lifecycle, and persistent-lane suites
+  pass.
 - The verifier's own prompt, lifecycle, collector, reporting, semantic, and
   deterministic-gate suites pass before any live lifecycle mutation.
 - No Docker command, worker dispatch, persistent application, or real project
@@ -24,7 +25,7 @@
   identity, and immutable generation all agree and contain no symlink.
 - A previous active generation is exactly cleaned and archived before the new
   generation exists.
-- Task Implementer is invoked only through its four public actions with the
+- Task Implementer is invoked only through its five public actions with the
   isolated verifier Codex home.
 - The plan contains disjoint frontend, API, and database tasks followed by a
   dependent integration/runtime task whose direct dependencies include all

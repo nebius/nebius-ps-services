@@ -133,7 +133,11 @@ Agentic SDLC checkpoints.
    - Use the canonical installed `commit_transaction.py prepare` helper with
      the hook-provided authorization and claim paths, exact Git root, and
      current session. Task Implementer returns the same two paths from its
-     owner transition. Never invoke a source-tree or alternate helper.
+     owner transition inside a transient canonical `commit_context`. A worker
+     runs that context's exact `prepare_argv` from its `lifecycle_cwd` and uses
+     the returned raw `session_id` from `CODEX_THREAD_ID`; it must never use the
+     `worker_session_fingerprint_sha256` as `--session-id`. Never invoke a
+     source-tree or alternate helper.
    - The helper copies the current real index into a private temporary index,
      runs repo-root `git add -A` there, validates the candidate, and returns the
      exact `git write-tree` candidate plus a one-shot private claim token.
@@ -146,6 +150,10 @@ Agentic SDLC checkpoints.
    - Use the canonical installed `commit_transaction.py execute` helper with
      the same root, session, claim and token, the exact reviewed candidate tree,
      and the final commit message. Run one uncomposed command.
+   - For delegated workers, keep the exact Python executable and helper from
+     `commit_context`. The hook admits its own interpreter or an exact
+     PATH-canonical `python3`/`python3.N`; arbitrary same-name paths and
+     wrappers remain denied.
    - Under the common-repository lock, the helper revalidates ref, `HEAD`, real
      index, complete porcelain status, candidate tree, and Worktree ownership.
      Any drift makes the claim stale before real staging.

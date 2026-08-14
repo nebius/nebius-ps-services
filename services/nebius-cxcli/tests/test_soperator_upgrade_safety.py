@@ -16,6 +16,7 @@ from nebius_cxcli.soperator_upgrade_safety import (
     _classify_managed_chart_upgrade_deltas,
     _classify_managed_node_template_upgrade_deltas,
     _external_open_metrics_comparison_hashes_match,
+    _protected_comparison_check,
     _pvc_check,
     build_intentional_delta_proof,
     build_remediation_approval_plan,
@@ -24,11 +25,14 @@ from nebius_cxcli.soperator_upgrade_safety import (
     checkpointed_remediation_approval_fingerprint,
     classify_intentional_deltas_from_proofs,
     compare_protected_customer_state,
+    remediation_approval_reverification_required,
     run_post_upgrade_fast_verification,
+    safety_report_markdown_lines,
     stage_fast_verification_check,
     stage_fast_verification_markdown_lines,
     stage_fast_verification_report,
     stage_fast_verification_status,
+    update_safety_payload_with_verification,
 )
 
 _TEST_PROOF_CONTEXT = {
@@ -1041,7 +1045,7 @@ def test_external_open_metrics_legacy_baseline_without_handoff_uses_normal_remed
         kube_context="external-context",
         before_state=legacy_before,
         external_cluster=True,
-        approved_remediation_fingerprint=approval_plan["comparison_fingerprint"],
+        approved_remediation_fingerprint=approval_plan["approval_fingerprint"],
     )
     assert approved.status == "passed"
     open_metrics_check = next(
@@ -1407,7 +1411,7 @@ def test_pvc_size_reduction_fails_fast_verification() -> None:
     )
 
 
-def test_remediation_required_drift_requires_explicit_approval() -> None:
+def test_remediation_required_drift_requires_exact_checkpointed_fingerprint() -> None:
     before = _capture(_Runner(config_value="baseline"))
 
     unapproved = run_post_upgrade_fast_verification(
@@ -1420,6 +1424,7 @@ def test_remediation_required_drift_requires_explicit_approval() -> None:
     )
 
     assert unapproved.status == "failed"
+    assert remediation_approval_reverification_required(unapproved) is True
     assert any(
         check["name"] == "protected-state-comparison"
         and check["status"] == "failed"
@@ -1435,16 +1440,27 @@ def test_remediation_required_drift_requires_explicit_approval() -> None:
         kube_context="external-context",
         before_state=before,
         external_cluster=True,
-        approved_remediation_fingerprint=approval_plan["comparison_fingerprint"],
+        approved_remediation_fingerprint=approval_plan["approval_fingerprint"],
     )
 
     assert approved.status == "passed"
+    assert remediation_approval_reverification_required(approved) is False
     assert any(
         check["name"] == "protected-state-comparison"
         and check["status"] == "passed"
-        and "remediation-approved" in check["summary"]
+        and "remediation approval fingerprint" in check["summary"]
         for check in approved.checks
     )
+
+    payload = update_safety_payload_with_verification(
+        None,
+        approved,
+        approved_remediation_fingerprint=approval_plan["approval_fingerprint"],
+        remediation_approval_policy="automatic",
+    )
+    assert payload["remediation_approval"]["policy"] == "automatic"
+    assert payload["remediation_approval"]["approved"] is True
+    assert "- Remediation approval policy: `automatic`" in safety_report_markdown_lines(payload)
 
 
 def test_stale_remediation_fingerprint_does_not_approve_fresh_drift() -> None:
@@ -1457,7 +1473,7 @@ def test_stale_remediation_fingerprint_does_not_approve_fresh_drift() -> None:
         before_state=before,
         external_cluster=True,
     )
-    stale_fingerprint = build_remediation_approval_plan(first.comparison)["comparison_fingerprint"]
+    stale_fingerprint = build_remediation_approval_plan(first.comparison)["approval_fingerprint"]
 
     changed = run_post_upgrade_fast_verification(
         command_runner=_Runner(config_value="different-drift"),
@@ -1470,8 +1486,78 @@ def test_stale_remediation_fingerprint_does_not_approve_fresh_drift() -> None:
     )
 
     assert changed.status == "failed"
-    assert build_remediation_approval_plan(changed.comparison)["comparison_fingerprint"] != (
+    assert build_remediation_approval_plan(changed.comparison)["approval_fingerprint"] != (
         stale_fingerprint
+    )
+
+
+def test_remediation_approval_survives_nonapproval_snapshot_churn() -> None:
+    remediation_delta = {
+        "kind": "nodes",
+        "resource": "node-1",
+        "field": "labels",
+        "before_digest": "a" * 64,
+        "after_digest": "b" * 64,
+        "classification": "remediation_required",
+        "approval_required": True,
+    }
+    first_comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "c" * 64,
+        "after_hash": "d" * 64,
+        "blocked_count": 0,
+        "approval_required_count": 1,
+        "deltas": [
+            remediation_delta,
+            {
+                "kind": "pods",
+                "resource": "soperator/completed-validation-old",
+                "field": "presence",
+                "before_digest": "e" * 64,
+                "after_digest": "f" * 64,
+                "classification": "preserve",
+                "approval_required": False,
+            },
+        ],
+    }
+    second_comparison = {
+        **first_comparison,
+        "after_hash": "1" * 64,
+        "deltas": [
+            remediation_delta,
+            {
+                "kind": "pods",
+                "resource": "soperator/completed-validation-new",
+                "field": "presence",
+                "before_digest": "2" * 64,
+                "after_digest": "3" * 64,
+                "classification": "preserve",
+                "approval_required": False,
+            },
+        ],
+    }
+
+    first_plan = build_remediation_approval_plan(first_comparison)
+    second_plan = build_remediation_approval_plan(second_comparison)
+    safety_payload = {
+        "post_upgrade_verification": {"comparison": first_comparison},
+        "remediation_approval_plan": first_plan,
+    }
+    approved_fingerprint = checkpointed_remediation_approval_fingerprint(
+        safety_payload,
+        approval_requested=True,
+    )
+
+    assert first_plan["comparison_fingerprint"] != second_plan["comparison_fingerprint"]
+    assert first_plan["approval_fingerprint"] == second_plan["approval_fingerprint"]
+    assert approved_fingerprint == first_plan["approval_fingerprint"]
+    assert (
+        _protected_comparison_check(
+            second_comparison,
+            approved_remediation_fingerprint=approved_fingerprint,
+        )["status"]
+        == "passed"
     )
 
 
@@ -1486,9 +1572,14 @@ def test_checkpointed_remediation_approval_consumes_only_the_persisted_compariso
         external_cluster=True,
     )
     plan = build_remediation_approval_plan(observed.comparison)
+    persisted_plan = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"approval_envelope", "approval_fingerprint"}
+    }
     safety_payload = {
         "post_upgrade_verification": {"comparison": observed.comparison},
-        "remediation_approval_plan": plan,
+        "remediation_approval_plan": persisted_plan,
     }
 
     assert (
@@ -1503,8 +1594,20 @@ def test_checkpointed_remediation_approval_consumes_only_the_persisted_compariso
             safety_payload,
             approval_requested=True,
         )
-        == plan["comparison_fingerprint"]
+        == plan["approval_fingerprint"]
     )
+    inconsistent_approval_payload = {
+        **safety_payload,
+        "remediation_approval_plan": {
+            **persisted_plan,
+            "approval_fingerprint": "0" * 64,
+        },
+    }
+    with pytest.raises(ValueError, match="approval fingerprint is inconsistent"):
+        checkpointed_remediation_approval_fingerprint(
+            inconsistent_approval_payload,
+            approval_requested=True,
+        )
 
     changed = run_post_upgrade_fast_verification(
         command_runner=_Runner(config_value="different-drift"),

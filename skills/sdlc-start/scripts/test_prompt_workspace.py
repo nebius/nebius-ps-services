@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -30,6 +31,10 @@ def write_private(path: Path, value: object) -> None:
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     path.chmod(0o600)
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class PromptWorkspaceTests(unittest.TestCase):
@@ -183,9 +188,17 @@ class PromptWorkspaceTests(unittest.TestCase):
         repeated = self.intake(prompt.name)
         self.assertEqual(repeated["revision"], "r0002")
         manifest = Path(str(first["snapshot"])).parents[2].parent / "workspace.json"
-        resolved = workspace.steering_resolve(
-            manifest, str(first["run_id"]), "r0002", "applied"
-        )
+        with mock.patch.object(
+            workspace,
+            "verify_current_prompt_impact",
+            return_value=(
+                {"revision": "r0002", "effects": ["requirements"]},
+                "d" * 64,
+            ),
+        ):
+            resolved = workspace.steering_resolve(
+                manifest, str(first["run_id"]), "r0002", "applied"
+            )
         self.assertEqual(resolved["disposition"], "applied")
         self.assertEqual(self.intake(prompt.name)["action"], "resume")
         self.set_run_status(first, "complete")
@@ -568,24 +581,235 @@ class PromptWorkspaceTests(unittest.TestCase):
         run_dir = Path(str(first["snapshot"])).parents[2]
         manifest = run_dir.parent / "workspace.json"
         requirements = self.project / "docs" / "requirements.md"
+        design = self.project / "docs" / "design.md"
         requirements.parent.mkdir()
         requirements.write_text(
-            "# Requirements\n\n## REQ-001\n\nThe accepted behavior is observable.\n",
+            """<!-- maintain-project-specs:requirements:start schema=maintain-project-specs/requirements-v1 -->
+# Requirements
+
+<!-- REQUIREMENT: REQ-001 status=active priority=P0 type=feature -->
+### REQ-001: Keep behavior current
+
+#### User Story
+
+As a user, I need observable accepted behavior.
+
+#### Acceptance Criteria
+
+- AC-001: The behavior is observable.
+
+#### Negative Criteria
+
+- NC-001: Stale intent does not progress.
+
+#### Validation Method
+
+Run canonical validation.
+
+#### Test Method
+
+Run focused tests.
+
+#### Evaluation Method
+
+Inspect the receipt.
+
+<!-- /REQUIREMENT: REQ-001 -->
+<!-- maintain-project-specs:requirements:end -->
+""",
             encoding="utf-8",
+        )
+        design.write_text(
+            """<!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v1 -->
+# Design
+
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+### FEAT-001: Keep one owner
+
+#### Requirements Covered
+
+- REQ-001
+
+#### Context Evidence
+
+Canonical owner tests.
+
+#### Design Details
+
+Validate impact coverage before progression.
+
+#### Selected Option
+
+Use one owner receipt.
+
+#### Alternatives Considered
+
+Separate validators create ambiguity.
+
+#### Implementation Boundaries
+
+The owner validates project contracts.
+
+#### Test-First Success Criteria
+
+- TDD-001: Stale coverage fails.
+
+#### Validation Plan
+
+Run validation.
+
+#### Test Plan
+
+Run focused tests.
+
+#### Evaluation Plan
+
+Inspect the outcome.
+
+#### Rollout And Rollback
+
+Fail closed on downgrade.
+
+#### Done Definition
+
+The prompt revision is traceable.
+
+<!-- /FEATURE: FEAT-001 -->
+<!-- maintain-project-specs:design:end -->
+""",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.project), "config", "user.name", "SDLC Test"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.project),
+                "config",
+                "user.email",
+                "sdlc-test@example.invalid",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.project), "add", "docs"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(self.project), "commit", "-qm", "specs"],
+            check=True,
         )
         bound_requirements = requirements.read_bytes()
         state = workspace.load_requirements_refinement(run_dir, required=True)
         assert state is not None
         state["status"] = "ready"
+        state["extracted"]["constraints"] = [
+            "Keep the accepted behavior current."
+        ]
         state["compiled_requirements_sha256"] = hashlib.sha256(
             requirements.read_bytes()
         ).hexdigest()
         workspace.save_requirements_refinement(run_dir, state)
+        write_private(
+            run_dir / "prompt-impact-claim.json",
+            {
+                "schema": "maintain-project-specs.prompt-impact-claim.v1",
+                "prompt_id": state["prompt_id"],
+                "revision": state["revision"],
+                "intent_sha256": state["intent_sha256"],
+                "dispositions": [
+                    {
+                        "statement": "constraints:0001",
+                        "disposition": "existing_contract",
+                        "requirements": ["REQ-001"],
+                        "design": ["FEAT-001"],
+                        "effects": [],
+                        "reason": None,
+                    }
+                ],
+                "declared_effects": [],
+                "declared_plan_action": "retain_plan",
+            },
+        )
 
         verified = workspace.verify_requirements_refinement_contract(
             manifest, str(first["run_id"])
         )
         self.assertEqual(verified["revision"], "r0001")
+        self.assertEqual(verified["impact"]["classification"], "no_effect")
+        row = next(
+            item
+            for item in workspace.prompt_rows(manifest, None, None)
+            if item.get("prompt_ref") == first["prompt_ref"]
+        )
+        self.assertEqual(
+            row["impact"],
+            {
+                "classification": "no_effect",
+                "requirements": ["REQ-001"],
+                "design": ["FEAT-001"],
+                "reasons": [],
+                "plan_action": "retain_plan",
+            },
+        )
+        serialized_impact = json.dumps(row["impact"], sort_keys=True)
+        for forbidden in ("sha256", "statement", "prompt-", str(run_dir)):
+            self.assertNotIn(forbidden, serialized_impact)
+        ledger = run_dir / "prompt-impact" / "ledger.json"
+        ledger_backing = ledger.with_name("ledger.backing")
+        ledger.rename(ledger_backing)
+        os.link(ledger_backing, ledger)
+        with self.assertRaises(workspace.PromptWorkspaceError) as hardlinked:
+            workspace.verify_requirements_refinement_contract(
+                manifest, str(first["run_id"])
+            )
+        self.assertEqual(hardlinked.exception.code, "RUN_STATE_INVALID")
+        ledger.unlink()
+        ledger_backing.rename(ledger)
+
+        claim_path = run_dir / "prompt-impact-claim.json"
+        claim = json.loads(claim_path.read_text(encoding="utf-8"))
+        claim["dispositions"][0].update(
+            {
+                "disposition": "non_contract",
+                "requirements": [],
+                "design": [],
+                "reason": "clarification_context",
+            }
+        )
+        write_private(claim_path, claim)
+        write_private(run_dir / "prompt-impact" / "attempt-0002.json", {"orphan": True})
+        recovered = workspace.verify_requirements_refinement_contract(
+            manifest, str(first["run_id"])
+        )
+        self.assertEqual(recovered["impact"]["classification"], "no_effect")
+        ledger_value = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(ledger_value["current"]["generation"], 3)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            concurrent = list(
+                executor.map(
+                    lambda _index: workspace.verify_requirements_refinement_contract(
+                        manifest, str(first["run_id"])
+                    )["impact_sha256"],
+                    range(4),
+                )
+            )
+        self.assertEqual(len(set(concurrent)), 1)
+        self.assertEqual(
+            sorted(path.name for path in ledger.parent.glob("attempt-*.json")),
+            ["attempt-0001.json", "attempt-0002.json", "attempt-0003.json"],
+        )
+        impact_module = sys.modules[workspace.publish_prompt_impact.__module__]
+        ledger_bytes = ledger.read_bytes()
+        with self.assertRaises(impact_module.PromptImpactError) as stale:
+            impact_module._publish_ledger_cas(
+                run_dir, "0" * 64, ledger_value
+            )
+        self.assertEqual(stale.exception.code, "CONCURRENT_MODIFICATION")
+        self.assertEqual(ledger.read_bytes(), ledger_bytes)
         requirements.write_text(
             requirements.read_text(encoding="utf-8") + "\nUnbound drift.\n",
             encoding="utf-8",
@@ -597,6 +821,7 @@ class PromptWorkspaceTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "REQUIREMENTS_REFINEMENT_REQUIRED")
 
         requirements.unlink()
+        design.unlink()
         requirements.parent.rmdir()
         foreign_docs = self.root / "foreign-docs"
         foreign_docs.mkdir()
@@ -624,6 +849,32 @@ class PromptWorkspaceTests(unittest.TestCase):
         result = self.intake(prompt)
         self.assertEqual(result["action"], "new")
         self.assertTrue(run_dir.exists())
+
+    def test_bound_pre_impact_status_is_pending_then_historical(self) -> None:
+        first = self.intake(self.prompt_path())
+        run_dir = Path(str(first["snapshot"])).parents[2]
+        manifest = run_dir.parent / "workspace.json"
+        pending = next(
+            item
+            for item in workspace.prompt_rows(manifest, None, None)
+            if item.get("prompt_ref") == first["prompt_ref"]
+        )
+        self.assertEqual(pending["impact"]["classification"], "pending")
+        self.assertEqual(
+            pending["impact"]["plan_action"],
+            "clarification_or_reconciliation_required",
+        )
+
+        self.set_run_status(first, "complete")
+        historical = next(
+            item
+            for item in workspace.prompt_rows(manifest, None, None)
+            if item.get("prompt_ref") == first["prompt_ref"]
+        )
+        self.assertEqual(
+            historical["impact"]["classification"], "historical_no_receipt"
+        )
+        self.assertEqual(historical["impact"]["plan_action"], "none")
 
     def test_foreign_symlink_tamper_and_sensitive_input_are_rejected(self) -> None:
         prompt = self.prompt_path()
@@ -1035,7 +1286,7 @@ class PromptWorkspaceTests(unittest.TestCase):
             (prompt.parent / migrations[0]["new_name"]).read_bytes(),
         )
 
-    def test_session_refinement_creates_lossless_prompt_and_rejects_stale_merge(self) -> None:
+    def test_session_projection_creates_lossless_prompt_and_rejects_stale_merge(self) -> None:
         manifest = Path(str(self.initialize()["workspace"]))
         refined = self.root / "refined.md"
         refinement = (
@@ -1045,13 +1296,14 @@ class PromptWorkspaceTests(unittest.TestCase):
         )
         refined.write_text(refinement, encoding="utf-8")
         refined.chmod(0o600)
-        created = workspace.merge_session_refinement(
+        created = workspace.merge_session_projection(
             manifest,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="1" * 64,
+            projection_sha256=file_sha256(refined),
             clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
         )
         prompt = Path(str(created["path"]))
@@ -1061,48 +1313,66 @@ class PromptWorkspaceTests(unittest.TestCase):
         delta = self.root / "delta.md"
         delta.write_text("Also retain collision-safe prompt references.", encoding="utf-8")
         delta.chmod(0o600)
-        merged = workspace.merge_session_refinement(
+        merged = workspace.merge_session_projection(
             manifest,
             delta,
             prompt_reference=str(base["prompt_ref"]),
             expected_sha256=str(base["sha256"]),
             new_objective=False,
             operation_id="2" * 64,
+            projection_sha256=file_sha256(delta),
             clock=lambda: datetime(2026, 8, 10, 0, 0, 1, tzinfo=timezone.utc),
         )
         self.assertEqual(merged["prompt_id"], base["prompt_id"])
         self.assertIn("Also retain collision-safe", prompt.read_text(encoding="utf-8"))
+        duplicate = workspace.merge_session_projection(
+            manifest,
+            delta,
+            prompt_reference=str(base["prompt_ref"]),
+            expected_sha256=str(base["sha256"]),
+            new_objective=False,
+            operation_id="3" * 64,
+            projection_sha256=file_sha256(delta),
+        )
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["sha256"], merged["sha256"])
+        other_delta = self.root / "other-delta.md"
+        other_delta.write_text("Require a distinct second constraint.\n", encoding="utf-8")
+        other_delta.chmod(0o600)
         with self.assertRaises(workspace.PromptWorkspaceError) as caught:
-            workspace.merge_session_refinement(
+            workspace.merge_session_projection(
                 manifest,
-                delta,
+                other_delta,
                 prompt_reference=str(base["prompt_ref"]),
                 expected_sha256=str(base["sha256"]),
                 new_objective=False,
-                operation_id="3" * 64,
+                operation_id="4" * 64,
+                projection_sha256=file_sha256(other_delta),
             )
         self.assertEqual(caught.exception.code, "PROMPT_DRIFT")
 
-        retried = workspace.merge_session_refinement(
+        retried = workspace.merge_session_projection(
             manifest,
             delta,
             prompt_reference=str(base["prompt_ref"]),
             expected_sha256=str(base["sha256"]),
             new_objective=False,
             operation_id="2" * 64,
+            projection_sha256=file_sha256(delta),
         )
         self.assertEqual(retried["sha256"], merged["sha256"])
-        recreated = workspace.merge_session_refinement(
+        recreated = workspace.merge_session_projection(
             manifest,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="1" * 64,
+            projection_sha256=file_sha256(refined),
         )
         self.assertEqual(recreated["prompt_id"], created["prompt_id"])
 
-    def test_session_refinement_new_objective_recovers_after_create_interruption(
+    def test_session_projection_new_objective_recovers_after_create_interruption(
         self,
     ) -> None:
         manifest = Path(str(self.initialize()["workspace"]))
@@ -1123,35 +1393,38 @@ class PromptWorkspaceTests(unittest.TestCase):
             side_effect=interrupt_after_write,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                workspace.merge_session_refinement(
+                workspace.merge_session_projection(
                     manifest,
                     refined,
                     prompt_reference=None,
                     expected_sha256=None,
                     new_objective=True,
                     operation_id="4" * 64,
+                    projection_sha256=file_sha256(refined),
                     clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
                 )
 
-        recovered = workspace.merge_session_refinement(
+        recovered = workspace.merge_session_projection(
             manifest,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="4" * 64,
+            projection_sha256=file_sha256(refined),
             clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
         )
         created_prompts = set(prompt_root.glob("*.md")) - before
         self.assertEqual(len(created_prompts), 1)
         self.assertEqual(
             Path(str(recovered["path"])).read_text(encoding="utf-8").count(
-                f"<!-- prompt-session-operation:{'4' * 64} -->"
+                "<!-- prompt-session-operation:v2:"
+                f"{'4' * 64}:{file_sha256(refined)} -->"
             ),
             1,
         )
 
-    def test_session_refinement_rejects_reserved_operation_marker(self) -> None:
+    def test_session_projection_rejects_reserved_operation_marker(self) -> None:
         manifest = Path(str(self.initialize()["workspace"]))
         refined = self.root / "reserved-marker.md"
         refined.write_text(
@@ -1160,15 +1433,89 @@ class PromptWorkspaceTests(unittest.TestCase):
         )
         refined.chmod(0o600)
         with self.assertRaises(workspace.PromptWorkspaceError) as caught:
-            workspace.merge_session_refinement(
+            workspace.merge_session_projection(
                 manifest,
                 refined,
                 prompt_reference=None,
                 expected_sha256=None,
                 new_objective=True,
                 operation_id="5" * 64,
+                projection_sha256=file_sha256(refined),
             )
         self.assertEqual(caught.exception.code, "PROMPT_INPUT_INVALID")
+
+    def test_session_projection_rejects_symlink_input(self) -> None:
+        manifest = Path(str(self.initialize()["workspace"]))
+        target = self.root / "projection-target.md"
+        target.write_text("Require one durable constraint.\n", encoding="utf-8")
+        target.chmod(0o600)
+        projection = self.root / "projection-link.md"
+        projection.symlink_to(target)
+
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.merge_session_projection(
+                manifest,
+                projection,
+                prompt_reference=None,
+                expected_sha256=None,
+                new_objective=True,
+                operation_id="a" * 64,
+                projection_sha256=file_sha256(target),
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_PATH_INVALID")
+
+    def test_session_projection_rejects_substitution_and_serializes_same_base(self) -> None:
+        prompt = self.prompt_path()
+        manifest = Path(str(self.initialize()["workspace"]))
+        base = workspace.parse_prompt(prompt)
+        first = self.root / "first-project-intent.md"
+        second = self.root / "second-project-intent.md"
+        first.write_text("Require the first durable constraint.\n", encoding="utf-8")
+        second.write_text("Require the second durable constraint.\n", encoding="utf-8")
+        first.chmod(0o600)
+        second.chmod(0o600)
+        before = prompt.read_bytes()
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.merge_session_projection(
+                manifest,
+                second,
+                prompt_reference=str(base["prompt_ref"]),
+                expected_sha256=str(base["sha256"]),
+                new_objective=False,
+                operation_id="7" * 64,
+                projection_sha256=file_sha256(first),
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_DRIFT")
+        self.assertEqual(prompt.read_bytes(), before)
+
+        def merge(path: Path, operation_id: str) -> tuple[str, object]:
+            try:
+                result = workspace.merge_session_projection(
+                    manifest,
+                    path,
+                    prompt_reference=str(base["prompt_ref"]),
+                    expected_sha256=str(base["sha256"]),
+                    new_objective=False,
+                    operation_id=operation_id,
+                    projection_sha256=file_sha256(path),
+                    clock=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc),
+                )
+                return "ok", result
+            except workspace.PromptWorkspaceError as error:
+                return error.code, error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda item: merge(*item),
+                    ((first, "8" * 64), (second, "9" * 64)),
+                )
+            )
+        self.assertEqual(sorted(code for code, _ in results), ["PROMPT_DRIFT", "ok"])
+        project_dir = manifest.parent
+        self.assertFalse((project_dir / "active-run.json").exists())
+        self.assertEqual(list(project_dir.glob("runs/*/run.json")), [])
+        self.assertEqual(list(project_dir.glob("runs/*/execution/*/coordinator.json")), [])
 
     def test_verify_detects_active_binding_drift(self) -> None:
         prompt = self.prompt_path()

@@ -102,6 +102,13 @@ Final status report
   revalidates live worker ownership before adopting an interrupted exact-child
   commit. This is delegated worker authorization, not an implicit root-user
   `$commit`.
+  The transition returns a transient canonical `commit_context`: exact
+  PATH-canonical Python, helper, outer lifecycle cwd, worker repository, raw
+  `CODEX_THREAD_ID`, evidence paths, and prepare argv. The separately returned
+  session fingerprint is persisted evidence only and is never a `--session-id`
+  value. This keeps mixed hook/worker Python versions usable while rejecting
+  non-PATH interpreters, arbitrary wrappers, alternate helpers, or weakened
+  owner checks.
 
 ## Files
 

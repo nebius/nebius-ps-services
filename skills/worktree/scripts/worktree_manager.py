@@ -18,8 +18,11 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 from typing import Any, Iterable, Sequence
 
 from git_promotion import (
@@ -28,16 +31,22 @@ from git_promotion import (
     public_safe_slug,
 )
 from task_lane_state import (
+    CHECKPOINT_KIND,
+    CHECKPOINT_SCHEMA,
     GENERATION_KIND,
     GENERATION_SCHEMA,
     LANE_KIND,
     LANE_SCHEMA,
     OBJECT_ID_RE,
     TaskLaneStateError,
+    all_checkpoints,
     all_lanes,
+    delete_checkpoint,
+    load_checkpoint,
     load_generation,
     load_lane,
     validate_lane,
+    write_checkpoint,
     write_generation,
     write_lane,
 )
@@ -58,6 +67,7 @@ from worktree_interop import (
     InteropError,
     abort_integration_preparation,
     acquire_task_lease,
+    acquire_task_lease_unlocked,
     active_preparations,
     active_reservations,
     all_leases,
@@ -82,6 +92,7 @@ from worktree_interop import (
     release_task_lease,
     retire_released_task_lease,
     rollback_task_lease_acquisition,
+    rollback_task_lease_acquisition_unlocked,
     task_lane_transition_lock,
     update_integration,
     update_task_lease,
@@ -92,6 +103,41 @@ from worktree_interop import (
 BRANCH_PREFIX = "feature/"
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?$")
 TASK_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
+TASK_LANE_CHECKPOINT_MESSAGE = "chore(task-implementer): checkpoint managed lane"
+TASK_LANE_CHECKPOINT_TIMEOUT_SECONDS = 900
+TASK_LANE_CHECKPOINT_FORBIDDEN_GIT_ENVIRONMENT = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_ATTR_NOSYSTEM",
+        "GIT_ATTR_SOURCE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DEFAULT_HASH",
+        "GIT_DIR",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_EXEC_PATH",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_OPTIONAL_LOCKS",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+)
+TASK_LANE_CHECKPOINT_FORBIDDEN_GIT_ENVIRONMENT_PREFIXES = (
+    "GIT_ATTR_",
+    "GIT_CONFIG_",
+)
 CONFIG_FIELDS = {
     "scope": "worktreeSkillScope",
     "path": "worktreeSkillPath",
@@ -340,9 +386,7 @@ def _task_lane_config_key(branch: str, field: str) -> str:
     return f"branch.{branch}.{TASK_LANE_CONFIG_FIELDS[field]}"
 
 
-def _read_task_lane_config(
-    repository: Path, branch: str, field: str
-) -> str | None:
+def _read_task_lane_config(repository: Path, branch: str, field: str) -> str | None:
     result = _run(
         ["git", "config", "--local", "--get", _task_lane_config_key(branch, field)],
         cwd=repository,
@@ -599,6 +643,216 @@ def status_paths(repository: Path, scope: str | None = None) -> list[str]:
     if scope is not None:
         arguments.extend(["--", scope])
     return _paths_from_status(_git_bytes(repository, *arguments))
+
+
+def _git_with_environment(
+    repository: Path,
+    arguments: Sequence[str],
+    *,
+    environment: dict[str, str],
+    allowed: Iterable[int] = (0,),
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        raise WorktreeError("could not run git") from error
+    if result.returncode not in set(allowed):
+        detail = _redact_detail(
+            (result.stderr or result.stdout).decode("utf-8", "replace").strip()
+        )
+        raise WorktreeError(f"git {' '.join(arguments)}: {detail or 'command failed'}")
+    return result
+
+
+def _checkpoint_candidate_paths(data: bytes) -> list[str]:
+    tokens = data.split(b"\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(tokens):
+        raw_status = tokens[index]
+        index += 1
+        if not raw_status:
+            continue
+        status = raw_status.decode("ascii", "strict")
+        count = 2 if status[:1] in {"R", "C"} else 1
+        if index + count > len(tokens):
+            raise WorktreeError("Git returned an incomplete checkpoint diff")
+        for _ in range(count):
+            raw_path = tokens[index]
+            index += 1
+            if not raw_path:
+                raise WorktreeError("Git returned an empty checkpoint path")
+            paths.append(raw_path.decode("utf-8", "surrogateescape"))
+    return sorted(set(paths))
+
+
+def _preview_task_lane_checkpoint(primary: Path, repository: Path) -> dict[str, object]:
+    status = _git_bytes(
+        repository, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    initial_index_tree = _git(repository, "write-tree")
+    index_value = Path(_git(repository, "rev-parse", "--git-path", "index"))
+    index_path = index_value if index_value.is_absolute() else repository / index_value
+    private_root = state_directory(primary)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix="task-lane-checkpoint-index-", dir=private_root
+    )
+    os.close(descriptor)
+    preview_index = Path(temporary_name)
+    try:
+        if index_path.exists():
+            shutil.copyfile(index_path, preview_index)
+        else:
+            preview_index.unlink(missing_ok=True)
+        environment = _environment()
+        environment["GIT_INDEX_FILE"] = str(preview_index)
+        if not index_path.exists():
+            _git_with_environment(
+                repository, ("read-tree", "HEAD"), environment=environment
+            )
+        _git_with_environment(repository, ("add", "-A"), environment=environment)
+        check = _git_with_environment(
+            repository,
+            ("diff", "--cached", "--check"),
+            environment=environment,
+            allowed=(0, 2),
+        )
+        if check.returncode != 0:
+            raise WorktreeError("Task Implementer checkpoint diff validation failed")
+        candidate_tree = (
+            _git_with_environment(repository, ("write-tree",), environment=environment)
+            .stdout.decode()
+            .strip()
+        )
+        paths = _checkpoint_candidate_paths(
+            _git_with_environment(
+                repository,
+                ("diff", "--cached", "--name-status", "-z", "--find-renames", "HEAD"),
+                environment=environment,
+            ).stdout
+        )
+        return {
+            "status_sha256": hashlib.sha256(status).hexdigest(),
+            "initial_index_tree": initial_index_tree,
+            "candidate_tree": candidate_tree,
+            "changed_paths": paths,
+        }
+    finally:
+        preview_index.unlink(missing_ok=True)
+
+
+def _checkpoint_reject_git_environment() -> None:
+    present = sorted(
+        name
+        for name in os.environ
+        if (
+            name in TASK_LANE_CHECKPOINT_FORBIDDEN_GIT_ENVIRONMENT
+            or name.startswith(TASK_LANE_CHECKPOINT_FORBIDDEN_GIT_ENVIRONMENT_PREFIXES)
+        )
+    )
+    if present:
+        raise WorktreeError(
+            "Task Implementer checkpoint rejects repository-shaping Git "
+            f"environment: {', '.join(present)}"
+        )
+
+
+def _checkpoint_reject_special_paths(
+    repository: Path, paths: list[str], candidate_tree: str
+) -> None:
+    special: list[tuple[str, PurePosixPath]] = []
+    for tree in ("HEAD", candidate_tree):
+        entries = _git_bytes(repository, "ls-tree", "-r", "-z", tree).split(b"\0")
+        for raw in entries:
+            if not raw:
+                continue
+            metadata, separator, raw_path = raw.partition(b"\t")
+            if not separator:
+                raise WorktreeError("Git returned an invalid checkpoint tree record")
+            mode = metadata.split(b" ", 1)[0]
+            if mode in {b"120000", b"160000"}:
+                label = "tracked symlink" if mode == b"120000" else "gitlink"
+                special.append(
+                    (
+                        label,
+                        PurePosixPath(raw_path.decode("utf-8", "surrogateescape")),
+                    )
+                )
+    for value in paths:
+        candidate = PurePosixPath(value)
+        for label, boundary in special:
+            if candidate == boundary or boundary in candidate.parents:
+                raise WorktreeError(
+                    f"Task Implementer checkpoint path crosses a {label}: {boundary}"
+                )
+
+
+def _checkpoint_commit_paths(
+    repository: Path, before_head: str, commit_head: str
+) -> list[str]:
+    return _checkpoint_candidate_paths(
+        _git_bytes(
+            repository,
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            before_head,
+            commit_head,
+        )
+    )
+
+
+def _checkpoint_has_unstaged_or_untracked(repository: Path) -> bool:
+    unstaged = _run(["git", "diff", "--quiet", "--"], cwd=repository, allowed=(0, 1))
+    untracked = _git_bytes(
+        repository, "ls-files", "--others", "--exclude-standard", "-z"
+    )
+    return unstaged.returncode != 0 or bool(untracked)
+
+
+def _run_task_lane_checkpoint_commit(repository: Path) -> None:
+    try:
+        process = subprocess.Popen(
+            ["git", "commit", "-m", TASK_LANE_CHECKPOINT_MESSAGE],
+            cwd=repository,
+            env=_environment(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise WorktreeError(
+            "could not start Task Implementer checkpoint commit"
+        ) from error
+    try:
+        _stdout, _stderr = process.communicate(
+            timeout=TASK_LANE_CHECKPOINT_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as error:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise WorktreeError("Task Implementer checkpoint commit timed out") from error
+    if process.returncode != 0:
+        raise WorktreeError("Task Implementer checkpoint commit failed")
 
 
 def branch_changed_paths(repository: Path, base: str) -> list[str]:
@@ -1060,7 +1314,149 @@ def _task_lane_live(
         != str(lane["incarnation"])
     ):
         raise WorktreeError("Task Implementer lane state disagrees with live Git state")
+    try:
+        _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
+    except WorktreeError as error:
+        raise WorktreeError(
+            "Task Implementer lane source ref is unavailable from live Git state"
+        ) from error
     return manifest, managed
+
+
+def _verify_task_lane_anchor_head(
+    primary: Path,
+    lane: dict[str, object],
+    manifest: Manifest,
+    managed: ManagedWorktree,
+) -> None:
+    """Bind read-only anchor inspection to durable allowed HEAD evidence."""
+
+    name = str(lane["name"])
+    source_head = _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
+    state = str(lane["state"])
+    lane_head = str(lane["lane_head"])
+    allowed_heads = {lane_head}
+
+    try:
+        checkpoint = load_checkpoint(primary, str(lane["lane_id"]), required=False)
+    except TaskLaneStateError as error:
+        raise WorktreeError(str(error)) from error
+    if checkpoint is not None and state in {"idle", "pending"}:
+        checkpoint_identity = {
+            "name": lane["name"],
+            "branch": lane["branch"],
+            "worktree": lane["worktree"],
+            "task_scope": lane["scope"],
+        }
+        if any(
+            checkpoint.get(key) != value for key, value in checkpoint_identity.items()
+        ):
+            raise WorktreeError(
+                "Task Implementer checkpoint disagrees with its live lane"
+            )
+        checkpoint_head = checkpoint.get("commit_head")
+        if lane_head not in {checkpoint["before_head"], checkpoint_head}:
+            raise WorktreeError(
+                "Task Implementer checkpoint baseline disagrees with its lane"
+            )
+        if checkpoint_head is not None:
+            checkpoint_head = str(checkpoint_head)
+            if (
+                not _direct_child_commit(
+                    managed.path,
+                    str(checkpoint["before_head"]),
+                    checkpoint_head,
+                )
+                or _git(
+                    managed.path,
+                    "rev-parse",
+                    f"{checkpoint_head}^{{tree}}",
+                )
+                != checkpoint["commit_tree"]
+                or _git(
+                    managed.path,
+                    "show",
+                    "-s",
+                    "--format=%B",
+                    checkpoint_head,
+                ).strip()
+                != TASK_LANE_CHECKPOINT_MESSAGE
+            ):
+                raise WorktreeError(
+                    "Task Implementer checkpoint head lacks exact history proof"
+                )
+            allowed_heads.add(checkpoint_head)
+
+    if state == "active":
+        active = lane.get("active_generation")
+        if not isinstance(active, dict):
+            raise WorktreeError(
+                "Task Implementer active lane lacks generation identity"
+            )
+        try:
+            lease = load_lease(primary, name)
+        except InteropError as error:
+            raise WorktreeError(str(error)) from error
+        expected_lease = {
+            "state": "active",
+            "owner_kind": "task-implementer",
+            "name": name,
+            "branch": managed.branch,
+            "worktree": str(managed.path),
+            "scope": lane["scope"],
+            "common_dir": lane["common_dir"],
+            "workspace": active["workspace"],
+            "run_id": active["run_id"],
+            "task_scope": lane["scope"],
+            "initial_head": active["initial_head"],
+            "token": active["token"],
+        }
+        if (
+            lease is None
+            or active["initial_head"] != lane_head
+            or manifest.lease_state != "active"
+            or manifest.lease_owner != "task-implementer"
+            or manifest.lease_token != active["token"]
+            or any(lease.get(key) != value for key, value in expected_lease.items())
+        ):
+            raise WorktreeError(
+                "Task Implementer active lane disagrees with its lease proof"
+            )
+        allowed_heads = {str(lease.get("promoted_head") or lease["initial_head"])}
+
+    if state in {"integrating", "conflicted", "source-promoted"}:
+        journal = lane.get("integration")
+        if not isinstance(journal, dict) or journal.get("child_head") != lane_head:
+            raise WorktreeError(
+                "Task Implementer integration head disagrees with its lane journal"
+            )
+        if state == "source-promoted":
+            if manifest.status == "integrated":
+                candidate = journal.get("candidate_head")
+                if (
+                    candidate is None
+                    or candidate != manifest.integration_head
+                    or lane_head != manifest.integration_child_head
+                ):
+                    raise WorktreeError(
+                        "Task Implementer promoted head lacks manifest proof"
+                    )
+                allowed_heads.add(str(candidate))
+            elif (
+                manifest.status == "active"
+                and manifest.expected_head == manifest.base
+                and _is_ancestor(primary, manifest.base, source_head)
+            ):
+                allowed_heads.add(manifest.base)
+            else:
+                raise WorktreeError(
+                    "Task Implementer promoted head lacks recovery proof"
+                )
+
+    if managed.head not in allowed_heads:
+        raise WorktreeError(
+            "Task Implementer lane head disagrees with durable lifecycle proof"
+        )
 
 
 def _task_lane_refresh_idle(
@@ -1068,6 +1464,10 @@ def _task_lane_refresh_idle(
 ) -> dict[str, object]:
     if lane["state"] != "idle" or lane["pending_generations"]:
         return lane
+    if load_checkpoint(primary, str(lane["lane_id"]), required=False) is not None:
+        raise WorktreeError(
+            "Task Implementer lane retains an unfinished generation checkpoint"
+        )
     manifest, managed = _task_lane_live(primary, lane)
     if manifest.status != "active":
         return lane
@@ -1077,7 +1477,9 @@ def _task_lane_refresh_idle(
         )
     operation = _operation_in_progress(managed.path)
     if operation:
-        raise WorktreeError(f"Task Implementer lane operation is in progress: {operation}")
+        raise WorktreeError(
+            f"Task Implementer lane operation is in progress: {operation}"
+        )
     source_head = _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
     if managed.head == source_head:
         _write_config(primary, managed.branch, "base", source_head)
@@ -1237,9 +1639,7 @@ def _recover_task_lane_creation(
     elif manifest.status == "planned":
         write_manifest(
             primary,
-            manifest.updated(
-                status="recovery", expected_head=str(lane["base_head"])
-            ),
+            manifest.updated(status="recovery", expected_head=str(lane["base_head"])),
         )
     _remove_worktree_unlocked(cwd=primary, name=name, allow_task_lane=True)
     path = Path(str(lane["worktree"]))
@@ -1290,13 +1690,13 @@ def task_lane_ensure(*, cwd: Path, project: str | None) -> dict[str, Any]:
                     "scope": preflight.scope,
                 }
                 if any(existing.get(key) != value for key, value in expected.items()):
-                    raise WorktreeError("existing Task Implementer lane identity changed")
+                    raise WorktreeError(
+                        "existing Task Implementer lane identity changed"
+                    )
                 if existing["state"] in {"creating", "recovery"}:
                     existing = _recover_task_lane_creation(primary, existing)
                 else:
-                    return _task_lane_result_locked(
-                        primary, existing, status="reused"
-                    )
+                    return _task_lane_result_locked(primary, existing, status="reused")
 
             incarnation = (
                 int(existing["incarnation"]) + 1 if existing is not None else 1
@@ -1305,7 +1705,9 @@ def task_lane_ensure(*, cwd: Path, project: str | None) -> dict[str, Any]:
                 int(existing["latest_generation"]) if existing is not None else 0
             )
             suffix = f"-{preflight.lane_id[:8]}-{incarnation}"
-            descriptive = f"project-ti-{preflight.scope_slug}"[: 95 - len(suffix)].rstrip("-")
+            descriptive = f"project-ti-{preflight.scope_slug}"[
+                : 95 - len(suffix)
+            ].rstrip("-")
             name = f"{descriptive}{suffix}"
             _validate_name(name)
             branch = _branch_for_name(name)
@@ -1395,7 +1797,9 @@ def task_lane_ensure(*, cwd: Path, project: str | None) -> dict[str, Any]:
                     None,
                 )
                 if record is None:
-                    raise WorktreeError("created Task Implementer lane was not re-observed")
+                    raise WorktreeError(
+                        "created Task Implementer lane was not re-observed"
+                    )
                 managed = _managed_from_record(primary, record)
                 if (
                     managed.head != preflight.source_head
@@ -1443,7 +1847,10 @@ def _find_record(
     records = list_worktrees(primary)
     if current_root != primary:
         for record in records:
-            if _canonical(Path(record.path)) == current_root:
+            record_path = Path(record.path)
+            if Path(os.path.abspath(record_path)) != current_root:
+                continue
+            if _canonical(record_path) == current_root:
                 return record
         raise WorktreeError("current linked worktree is not registered")
     if name is not None:
@@ -1562,8 +1969,6 @@ def inspect_managed_anchor(*, cwd: Path) -> dict[str, Any]:
     managed = _managed_from_record(primary, record)
     manifest = load_manifest(primary, managed.name)
     assert manifest is not None
-    if manifest.status != "active":
-        raise WorktreeError(f"managed outer worktree is not active: {manifest.status}")
     current = _canonical(cwd)
     try:
         task_scope_cwd = current.relative_to(managed.path).as_posix() or "."
@@ -1604,13 +2009,18 @@ def inspect_managed_anchor(*, cwd: Path) -> dict[str, Any]:
         except TaskLaneStateError as error:
             raise WorktreeError(str(error)) from error
         assert lane is not None
-        if (
-            lane["name"] != managed.name
-            or lane["worktree"] != str(managed.path)
-            or lane["scope"] != managed.scope
-            or lane["branch"] != managed.branch
-        ):
-            raise WorktreeError("Task Implementer lane anchor identity is inconsistent")
+        if lane["state"] in {"creating", "recovery", "removing", "removed"}:
+            raise WorktreeError(
+                "Task Implementer lane anchor is unavailable from state "
+                f"{lane['state']}"
+            )
+        lane_manifest, lane_worktree = _task_lane_live(primary, lane)
+        _verify_task_lane_anchor_head(
+            primary,
+            lane,
+            lane_manifest,
+            lane_worktree,
+        )
         return {
             "action": "anchor-inspect",
             "status": "task-lane",
@@ -1631,6 +2041,8 @@ def inspect_managed_anchor(*, cwd: Path) -> dict[str, Any]:
             "source_ref": lane["source_ref"],
             "source_base": lane["base_head"],
         }
+    if manifest.status != "active":
+        raise WorktreeError(f"managed outer worktree is not active: {manifest.status}")
     return {
         "action": "anchor-inspect",
         "status": "managed",
@@ -2267,22 +2679,518 @@ def _reset_task_lane_manifest_lease(
     return updated
 
 
-def task_lane_generation_acquire(
+def _normalize_initial_generation_claims(
+    claims: list[dict[str, str]], changed_paths: list[str]
+) -> list[dict[str, str]]:
+    candidates = [*claims, *({"kind": "exact", "path": path} for path in changed_paths)]
+    normalized: dict[tuple[str, str], dict[str, str]] = {}
+    for item in candidates:
+        if set(item) != {"kind", "path"}:
+            raise WorktreeError("Task Implementer claim fields are invalid")
+        kind = item.get("kind")
+        path_value = item.get("path")
+        if (
+            kind not in {"exact", "prefix", "domain"}
+            or not isinstance(path_value, str)
+            or not path_value
+        ):
+            raise WorktreeError("Task Implementer claim is invalid")
+        if kind != "domain":
+            path = PurePosixPath(path_value)
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or path.as_posix() != path_value
+            ):
+                raise WorktreeError("Task Implementer path claim is invalid")
+        normalized[(str(kind), path_value)] = {
+            "kind": str(kind),
+            "path": path_value,
+        }
+    return [normalized[key] for key in sorted(normalized)]
+
+
+def _assert_initial_generation_claims_available(
+    primary: Path, lane_id: str, claims: list[dict[str, str]]
+) -> None:
+    for other in all_lanes(primary):
+        if other["lane_id"] == lane_id or other["state"] in {"removed", "removing"}:
+            continue
+        for claim in claims:
+            for other_claim in other["claims"]:
+                if _claim_overlaps(claim, other_claim):
+                    raise WorktreeError(
+                        "Task Implementer repository claim conflicts with lane "
+                        f"{other['lane_id']}: {claim['path']}"
+                    )
+    for checkpoint in all_checkpoints(primary):
+        if checkpoint["lane_id"] == lane_id:
+            continue
+        for claim in claims:
+            for other_claim in checkpoint["claims"]:
+                if _claim_overlaps(claim, other_claim):
+                    raise WorktreeError(
+                        "Task Implementer repository claim conflicts with an active "
+                        f"lane checkpoint: {claim['path']}"
+                    )
+
+
+def _task_lane_checkpoint_identity(
+    *,
+    lane: dict[str, object],
+    managed: ManagedWorktree,
+    workspace: Path,
+    run_id: str,
+    task_scope: str,
+    before_head: str,
+) -> dict[str, object]:
+    return {
+        "lane_id": lane["lane_id"],
+        "name": lane["name"],
+        "branch": managed.branch,
+        "worktree": str(managed.path),
+        "workspace": str(workspace.resolve()),
+        "run_id": run_id,
+        "task_scope": task_scope,
+        "before_head": before_head,
+    }
+
+
+def _assert_task_lane_checkpoint_identity(
+    *,
+    checkpoint: dict[str, object],
+    lane: dict[str, object],
+    managed: ManagedWorktree,
+    workspace: Path,
+    run_id: str,
+    task_scope: str,
+) -> None:
+    identity = _task_lane_checkpoint_identity(
+        lane=lane,
+        managed=managed,
+        workspace=workspace,
+        run_id=run_id,
+        task_scope=task_scope,
+        before_head=str(checkpoint["before_head"]),
+    )
+    if any(checkpoint.get(key) != value for key, value in identity.items()):
+        raise WorktreeError("Task Implementer lane retains another run checkpoint")
+
+
+def _task_lane_checkpoint_paths_sha256(paths: list[str]) -> str:
+    return hashlib.sha256(
+        json.dumps(paths, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def _task_lane_checkpoint_index_lock(repository: Path) -> Path:
+    return Path(
+        _git(
+            repository,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index.lock",
+        )
+    )
+
+
+def _assert_task_lane_checkpoint_mutation_boundary(
+    *,
+    primary: Path,
+    lane: dict[str, object],
+    managed: ManagedWorktree,
+    expected_head: str,
+) -> None:
+    branch = _git(managed.path, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1))
+    if (
+        branch != managed.branch
+        or _git(managed.path, "rev-parse", "HEAD") != expected_head
+    ):
+        raise WorktreeError(
+            "Task Implementer checkpoint branch or head changed at its mutation boundary"
+        )
+    if (
+        _read_config(primary, managed.branch, "name") != managed.name
+        or _read_config(primary, managed.branch, "path") != str(managed.path)
+        or _read_config(primary, managed.branch, "scope") != managed.scope
+        or _read_task_lane_config(primary, managed.branch, "lane_id") != lane["lane_id"]
+        or _read_task_lane_config(primary, managed.branch, "source_ref")
+        != lane["source_ref"]
+        or _read_task_lane_config(primary, managed.branch, "incarnation")
+        != str(lane["incarnation"])
+    ):
+        raise WorktreeError("Task Implementer checkpoint branch configuration changed")
+    operation = _operation_in_progress(managed.path)
+    if operation:
+        raise WorktreeError(
+            f"Task Implementer lane operation is in progress: {operation}"
+        )
+    if _task_lane_checkpoint_index_lock(managed.path).exists():
+        raise WorktreeError("Task Implementer lane Git index is locked")
+
+
+def task_lane_generation_prepare(
     *,
     cwd: Path,
     workspace: Path,
     run_id: str,
     task_scope: str,
-    initial_head: str,
+    expected_head: str,
+    claims: list[dict[str, str]],
 ) -> dict[str, Any]:
+    """Prepare and reserve an exact whole-lane candidate for agent review."""
+
+    _checkpoint_reject_git_environment()
     anchor = inspect_managed_anchor(cwd=cwd)
     if anchor["status"] != "task-lane":
         raise WorktreeError("Task Implementer generation requires its persistent lane")
     primary = Path(str(anchor["primary"]))
     name = str(anchor["name"])
     try:
-        with integration_transition_lock(primary, name):
+        with (
+            task_lane_transition_lock(primary),
+            integration_transition_lock(primary, name),
+            interop_lock(primary),
+        ):
+            lane, _, managed = _task_lane_by_name(primary, name)
+            if managed.scope != task_scope:
+                raise WorktreeError(
+                    "Task Implementer generation scope does not match its lane"
+                )
+            active = lane["active_generation"]
+            if active is not None:
+                if (
+                    active["run_id"] != run_id
+                    or active["workspace"] != str(workspace.resolve())
+                    or managed.head != active["initial_head"]
+                    or status_paths(managed.path)
+                ):
+                    raise WorktreeError(
+                        "Task Implementer lane is already owned by another active run"
+                    )
+                checkpoint = load_checkpoint(
+                    primary, str(lane["lane_id"]), required=True
+                )
+                assert checkpoint is not None
+                if expected_head not in {
+                    checkpoint["before_head"],
+                    active["initial_head"],
+                }:
+                    raise WorktreeError(
+                        "Task Implementer active checkpoint baseline changed"
+                    )
+                _assert_task_lane_checkpoint_identity(
+                    checkpoint=checkpoint,
+                    lane=lane,
+                    managed=managed,
+                    workspace=workspace,
+                    run_id=run_id,
+                    task_scope=task_scope,
+                )
+                initial_head = str(active["initial_head"])
+                active_tree = _git(
+                    managed.path, "rev-parse", f"{initial_head}^{{tree}}"
+                )
+                commit_head = checkpoint.get("commit_head")
+                if commit_head is None:
+                    history_valid = (
+                        checkpoint["state"] == "prepared"
+                        and checkpoint["before_head"] == initial_head
+                        and checkpoint["candidate_tree"] == active_tree
+                        and checkpoint["changed_paths"] == []
+                    )
+                else:
+                    history_valid = (
+                        checkpoint["state"] == "committed"
+                        and commit_head == initial_head
+                        and checkpoint.get("commit_tree")
+                        == checkpoint["candidate_tree"]
+                        and checkpoint["candidate_tree"] == active_tree
+                        and _direct_child_commit(
+                            managed.path,
+                            str(checkpoint["before_head"]),
+                            initial_head,
+                        )
+                        and _git(
+                            managed.path,
+                            "show",
+                            "-s",
+                            "--format=%B",
+                            initial_head,
+                        ).strip()
+                        == TASK_LANE_CHECKPOINT_MESSAGE
+                    )
+                expected_claims = _normalize_initial_generation_claims(
+                    claims, list(checkpoint["changed_paths"])
+                )
+                active_claims = sorted(
+                    (
+                        {"kind": str(item["kind"]), "path": str(item["path"])}
+                        for item in lane["claims"]
+                        if item["generation"] == active["generation"]
+                    ),
+                    key=lambda item: (item["kind"], item["path"]),
+                )
+                if (
+                    not history_valid
+                    or checkpoint["claims"] != expected_claims
+                    or active_claims != expected_claims
+                ):
+                    raise WorktreeError(
+                        "Task Implementer active checkpoint recovery is inconsistent"
+                    )
+                return {
+                    "action": "task-lane-generation-prepare",
+                    "status": "active-recovered",
+                    "checkpoint_state": checkpoint["state"],
+                    "requires_review": bool(checkpoint["changed_paths"]),
+                    "lane_id": checkpoint["lane_id"],
+                    "before_head": checkpoint["before_head"],
+                    "candidate_tree": checkpoint["candidate_tree"],
+                    "changed_paths": checkpoint["changed_paths"],
+                    "paths_sha256": _task_lane_checkpoint_paths_sha256(
+                        list(checkpoint["changed_paths"])
+                    ),
+                    "review_token": checkpoint["token"],
+                }
+            if lane["state"] not in {"idle", "pending"}:
+                raise WorktreeError(
+                    f"Task Implementer lane cannot prepare from state {lane['state']}"
+                )
+            _assert_task_lane_checkpoint_mutation_boundary(
+                primary=primary,
+                lane=lane,
+                managed=managed,
+                expected_head=managed.head,
+            )
+            checkpoint = load_checkpoint(primary, str(lane["lane_id"]), required=False)
+            recovered = checkpoint is not None
+            if checkpoint is None:
+                if managed.head != expected_head or lane["lane_head"] != expected_head:
+                    raise WorktreeError(
+                        "Task Implementer run baseline does not match the persistent lane"
+                    )
+                preview = _preview_task_lane_checkpoint(primary, managed.path)
+                changed_paths = list(preview["changed_paths"])
+                _checkpoint_reject_special_paths(
+                    managed.path, changed_paths, str(preview["candidate_tree"])
+                )
+                initial_claims = _normalize_initial_generation_claims(
+                    claims, changed_paths
+                )
+                _assert_initial_generation_claims_available(
+                    primary, str(lane["lane_id"]), initial_claims
+                )
+                checkpoint = {
+                    "schema": CHECKPOINT_SCHEMA,
+                    "kind": CHECKPOINT_KIND,
+                    "state": "prepared",
+                    **_task_lane_checkpoint_identity(
+                        lane=lane,
+                        managed=managed,
+                        workspace=workspace,
+                        run_id=run_id,
+                        task_scope=task_scope,
+                        before_head=expected_head,
+                    ),
+                    "initial_index_tree": preview["initial_index_tree"],
+                    "status_sha256": preview["status_sha256"],
+                    "candidate_tree": preview["candidate_tree"],
+                    "changed_paths": changed_paths,
+                    "claims": initial_claims,
+                    "token": secrets.token_hex(16),
+                    "commit_head": None,
+                    "commit_tree": None,
+                }
+                write_checkpoint(primary, checkpoint)
+            else:
+                _assert_task_lane_checkpoint_identity(
+                    checkpoint=checkpoint,
+                    lane=lane,
+                    managed=managed,
+                    workspace=workspace,
+                    run_id=run_id,
+                    task_scope=task_scope,
+                )
+                if expected_head not in {
+                    checkpoint["before_head"],
+                    checkpoint.get("commit_head"),
+                    managed.head,
+                }:
+                    raise WorktreeError(
+                        "Task Implementer checkpoint retry baseline changed"
+                    )
+                before_head = str(checkpoint["before_head"])
+                current_head = _git(managed.path, "rev-parse", "HEAD")
+                if checkpoint["state"] == "prepared":
+                    preview = _preview_task_lane_checkpoint(primary, managed.path)
+                    changed_paths = list(preview["changed_paths"])
+                    _checkpoint_reject_special_paths(
+                        managed.path, changed_paths, str(preview["candidate_tree"])
+                    )
+                    refreshed_claims = _normalize_initial_generation_claims(
+                        claims, changed_paths
+                    )
+                    _assert_initial_generation_claims_available(
+                        primary, str(lane["lane_id"]), refreshed_claims
+                    )
+                    if (
+                        any(
+                            preview[key] != checkpoint[key]
+                            for key in (
+                                "initial_index_tree",
+                                "status_sha256",
+                                "candidate_tree",
+                                "changed_paths",
+                            )
+                        )
+                        or checkpoint["claims"] != refreshed_claims
+                    ):
+                        checkpoint = {
+                            **checkpoint,
+                            "initial_index_tree": preview["initial_index_tree"],
+                            "status_sha256": preview["status_sha256"],
+                            "candidate_tree": preview["candidate_tree"],
+                            "changed_paths": changed_paths,
+                            "claims": refreshed_claims,
+                            "token": secrets.token_hex(16),
+                        }
+                        write_checkpoint(primary, checkpoint)
+                else:
+                    expected_claims = _normalize_initial_generation_claims(
+                        claims, list(checkpoint["changed_paths"])
+                    )
+                    if checkpoint["claims"] != expected_claims:
+                        raise WorktreeError(
+                            "Task Implementer checkpoint claims changed before recovery"
+                        )
+                    _assert_initial_generation_claims_available(
+                        primary, str(lane["lane_id"]), expected_claims
+                    )
+                if checkpoint["state"] == "review-required":
+                    commit_tree = _git(
+                        managed.path, "rev-parse", f"{current_head}^{{tree}}"
+                    )
+                    clean = not status_paths(managed.path)
+                    message = _git(
+                        managed.path, "show", "-s", "--format=%B", current_head
+                    )
+                    if (
+                        not _direct_child_commit(
+                            managed.path, before_head, current_head
+                        )
+                        or message.strip() != TASK_LANE_CHECKPOINT_MESSAGE
+                        or not clean
+                    ):
+                        raise WorktreeError(
+                            "Task Implementer checkpoint review state is inconsistent"
+                        )
+                    changed_paths = _checkpoint_commit_paths(
+                        managed.path, before_head, current_head
+                    )
+                    _checkpoint_reject_special_paths(
+                        managed.path, changed_paths, commit_tree
+                    )
+                    reviewed_claims = _normalize_initial_generation_claims(
+                        claims, changed_paths
+                    )
+                    _assert_initial_generation_claims_available(
+                        primary, str(lane["lane_id"]), reviewed_claims
+                    )
+                    checkpoint = {
+                        **checkpoint,
+                        "candidate_tree": commit_tree,
+                        "changed_paths": changed_paths,
+                        "claims": reviewed_claims,
+                        "token": secrets.token_hex(16),
+                        "commit_head": current_head,
+                        "commit_tree": commit_tree,
+                    }
+                    write_checkpoint(primary, checkpoint)
+                elif current_head != before_head:
+                    commit_tree = _git(
+                        managed.path, "rev-parse", f"{current_head}^{{tree}}"
+                    )
+                    if (
+                        checkpoint["state"] != "committed"
+                        or checkpoint.get("commit_head") != current_head
+                        or checkpoint.get("commit_tree") != checkpoint["candidate_tree"]
+                        or commit_tree != checkpoint["candidate_tree"]
+                        or not _direct_child_commit(
+                            managed.path, before_head, current_head
+                        )
+                        or _git(
+                            managed.path,
+                            "show",
+                            "-s",
+                            "--format=%B",
+                            current_head,
+                        ).strip()
+                        != TASK_LANE_CHECKPOINT_MESSAGE
+                        or status_paths(managed.path)
+                    ):
+                        raise WorktreeError(
+                            "Task Implementer committed checkpoint is inconsistent"
+                        )
+                elif checkpoint["state"] in {"committed", "review-required"}:
+                    raise WorktreeError(
+                        "Task Implementer checkpoint commit evidence disagrees with HEAD"
+                    )
+                elif checkpoint["state"] == "staged":
+                    if _git(managed.path, "write-tree") != checkpoint[
+                        "candidate_tree"
+                    ] or _checkpoint_has_unstaged_or_untracked(managed.path):
+                        raise WorktreeError(
+                            "Task Implementer staged checkpoint changed after review"
+                        )
+            return {
+                "action": "task-lane-generation-prepare",
+                "status": "recovered" if recovered else "prepared",
+                "checkpoint_state": checkpoint["state"],
+                "requires_review": bool(checkpoint["changed_paths"]),
+                "lane_id": checkpoint["lane_id"],
+                "before_head": checkpoint["before_head"],
+                "candidate_tree": checkpoint["candidate_tree"],
+                "changed_paths": checkpoint["changed_paths"],
+                "paths_sha256": _task_lane_checkpoint_paths_sha256(
+                    list(checkpoint["changed_paths"])
+                ),
+                "review_token": checkpoint["token"],
+            }
+    except (InteropError, StateError, TaskLaneStateError) as error:
+        raise WorktreeError(str(error)) from error
+
+
+def task_lane_generation_open(
+    *,
+    cwd: Path,
+    workspace: Path,
+    run_id: str,
+    task_scope: str,
+    expected_head: str,
+    claims: list[dict[str, str]],
+    review_token: str,
+    reviewed_tree: str,
+    reviewed_paths_sha256: str,
+) -> dict[str, Any]:
+    _checkpoint_reject_git_environment()
+    anchor = inspect_managed_anchor(cwd=cwd)
+    if anchor["status"] != "task-lane":
+        raise WorktreeError("Task Implementer generation requires its persistent lane")
+    primary = Path(str(anchor["primary"]))
+    name = str(anchor["name"])
+    try:
+        with (
+            task_lane_transition_lock(primary),
+            integration_transition_lock(primary, name),
+            interop_lock(primary),
+        ):
             lane, manifest, managed = _task_lane_by_name(primary, name)
+            if managed.scope != task_scope:
+                raise WorktreeError(
+                    "Task Implementer generation scope does not match its lane"
+                )
             if lane["state"] in {"integrating", "conflicted", "source-promoted"}:
                 raise WorktreeError(
                     "Task Implementer lane integration must finish before another run"
@@ -2293,15 +3201,94 @@ def task_lane_generation_acquire(
                 )
             active = lane["active_generation"]
             if active is not None:
-                if (
-                    active["run_id"] != run_id
-                    or active["workspace"] != str(workspace.resolve())
-                    or active["initial_head"] != initial_head
+                operation = _operation_in_progress(managed.path)
+                if operation:
+                    raise WorktreeError(
+                        f"Task Implementer lane operation is in progress: {operation}"
+                    )
+                if active["run_id"] != run_id or active["workspace"] != str(
+                    workspace.resolve()
                 ):
                     raise WorktreeError(
                         "Task Implementer lane is already owned by another active run"
                     )
-                result = acquire_task_lease(
+                if (
+                    managed.head != active["initial_head"]
+                    or expected_head != active["initial_head"]
+                    or status_paths(managed.path)
+                ):
+                    raise WorktreeError(
+                        "active Task Implementer generation must remain at its clean "
+                        "initial checkpoint during open recovery"
+                    )
+                checkpoint = load_checkpoint(
+                    primary, str(lane["lane_id"]), required=True
+                )
+                assert checkpoint is not None
+                _assert_task_lane_checkpoint_identity(
+                    checkpoint=checkpoint,
+                    lane=lane,
+                    managed=managed,
+                    workspace=workspace,
+                    run_id=run_id,
+                    task_scope=task_scope,
+                )
+                checkpoint_head = checkpoint.get("commit_head")
+                initial_head = str(active["initial_head"])
+                checkpoint_tree = str(checkpoint["candidate_tree"])
+                active_tree = _git(
+                    managed.path, "rev-parse", f"{initial_head}^{{tree}}"
+                )
+                if checkpoint_head is None:
+                    checkpoint_history_valid = (
+                        checkpoint["state"] == "prepared"
+                        and initial_head == checkpoint["before_head"]
+                        and checkpoint_tree == active_tree
+                        and checkpoint["changed_paths"] == []
+                    )
+                else:
+                    checkpoint_history_valid = (
+                        checkpoint["state"] == "committed"
+                        and checkpoint_head == initial_head
+                        and checkpoint.get("commit_tree") == checkpoint_tree
+                        and checkpoint_tree == active_tree
+                        and _direct_child_commit(
+                            managed.path,
+                            str(checkpoint["before_head"]),
+                            initial_head,
+                        )
+                        and _git(
+                            managed.path,
+                            "show",
+                            "-s",
+                            "--format=%B",
+                            initial_head,
+                        ).strip()
+                        == TASK_LANE_CHECKPOINT_MESSAGE
+                    )
+                if not checkpoint_history_valid:
+                    raise WorktreeError(
+                        "Task Implementer active checkpoint history is inconsistent"
+                    )
+                expected_checkpoint_claims = _normalize_initial_generation_claims(
+                    claims, list(checkpoint["changed_paths"])
+                )
+                active_claims = sorted(
+                    (
+                        {"kind": str(item["kind"]), "path": str(item["path"])}
+                        for item in lane["claims"]
+                        if item["generation"] == active["generation"]
+                    ),
+                    key=lambda item: (item["kind"], item["path"]),
+                )
+                if (
+                    checkpoint["claims"] != expected_checkpoint_claims
+                    or active_claims != expected_checkpoint_claims
+                ):
+                    raise WorktreeError(
+                        "Task Implementer generation claims changed before recovery"
+                    )
+                result = acquire_task_lease_unlocked(
                     primary,
                     name=name,
                     branch=managed.branch,
@@ -2315,24 +3302,243 @@ def task_lane_generation_acquire(
                     owner_kind="task-implementer",
                 )
                 return {
-                    "action": "task-lane-generation-acquire",
+                    **result,
+                    "action": "task-lane-generation-open",
+                    "status": "recovered",
+                    "checkpoint_status": "recovered",
+                    "checkpoint_before_head": checkpoint["before_head"],
+                    "checkpoint_head": initial_head,
+                    "checkpoint_tree": active_tree,
+                    "checkpoint_paths": checkpoint["changed_paths"],
                     "generation": active["generation"],
                     "lane_id": lane["lane_id"],
-                    **result,
                 }
-            if managed.head != initial_head or lane["lane_head"] != initial_head:
-                raise WorktreeError(
-                    "Task Implementer run baseline does not match the persistent lane"
-                )
-            if status_paths(managed.path):
-                raise WorktreeError(
-                    "Task Implementer lane must be completely clean before a run"
-                )
             operation = _operation_in_progress(managed.path)
             if operation:
                 raise WorktreeError(
                     f"Task Implementer lane operation is in progress: {operation}"
                 )
+            if _task_lane_checkpoint_index_lock(managed.path).exists():
+                raise WorktreeError("Task Implementer lane Git index is locked")
+            checkpoint = load_checkpoint(primary, str(lane["lane_id"]), required=False)
+            if checkpoint is None:
+                raise WorktreeError(
+                    "Task Implementer checkpoint must be prepared and reviewed before open"
+                )
+            recovered = checkpoint["state"] != "prepared"
+            _assert_task_lane_checkpoint_identity(
+                checkpoint=checkpoint,
+                lane=lane,
+                managed=managed,
+                workspace=workspace,
+                run_id=run_id,
+                task_scope=task_scope,
+            )
+            if expected_head not in {
+                checkpoint["before_head"],
+                checkpoint.get("commit_head"),
+                managed.head,
+            }:
+                raise WorktreeError(
+                    "Task Implementer checkpoint retry baseline changed"
+                )
+            expected_claims = _normalize_initial_generation_claims(
+                claims, list(checkpoint["changed_paths"])
+            )
+            if checkpoint["claims"] != expected_claims:
+                raise WorktreeError(
+                    "Task Implementer checkpoint claims changed before recovery"
+                )
+            if (
+                checkpoint["token"] != review_token
+                or checkpoint["candidate_tree"] != reviewed_tree
+                or _task_lane_checkpoint_paths_sha256(list(checkpoint["changed_paths"]))
+                != reviewed_paths_sha256
+            ):
+                raise WorktreeError(
+                    "Task Implementer checkpoint review evidence changed; prepare and "
+                    "review it again"
+                )
+            _assert_initial_generation_claims_available(
+                primary, str(lane["lane_id"]), expected_claims
+            )
+
+            before_head = str(checkpoint["before_head"])
+            head_tree = _git(managed.path, "rev-parse", f"{before_head}^{{tree}}")
+            current_head = _git(managed.path, "rev-parse", "HEAD")
+            if current_head != before_head:
+                _assert_task_lane_checkpoint_mutation_boundary(
+                    primary=primary,
+                    lane=lane,
+                    managed=managed,
+                    expected_head=current_head,
+                )
+                commit_tree = _git(
+                    managed.path, "rev-parse", f"{current_head}^{{tree}}"
+                )
+                clean = not status_paths(managed.path)
+                message = _git(managed.path, "show", "-s", "--format=%B", current_head)
+                if (
+                    not _direct_child_commit(managed.path, before_head, current_head)
+                    or message.strip() != TASK_LANE_CHECKPOINT_MESSAGE
+                ):
+                    raise WorktreeError(
+                        "Task Implementer checkpoint history moved outside its transaction"
+                    )
+                if checkpoint["state"] == "review-required":
+                    changed_paths = _checkpoint_commit_paths(
+                        managed.path, before_head, current_head
+                    )
+                    if (
+                        not clean
+                        or checkpoint.get("commit_head") != current_head
+                        or checkpoint.get("commit_tree") != commit_tree
+                        or checkpoint["candidate_tree"] != commit_tree
+                        or checkpoint["changed_paths"] != changed_paths
+                    ):
+                        raise WorktreeError(
+                            "Task Implementer checkpoint changed after explicit review"
+                        )
+                    checkpoint = {
+                        **checkpoint,
+                        "state": "committed",
+                    }
+                    write_checkpoint(primary, checkpoint)
+                if commit_tree != checkpoint["candidate_tree"] or not clean:
+                    checkpoint = {
+                        **checkpoint,
+                        "state": "review-required",
+                        "token": secrets.token_hex(16),
+                        "commit_head": current_head,
+                        "commit_tree": commit_tree,
+                    }
+                    write_checkpoint(primary, checkpoint)
+                    raise WorktreeError(
+                        "Task Implementer checkpoint commit requires review before recovery"
+                    )
+                checkpoint = {
+                    **checkpoint,
+                    "state": "committed",
+                    "commit_head": current_head,
+                    "commit_tree": commit_tree,
+                }
+                write_checkpoint(primary, checkpoint)
+            elif checkpoint["state"] in {"committed", "review-required"}:
+                raise WorktreeError(
+                    "Task Implementer checkpoint commit evidence disagrees with HEAD"
+                )
+            else:
+                staged_recovery = (
+                    checkpoint["state"] == "staged"
+                    and _git(managed.path, "write-tree") == checkpoint["candidate_tree"]
+                    and not _checkpoint_has_unstaged_or_untracked(managed.path)
+                )
+                if not staged_recovery:
+                    preview = _preview_task_lane_checkpoint(primary, managed.path)
+                    if any(
+                        preview[key] != checkpoint[key]
+                        for key in (
+                            "initial_index_tree",
+                            "status_sha256",
+                            "candidate_tree",
+                            "changed_paths",
+                        )
+                    ):
+                        raise WorktreeError(
+                            "Task Implementer checkpoint candidate changed after review"
+                        )
+                _assert_task_lane_checkpoint_mutation_boundary(
+                    primary=primary,
+                    lane=lane,
+                    managed=managed,
+                    expected_head=before_head,
+                )
+                _git(managed.path, "add", "-A")
+                staged_tree = _git(managed.path, "write-tree")
+                if staged_tree != checkpoint["candidate_tree"]:
+                    raise WorktreeError(
+                        "Task Implementer checkpoint staged tree changed after review"
+                    )
+                staged_check = _run(
+                    ["git", "diff", "--cached", "--check"],
+                    cwd=managed.path,
+                    allowed=(0, 2),
+                )
+                if staged_check.returncode != 0:
+                    raise WorktreeError(
+                        "Task Implementer checkpoint diff validation failed"
+                    )
+                if staged_tree != head_tree:
+                    checkpoint = {**checkpoint, "state": "staged"}
+                    write_checkpoint(primary, checkpoint)
+                    try:
+                        _run_task_lane_checkpoint_commit(managed.path)
+                    except WorktreeError:
+                        if _git(managed.path, "rev-parse", "HEAD") == before_head:
+                            raise
+                    current_head = _git(managed.path, "rev-parse", "HEAD")
+                    _assert_task_lane_checkpoint_mutation_boundary(
+                        primary=primary,
+                        lane=lane,
+                        managed=managed,
+                        expected_head=current_head,
+                    )
+                    commit_tree = _git(
+                        managed.path, "rev-parse", f"{current_head}^{{tree}}"
+                    )
+                    clean = not status_paths(managed.path)
+                    message = _git(
+                        managed.path, "show", "-s", "--format=%B", current_head
+                    )
+                    if (
+                        not _direct_child_commit(
+                            managed.path, before_head, current_head
+                        )
+                        or message.strip() != TASK_LANE_CHECKPOINT_MESSAGE
+                        or commit_tree != checkpoint["candidate_tree"]
+                        or not clean
+                    ):
+                        checkpoint = {
+                            **checkpoint,
+                            "state": "review-required",
+                            "token": secrets.token_hex(16),
+                            "commit_head": current_head,
+                            "commit_tree": commit_tree,
+                        }
+                        write_checkpoint(primary, checkpoint)
+                        raise WorktreeError(
+                            "Task Implementer checkpoint commit requires review"
+                        )
+                    checkpoint = {
+                        **checkpoint,
+                        "state": "committed",
+                        "commit_head": current_head,
+                        "commit_tree": commit_tree,
+                    }
+                    write_checkpoint(primary, checkpoint)
+                elif status_paths(managed.path):
+                    raise WorktreeError(
+                        "Task Implementer checkpoint no-op did not clean the lane"
+                    )
+
+            initial_head = str(checkpoint.get("commit_head") or before_head)
+            _assert_task_lane_checkpoint_mutation_boundary(
+                primary=primary,
+                lane=lane,
+                managed=managed,
+                expected_head=initial_head,
+            )
+            if status_paths(managed.path):
+                raise WorktreeError(
+                    "Task Implementer checkpoint lane changed before lease acquisition"
+                )
+            checkpoint_status = (
+                "recovered"
+                if recovered
+                else "created"
+                if checkpoint.get("commit_head") is not None
+                else "not-needed"
+            )
             existing_lease = load_lease(primary, name)
             if existing_lease is not None:
                 expected_lease = {
@@ -2349,7 +3555,10 @@ def task_lane_generation_acquire(
                     "promoted_head": None,
                 }
                 recoverable = (
-                    all(existing_lease.get(key) == value for key, value in expected_lease.items())
+                    all(
+                        existing_lease.get(key) == value
+                        for key, value in expected_lease.items()
+                    )
                     and existing_lease.get("resources") == []
                     and existing_lease.get("promotion_heads") == [initial_head]
                 )
@@ -2357,50 +3566,28 @@ def task_lane_generation_acquire(
                     raise WorktreeError(
                         "Task Implementer lane retains an unreconciled coordinator lease"
                     )
-                token = str(existing_lease["token"])
-                _record_manifest_lease(
-                    primary,
-                    name=name,
-                    owner_kind="task-implementer",
-                    token=token,
-                    state="active",
-                )
-                generation = int(lane["latest_generation"]) + 1
-                lane = {
-                    **lane,
-                    "state": "active",
-                    "active_generation": {
-                        "generation": generation,
-                        "run_id": run_id,
-                        "token": token,
-                        "workspace": str(workspace.resolve()),
-                        "initial_head": initial_head,
-                    },
-                }
-                write_lane(primary, lane)
-                return {
-                    "action": "task-lane-generation-acquire",
-                    "status": "recovered",
-                    "state": "active",
-                    "generation": generation,
-                    "lane_id": lane["lane_id"],
-                    **existing_lease,
-                }
             if manifest.lease_state != "none":
-                previous = int(lane["latest_generation"])
-                receipt = (
-                    load_generation(primary, str(lane["lane_id"]), previous)
-                    if previous
-                    else None
-                )
-                if receipt is None or receipt["token"] != manifest.lease_token:
-                    raise WorktreeError(
-                        "Task Implementer lane lease marker lacks its generation receipt"
+                if existing_lease is None or (
+                    manifest.lease_owner != "task-implementer"
+                    or manifest.lease_token != existing_lease["token"]
+                ):
+                    previous = int(lane["latest_generation"])
+                    receipt = (
+                        load_generation(primary, str(lane["lane_id"]), previous)
+                        if previous
+                        else None
                     )
-                manifest = _reset_task_lane_manifest_lease(
-                    primary, manifest, token=str(receipt["token"])
-                )
-            result = acquire_task_lease(
+                    if receipt is None or receipt["token"] != manifest.lease_token:
+                        raise WorktreeError(
+                            "Task Implementer lane lease marker lacks its generation receipt"
+                        )
+                    manifest = _reset_task_lane_manifest_lease(
+                        primary, manifest, token=str(receipt["token"])
+                    )
+            if lane["lane_head"] != initial_head:
+                lane = {**lane, "lane_head": initial_head}
+                write_lane(primary, lane)
+            result = acquire_task_lease_unlocked(
                 primary,
                 name=name,
                 branch=managed.branch,
@@ -2413,14 +3600,59 @@ def task_lane_generation_acquire(
                 initial_head=initial_head,
                 owner_kind="task-implementer",
             )
-            _record_manifest_lease(
-                primary,
-                name=name,
-                owner_kind="task-implementer",
-                token=str(result["token"]),
-                state="active",
-            )
+            try:
+                _assert_task_lane_checkpoint_mutation_boundary(
+                    primary=primary,
+                    lane=lane,
+                    managed=managed,
+                    expected_head=initial_head,
+                )
+                if status_paths(managed.path):
+                    raise WorktreeError(
+                        "Task Implementer checkpoint lane is no longer clean"
+                    )
+            except WorktreeError as error:
+                if result["status"] == "acquired":
+                    rollback_task_lease_acquisition_unlocked(
+                        primary,
+                        name=name,
+                        token=str(result["token"]),
+                    )
+                raise WorktreeError(
+                    "Task Implementer checkpoint changed during task lease acquisition"
+                ) from error
+            manifest = load_manifest(primary, name)
+            assert manifest is not None
+            if manifest.lease_state == "released":
+                raise WorktreeError("released ownership manifest cannot become active")
+            expected_identity = ("task-implementer", str(result["token"]))
+            if (
+                manifest.lease_state == "active"
+                and (
+                    manifest.lease_owner,
+                    manifest.lease_token,
+                )
+                != expected_identity
+            ):
+                raise WorktreeError("task lease disagrees with its ownership manifest")
+            if (
+                manifest.lease_state != "active"
+                or (manifest.lease_owner, manifest.lease_token) != expected_identity
+                or manifest.expected_head != initial_head
+            ):
+                write_manifest(
+                    primary,
+                    manifest.updated(
+                        expected_head=initial_head,
+                        lease_state="active",
+                        lease_owner="task-implementer",
+                        lease_token=str(result["token"]),
+                    ),
+                )
             generation = int(lane["latest_generation"]) + 1
+            bound_claims = [
+                {**claim, "generation": generation} for claim in checkpoint["claims"]
+            ]
             lane = {
                 **lane,
                 "state": "active",
@@ -2431,13 +3663,22 @@ def task_lane_generation_acquire(
                     "workspace": str(workspace.resolve()),
                     "initial_head": initial_head,
                 },
+                "claims": [*lane["claims"], *bound_claims],
             }
             write_lane(primary, lane)
             return {
-                "action": "task-lane-generation-acquire",
+                **result,
+                "action": "task-lane-generation-open",
+                "status": "recovered" if recovered else "opened",
+                "checkpoint_status": checkpoint_status,
+                "checkpoint_before_head": before_head,
+                "checkpoint_head": initial_head,
+                "checkpoint_tree": _git(
+                    managed.path, "rev-parse", f"{initial_head}^{{tree}}"
+                ),
+                "checkpoint_paths": checkpoint["changed_paths"],
                 "generation": generation,
                 "lane_id": lane["lane_id"],
-                **result,
             }
     except (InteropError, StateError, TaskLaneStateError) as error:
         raise WorktreeError(str(error)) from error
@@ -2557,19 +3798,17 @@ def task_lane_generation_claims(
                     normalized.append(candidate)
                     existing_identities.add(identity)
             candidate_lane = {**lane, "claims": [*lane["claims"], *normalized]}
-            candidate_lane = validate_lane(
-                candidate_lane, str(lane["lane_id"])
-            )
+            candidate_lane = validate_lane(candidate_lane, str(lane["lane_id"]))
             own_claims = [
                 item
                 for item in candidate_lane["claims"]
                 if item["generation"] == generation
             ]
             for other in all_lanes(primary):
-                if (
-                    other["lane_id"] == lane["lane_id"]
-                    or other["state"] in {"removed", "removing"}
-                ):
+                if other["lane_id"] == lane["lane_id"] or other["state"] in {
+                    "removed",
+                    "removing",
+                }:
                     continue
                 for own_claim in own_claims:
                     for other_claim in other["claims"]:
@@ -2577,6 +3816,16 @@ def task_lane_generation_claims(
                             raise WorktreeError(
                                 "Task Implementer repository claim conflicts with "
                                 f"lane {other['lane_id']}: {own_claim['path']}"
+                            )
+            for checkpoint in all_checkpoints(primary):
+                if checkpoint["lane_id"] == lane["lane_id"]:
+                    continue
+                for own_claim in own_claims:
+                    for other_claim in checkpoint["claims"]:
+                        if _claim_overlaps(own_claim, other_claim):
+                            raise WorktreeError(
+                                "Task Implementer repository claim conflicts with an "
+                                f"active lane checkpoint: {own_claim['path']}"
                             )
             write_lane(primary, candidate_lane)
             return {
@@ -2615,6 +3864,14 @@ def task_lane_generation_release(
                 _reset_task_lane_manifest_lease(
                     primary, manifest, token=str(receipt["token"])
                 )
+                checkpoint = load_checkpoint(
+                    primary, str(lane["lane_id"]), required=False
+                )
+                if checkpoint is not None and (
+                    checkpoint["run_id"] == receipt["run_id"]
+                    and checkpoint["workspace"] == receipt["workspace"]
+                ):
+                    delete_checkpoint(primary, str(lane["lane_id"]))
                 return {
                     "action": "task-lane-generation-release",
                     "status": "already-released",
@@ -2628,7 +3885,9 @@ def task_lane_generation_release(
                 or active["token"] != lease_id
                 or managed.head != promoted_head
             ):
-                raise WorktreeError("Task Implementer generation release identity changed")
+                raise WorktreeError(
+                    "Task Implementer generation release identity changed"
+                )
             released = task_lease_release(
                 cwd=managed.path,
                 name=name,
@@ -2667,6 +3926,12 @@ def task_lane_generation_release(
             manifest = load_manifest(primary, name)
             assert manifest is not None
             _reset_task_lane_manifest_lease(primary, manifest, token=lease_id)
+            checkpoint = load_checkpoint(primary, str(lane["lane_id"]), required=False)
+            if checkpoint is not None and (
+                checkpoint["run_id"] == receipt["run_id"]
+                and checkpoint["workspace"] == receipt["workspace"]
+            ):
+                delete_checkpoint(primary, str(lane["lane_id"]))
             return {
                 "action": "task-lane-generation-release",
                 "status": "released",
@@ -2859,8 +4124,7 @@ def integration_preflight(
     assert manifest is not None
     if _task_lane_id_for_branch(primary, manifest.branch) is not None:
         raise WorktreeError(
-            "Task Implementer lanes integrate only through "
-            "$task-implementer integrate"
+            "Task Implementer lanes integrate only through $task-implementer integrate"
         )
     if manifest.status not in {"active", "integrated"}:
         raise WorktreeError(
@@ -2961,9 +4225,7 @@ def integration_preflight(
             preparation.get(key) != value for key, value in expected_identity.items()
         ):
             blockers.append("integration preparation identity changed")
-        commits = {
-            str(commit["target"]): commit for commit in preparation["commits"]
-        }
+        commits = {str(commit["target"]): commit for commit in preparation["commits"]}
         repositories = {"child": managed.path, "source": primary}
         observed_heads = {"child": managed.head, "source": source_head}
         dirty_paths = {"child": child_dirty, "source": source_dirty}
@@ -3000,9 +4262,7 @@ def integration_preflight(
                     f"unrecorded preparatory {target} commit requires review"
                 )
             elif not dirty_paths[target]:
-                blockers.append(
-                    f"prepared {target} changes disappeared before commit"
-                )
+                blockers.append(f"prepared {target} changes disappeared before commit")
         for target in {"child", "source"} - set(preparation["commit_order"]):
             if dirty_paths[target]:
                 blockers.append(
@@ -3017,9 +4277,7 @@ def integration_preflight(
 
     commit_order: list[str] = []
     if preparation is not None and not blockers:
-        completed_targets = {
-            str(commit["target"]) for commit in preparation["commits"]
-        }
+        completed_targets = {str(commit["target"]) for commit in preparation["commits"]}
         commit_order = [
             target
             for target in preparation["commit_order"]
@@ -3117,7 +4375,9 @@ def _integration_commit_unlocked(
             blockers or "integration preflight does not permit a commit"
         )
     if preflight["commit_order"][0] != target:
-        raise WorktreeError("integration commits must follow the preflight commit order")
+        raise WorktreeError(
+            "integration commits must follow the preflight commit order"
+        )
     current_preparation = load_preparation(primary, name)
     if current_preparation is None:
         initial_source = str(preflight["source_head"])
@@ -3177,7 +4437,9 @@ def _integration_commit_unlocked(
     _git(checkout, "commit", "-m", message)
     after_head = _git(checkout, "rev-parse", "HEAD")
     if not _direct_child_commit(checkout, head, after_head):
-        raise WorktreeError(f"{target} commit is not one direct child of preflight HEAD")
+        raise WorktreeError(
+            f"{target} commit is not one direct child of preflight HEAD"
+        )
     commit_tree = _git(checkout, "rev-parse", f"{after_head}^{{tree}}")
     try:
         preparation = record_integration_preparation_commit(
@@ -3198,7 +4460,9 @@ def _integration_commit_unlocked(
         == expected_branch
     )
     tree_verified = commit_tree == staged_tree
-    status = "committed" if clean and same_branch and tree_verified else "review-required"
+    status = (
+        "committed" if clean and same_branch and tree_verified else "review-required"
+    )
     return {
         "action": "integration-commit",
         "status": status,
@@ -3807,8 +5071,7 @@ def integrate_worktree(
     assert manifest is not None
     if _task_lane_id_for_branch(primary, manifest.branch) is not None:
         raise WorktreeError(
-            "Task Implementer lanes integrate only through "
-            "$task-implementer integrate"
+            "Task Implementer lanes integrate only through $task-implementer integrate"
         )
     try:
         with integration_transition_lock(primary, name):
@@ -3825,9 +5088,7 @@ def integrate_worktree(
         raise WorktreeError(str(error)) from error
 
 
-def _task_lane_rearm(
-    primary: Path, lane: dict[str, object]
-) -> dict[str, Any]:
+def _task_lane_rearm(primary: Path, lane: dict[str, object]) -> dict[str, Any]:
     manifest, managed = _task_lane_live(primary, lane)
     first_generation = int(lane["last_integrated_generation"]) + 1
     last_generation = int(lane["latest_generation"])
@@ -3878,8 +5139,12 @@ def _task_lane_rearm(
         managed.path
     ):
         raise WorktreeError("Task Implementer lane rearm failed exact verification")
-    if not _is_ancestor(primary, merge_head, _git(primary, "rev-parse", lane["source_ref"])):
-        raise WorktreeError("source no longer contains the Task Implementer integration")
+    if not _is_ancestor(
+        primary, merge_head, _git(primary, "rev-parse", lane["source_ref"])
+    ):
+        raise WorktreeError(
+            "source no longer contains the Task Implementer integration"
+        )
     _write_config(primary, managed.branch, "base", merge_head)
     try:
         write_manifest(
@@ -3935,9 +5200,7 @@ def _task_lane_finish_no_change(
         raise WorktreeError("Task Implementer no-change journal is unavailable")
     source_head = str(journal["source_head"])
     child_head = str(journal["child_head"])
-    current_source = _git(
-        primary, "rev-parse", "--verify", str(lane["source_ref"])
-    )
+    current_source = _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
     if current_source != source_head:
         raise WorktreeError(
             "source moved during Task Implementer no-change integration; retry "
@@ -3945,9 +5208,7 @@ def _task_lane_finish_no_change(
         )
     live_head = _git(managed.path, "rev-parse", "HEAD")
     if live_head not in {child_head, source_head}:
-        raise WorktreeError(
-            "Task Implementer lane moved during no-change integration"
-        )
+        raise WorktreeError("Task Implementer lane moved during no-change integration")
     if not _is_ancestor(primary, live_head, source_head):
         raise WorktreeError(
             "Task Implementer no-change lane no longer descends to the source"
@@ -4013,6 +5274,11 @@ def task_lane_integrate(
             lane = load_lane(primary, lane_id)
             assert lane is not None
             manifest, managed = _task_lane_live(primary, lane)
+            if load_checkpoint(primary, lane_id, required=False) is not None:
+                raise WorktreeError(
+                    "Task Implementer generation checkpoint must finish before "
+                    "integration"
+                )
             if manifest.status == "integrated" or lane["state"] == "source-promoted":
                 return _task_lane_rearm(primary, lane)
             if lane["state"] == "active" or lane["active_generation"] is not None:
@@ -4031,9 +5297,7 @@ def task_lane_integrate(
                         primary, "rev-parse", "--verify", str(lane["source_ref"])
                     ),
                     "lane_head": managed.head,
-                    "last_integrated_generation": lane[
-                        "last_integrated_generation"
-                    ],
+                    "last_integrated_generation": lane["last_integrated_generation"],
                 }
             if pending != list(
                 range(
@@ -4041,7 +5305,9 @@ def task_lane_integrate(
                     int(lane["latest_generation"]) + 1,
                 )
             ):
-                raise WorktreeError("Task Implementer pending generation range is invalid")
+                raise WorktreeError(
+                    "Task Implementer pending generation range is invalid"
+                )
             source_operation = _operation_in_progress(primary)
             child_operation = _operation_in_progress(managed.path)
             if source_operation or child_operation:
@@ -4055,8 +5321,7 @@ def task_lane_integrate(
                     "source checkout must be completely clean before Task Implementer "
                     "integration; run one fresh explicit $commit in the primary "
                     "checkout, review and commit the complete repository diff, then "
-                    "repeat integrate. Dirty paths: "
-                    + ", ".join(source_dirty)
+                    "repeat integrate. Dirty paths: " + ", ".join(source_dirty)
                 )
             if child_dirty:
                 raise WorktreeError(
@@ -4084,12 +5349,12 @@ def task_lane_integrate(
                     }
                     lane = {**lane, "integration": journal}
                     write_lane(primary, lane)
-                return _task_lane_finish_no_change(
-                    primary, lane, manifest, managed
-                )
+                return _task_lane_finish_no_change(primary, lane, manifest, managed)
             child_head = managed.head
             if child_head != lane["lane_head"]:
-                raise WorktreeError("Task Implementer lane head changed before integration")
+                raise WorktreeError(
+                    "Task Implementer lane head changed before integration"
+                )
             # No-change generations are consumed without manufacturing an empty merge.
             if _is_ancestor(primary, child_head, source_head):
                 journal = {
@@ -4103,9 +5368,7 @@ def task_lane_integrate(
                 }
                 lane = {**lane, "state": "integrating", "integration": journal}
                 write_lane(primary, lane)
-                return _task_lane_finish_no_change(
-                    primary, lane, manifest, managed
-                )
+                return _task_lane_finish_no_change(primary, lane, manifest, managed)
             if journal is None:
                 journal = {
                     "first_generation": pending[0],
@@ -4182,7 +5445,9 @@ def task_lane_integrate(
                 )
                 return {"action": "task-lane-integrate", "lane_id": lane_id, **result}
             if result["status"] not in {"integrated", "already-integrated"}:
-                raise WorktreeError("Task Implementer integration returned invalid state")
+                raise WorktreeError(
+                    "Task Implementer integration returned invalid state"
+                )
             lane = load_lane(primary, lane_id)
             assert lane is not None
             journal = {**lane["integration"], "phase": "source-promoted"}
@@ -4469,9 +5734,7 @@ def _remove_worktree_unlocked(
                 expected_source_head=task_lane_source_head,
             )
         else:
-            local_result = _remove_local_branch(
-                primary, branch, expected_head=head
-            )
+            local_result = _remove_local_branch(primary, branch, expected_head=head)
 
     receipt = _validate_outer_lease_receipt(
         primary,
@@ -4506,9 +5769,7 @@ def remove_worktree(*, cwd: Path, name: str | None) -> dict[str, Any]:
     _validate_name(name)
     try:
         with interop_lock(primary):
-            return _remove_worktree_unlocked(
-                cwd=cwd, name=name, allow_task_lane=False
-            )
+            return _remove_worktree_unlocked(cwd=cwd, name=name, allow_task_lane=False)
     except InteropError as error:
         raise WorktreeError(str(error)) from error
 
@@ -4560,6 +5821,10 @@ def task_lane_remove(*, cwd: Path, lane_id: str) -> dict[str, Any]:
                     "worktree": result.get("worktree"),
                     "branch": result.get("branch"),
                 }
+            if load_checkpoint(primary, lane_id, required=False) is not None:
+                raise WorktreeError(
+                    "Task Implementer generation checkpoint must finish before removal"
+                )
             if (
                 lane["state"] != "idle"
                 or lane["active_generation"] is not None
@@ -4583,7 +5848,9 @@ def task_lane_remove(*, cwd: Path, lane_id: str) -> dict[str, Any]:
             head = managed.head
             if head != lane["lane_head"]:
                 raise WorktreeError("Task Implementer lane moved before removal")
-            source_head = _git(primary, "rev-parse", "--verify", str(lane["source_ref"]))
+            source_head = _git(
+                primary, "rev-parse", "--verify", str(lane["source_ref"])
+            )
             if not _is_ancestor(primary, head, source_head):
                 raise WorktreeError(
                     "source history does not contain the Task Implementer lane head"
@@ -4686,9 +5953,7 @@ def _parser() -> argparse.ArgumentParser:
     integration_commit_review_parser.add_argument(
         "--target", required=True, choices=("child", "source")
     )
-    integration_commit_review_parser.add_argument(
-        "--preparation-token", required=True
-    )
+    integration_commit_review_parser.add_argument("--preparation-token", required=True)
     integration_commit_review_parser.add_argument("--commit-head", required=True)
     integration_commit_review_parser.add_argument("--commit-tree", required=True)
 
@@ -4745,14 +6010,28 @@ def _parser() -> argparse.ArgumentParser:
         "--project", help="repository-relative project directory"
     )
 
-    task_lane_acquire_parser = subparsers.add_parser(
-        "task-lane-generation-acquire",
-        help="internal: acquire one monotonic Task Implementer lane generation",
+    task_lane_prepare_parser = subparsers.add_parser(
+        "task-lane-generation-prepare",
+        help="internal: reserve one reviewed Task Implementer lane candidate",
     )
-    task_lane_acquire_parser.add_argument("--workspace", required=True, type=Path)
-    task_lane_acquire_parser.add_argument("--run-id", required=True)
-    task_lane_acquire_parser.add_argument("--task-scope", required=True)
-    task_lane_acquire_parser.add_argument("--initial-head", required=True)
+    task_lane_prepare_parser.add_argument("--workspace", required=True, type=Path)
+    task_lane_prepare_parser.add_argument("--run-id", required=True)
+    task_lane_prepare_parser.add_argument("--task-scope", required=True)
+    task_lane_prepare_parser.add_argument("--expected-head", required=True)
+    task_lane_prepare_parser.add_argument("--claims-json", required=True)
+
+    task_lane_open_parser = subparsers.add_parser(
+        "task-lane-generation-open",
+        help="internal: execute a reviewed checkpoint and open one lane generation",
+    )
+    task_lane_open_parser.add_argument("--workspace", required=True, type=Path)
+    task_lane_open_parser.add_argument("--run-id", required=True)
+    task_lane_open_parser.add_argument("--task-scope", required=True)
+    task_lane_open_parser.add_argument("--expected-head", required=True)
+    task_lane_open_parser.add_argument("--claims-json", required=True)
+    task_lane_open_parser.add_argument("--review-token", required=True)
+    task_lane_open_parser.add_argument("--reviewed-tree", required=True)
+    task_lane_open_parser.add_argument("--reviewed-paths-sha256", required=True)
 
     task_lane_inspect_parser = subparsers.add_parser(
         "task-lane-generation-inspect",
@@ -4926,17 +6205,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.action == "remove":
             result = remove_worktree(cwd=Path.cwd(), name=arguments.name)
         elif arguments.action == "task-lane-ensure":
-            result = task_lane_ensure(
-                cwd=Path.cwd(), project=arguments.project
-            )
-        elif arguments.action == "task-lane-generation-acquire":
-            result = task_lane_generation_acquire(
-                cwd=Path.cwd(),
-                workspace=arguments.workspace,
-                run_id=arguments.run_id,
-                task_scope=arguments.task_scope,
-                initial_head=arguments.initial_head,
-            )
+            result = task_lane_ensure(cwd=Path.cwd(), project=arguments.project)
+        elif arguments.action in {
+            "task-lane-generation-prepare",
+            "task-lane-generation-open",
+        }:
+            try:
+                claims_value = json.loads(arguments.claims_json)
+            except json.JSONDecodeError as error:
+                raise WorktreeError(
+                    "Task Implementer claims JSON is invalid"
+                ) from error
+            if not isinstance(claims_value, list) or any(
+                not isinstance(item, dict) for item in claims_value
+            ):
+                raise WorktreeError("Task Implementer claims JSON must be a list")
+            if arguments.action == "task-lane-generation-prepare":
+                result = task_lane_generation_prepare(
+                    cwd=Path.cwd(),
+                    workspace=arguments.workspace,
+                    run_id=arguments.run_id,
+                    task_scope=arguments.task_scope,
+                    expected_head=arguments.expected_head,
+                    claims=claims_value,
+                )
+            else:
+                result = task_lane_generation_open(
+                    cwd=Path.cwd(),
+                    workspace=arguments.workspace,
+                    run_id=arguments.run_id,
+                    task_scope=arguments.task_scope,
+                    expected_head=arguments.expected_head,
+                    claims=claims_value,
+                    review_token=arguments.review_token,
+                    reviewed_tree=arguments.reviewed_tree,
+                    reviewed_paths_sha256=arguments.reviewed_paths_sha256,
+                )
         elif arguments.action == "task-lane-generation-inspect":
             result = task_lane_generation_inspect(
                 cwd=Path.cwd(),
@@ -4948,7 +6252,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 claims_value = json.loads(arguments.claims_json)
             except json.JSONDecodeError as error:
-                raise WorktreeError("Task Implementer claims JSON is invalid") from error
+                raise WorktreeError(
+                    "Task Implementer claims JSON is invalid"
+                ) from error
             if not isinstance(claims_value, list) or any(
                 not isinstance(item, dict) for item in claims_value
             ):
@@ -4976,9 +6282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 restart=arguments.restart,
             )
         elif arguments.action == "task-lane-remove":
-            result = task_lane_remove(
-                cwd=Path.cwd(), lane_id=arguments.lane_id
-            )
+            result = task_lane_remove(cwd=Path.cwd(), lane_id=arguments.lane_id)
         elif arguments.action == "anchor-inspect":
             result = inspect_managed_anchor(cwd=Path.cwd())
         elif arguments.action == "publication-guard":

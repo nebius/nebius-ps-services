@@ -9,12 +9,15 @@ $task-implementer-test --create --keep
 $task-implementer-test --destroy
 ```
 
-No flags run the Task Implementer contract and temporary-fixture suites plus
-the verifier helper, lifecycle, reporting, and semantic suites. They do not
-create a real application, start Docker, or dispatch implementation workers.
+No flags run the Task Implementer contract, digest-bound resume/adoption, and
+temporary-fixture suites plus the verifier helper, lifecycle, reporting, and
+semantic suites. They do not create a real application, start Docker, or
+dispatch implementation workers.
+The deterministic harness allows each suite up to 600 seconds; this covers the
+full disposable linked-worktree crash matrix without changing worker budgets.
 
 `--create` first replaces any prior exactly owned fixture, then exercises the
-real four-action Task Implementer interface on a seeded local-only brownfield
+real Task Implementer public interface on a seeded local-only brownfield
 frontend/API/PostgreSQL project. It verifies dependency waves, worker and Git
 evidence, the running application, database correlation, restart persistence,
 and a canonical post-completion unchanged-prompt invocation. A lifecycle-owned

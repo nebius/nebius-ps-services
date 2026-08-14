@@ -19,7 +19,8 @@ from typing import Any, Iterator
 
 ROOT_SCHEMA = "prompt-session-intake/root-v1"
 BINDING_SCHEMA = "prompt-session-intake/binding-v1"
-EVENT_SCHEMA = "prompt-session-intake/event-v1"
+EVENT_SCHEMA = "prompt-session-intake/event-v2"
+CURRENT_EVENT_SCHEMA = "prompt-session-intake/current-event-v2"
 REGISTRY_SCHEMA = "prompt-session-intake/registry-v1"
 CONTINUATION_SCHEMA = "prompt-session-intake/stop-continuation-v1"
 MATERIAL_CLASSIFICATIONS = {
@@ -29,8 +30,17 @@ MATERIAL_CLASSIFICATIONS = {
     "clarification-answer",
     "acceptance-change",
 }
-NONMATERIAL_CLASSIFICATIONS = {"conversation", "status", "control"}
-CLASSIFICATIONS = MATERIAL_CLASSIFICATIONS | NONMATERIAL_CLASSIFICATIONS
+DISPOSITIONS = {"merge", "noop", "sensitive"}
+NOOP_REASONS = {
+    "workflow-control",
+    "tool-control",
+    "delivery-control",
+    "agent-control",
+    "status",
+    "conversation",
+    "unrelated",
+    "duplicate",
+}
 WORKFLOWS = {"task-implementer", "agentic-sdlc"}
 PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
 PROMPT_REF_RE = re.compile(r"[0-9a-f]{5,32}\Z")
@@ -47,7 +57,12 @@ SECRET_PATTERNS = (
     re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
     re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
     re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(
+        r"\bNEBIUS_(?!(?:PROFILE|PROJECT_ID|AUTH_CREDENTIALS_FILE)\b)"
+        r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"
+    ),
     re.compile(r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}"),
+    re.compile(r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)"),
     re.compile(
         r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?"
         r"[A-Za-z0-9_./+=:-]{12,}"
@@ -74,6 +89,16 @@ def sha256_bytes(value: bytes) -> str:
 
 def identity_sha256(value: object) -> str:
     return sha256_bytes(str(value).encode("utf-8"))
+
+
+def event_operation_id(
+    session_sha256: str, turn_sha256: str, submitted_sha256: str
+) -> str:
+    material = (
+        f"prompt-session-intake/event-v2:{session_sha256}:"
+        f"{turn_sha256}:{submitted_sha256}"
+    )
+    return sha256_bytes(material.encode("utf-8"))
 
 
 def utc_now() -> str:
@@ -248,10 +273,14 @@ def event_path(root: Path, session_id: object, turn_id: object) -> Path:
         root
         / "sessions"
         / session_key(session_id)
-        / "events"
+        / "events-v2"
         / turn_key(turn_id)
         / "event.json"
     )
+
+
+def current_event_path(root: Path, session_id: object) -> Path:
+    return root / "sessions" / session_key(session_id) / "current-event-v2.json"
 
 
 def continuation_path(root: Path, session_id: object) -> Path:

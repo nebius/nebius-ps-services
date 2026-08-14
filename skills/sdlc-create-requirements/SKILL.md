@@ -95,9 +95,11 @@ Convert user intent into durable, testable product requirements in `docs/require
   private refinement ledger and set `ready` only when no material question is
   open or reopened.
 - Invoke the private `refinement-verify` action owned by `sdlc-start` with the
-  exact workspace and run after saving `ready`. Route to design only when it
-  proves that the latest accepted prompt identity and intent digest match the
-  exact current `docs/requirements.md` bytes.
+  exact workspace and run after saving `ready` and a complete private impact
+  claim. Route to design only when the shared owner proves that the latest
+  accepted prompt identity and intent, every extracted statement occurrence,
+  and the exact current requirements/design bytes have one accepted impact
+  receipt. Do not use matching bytes or a bare `no_effect` label as proof.
 
 ## Idempotency
 
@@ -135,8 +137,8 @@ Convert user intent into durable, testable product requirements in `docs/require
   records safe access references, allowed operations, reset instructions, and
   evidence limits.
 - Open questions and change log are explicit.
-- The private refinement verifier passes for the latest accepted revision and
-  exact current `docs/requirements.md`.
+- The private refinement verifier passes for the latest accepted revision,
+  complete statement-impact claim, and exact current canonical specs.
 
 ## SDLC Invariants
 

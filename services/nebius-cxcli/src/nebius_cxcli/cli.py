@@ -515,6 +515,7 @@ from .soperator_migration import (
     _checkpoint_slurm_held_job_operations,
     _checkpoint_write_lock,
     _cleanup_controller_bridge_after_final_health,
+    _controller_bridge_provider_boundary_active,
     _controller_singleton_handoff_boundary_active,
     _ensure_passive_populate_job,
     _ensure_persistent_migration_login_hold_allowed,
@@ -697,6 +698,8 @@ from .soperator_upgrade_campaign import (
     validated_control_plane_path,
 )
 from .soperator_upgrade_safety import (
+    REMEDIATION_APPROVAL_POLICY_AUTOMATIC,
+    REMEDIATION_APPROVAL_POLICY_STOP_FOR_REVIEW,
     ProtectedCustomerState,
     _classify_managed_chart_upgrade_deltas,
     _classify_managed_node_template_upgrade_deltas,
@@ -705,6 +708,7 @@ from .soperator_upgrade_safety import (
     capture_protected_customer_state,
     checkpointed_remediation_approval_fingerprint,
     protected_customer_state_from_payload,
+    remediation_approval_reverification_required,
     run_post_upgrade_fast_verification,
     safety_report_markdown_lines,
     stage_fast_verification_check,
@@ -5542,12 +5546,8 @@ def _managed_soperator_upgrade_run_post_verification(
     checkpoint: Mapping[str, Any],
     paths: ProjectPaths,
     managed_node_template_upgrade: bool,
-    approve_remediation: bool,
+    approved_remediation_fingerprint: str | None,
 ) -> Any:
-    approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
-        _state_mapping(checkpoint.get("upgrade_safety")),
-        approval_requested=approve_remediation,
-    )
     result = run_post_upgrade_fast_verification(
         command_runner=_soperator_upgrade_safety_command_runner,
         target_ref=target.target_ref,
@@ -13889,7 +13889,7 @@ def _external_soperator_upgrade_command_args(
     slurm_scheduling_pause: bool,
     dry_run: bool,
     approve: bool,
-    approve_remediation: bool,
+    stop_for_remediation_approval: bool,
     interactive: bool,
     approve_backup_recovery: bool = False,
     stop_after_phase: str | None = None,
@@ -13916,7 +13916,8 @@ def _external_soperator_upgrade_command_args(
     args.append("--interactive" if interactive else "--no-interactive")
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
-    args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if stop_for_remediation_approval:
+        args.append("--stop-for-remediation-approval")
     args.append(
         "--approve-backup-recovery" if approve_backup_recovery else "--no-approve-backup-recovery"
     )
@@ -16392,14 +16393,15 @@ def soperator_upgrade_command(
             help="Confirm the managed upgrade plan; required with --execute.",
         ),
     ] = False,
-    approve_remediation: Annotated[
+    stop_for_remediation_approval: Annotated[
         bool,
         typer.Option(
-            "--approve-remediation/--no-approve-remediation",
+            "--stop-for-remediation-approval",
             help=(
-                "Approve only the exact previously checkpointed protected-state comparison "
-                "fingerprint or an exact checkpointed Slurm hold recovery. "
-                "Blocked data-loss or downtime deltas are never overrideable."
+                "Stop after checkpointing an exact protected-state remediation plan or "
+                "journaled Slurm hold recovery so it can be reviewed. By default cxcli "
+                "revalidates and applies exact remediations automatically; blocked data-loss "
+                "or downtime deltas are never overrideable."
             ),
         ),
     ] = False,
@@ -16457,7 +16459,7 @@ def soperator_upgrade_command(
             login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
             login_session_drain_timeout="0s",
             dry_run=not execute,
-            approve_remediation=approve_remediation,
+            stop_for_remediation_approval=stop_for_remediation_approval,
             interactive=interactive,
         )
     except typer.Exit:
@@ -16494,7 +16496,7 @@ def _run_soperator_upgrade_command(
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
-    approve_remediation: bool = False,
+    stop_for_remediation_approval: bool = False,
     interactive: bool = True,
 ) -> None:
     source_payload = _load_source_payload(config_path)
@@ -16566,7 +16568,7 @@ def _run_soperator_upgrade_command(
         login_session_policy=_external_login_session_policy(login_session_policy),
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
-        approve_remediation=approve_remediation,
+        stop_for_remediation_approval=stop_for_remediation_approval,
         interactive=interactive,
     )
 
@@ -16599,7 +16601,7 @@ def _soperator_upgrade_command_args(
     dry_run: bool,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout: str = "0s",
-    approve_remediation: bool = False,
+    stop_for_remediation_approval: bool = False,
 ) -> tuple[str, ...]:
     args = [
         "nebius-cxcli",
@@ -16647,7 +16649,8 @@ def _soperator_upgrade_command_args(
     args.append(
         "--slurm-scheduling-pause" if slurm_scheduling_pause else "--no-slurm-scheduling-pause"
     )
-    args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if stop_for_remediation_approval:
+        args.append("--stop-for-remediation-approval")
     args.append("--no-interactive")
     args.append("--dry-run" if dry_run else "--execute")
     if not dry_run:
@@ -16813,7 +16816,7 @@ def _managed_soperator_upgrade_order_issue(
     slurm_scheduling_pause: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
-    approve_remediation: bool,
+    stop_for_remediation_approval: bool,
 ) -> Mapping[str, str] | None:
     target_k8s = _non_empty_text(to_k8s_version)
     if not target_k8s:
@@ -16867,7 +16870,7 @@ def _managed_soperator_upgrade_order_issue(
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
-            approve_remediation=approve_remediation,
+            stop_for_remediation_approval=stop_for_remediation_approval,
         )
     )
     later_command = shlex.join(
@@ -16898,7 +16901,7 @@ def _managed_soperator_upgrade_order_issue(
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
-            approve_remediation=approve_remediation,
+            stop_for_remediation_approval=stop_for_remediation_approval,
         )
     )
     return {
@@ -17701,7 +17704,7 @@ def _run_managed_soperator_cluster_upgrade(
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
-    approve_remediation: bool = False,
+    stop_for_remediation_approval: bool = False,
     interactive: bool = True,
 ) -> None:
     if dry_run:
@@ -17733,7 +17736,7 @@ def _run_managed_soperator_cluster_upgrade(
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=True,
-            approve_remediation=approve_remediation,
+            stop_for_remediation_approval=stop_for_remediation_approval,
             interactive=interactive,
         )
     checkpoint_path = _soperator_upgrade_checkpoint_path(
@@ -17778,7 +17781,7 @@ def _run_managed_soperator_cluster_upgrade(
                 login_session_policy=login_session_policy,
                 login_session_drain_timeout=login_session_drain_timeout,
                 dry_run=False,
-                approve_remediation=approve_remediation,
+                stop_for_remediation_approval=stop_for_remediation_approval,
                 interactive=interactive,
             )
 
@@ -17817,10 +17820,15 @@ def _run_managed_soperator_cluster_upgrade_locked(
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
-    approve_remediation: bool = False,
+    stop_for_remediation_approval: bool = False,
     interactive: bool = True,
 ) -> None:
     del interactive
+    remediation_approval_policy = (
+        REMEDIATION_APPROVAL_POLICY_STOP_FOR_REVIEW
+        if stop_for_remediation_approval
+        else REMEDIATION_APPROVAL_POLICY_AUTOMATIC
+    )
     generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
     _raise_if_soperator_upgrade_would_bypass_migration(
         generated_config,
@@ -17871,7 +17879,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
         slurm_scheduling_pause=slurm_scheduling_pause,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
-        approve_remediation=approve_remediation,
+        stop_for_remediation_approval=stop_for_remediation_approval,
     )
     command_args = _soperator_upgrade_command_args(
         config_path=config_path,
@@ -17900,7 +17908,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=True,
-        approve_remediation=approve_remediation,
+        stop_for_remediation_approval=stop_for_remediation_approval,
     )
     repeat_dry_run_command = shlex.join(command_args) if dry_run else None
     _print_upgrade_plan_lines(
@@ -18056,7 +18064,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
-            approve_remediation=approve_remediation,
+            stop_for_remediation_approval=stop_for_remediation_approval,
         )
     )
     current_mk8s_target = _managed_mk8s_target_payload(
@@ -18798,6 +18806,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
             held_job_checkpoint_writer=lambda: _write_soperator_upgrade_checkpoint(
                 checkpoint_path, checkpoint
             ),
+            automatic_remediation=not stop_for_remediation_approval,
             slurm_action_journal=_checkpoint_slurm_action_journal_for_job_control(checkpoint),
             slurm_action_checkpoint_writer=lambda: _write_soperator_upgrade_checkpoint(
                 checkpoint_path, checkpoint
@@ -22056,6 +22065,11 @@ def _run_managed_soperator_cluster_upgrade_locked(
             "shared-safety-verification",
             "Running the shared protected-state and fast smoke verification.",
         ):
+            automatic_remediation_reverified = False
+            approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
+                _state_mapping(checkpoint.get("upgrade_safety")),
+                approval_requested=not stop_for_remediation_approval,
+            )
             safety_verification = _managed_soperator_upgrade_run_post_verification(
                 source_payload=source_payload,
                 target=target,
@@ -22064,7 +22078,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 checkpoint=checkpoint,
                 paths=staged_paths,
                 managed_node_template_upgrade=requested_mk8s_change,
-                approve_remediation=approve_remediation,
+                approved_remediation_fingerprint=approved_remediation_fingerprint,
             )
 
             def _record_shared_safety_payload() -> None:
@@ -22073,12 +22087,8 @@ def _run_managed_soperator_cluster_upgrade_locked(
                     if isinstance(checkpoint.get("upgrade_safety"), Mapping)
                     else None,
                     safety_verification,
-                    approved_remediation_fingerprint=(
-                        checkpointed_remediation_approval_fingerprint(
-                            _state_mapping(checkpoint.get("upgrade_safety")),
-                            approval_requested=approve_remediation,
-                        )
-                    ),
+                    approved_remediation_fingerprint=approved_remediation_fingerprint,
+                    remediation_approval_policy=remediation_approval_policy,
                 )
 
             def _rerun_shared_safety_verification() -> tuple[str, Sequence[Mapping[str, Any]]]:
@@ -22095,7 +22105,7 @@ def _run_managed_soperator_cluster_upgrade_locked(
                     checkpoint=checkpoint,
                     paths=staged_paths,
                     managed_node_template_upgrade=requested_mk8s_change,
-                    approve_remediation=approve_remediation,
+                    approved_remediation_fingerprint=approved_remediation_fingerprint,
                 )
                 _record_shared_safety_payload()
                 return (
@@ -22109,12 +22119,44 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 status=safety_verification.status,
                 passed=safety_verification.passed,
             )
+            if (
+                not stop_for_remediation_approval
+                and remediation_approval_reverification_required(safety_verification)
+            ):
+                approved_remediation_fingerprint = (
+                    checkpointed_remediation_approval_fingerprint(
+                        _state_mapping(checkpoint.get("upgrade_safety")),
+                        approval_requested=True,
+                    )
+                )
+                safety_verification = _managed_soperator_upgrade_run_post_verification(
+                    source_payload=source_payload,
+                    target=target,
+                    namespace=plan.namespace or "default",
+                    before_state=protected_state_before,
+                    checkpoint=checkpoint,
+                    paths=staged_paths,
+                    managed_node_template_upgrade=requested_mk8s_change,
+                    approved_remediation_fingerprint=approved_remediation_fingerprint,
+                )
+                automatic_remediation_reverified = True
+                _record_shared_safety_payload()
+                _checkpoint(
+                    "shared-safety-automatic-remediation-verified",
+                    status=safety_verification.status,
+                    passed=safety_verification.passed,
+                )
             _run_stage_fast_verification(
                 phase_id="shared-safety-verification",
                 summary="Shared protected-state and fast safety verification completed.",
                 checks=safety_verification.checks,
                 report_paths=staged_paths,
-                checks_provider=_rerun_shared_safety_verification,
+                checks_provider=(
+                    None
+                    if automatic_remediation_reverified
+                    or remediation_approval_reverification_required(safety_verification)
+                    else _rerun_shared_safety_verification
+                ),
             )
             if not safety_verification.passed:
                 failed = [
@@ -22367,6 +22409,10 @@ def _run_managed_soperator_cluster_upgrade_locked(
                 slurm_restore_nodes = ()
             if not _non_empty_text(slurm_map.get("partition_restore_manual_command")):
                 slurm_pause_records = ()
+        approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
+            _state_mapping(checkpoint.get("upgrade_safety")),
+            approval_requested=not stop_for_remediation_approval,
+        )
         terminal_safety = _managed_soperator_upgrade_run_post_verification(
             source_payload=source_payload,
             target=target,
@@ -22375,17 +22421,43 @@ def _run_managed_soperator_cluster_upgrade_locked(
             checkpoint=checkpoint,
             paths=staged_paths,
             managed_node_template_upgrade=requested_mk8s_change,
-            approve_remediation=approve_remediation,
-        )
-        approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
-            _state_mapping(checkpoint.get("upgrade_safety")),
-            approval_requested=approve_remediation,
+            approved_remediation_fingerprint=approved_remediation_fingerprint,
         )
         checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
             _state_mapping(checkpoint.get("upgrade_safety")),
             terminal_safety,
             approved_remediation_fingerprint=approved_remediation_fingerprint,
+            remediation_approval_policy=remediation_approval_policy,
         )
+        if (
+            not stop_for_remediation_approval
+            and remediation_approval_reverification_required(terminal_safety)
+        ):
+            _checkpoint(
+                "terminal-shared-safety-remediation-checkpointed",
+                status=terminal_safety.status,
+                passed=False,
+            )
+            approved_remediation_fingerprint = checkpointed_remediation_approval_fingerprint(
+                _state_mapping(checkpoint.get("upgrade_safety")),
+                approval_requested=True,
+            )
+            terminal_safety = _managed_soperator_upgrade_run_post_verification(
+                source_payload=source_payload,
+                target=target,
+                namespace=plan.namespace or "default",
+                before_state=protected_state_before,
+                checkpoint=checkpoint,
+                paths=staged_paths,
+                managed_node_template_upgrade=requested_mk8s_change,
+                approved_remediation_fingerprint=approved_remediation_fingerprint,
+            )
+            checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+                _state_mapping(checkpoint.get("upgrade_safety")),
+                terminal_safety,
+                approved_remediation_fingerprint=approved_remediation_fingerprint,
+                remediation_approval_policy=remediation_approval_policy,
+            )
         terminal_safety_payload = checkpoint["upgrade_safety"]
         if isinstance(terminal_safety_payload, dict):
             terminal_safety_payload["terminal_verification"] = {
@@ -23841,6 +23913,10 @@ def _soperator_route_guidance_lines(
     )
 
 
+_EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING = "Optional: inspect the upgrade plan:"
+_EXT_SOPERATOR_EXECUTE_HEADING = "Run the upgrade:"
+
+
 def _print_render_deploy_hint(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     try:
@@ -23868,11 +23944,11 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 migration_required=True,
             ):
                 console.print(line, soft_wrap=True)
-            console.print("Next step: dry-run the external Soperator upgrade:")
+            console.print(_EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING)
             _print_copy_paste_command(
                 f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run"
             )
-            console.print("After accepting the dry-run plan, execute it:")
+            console.print(_EXT_SOPERATOR_EXECUTE_HEADING)
             _print_copy_paste_command(
                 "nebius-cxcli ext-soperator upgrade "
                 f"{config_arg} --target {target_arg} --execute --approve"
@@ -23884,14 +23960,14 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                     f"  - {target_ref}: " + _soperator_migration_reason_text(onboarding),
                     soft_wrap=True,
                 )
-            console.print("Next step: dry-run each external-upgrade-required Soperator target:")
+            console.print(_EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING)
             for target_ref, _onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
                 _print_copy_paste_command(
                     "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --dry-run"
                 )
-            console.print("After accepting each dry-run plan, execute that target:")
+            console.print(_EXT_SOPERATOR_EXECUTE_HEADING)
             for target_ref, _onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
                 _print_copy_paste_command(
@@ -23984,17 +24060,16 @@ def _print_soperator_onboard_next_steps(
     commands: list[tuple[str, str]] = [
         (
             f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run",
-            "",
+            _EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING,
         ),
         (
             "nebius-cxcli ext-soperator upgrade "
             f"{config_arg} --target {target_arg} --execute --approve",
-            "After the dry run is accepted:",
+            _EXT_SOPERATOR_EXECUTE_HEADING,
         ),
     ]
-    for command, suffix in commands:
-        if suffix:
-            console.print(suffix.strip())
+    for command, heading in commands:
+        console.print(heading)
         _print_copy_paste_command(command)
 
 
@@ -56217,12 +56292,12 @@ def _raise_if_deploy_would_bypass_soperator_migration(
         lines.extend(
             [
                 f"- {target_ref}: " + _soperator_migration_reason_text(onboarding),
-                "Dry-run command:",
+                _EXT_SOPERATOR_OPTIONAL_DRY_RUN_HEADING,
                 (
                     "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --dry-run"
                 ),
-                "Execute after the dry run is accepted:",
+                _EXT_SOPERATOR_EXECUTE_HEADING,
                 (
                     "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --execute --approve"
@@ -63802,8 +63877,35 @@ def _external_soperator_discovery_refresh_deferred(
         and (
             _persistent_mount_copy_failure_boundary_active(checkpoint)
             or _rolling_compute_provider_boundary_active(checkpoint)
+            or _controller_bridge_provider_boundary_active(checkpoint)
             or _controller_singleton_handoff_boundary_active(checkpoint)
         )
+    )
+
+
+def _external_soperator_command_entry_live_waypoint_index(
+    *,
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    completed_segment_ids: Sequence[str],
+    resume_current_segment: bool,
+    node_group_transitions: Mapping[str, Any] | None,
+    discovery_refresh_deferred: bool,
+) -> int:
+    if discovery_refresh_deferred:
+        if not resume_current_segment:
+            raise RuntimeError(
+                "recovery-required: discovery refresh is deferred by an active mutation "
+                "boundary, but the operation journal does not prove the exact current "
+                "campaign segment."
+            )
+        return len(tuple(completed_segment_ids))
+    return _external_soperator_campaign_live_waypoint_index(
+        campaign=campaign,
+        source_report=source_report,
+        completed_segment_ids=completed_segment_ids,
+        resume_current_segment=resume_current_segment,
+        node_group_transitions=node_group_transitions,
     )
 
 
@@ -64355,11 +64457,12 @@ def ext_soperator_discover_command(
         "hop, exact node-group OS/driver tuple, Soperator/chart target, and Jail Upgrade. "
         "Soperator app/chart, managed operator, and Jail targets are resolved only from "
         "the exact catalog-pinned component sources; unsupported paths fail closed. "
-        "After onboarding, run nebius-cxcli ext-soperator upgrade <config.yaml> "
-        "--target <target> --dry-run, "
-        "then nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
-        "--execute --approve. Repeat those upgrade commands for each remaining "
-        "campaign segment; do not render, deploy, or onboard again between segments."
+        "After onboarding, optionally inspect the campaign with nebius-cxcli "
+        "ext-soperator upgrade <config.yaml> --target <target> --dry-run, or run "
+        "the upgrade directly with nebius-cxcli ext-soperator upgrade <config.yaml> "
+        "--target <target> --execute --approve. Rerun the execute command only after "
+        "a reported gate, error, explicit stop, or interrupt; do not render, deploy, "
+        "or onboard again between segments."
     ),
 )
 def soperator_onboard_command(
@@ -67989,15 +68092,15 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
-    approve_remediation: Annotated[
+    stop_for_remediation_approval: Annotated[
         bool,
         typer.Option(
-            "--approve-remediation/--no-approve-remediation",
+            "--stop-for-remediation-approval",
             help=(
-                "Approve only the exact previously checkpointed protected-state comparison "
-                "fingerprint or an exact journaled Slurm hold crash-window recovery. Blocked "
-                "data-loss or downtime deltas and unproven Slurm transitions are never "
-                "overrideable."
+                "Stop after checkpointing an exact protected-state remediation plan or "
+                "journaled Slurm hold recovery so it can be reviewed. By default cxcli "
+                "revalidates and applies exact remediations automatically; blocked data-loss "
+                "or downtime deltas and unproven Slurm transitions are never overrideable."
             ),
         ),
     ] = False,
@@ -68296,7 +68399,7 @@ def soperator_external_upgrade_command(
             campaign=locked_upgrade_path,
             source_report=source_report,
         )
-        live_waypoint_index = _external_soperator_campaign_live_waypoint_index(
+        live_waypoint_index = _external_soperator_command_entry_live_waypoint_index(
             campaign=locked_upgrade_path,
             source_report=source_report,
             completed_segment_ids=upgrade_path_progress.get("completed_segment_ids", []),
@@ -68305,6 +68408,7 @@ def soperator_external_upgrade_command(
                 current_segment=current_segment,
             ),
             node_group_transitions=node_group_transitions,
+            discovery_refresh_deferred=discovery_refresh_deferred,
         )
         completed_waypoint_index = len(upgrade_path_progress.get("completed_segment_ids", []) or [])
         live_ahead_segment_count = live_waypoint_index - completed_waypoint_index
@@ -68895,7 +68999,7 @@ def soperator_external_upgrade_command(
                     job_refresh_interval=job_refresh_interval,
                     dry_run=False,
                     approve=approve,
-                    approve_remediation=approve_remediation,
+                    stop_for_remediation_approval=stop_for_remediation_approval,
                     interactive=interactive,
                     approve_backup_recovery=approve_backup_recovery,
                     stop_after_phase=stop_after_phase,
@@ -69272,7 +69376,7 @@ def soperator_external_upgrade_command(
                     slurm_scheduling_pause=resolved_slurm_scheduling_pause,
                     login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
                     login_session_drain_timeout_seconds=0,
-                    approve_remediation=approve_remediation,
+                    stop_for_remediation_approval=stop_for_remediation_approval,
                     campaign_fingerprint=(
                         _locked_upgrade_path_fingerprint(locked_upgrade_path)
                         if locked_upgrade_path

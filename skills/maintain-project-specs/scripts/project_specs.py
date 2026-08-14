@@ -36,6 +36,8 @@ def _parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--project-root", type=Path, required=True)
     validate_parser.add_argument("--output", type=Path)
     validate_parser.add_argument("--session-id")
+    validate_parser.add_argument("--task-implementer-workspace", type=Path)
+    validate_parser.add_argument("--task-implementer-run-id")
     start_parser = subparsers.add_parser("start-prompt")
     start_parser.add_argument("--project-root", type=Path, required=True)
     start_parser.add_argument("--session-id", required=True)
@@ -79,6 +81,8 @@ def main(argv: list[str]) -> int:
                     args.project_root,
                     args.output,
                     args.session_id,
+                    task_implementer_workspace=args.task_implementer_workspace,
+                    task_implementer_run_id=args.task_implementer_run_id,
                 )
                 if args.output is not None
                 else validate_project(args.project_root)

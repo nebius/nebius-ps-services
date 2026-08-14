@@ -243,7 +243,7 @@ Tasks become done only after verified fast-forward promotion.
 
 ## Coordinator Handoff
 
-- Current action: resume recorded v3 transition
+- Current action: inspect authoritative resume-control-v1 transition
 - Coordinator state path:
 - Active wave:
 - Dispatch batch:
@@ -261,8 +261,10 @@ Tasks become done only after verified fast-forward promotion.
 ```text
 Use $task-implementer run <same-prompt-ref-or-file>.
 
-Read the run manifest, exact bound snapshot, complete coordinator-owned handoff,
-v2 coordinator/wave state, immutable assignments/results, and wave journal.
+Read the run manifest, exact bound snapshot, coordinator-v7, wave-v4,
+task-plane-v5, resume-control-v1, immutable assignments/results, interop-v4,
+and wave journal. Treat handoff status as a human projection after coordinator
+creation.
 Re-observe the primary checkout and every managed worktree/ref before choosing a
 transition. Resume the active dependency wave idempotently. Keep shared specs
 and documentation coordinator-owned; require each worker to use its assigned

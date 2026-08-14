@@ -95,6 +95,29 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             }
         )
 
+    def test_trusted_python_accepts_only_exact_path_canonical_python_family(
+        self,
+    ) -> None:
+        hook_python = self.root / "hook-bin" / "python3.12"
+        canonical_python = self.root / "path-bin" / "python3.14"
+        alternate_python = self.root / "alternate-bin" / "python3.14"
+        for executable in (hook_python, canonical_python, alternate_python):
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+
+        def which(value: str) -> str | None:
+            return str(canonical_python) if value == "python3.14" else None
+
+        with (
+            mock.patch.object(lifecycle.sys, "executable", str(hook_python)),
+            mock.patch.object(lifecycle.shutil, "which", side_effect=which),
+        ):
+            self.assertTrue(lifecycle._trusted_python(str(canonical_python)))
+            self.assertTrue(lifecycle._trusted_python("python3.14"))
+            self.assertFalse(lifecycle._trusted_python(str(alternate_python)))
+            self.assertFalse(lifecycle._trusted_python("python2"))
+
     def test_prompt_blocks_code_until_planned(self) -> None:
         result = lifecycle.evaluate(
             {**self.base, "hook_event_name": "UserPromptSubmit"}
@@ -161,7 +184,7 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
         assert state is not None
         state.update(
             {
-                "phase": "implementation-open",
+                "phase": "reconciliation-required",
                 "receipt_sha256": "a" * 64,
                 "planned_write_epoch": 0,
             }
@@ -189,7 +212,7 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
         assert state is not None
         state.update(
             {
-                "phase": "implementation-open",
+                "phase": "reconciliation-required",
                 "receipt_sha256": "a" * 64,
                 "planned_write_epoch": 0,
             }
@@ -409,6 +432,110 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             {**self.base, "hook_event_name": "Stop", "stop_hook_active": True}
         )
         self.assertFalse(second["continue"])
+
+    def test_stop_opens_reconciliation_before_synthetic_continuation(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "implementation-open",
+                "receipt_sha256": "a" * 64,
+                "requirements_sha256": "b" * 64,
+                "design_sha256": "c" * 64,
+                "planned_write_epoch": 1,
+                "write_epoch": 1,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+
+        first = lifecycle.evaluate_stop({**self.base, "hook_event_name": "Stop"})
+
+        self.assertEqual(first["decision"], "block")
+        current = lifecycle._load(state_path)
+        assert current is not None
+        self.assertEqual(current["phase"], "reconciliation-required")
+        self.assertEqual(current["write_epoch"], 1)
+        for field in (
+            "receipt_sha256",
+            "requirements_sha256",
+            "design_sha256",
+            "rules_path",
+            "rules_sha256",
+            "planned_write_epoch",
+        ):
+            self.assertIsNone(current[field])
+
+        spec_patch = lifecycle.evaluate(
+            {
+                **self.base,
+                "hook_event_name": "PreToolUse",
+                "tool_name": "apply_patch",
+                "tool_input": "*** Update File: docs/design.md\n",
+            }
+        )
+        self.assertEqual(spec_patch, {})
+
+        recursive = lifecycle.evaluate_stop(
+            {**self.base, "hook_event_name": "Stop", "stop_hook_active": True}
+        )
+        self.assertFalse(recursive["continue"])
+
+    def test_stop_reconciliation_retries_a_concurrent_material_write(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "implementation-open",
+                "receipt_sha256": "a" * 64,
+                "requirements_sha256": "b" * 64,
+                "design_sha256": "c" * 64,
+                "planned_write_epoch": 1,
+                "write_epoch": 1,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        original_write = lifecycle._write
+        raced = False
+
+        def concurrent_write(path, value):
+            nonlocal raced
+            if not raced:
+                raced = True
+                current = lifecycle._load(path)
+                assert current is not None
+                current["phase"] = "reconciliation-required"
+                current["write_epoch"] = int(current["write_epoch"]) + 1
+                original_write(path, current)
+                raise lifecycle.HookError(
+                    "project spec lifecycle changed before transition"
+                )
+            return original_write(path, value)
+
+        with mock.patch.object(lifecycle, "_write", side_effect=concurrent_write):
+            result = lifecycle.evaluate_stop({**self.base, "hook_event_name": "Stop"})
+
+        self.assertEqual(result["decision"], "block")
+        current = lifecycle._load(state_path)
+        assert current is not None
+        self.assertEqual(current["phase"], "reconciliation-required")
+        self.assertEqual(current["write_epoch"], 2)
+        for field in (
+            "receipt_sha256",
+            "requirements_sha256",
+            "design_sha256",
+            "rules_path",
+            "rules_sha256",
+            "planned_write_epoch",
+        ):
+            self.assertIsNone(current[field])
 
     def test_arbiter_aggregates_every_initial_continuation(self) -> None:
         delegates = self.root / "delegates"
@@ -1225,6 +1352,308 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
                     lifecycle.COORDINATOR_BINDING_REASON,
                 )
 
+    def test_task_implementer_run_bundle_uses_attested_adapter_boundary(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "reconciliation-required",
+                "receipt_sha256": "a" * 64,
+                "planned_write_epoch": 0,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        helper = (
+            self.user_skills_root
+            / "project-agent-instructions/scripts/project_agent_instructions.py"
+        )
+        helper.parent.mkdir(parents=True)
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        private_root = (
+            Path(os.environ["CODEX_HOME"])
+            / "task-implementer/projects/project/scopes/scope/runs"
+            / "run-20260811t135023z-caac975f/orchestration"
+            / "project-agent-instructions"
+        )
+        command = (
+            f"python3 {helper} inspect --project-root {self.root / 'integration'} "
+            "--spec-owner maintain-project-specs "
+            "--requirements docs/requirements.md --design docs/design.md "
+            f"--spec-receipt {private_root.parent / 'project-agent-spec-receipt.json'} "
+            f"--runtime-config {private_root.parent / 'project-agent-runtime.json'} "
+            f"--codex-home {Path(os.environ['CODEX_HOME'])} "
+            f"--private-root {private_root} "
+            f"--output {private_root / 'manifest.json'}"
+        )
+        adapter = {
+            "status": "authorized",
+            "action": "inspect",
+            "outer_project_root": str(self.project),
+            "project_root": str(self.root / "integration"),
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        }
+        payload = {
+            **self.base,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        with mock.patch.object(
+            lifecycle, "_task_implementer_coordinator", return_value=adapter
+        ):
+            for phase in ("reconciliation-required", "implementation-open"):
+                with self.subTest(phase=phase):
+                    state = lifecycle._load(state_path)
+                    assert state is not None
+                    state["phase"] = phase
+                    lifecycle._write(state_path, state)
+                    self.assertEqual(lifecycle.evaluate(payload), {})
+            denied = lifecycle.evaluate(
+                {
+                    **payload,
+                    "tool_input": {"command": command + " --unexpected value"},
+                }
+            )
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+
+        validate_command = (
+            f"python3 {self.user_skills_root / 'maintain-project-specs/scripts/project_specs.py'} "
+            f"validate --project-root {self.root / 'integration'} "
+            f"--output {private_root.parent / 'project-agent-spec-receipt.json'} "
+            f"--session-id {self.base['session_id']} "
+            f"--task-implementer-workspace {private_root.parents[3] / 'workspace.json'} "
+            f"--task-implementer-run-id run-20260811t135023z-caac975f"
+        )
+        validate_adapter = {
+            **adapter,
+            "action": "validate",
+            "command_sha256": hashlib.sha256(validate_command.encode()).hexdigest(),
+        }
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state["phase"] = "implementation-open"
+        lifecycle._write(state_path, state)
+        validate_payload = {
+            **payload,
+            "tool_input": {"command": validate_command},
+        }
+        with mock.patch.object(
+            lifecycle,
+            "_task_implementer_coordinator",
+            return_value=validate_adapter,
+        ):
+            self.assertEqual(lifecycle.evaluate(validate_payload), {})
+            wrong_session = validate_command.replace(
+                self.base["session_id"], "019ff65c-3e02-7780-8f24-448c391b5f66"
+            )
+            denied = lifecycle.evaluate(
+                {**payload, "tool_input": {"command": wrong_session}}
+            )
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_task_implementer_run_bundle_rejects_terminal_actions(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "reconciliation-required",
+                "receipt_sha256": "a" * 64,
+                "planned_write_epoch": 0,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        helper = (
+            self.user_skills_root
+            / "project-agent-instructions/scripts/project_agent_instructions.py"
+        )
+        helper.parent.mkdir(parents=True)
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        private_root = (
+            Path(os.environ["CODEX_HOME"])
+            / "task-implementer/projects/project/scopes/scope/runs"
+            / "run-20260811t135023z-caac975f/orchestration"
+            / "project-agent-instructions"
+        )
+        for action in ("apply", "verify"):
+            command = f"python3 {helper} {action} --private-root {private_root}"
+            adapter = {
+                "status": "authorized",
+                "action": action,
+                "outer_project_root": str(self.project),
+                "project_root": str(self.root / "integration"),
+                "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+            }
+            with (
+                self.subTest(action=action),
+                mock.patch.object(
+                    lifecycle, "_task_implementer_coordinator", return_value=adapter
+                ),
+            ):
+                denied = lifecycle.evaluate(
+                    {
+                        **self.base,
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "Bash",
+                        "tool_input": {"command": command},
+                    }
+                )
+                self.assertEqual(
+                    denied["hookSpecificOutput"]["permissionDecision"], "deny"
+                )
+
+    def test_task_implementer_wave_plan_records_hidden_checkpoint_write(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "implementation-open",
+                "receipt_sha256": "a" * 64,
+                "planned_write_epoch": 0,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        command = "python3 /trusted/prompt_workspace.py wave-plan --workspace /private/workspace.json --run-id run-20260811t135023z-caac975f --capacity 2 --json"
+        impact = {
+            "status": "authorized",
+            "action": "wave-plan",
+            "outer_project_root": str(self.project),
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+            "checkpoint_head": "b" * 40,
+        }
+        payload = {
+            **self.base,
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"exit_code": 0},
+        }
+        with mock.patch.object(
+            lifecycle, "_task_implementer_impact", return_value=impact
+        ):
+            lifecycle.evaluate(payload)
+        current = lifecycle._load(state_path)
+        assert current is not None
+        self.assertEqual(current["phase"], "reconciliation-required")
+        self.assertEqual(current["write_epoch"], 1)
+
+    def test_task_implementer_coordinator_commit_is_bound_during_reconciliation(
+        self,
+    ) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state["phase"] = "reconciliation-required"
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        command = (
+            "python3 /trusted/prompt_workspace.py coordinator-commit "
+            "--workspace /private/workspace.json "
+            "--run-id run-20260811t135023z-caac975f --json"
+        )
+        evidence = {
+            "status": "authorized",
+            "action": "coordinator-commit",
+            "outer_project_root": str(self.project),
+            "project_root": str(self.root / "integration"),
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        }
+        payload = {
+            **self.base,
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        with mock.patch.object(
+            lifecycle, "_task_implementer_coordinator", return_value=evidence
+        ):
+            allowed = lifecycle.evaluate({**payload, "hook_event_name": "PreToolUse"})
+            completed = lifecycle.evaluate(
+                {
+                    **payload,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": {"exit_code": 0},
+                }
+            )
+
+        self.assertNotIn("hookSpecificOutput", allowed)
+        self.assertNotIn("hookSpecificOutput", completed)
+        current = lifecycle._load(state_path)
+        assert current is not None
+        self.assertEqual(current["phase"], "reconciliation-required")
+
+    def test_task_implementer_wave_plan_rejects_basename_lookalike(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "implementation-open",
+                "receipt_sha256": "a" * 64,
+                "planned_write_epoch": 0,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        workspace = Path(os.environ["CODEX_HOME"]) / "task-implementer/workspace.json"
+        workspace.parent.mkdir(parents=True)
+        workspace.write_text("{}\n", encoding="utf-8")
+        helper = self.root / "lookalike/task-implementer/scripts/prompt_workspace.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text(
+            "#!/usr/bin/env python3\n"
+            "import hashlib, json, sys\n"
+            "command = sys.stdin.read()\n"
+            "print(json.dumps({\n"
+            "    'status': 'authorized',\n"
+            "    'action': 'wave-plan',\n"
+            f"    'outer_project_root': {str(self.project)!r},\n"
+            "    'command_sha256': hashlib.sha256(command.encode()).hexdigest(),\n"
+            "    'checkpoint_head': None,\n"
+            "}))\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o755)
+        command = shlex.join(
+            [
+                sys.executable,
+                str(helper),
+                "wave-plan",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                "run-20260811t135023z-caac975f",
+                "--capacity",
+                "1",
+                "--json",
+            ]
+        )
+
+        denied = lifecycle.evaluate(
+            {
+                **self.base,
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            }
+        )
+
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_project_instructions_apply_arms_seal_and_blocks_new_open(self) -> None:
         lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
         _project, git_root, _scope = lifecycle._project(str(self.project))
@@ -1678,19 +2107,128 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             encoding="utf-8",
         )
         authorization.chmod(0o600)
+        hook_python = self.root / "hook-bin/python3.12"
+        canonical_python = self.root / "path-bin/python3.14"
+        for executable in (hook_python, canonical_python):
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
         command = (
-            f"{sys.executable} {helper} prepare --repo-root {git_root} "
+            f"{canonical_python} {helper} prepare --repo-root {git_root} "
             f"--session-id session-1 --authorization {authorization} --claim {claim}"
         )
-        allowed = lifecycle.evaluate(
-            {
-                **self.base,
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": command},
-            }
+        original_which = shutil.which
+
+        def which(value: str) -> str | None:
+            if value == "python3.14":
+                return str(canonical_python)
+            return original_which(value)
+
+        with (
+            mock.patch.object(lifecycle.sys, "executable", str(hook_python)),
+            mock.patch.object(lifecycle.shutil, "which", side_effect=which),
+        ):
+            allowed = lifecycle._bound_commit_command(
+                command,
+                git_root,
+                self.base["session_id"],
+            )
+        self.assertIsNotNone(allowed)
+        self.assertEqual(allowed[0], "prepare")
+
+    def test_task_commit_uses_attested_worker_session_not_outer_payload_session(
+        self,
+    ) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        worker_root = self.root / "worker"
+        worker_session = "worker-session"
+        command = (
+            "python3 /trusted/commit_transaction.py prepare "
+            f"--repo-root {worker_root} --session-id {worker_session} "
+            "--authorization /private/authorization.json "
+            "--claim /private/claim.json"
         )
+        delegated = {
+            "status": "authorized",
+            "action": "prepare",
+            "outer_project_root": str(self.project),
+            "worker_root": str(worker_root),
+            "worker_session_id": worker_session,
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        }
+        calls: list[tuple[Path, object]] = []
+
+        def bind(
+            _command: str,
+            root: Path,
+            session_id: object,
+            *,
+            completed: bool = False,
+        ) -> tuple[str, Path, str, str] | None:
+            del completed
+            calls.append((root, session_id))
+            if root == worker_root and session_id == worker_session:
+                return (
+                    "prepare",
+                    Path("/private/claim.json"),
+                    "task-implementer",
+                    "a" * 64,
+                )
+            return None
+
+        with (
+            mock.patch.object(lifecycle, "_bound_commit_command", side_effect=bind),
+            mock.patch.object(
+                lifecycle, "_task_implementer_commit", return_value=delegated
+            ),
+        ):
+            allowed = lifecycle.evaluate(
+                {
+                    **self.base,
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                }
+            )
+
         self.assertEqual(allowed, {})
+        self.assertEqual(
+            calls,
+            [(git_root, self.base["session_id"]), (worker_root, worker_session)],
+        )
+
+    def test_task_commit_adapter_session_must_match_command_session(self) -> None:
+        command = (
+            "python3 /trusted/commit_transaction.py prepare "
+            f"--repo-root {self.project} --session-id worker-session "
+            "--authorization /private/authorization.json "
+            "--claim /private/claim.json"
+        )
+        adapter = {
+            "status": "authorized",
+            "action": "prepare",
+            "outer_project_root": str(self.project),
+            "worker_root": str(self.project),
+            "worker_session_id": "different-session",
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        }
+        evidence = {
+            "owner": "task-implementer",
+            "owner_evidence_path": str(
+                Path(os.environ["CODEX_HOME"]) / "task-implementer/run/plane.json"
+            ),
+        }
+        with (
+            mock.patch.object(
+                lifecycle, "_read_regular", return_value=json.dumps(evidence).encode()
+            ),
+            mock.patch.object(
+                lifecycle, "_task_implementer_adapter", return_value=adapter
+            ),
+            mock.patch.object(lifecycle, "_private_path_is_safe", return_value=True),
+        ):
+            self.assertIsNone(lifecycle._task_implementer_commit(command, self.project))
 
     def test_task_commit_owner_remains_bound_for_exact_post_commit_child(self) -> None:
         base_head = subprocess.run(

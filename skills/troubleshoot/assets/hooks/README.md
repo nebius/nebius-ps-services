@@ -16,42 +16,29 @@ blocks supported tool calls after exhaustion, and requires the final report.
 At runtime the handler may create
 `remediation-budget-authorization.json` beside the advertised `current.md`.
 That private sidecar is session state, never a repository artifact.
-Every explicit `$troubleshoot` invocation also creates a separate
-`troubleshoot-report-obligation.json` in that 0700 same-session directory, mode
-0600, without changing the remediation authorization schema. It requires a
-terminal report containing `Current workflow state: REPORTED` for success,
-blocking, tool error, early stop, unresolved work, and exhaustion. An
-undelivered duty survives a later turn in the same session. One incomplete
-assistant response gets a corrective continuation; the next incomplete
-response closes with an honest bounded UI fallback and records that the
-assistant-authored report was not delivered. A valid report is finalized only
-after the shared Stop arbiter proves that no project-contract or SDLC delegate
-still needs continuation. A later terminal peer result keeps precedence but
-first finalizes the already validated report, so its obligation cannot leak
-into another turn. A peer continuation leaves the obligation active for the
-later terminal Stop.
-All outcomes use one canonical report envelope. The validator requires the
-architecture verdict, component matrix, incident timeline, logs, hypotheses,
-code debugging, root cause, remediation, post-fix validation, and exactly one
-`PASS`, `FAIL`, or `UNKNOWN` row for Design, Infrastructure, Connectivity,
-Configuration, Runtime health, Logs, and Relevant code paths. It rejects
-`VERIFIED_FIXED` unless every row is `PASS`. Every `PASS` row requires its exact
-canonical section reference and no-gap sentinel, then cross-validates the
-referenced architecture verdict, component-matrix cells, log coverage statuses,
-or code-debugging and post-fix fields. Structured status and referenced detail
-are validated separately: a token cannot override explicit missing,
-unavailable, unexamined, unverified, or otherwise insufficient evidence.
-The Failure Contract also requires explicit included and excluded boundaries,
-exercised control and data paths, and incident-window start and end. The
-component table names DNS and restart-history evidence. The log ledger requires
-exactly one ordered row for each canonical layer: component, application or
-job, container or orchestrator, service manager, OS and kernel, network and
-firewall, storage, and GPU or hardware. Coverage status is exactly `examined`,
-`unavailable`, `unsafe`, or `not applicable`; aliases and differently cased
-values fail closed.
-Evidence-bearing component and log cells are validated independently, and the
-detail after `PASS:` must be substantive; a fixed layer name, neighboring prose,
-or verdict token cannot make a placeholder cell satisfy the report gate.
+
+Every explicit `$troubleshoot` invocation also creates mode-0600
+`troubleshoot-report-obligation.json` in the same 0700 session directory.
+The sidecar records invocation and transactional delivery; it is not a
+general workflow lock. The ordinary report has four required sections:
+`Outcome`, `Root Cause And Fix`, `Verification`, and `Next Action`, with an
+optional bounded `Evidence Appendix`.
+
+A valid concise report is finalized only after the shared Stop arbiter proves
+that no project-contract or SDLC delegate still needs continuation. A peer
+continuation remains authoritative. An ordinary incomplete, malformed,
+partial, `FAIL`, or `UNKNOWN` report records `advisory_incomplete` and returns
+`continue: true`; it requests no corrective turn, denies no later tool, and
+emits no generated fallback. Sensitive output may receive one bounded
+redaction correction and then a concise redacted safety fallback. Invalid
+trusted state, missing authority, exact remediation-budget exhaustion, and
+peer Stop policy remain fail-closed.
+
+Supported outcomes include `DIAGNOSED-FIXED` for a proven cause, applied
+owner-correct repair, and passing reproducer, regression, and source or
+affected-boundary checks when installed or live activation remains explicitly
+unverified. `VERIFIED_FIXED` remains end-to-end proof;
+`DIAGNOSED_NOT_FIXED` remains diagnosed but unrepaired.
 
 ## Runtime Contract
 
@@ -61,7 +48,8 @@ The event payload and output shapes follow the current
 blocking, and concurrent same-event command handlers.
 
 - Missing task state or a missing remediation marker fails open for budget
-  enforcement. An active report obligation remains independently enforced.
+  enforcement. An active ordinary report obligation remains advisory; its
+  sensitive-output boundary is independently enforced.
 - A present malformed marker fails closed until the parent repairs the exact
   advertised `current.md` file. The denial includes a bounded public-safe
   validation reason without reflecting marker content or filesystem exception
@@ -139,12 +127,12 @@ blocking, and concurrent same-event command handlers.
 - Once the attempt or time limit is exhausted, every supported tool call is
   denied except an `apply_patch` that updates only that `current.md` file.
 - For exhausted state, the Stop evaluator requests one corrected report with the
-  exact validation issue and includes a bounded, redacted report as the minimum
-  assistant response in that same canonical envelope. Validation requires
+  marker-bound evidence and includes a bounded, redacted concise report as the
+  minimum assistant response. Validation requires
   substantive `Remediation`, `Verification`, `Result`, and `Evidence` fields
   for every positional attempt, bound to the guard's bounded, redacted
-  marker-derived summaries under `## Remediation` and
-  `## Post-Fix Validation`. A report
+  marker-derived summaries under `## Root Cause And Fix` and
+  `## Verification`. A report
   containing a detected sensitive value is rejected for correction. The
   marker-derived report fields are capped at 70 characters so the canonical
   fallback remains bounded even with all ten attempts. The
@@ -154,8 +142,8 @@ blocking, and concurrent same-event command handlers.
   an exact marker-derived field is intentionally rejected with a distinct
   mismatch reason rather than the missing-field reason.
   If the continued response remains incomplete, the hook terminates and emits
-  the same fallback as a UI/event-stream `systemMessage` warning; that warning
-  is not an assistant-authored conversation response. Secret-, private-URL-,
+  the same concise fallback as a UI/event-stream `systemMessage` warning; that
+  warning is not an assistant-authored conversation response. Secret-, private-URL-,
   private-IPv4/IPv6-, internal-hostname/localhost-, cloud-access-key-, and
   Unix/Windows personal-path-shaped values are replaced with generic summaries
   even though the marker contract already requires public-safe content. Public

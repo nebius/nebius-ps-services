@@ -1,7 +1,6 @@
 # nebius-ps-services
 
-Public Nebius Professional Services monorepo for reusable AI/ML deployment
-building blocks on Nebius AI Cloud.
+Nebius Public Services monorepo for reusable Nebius cloud infrastructure and AI/ML deployments on Nebius AI Cloud.
 
 This repository contains Terraform modules, Helm charts, CLI services, examples,
 and reusable Codex skills. Root-level files should stay focused on repository

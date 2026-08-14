@@ -16,7 +16,9 @@ if str(HOOK_ASSETS) not in sys.path:
     sys.path.insert(0, str(HOOK_ASSETS))
 
 from prompt_session_state import (  # noqa: E402
-    CLASSIFICATIONS,
+    DISPOSITIONS,
+    MATERIAL_CLASSIFICATIONS,
+    NOOP_REASONS,
     WORKFLOWS,
     PromptSessionError,
     accept_event,
@@ -36,9 +38,11 @@ def parser() -> argparse.ArgumentParser:
     accept.add_argument("--event", type=Path, required=True)
     accept.add_argument("--token", required=True)
     accept.add_argument(
-        "--classification", choices=sorted(CLASSIFICATIONS), required=True
+        "--disposition", choices=sorted(DISPOSITIONS), required=True
     )
-    accept.add_argument("--refined-file", type=Path)
+    accept.add_argument("--classification", choices=sorted(MATERIAL_CLASSIFICATIONS))
+    accept.add_argument("--reason", choices=sorted(NOOP_REASONS | {"sensitive"}))
+    accept.add_argument("--projection-file", type=Path)
     accept.add_argument("--prompt-path", type=Path)
     accept.add_argument("--base-sha256")
     accept.add_argument("--new-objective", action="store_true")
@@ -50,8 +54,7 @@ def parser() -> argparse.ArgumentParser:
     consume.add_argument("--prompt-ref")
     consume.add_argument("--prompt-path", type=Path)
     consume.add_argument("--prompt-sha256")
-    consume.add_argument("--run-id")
-    consume.add_argument("--objective-terminal", action="store_true")
+    consume.add_argument("--duplicate", action="store_true")
     objective = subparsers.add_parser("objective")
     objective.add_argument("--workflow", choices=sorted(WORKFLOWS), required=True)
     objective.add_argument("--project", type=Path, required=True)
@@ -68,28 +71,41 @@ def parser() -> argparse.ArgumentParser:
 def execute(args: argparse.Namespace) -> dict[str, Any]:
     home = codex_home()
     if args.action == "accept":
+        session_id = os.environ.get("CODEX_THREAD_ID")
+        if not session_id:
+            raise PromptSessionError(
+                "IDENTITY_REQUIRED", "current Codex session identity is unavailable"
+            )
         return accept_event(
             home,
             args.event,
             args.token,
-            args.classification,
-            refined_file=args.refined_file,
+            args.disposition,
+            session_id=session_id,
+            classification=args.classification,
+            reason=args.reason,
+            projection_file=args.projection_file,
             prompt_path=args.prompt_path,
             base_sha256=args.base_sha256,
             new_objective=args.new_objective,
         )
     if args.action == "consume":
+        session_id = os.environ.get("CODEX_THREAD_ID")
+        if not session_id:
+            raise PromptSessionError(
+                "IDENTITY_REQUIRED", "current Codex session identity is unavailable"
+            )
         return consume_event(
             home,
             args.event,
             args.token,
+            session_id=session_id,
             workflow=args.workflow,
             prompt_id=args.prompt_id,
             prompt_ref=args.prompt_ref,
             prompt_path=args.prompt_path,
             prompt_sha256=args.prompt_sha256,
-            run_id=args.run_id,
-            objective_terminal=args.objective_terminal,
+            duplicate=args.duplicate,
         )
     if args.action == "objective":
         session_id = os.environ.get("CODEX_THREAD_ID")

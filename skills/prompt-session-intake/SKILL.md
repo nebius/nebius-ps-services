@@ -1,6 +1,6 @@
 ---
 name: prompt-session-intake
-description: "Internal coordinator used only when its capture hook routes a safe direct prompt from an explicitly bound Task Implementer or Agentic SDLC session. Classify, losslessly refine, accept, merge, execute once, and consume the exact staged turn; never invoke standalone or for unbound, Stop-generated, compaction, system, or subagent prompts."
+description: "Internal coordinator used only when its non-blocking capture hook stages metadata for a safe direct prompt bound to Task Implementer or Agentic SDLC. While the current agent handles the direct request normally, select only durable project intent, record merge/noop/sensitive, accept, merge the canonical prompt once, and consume the exact sidecar; never invoke standalone or execute a workflow."
 ---
 
 # Prompt Session Intake
@@ -21,10 +21,11 @@ authorization.
 
 ## Purpose
 
-Bridge a capture-only `UserPromptSubmit` hook to the existing semantic and
-execution owners. The hook can stage exact private provenance and add context;
-only the current agent can classify/refine the delivered prompt and only Task
-Implementer or Agentic SDLC can update and run its canonical objective.
+Bridge a non-blocking `UserPromptSubmit` capture sidecar to the existing prompt
+owners. The current agent always handles the delivered request normally. When
+safe capture succeeds, only that agent can select a project-intent projection and only
+the owning Task Implementer or Agentic SDLC prompt adapter can update the
+canonical objective. Capture never selects, starts, or resumes a workflow.
 
 ## Invocation Policy
 
@@ -47,8 +48,7 @@ consume, replay, or recovery command.
 ## Inputs
 
 - The current delivered user message, exact hook receipt, bound workflow and
-  project, canonical prompt state when material, and authoritative workflow
-  result needed for consumption.
+  project, and canonical prompt state when material.
 
 ## Required Reads
 
@@ -56,40 +56,61 @@ Read `references/state-contract.md` before any transition.
 
 ## Writes
 
-- Private mode-0600 raw/refined journals, event state, binding, one-shot Stop
-  continuation marker, and project objective registry under the Codex home.
+- Metadata-only private event-v2 state, an accepted mode-0600
+  `project-intent.md` projection when eligible, binding, current-event receipt,
+  one-shot Stop continuation marker, and project objective registry under the
+  Codex home. Never write the submitted prompt body or a raw prompt journal.
 - Canonical workflow prompts only through the owning Task Implementer or SDLC
   compare-and-set adapter; this skill never writes committed project files.
 
 ## Process
 
 1. Confirm the event is for the current delivered root-agent turn and names the
-   expected bound workflow. Never select an older staged event.
-2. Classify the turn as exactly one of `intent`, `steering`, `constraint`,
-   `clarification-answer`, `acceptance-change`, `conversation`, `status`, or
-   `control`.
-3. For a nonmaterial class, invoke private `accept` without prompt inputs, then
-   private `consume` without prompt or run identity. Continue the conversation
-   normally; do not edit or run a workflow.
-4. For a material class, inspect the exact current canonical prompt and compute
-   its digest. Refine the current user message for grammar, semantic clarity,
-   and concision without deleting facts, data, constraints, decisions,
-   uncertainty, references, or acceptance intent. Put only that lossless
-   refinement in one private mode-0600 file.
-5. Invoke private `accept` with the exact event/token, class, refined file,
-   canonical prompt path, and base digest. For a first objective, use the
-   explicit new-objective transition instead of inventing a base.
-6. Route to the bound workflow adapter. Merge the accepted refinement into the
-   objective-owned prompt using compare-and-set and the accepted operation ID,
-   then continue the workflow's same canonical start/resume path used by
-   explicit `run`. On recovery, reuse that exact operation ID; the adapter must
-   return the one already-applied result instead of merging twice.
-7. After the workflow has started or resumed exactly once, invoke private
-   `consume` with its exact full prompt ID, prompt reference, path, resulting
-   digest, run ID when one exists, and terminal objective fact only when the
-   workflow authoritatively completed. Do not consume before that transition.
-8. If any peer hook blocks prompt submission, leave this event staged. It is
-   ineligible for later implicit replay; a later turn uses only its own event.
+   expected bound workflow. Continue the direct request normally and never
+   select an older staged event.
+2. Record exactly one disposition: `merge`, `noop`, or `sensitive`. A merge
+   also uses exactly one classification: `intent`, `steering`, `constraint`,
+   `clarification-answer`, or `acceptance-change`.
+3. Use `sensitive` when later inspection finds content that must not remain in
+   capture state. Invoke private `accept` with no prompt inputs; the transition
+   atomically discards the submitted digest, operation ID, token, and any
+   projection authority. Continue the direct request without capture replay.
+4. Use `noop` for workflow or skill invocation, shell/tool action, delivery or
+   operational control, agent/session/response control, status or inquiry,
+   conversation, unrelated content, or already-recorded intent. Record the
+   matching no-op reason, then consume without prompt or run identity. Do not
+   edit or run a workflow.
+5. Use `merge` only for durable project objectives, scope, behavior, API/CLI/
+   configuration/schema/data contracts, architecture decisions, constraints,
+   acceptance outcomes, domain facts and examples, priorities, non-goals,
+   trade-offs, corrections, clarification answers, and rollout or operational
+   requirements. For mixed turns, exclude ephemeral skill, workflow, shell,
+   tool, delivery, orchestration, status, response-style, and conversation
+   clauses. Keep a command only when it declaratively defines a project
+   interface, example, or verification contract.
+6. Inspect the exact canonical prompt and compute its digest. Put only the
+   selected durable project intent in one private mode-0600
+   `project-intent.md`. Be concise but lossless for selected facts, values,
+   negations, decisions, uncertainty, examples, references, constraints, and
+   acceptance outcomes; do not preserve the excluded wrapper.
+7. Invoke private `accept` with the exact event/token, `merge` disposition,
+   material classification, projection file, canonical prompt path, and base
+   digest. For a first objective, use the explicit new-objective transition
+   instead of inventing a base.
+8. Route to the bound workflow adapter. Rehash and merge the accepted
+   projection using compare-and-set, the accepted operation ID, and accepted
+   projection digest, without calling its start/resume path. An exact operation
+   retry returns the already-applied result. A byte-identical projection under
+   another operation returns a terminal duplicate no-op; semantic paraphrase
+   detection remains the agent's responsibility.
+9. After the canonical merge or exact duplicate result is verified, invoke
+   private `consume` with its
+   exact full prompt ID, prompt reference, path, and resulting digest. Do not
+   supply a run ID or terminal workflow fact from direct capture; carry the
+   adapter's duplicate result exactly.
+10. If capture cannot stage, accept, merge, or consume, keep handling the direct
+   request. Preserve only bounded private transition evidence; never replay the
+   prompt or request a Stop continuation solely to repair capture.
 
 ## Manual edits
 
@@ -100,19 +121,25 @@ automatic execution.
 
 ## Safety
 
-- Reject recognized secrets before any raw, refined, or canonical prompt write.
-- Keep the raw session journal private and lossless; never quote it in hook
-  diagnostics, logs, task state, docs, or final responses.
+- Skip capture for recognized secrets before any event, projection, or
+  canonical prompt write, while allowing the direct request to reach the
+  current agent. Never partially capture a mixed secret-bearing prompt.
+- Metadata staging stores only bounded identity, digest, workflow, project,
+  token, and timing fields. Never persist or reconstruct the submitted body.
 - Treat the five-character prompt reference as non-authoritative. Resolve it
   only when exact and unique; persist and compare the full prompt ID.
-- Reject stale base digests, manual drift, a second writer, cross-workflow
-  claims, duplicate turn content, symlinks, unsafe file modes, and ambiguous
-  active objectives.
+- Reject stale current-event claims, mismatched current sessions, stale base
+  digests, manual drift, projection substitution, cross-workflow claims,
+  reused turn identity with changed content, symlinks, unsafe file modes, and ambiguous active objectives
+  from capture. Treat writer-session identity as provenance, never an admission
+  lease. For Task Implementer, treat manifest-proven primary and managed-lane
+  project paths as one logical objective.
 - Do not acquire Task Implementer or SDLC workflow locks from the hook. The
   capture hook uses only its own bounded state lock; workflow adapters acquire
   their normal locks after acceptance.
 - Use the shared Stop arbiter delegate. Never register an independent Stop
-  hook for prompt intake.
+  hook for prompt intake, and never block Stop because capture is incomplete or
+  invalid.
 - Explicit workflow invocations carrying a binding receipt register their
   active prompt result through the private objective transition; terminal
   workflow results close it. Never infer active or terminal state from a file
@@ -120,20 +147,22 @@ automatic execution.
 
 ## Idempotency
 
-The same session/turn/content stages once. Acceptance retries must reproduce
-the exact classification, private refinement, base, and new-objective choice.
-The workflow adapter applies one operation ID once, and consumption retries
-must reproduce the exact result identity before returning the terminal state.
+The same session/turn/content stages once in the event-v2 namespace. Event-v1
+records and raw journals remain inert and are never read, migrated, rewritten,
+or deleted. Acceptance retries must reproduce the exact disposition,
+classification or reason, private projection, base, and new-objective choice.
+The prompt adapter applies one operation-and-projection binding once, and
+consumption retries must reproduce the exact result identity before returning the terminal state.
 Reused turn identity with different content, stale base digests, and divergent
-execution retries fail closed.
+capture retries fail closed for capture without affecting the direct request.
 
 ## Failure Handling
 
-Leave a failed material event staged or accepted with its structured blocker.
-Do not replay an older event, silently reclassify it, retry through a second
-workflow path, or consume before prompt/run postconditions are authoritative.
-The shared Stop arbiter requests continuation only for the exact unfinished
-current event.
+Leave a failed material event staged or accepted with its bounded structured
+capture evidence and continue the direct request. Do not replay an older event,
+silently reclassify it, retry through a second path, or consume before prompt
+postconditions are authoritative. The prompt-session Stop delegate always
+passes; it never requests continuation for capture recovery.
 
 ## Must Not
 
@@ -146,9 +175,11 @@ current event.
 
 ## Completion Criteria
 
-The exact current event is consumed once, or it remains visibly staged/accepted
-with a structured blocker. Report source, installation, registration/trust,
-restart, and fresh-session proof separately.
+The direct request proceeds whether capture is consumed, skipped, or remains
+staged/accepted with a structured blocker. A successful material sidecar
+updates the canonical prompt exactly once without starting a workflow. Report
+source, installation, registration/trust, restart, and fresh-session proof
+separately.
 
 ## Learning Loop
 
@@ -158,11 +189,12 @@ For read-only/report-only work, or when a learning is not public-safe,
 evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state. This also excludes raw
-or refined prompts, event paths, tokens, and session identifiers.
+or project-intent projections, event paths, tokens, and session identifiers.
 
 ## Output Contract
 
-Return only the classification, bound workflow, transition outcome, resulting
-prompt reference when material, run/resume outcome, and a structured blocker
-when incomplete. Never return raw prompt text, event paths, acceptance tokens,
-full session identifiers, or private state roots.
+Return only the disposition, material classification or no-op reason, bound
+workflow, capture transition outcome, resulting prompt reference when merged,
+and a structured capture blocker when
+incomplete. Never return raw prompt text, event paths, acceptance tokens, full
+session identifiers, or private state roots.

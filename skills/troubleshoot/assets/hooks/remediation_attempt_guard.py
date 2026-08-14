@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the parent-authored remediation budget in private task state."""
+"""Enforce remediation budgets and concise troubleshoot-report safety."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ PREVIOUS_SCHEMA = "codex/remediation-budget-v3"
 LEGACY_SCHEMA = "codex/remediation-budget-v1"
 AUTHORIZATION_SCHEMA = "codex/remediation-budget-authorization-v1"
 AUTHORIZATION_FILE_NAME = "remediation-budget-authorization.json"
-REPORT_OBLIGATION_SCHEMA = "codex/troubleshoot-report-obligation-v1"
+REPORT_OBLIGATION_SCHEMA = "codex/troubleshoot-report-obligation-v2"
 REPORT_OBLIGATION_FILE_NAME = "troubleshoot-report-obligation.json"
 MARKER_START = "<!-- codex-remediation-budget:v1\n"
 MARKER_END = "\n-->"
@@ -105,52 +105,21 @@ LEGACY_EVIDENCE_NOTE = (
 )
 REPORT_HEADINGS = (
     "## Outcome",
-    "## Failure Contract",
-    "## Architecture Verdict",
-    "## Component Verification Matrix",
-    "## Incident Timeline",
-    "## Logs Examined",
-    "## Hypotheses And Experiments",
-    "## Code Debugging",
-    "## Root Cause",
-    "## Remediation",
-    "## Post-Fix Validation",
-    "## Completion Gate",
-    "## Remaining Unknowns And Residual Risks",
+    "## Root Cause And Fix",
+    "## Verification",
+    "## Next Action",
 )
+OPTIONAL_REPORT_HEADING = "## Evidence Appendix"
 GENERAL_REPORT_OUTCOMES = (
     "VERIFIED_FIXED",
+    "DIAGNOSED-FIXED",
     "MITIGATED_NOT_PROVEN",
     "DIAGNOSED_NOT_FIXED",
     "BLOCKED_MISSING_EVIDENCE",
     "UNRESOLVED",
 )
-COMPLETION_CRITERIA = (
-    "Design",
-    "Infrastructure",
-    "Connectivity",
-    "Configuration",
-    "Runtime health",
-    "Logs",
-    "Relevant code paths",
-)
-COMPLETION_VERDICTS = ("PASS", "FAIL", "UNKNOWN")
-PASS_NO_GAP = "None after scoped verification."
-PASS_EVIDENCE_BY_CRITERION = {
-    "Design": "Verified: Architecture Verdict.",
-    "Infrastructure": "Verified: Component Verification Matrix.",
-    "Connectivity": "Verified: Component Verification Matrix.",
-    "Configuration": "Verified: Component Verification Matrix.",
-    "Runtime health": "Verified: Component Verification Matrix.",
-    "Logs": "Verified: Logs Examined.",
-    "Relevant code paths": "Verified: Code Debugging and Post-Fix Validation.",
-}
-COMPONENT_PASS_COLUMNS = {
-    "Infrastructure": (1, 5),
-    "Connectivity": (4,),
-    "Configuration": (2,),
-    "Runtime health": (3, 6),
-}
+REPORT_CONFIDENCE_VALUES = ("High", "Medium", "Low", "Unknown")
+VERIFIED_NO_GAP = "None within the declared scope."
 INSUFFICIENT_PASS_DETAIL_RE = re.compile(
     r"(?i)(?:"
     r"\b(?:unavailable|unverified|unproven|unexamined|unrun|unknown|"
@@ -161,126 +130,6 @@ INSUFFICIENT_PASS_DETAIL_RE = re.compile(
     r"(?:evidence|logs?|proof|verification|coverage)\b"
     r")"
 )
-INSUFFICIENT_PASS_FINDING_RE = re.compile(
-    r"(?i)(?:"
-    r"\b(?:unavailable|unverified|unproven|unexamined|unrun|unknown|"
-    r"incomplete|insufficient|missing|absent)\b|"
-    r"\b(?:not|never)\s+(?:available|run|examined|checked|verified|"
-    r"proven|collected|captured)\b|"
-    r"\bno(?:\s+[a-z][a-z-]*){0,8}\s+"
-    r"(?:evidence|logs?|proof|verification|coverage)\s+"
-    r"(?:(?:was|were|is|are)\s+)?"
-    r"(?:available|collected|captured|retained)\b"
-    r")"
-)
-REPORT_TABLE_HEADERS = {
-    "## Component Verification Matrix": (
-        "Component",
-        "Version and existence",
-        "Active configuration",
-        "Runtime health",
-        "Dependencies, authentication, and DNS",
-        "Resources and time sync",
-        "Restart history and recent changes",
-        "Evidence",
-    ),
-    "## Incident Timeline": (
-        "Time",
-        "Source and clock basis",
-        "Correlation identifier",
-        "Event",
-        "Evidence or inference",
-    ),
-    "## Logs Examined": (
-        "Layer",
-        "Source",
-        "Window and filters",
-        "Finding",
-        "Coverage status",
-    ),
-    "## Hypotheses And Experiments": (
-        "Hypothesis",
-        "Prediction and falsifier",
-        "Bounded experiment",
-        "Observation",
-        "Decision",
-    ),
-}
-CANONICAL_LOG_LAYERS = (
-    "Component",
-    "Application or job",
-    "Container or orchestrator",
-    "Service manager",
-    "OS and kernel",
-    "Network and firewall",
-    "Storage",
-    "GPU or hardware",
-)
-LOG_COVERAGE_STATUSES = (
-    "examined",
-    "unavailable",
-    "unsafe",
-    "not applicable",
-)
-REQUIRED_REPORT_FIELDS = {
-    "## Outcome": ("- Confidence:", "- Current impact:", "- Stabilization status:"),
-    "## Failure Contract": (
-        "- Expected:",
-        "- Actual:",
-        "- Scope and signature:",
-        "- Reproduction or characterization:",
-        "- Success criteria and constraints:",
-        "- Target, environment, blast radius, and allowed mutations:",
-        "- Included system boundary:",
-        "- Excluded system boundary:",
-        "- Exercised control and data paths:",
-        "- Incident-window start:",
-        "- Incident-window end:",
-    ),
-    "## Architecture Verdict": (
-        "- Observed technologies, versions, and deployment model:",
-        "- Configuration authorities:",
-        "- Components, dependencies, ports, protocols, and authentication:",
-        "- Control and data flows:",
-        "- Official vendor architecture comparison and verdict:",
-    ),
-    "## Code Debugging": (
-        "- Reproduction and execution or data path:",
-        "- Stack trace, core dump, or equivalent runtime evidence:",
-        "- Configuration, environment, and data inputs:",
-        "- Recent changes and affected or unaffected comparison:",
-        "- Focused tests, static or dynamic analysis, and instrumentation:",
-        "- Instrumentation cleanup and limitations:",
-    ),
-    "## Root Cause": (
-        "- Earliest divergence:",
-        "- Causal chain:",
-        "- Counterfactual and reintroduction:",
-        "- Alternatives eliminated:",
-        "- Confidence:",
-    ),
-    "## Remediation": (
-        "- Design classification and handoff:",
-        "- Changes made:",
-        "- Authority and safety basis:",
-        "- Rollback or recovery state:",
-    ),
-    "## Post-Fix Validation": (
-        "- Original reproducer:",
-        "- Regression oracle:",
-        "- Targeted and boundary checks:",
-        "- Repeated or dynamic diagnostics:",
-        "- Live trial status and claim scope:",
-        "- Candidate, target, checkpoint, and replay range:",
-        "- Intervention ledger and first contaminated boundary:",
-        "- Product-owned transitions and independent postconditions:",
-    ),
-    "## Remaining Unknowns And Residual Risks": (
-        "- Unknowns and coverage gaps:",
-        "- Residual risks:",
-        "- Exact next action:",
-    ),
-}
 PLACEHOLDER_TOKENS = {
     "a",
     "n",
@@ -768,7 +617,12 @@ def _validate_report_obligation_data(
     turn_hash = data.get("turn_hash")
     if not isinstance(turn_hash, str) or not DIGEST_RE.fullmatch(turn_hash):
         raise GuardStateError("report obligation turn binding is invalid")
-    if data.get("status") not in {"active", "delivered", "fallback"}:
+    if data.get("status") not in {
+        "active",
+        "delivered",
+        "advisory_incomplete",
+        "fallback",
+    }:
         raise GuardStateError("report obligation status is invalid")
     corrections = data.get("corrections")
     if (
@@ -1445,21 +1299,9 @@ def _patch_updates_only_state(payload: dict[str, Any], state_file: Path | None) 
 
 def _substantive_report_value(value: str) -> bool:
     normalized_tokens = re.findall(r"[a-z]+", value.casefold())
-    return len(value.strip()) >= 12 and not (
+    return bool(value.strip()) and any(character.isalnum() for character in value) and not (
         normalized_tokens
         and all(token in PLACEHOLDER_TOKENS for token in normalized_tokens)
-    )
-
-
-def _non_placeholder_report_identifier(value: str) -> bool:
-    normalized_tokens = re.findall(r"[a-z]+", value.casefold())
-    return (
-        bool(value.strip())
-        and any(character.isalnum() for character in value)
-        and not (
-            normalized_tokens
-            and all(token in PLACEHOLDER_TOKENS for token in normalized_tokens)
-        )
     )
 
 
@@ -1509,580 +1351,6 @@ def _evidence_report_value(section_lines: list[str], label: str) -> str | None:
         return None
     evidence = matches[0].group("evidence").strip()
     return evidence if _substantive_report_value(evidence) else None
-
-
-def _completion_rows(
-    section_lines: list[str], classification: str
-) -> tuple[dict[str, str] | None, str]:
-    expected_header = "| Criterion | Verdict | Evidence | Gap or next action |"
-    expected_separator = "| --- | --- | --- | --- |"
-    if section_lines.count(expected_header) != 1:
-        return None, "Completion Gate requires exactly one canonical table header"
-    header_position = section_lines.index(expected_header)
-    if (
-        header_position + 1 >= len(section_lines)
-        or section_lines[header_position + 1] != expected_separator
-        or section_lines.count(expected_separator) != 1
-    ):
-        return None, "Completion Gate requires one canonical table separator"
-    if any(line.startswith("|") for line in section_lines[:header_position]):
-        return None, "Completion Gate contains a table row before its header"
-    rows: dict[str, str] = {}
-    for line in section_lines:
-        if not line.startswith("|"):
-            continue
-        if not line.endswith("|"):
-            return None, "Completion Gate contains a malformed table row"
-        cells = [cell.strip() for cell in line[1:-1].split("|")]
-        if cells == ["Criterion", "Verdict", "Evidence", "Gap or next action"]:
-            continue
-        if len(cells) == 4 and all(
-            re.fullmatch(r":?-{3,}:?", cell) is not None for cell in cells
-        ):
-            continue
-        if len(cells) != 4:
-            return None, "Completion Gate rows require exactly four columns"
-        criterion, verdict, evidence, gap = cells
-        if criterion not in COMPLETION_CRITERIA:
-            return None, f"Completion Gate contains unsupported criterion `{criterion}`"
-        if criterion in rows:
-            return None, f"Completion Gate duplicates criterion `{criterion}`"
-        if verdict not in COMPLETION_VERDICTS:
-            return None, f"Completion Gate verdict for `{criterion}` is unsupported"
-        if not _substantive_report_value(evidence):
-            return (
-                None,
-                f"Completion Gate evidence for `{criterion}` is not substantive",
-            )
-        if not _substantive_report_value(gap):
-            return (
-                None,
-                f"Completion Gate next action for `{criterion}` is not substantive",
-            )
-        if verdict == "PASS":
-            expected_evidence = PASS_EVIDENCE_BY_CRITERION[criterion]
-            if evidence != expected_evidence:
-                return (
-                    None,
-                    f"Completion Gate PASS evidence for `{criterion}` must be "
-                    f"`{expected_evidence}`",
-                )
-            if gap != PASS_NO_GAP:
-                return (
-                    None,
-                    f"Completion Gate PASS gap for `{criterion}` must be "
-                    f"`{PASS_NO_GAP}`",
-                )
-        elif gap == PASS_NO_GAP:
-            return (
-                None,
-                f"Completion Gate `{verdict}` row for `{criterion}` must name "
-                "a real gap or next action",
-            )
-        rows[criterion] = verdict
-    missing = [criterion for criterion in COMPLETION_CRITERIA if criterion not in rows]
-    if missing:
-        return None, "Completion Gate is missing: " + ", ".join(missing)
-    if classification == "VERIFIED_FIXED":
-        non_pass = [
-            criterion for criterion, verdict in rows.items() if verdict != "PASS"
-        ]
-        if non_pass:
-            return (
-                None,
-                "VERIFIED_FIXED requires PASS for: " + ", ".join(non_pass),
-            )
-    return rows, ""
-
-
-def _report_table_issue(section_lines: list[str], header: tuple[str, ...]) -> str:
-    expected_header = "| " + " | ".join(header) + " |"
-    expected_separator = "| " + " | ".join("---" for _ in header) + " |"
-    if section_lines.count(expected_header) != 1:
-        return f"requires exactly one table header `{expected_header}`"
-    header_position = section_lines.index(expected_header)
-    if any(line.startswith("|") for line in section_lines[:header_position]):
-        return "contains a table row before its canonical header"
-    if (
-        header_position + 1 >= len(section_lines)
-        or section_lines[header_position + 1] != expected_separator
-    ):
-        return "requires the canonical table separator immediately after its header"
-    rows = [
-        line for line in section_lines[header_position + 2 :] if line.startswith("|")
-    ]
-    if not rows:
-        return "requires at least one substantive data row"
-    for line in rows:
-        if not line.endswith("|"):
-            return "contains a malformed table row"
-        cells = [cell.strip() for cell in line[1:-1].split("|")]
-        if len(cells) != len(header) or any(not cell for cell in cells):
-            return "contains a row with missing or extra cells"
-        if not _substantive_report_value(" ".join(cells)):
-            return "contains a non-substantive data row"
-    return ""
-
-
-def _report_table_cells(
-    section_lines: list[str], header: tuple[str, ...]
-) -> list[list[str]]:
-    expected_header = "| " + " | ".join(header) + " |"
-    header_position = section_lines.index(expected_header)
-    return [
-        [cell.strip() for cell in line[1:-1].split("|")]
-        for line in section_lines[header_position + 2 :]
-        if line.startswith("|")
-    ]
-
-
-def _table_evidence_issue(
-    section_lines: list[str],
-    header: tuple[str, ...],
-    evidence_columns: tuple[int, ...],
-) -> str:
-    for row in _report_table_cells(section_lines, header):
-        if header == REPORT_TABLE_HEADERS[
-            "## Component Verification Matrix"
-        ] and not _non_placeholder_report_identifier(row[0]):
-            return "contains a placeholder component identity"
-        for column in evidence_columns:
-            if not _substantive_report_value(row[column]):
-                return (
-                    f"contains non-substantive `{header[column]}` evidence "
-                    f"for `{row[0]}`"
-                )
-    return ""
-
-
-def _log_ledger_issue(section_lines: list[str]) -> str:
-    rows = _report_table_cells(
-        section_lines,
-        REPORT_TABLE_HEADERS["## Logs Examined"],
-    )
-    observed_layers = tuple(row[0] for row in rows)
-    if observed_layers != CANONICAL_LOG_LAYERS:
-        missing = [
-            layer for layer in CANONICAL_LOG_LAYERS if layer not in observed_layers
-        ]
-        duplicates = sorted(
-            {layer for layer in observed_layers if observed_layers.count(layer) > 1}
-        )
-        unknown = [
-            layer for layer in observed_layers if layer not in CANONICAL_LOG_LAYERS
-        ]
-        if missing:
-            return "is missing canonical layers: " + ", ".join(missing)
-        if duplicates:
-            return "duplicates canonical layers: " + ", ".join(duplicates)
-        if unknown:
-            return "contains unsupported layers: " + ", ".join(unknown)
-        return "requires canonical log layers in the documented order"
-    invalid_statuses = [row[4] for row in rows if row[4] not in LOG_COVERAGE_STATUSES]
-    if invalid_statuses:
-        return "contains unsupported coverage status values: " + ", ".join(
-            sorted(set(invalid_statuses))
-        )
-    return ""
-
-
-def _affirmative_pass_value(value: str) -> bool:
-    if not value.startswith("PASS:"):
-        return False
-    detail = value.removeprefix("PASS:").strip()
-    return _substantive_report_value(detail) and not INSUFFICIENT_PASS_DETAIL_RE.search(
-        detail
-    )
-
-
-def _pass_evidence_issue(
-    sections: dict[str, list[str]], completion_rows: dict[str, str]
-) -> str:
-    if completion_rows["Design"] == "PASS":
-        for prefix in REQUIRED_REPORT_FIELDS["## Architecture Verdict"]:
-            value = _prefixed_report_value(sections["## Architecture Verdict"], prefix)
-            if value is None or not _affirmative_pass_value(value):
-                return (
-                    "Design PASS requires affirmative `PASS:` state for every "
-                    "Architecture Verdict field"
-                )
-
-    component_rows = _report_table_cells(
-        sections["## Component Verification Matrix"],
-        REPORT_TABLE_HEADERS["## Component Verification Matrix"],
-    )
-    for criterion, columns in COMPONENT_PASS_COLUMNS.items():
-        if completion_rows[criterion] != "PASS":
-            continue
-        for row in component_rows:
-            evidence_values = [row[column] for column in columns] + [row[7]]
-            if any(not _affirmative_pass_value(value) for value in evidence_values):
-                return (
-                    f"{criterion} PASS requires affirmative `PASS:` state in "
-                    "every relevant component-matrix cell and its evidence"
-                )
-
-    if completion_rows["Logs"] == "PASS":
-        log_rows = _report_table_cells(
-            sections["## Logs Examined"],
-            REPORT_TABLE_HEADERS["## Logs Examined"],
-        )
-        if any(
-            row[4].casefold() not in {"examined", "not applicable"}
-            or INSUFFICIENT_PASS_DETAIL_RE.search(" ".join(row[1:3]))
-            or INSUFFICIENT_PASS_FINDING_RE.search(row[3])
-            for row in log_rows
-        ):
-            return (
-                "Logs PASS requires affirmative source and finding detail plus "
-                "`examined` or `not applicable` coverage for every log-ledger row"
-            )
-
-    if completion_rows["Relevant code paths"] == "PASS":
-        for heading in ("## Code Debugging", "## Post-Fix Validation"):
-            for prefix in REQUIRED_REPORT_FIELDS[heading]:
-                value = _prefixed_report_value(sections[heading], prefix)
-                if value is None or not _affirmative_pass_value(value):
-                    return (
-                        "Relevant code paths PASS requires affirmative `PASS:` "
-                        "state for every Code Debugging and Post-Fix Validation "
-                        "field"
-                    )
-    return ""
-
-
-def _canonical_report_sections(
-    message: object,
-) -> tuple[dict[str, list[str]] | None, str]:
-    if not isinstance(message, str):
-        return None, "response is not text"
-    if _contains_sensitive_report_value(message):
-        return None, "report contains a sensitive value that must be redacted"
-    lines = [line.strip() for line in message.splitlines()]
-    if lines.count("# Troubleshooting Report") != 1:
-        return None, "report requires exactly one `# Troubleshooting Report` title"
-    title_position = lines.index("# Troubleshooting Report")
-    actual_headings = [
-        line for line in lines[title_position + 1 :] if line.startswith("## ")
-    ]
-    if actual_headings != list(REPORT_HEADINGS):
-        for heading in REPORT_HEADINGS:
-            if heading not in actual_headings:
-                return None, f"missing required heading `{heading}`"
-        return None, "report headings are duplicated, reordered, or unsupported"
-
-    positions = [
-        lines.index(heading, title_position + 1) for heading in REPORT_HEADINGS
-    ]
-    positions.append(len(lines))
-    sections: dict[str, list[str]] = {}
-    for index, position in enumerate(positions[:-1]):
-        section_lines = [
-            line for line in lines[position + 1 : positions[index + 1]] if line
-        ]
-        heading = REPORT_HEADINGS[index]
-        if not _substantive_report_value(" ".join(section_lines)):
-            return None, f"section `{heading}` is not substantive"
-        sections[heading] = section_lines
-
-    classification_pattern = re.compile(
-        r"^-\s*Classification:\s*(?P<classification>[A-Z_]+)\.?$"
-    )
-    classifications = [
-        match.group("classification")
-        for line in sections["## Outcome"]
-        if (match := classification_pattern.fullmatch(line))
-    ]
-    if len(classifications) != 1 or classifications[0] not in GENERAL_REPORT_OUTCOMES:
-        return None, "Outcome requires one supported `- Classification:` line"
-    workflow_states = [
-        line
-        for line in sections["## Outcome"]
-        if line.casefold().startswith("- current workflow state:")
-    ]
-    if workflow_states != ["- Current workflow state: REPORTED"]:
-        return None, "Outcome requires `- Current workflow state: REPORTED`"
-    for heading, prefixes in REQUIRED_REPORT_FIELDS.items():
-        for prefix in prefixes:
-            if _prefixed_report_value(sections[heading], prefix) is None:
-                return None, f"{heading} requires one substantive `{prefix}` line"
-    for heading, header in REPORT_TABLE_HEADERS.items():
-        table_issue = _report_table_issue(sections[heading], header)
-        if table_issue:
-            return None, f"{heading} {table_issue}"
-    evidence_columns = {
-        "## Component Verification Matrix": tuple(range(1, 8)),
-        "## Logs Examined": (1, 2, 3),
-    }
-    for heading, columns in evidence_columns.items():
-        evidence_issue = _table_evidence_issue(
-            sections[heading], REPORT_TABLE_HEADERS[heading], columns
-        )
-        if evidence_issue:
-            return None, f"{heading} {evidence_issue}"
-    log_ledger_issue = _log_ledger_issue(sections["## Logs Examined"])
-    if log_ledger_issue:
-        return None, f"## Logs Examined {log_ledger_issue}"
-    completion_rows, completion_issue = _completion_rows(
-        sections["## Completion Gate"], classifications[0]
-    )
-    if completion_issue:
-        return None, completion_issue
-    assert completion_rows is not None
-    pass_evidence_issue = _pass_evidence_issue(sections, completion_rows)
-    if pass_evidence_issue:
-        return None, pass_evidence_issue
-    return sections, ""
-
-
-def _general_report_complete(message: object) -> tuple[bool, str]:
-    sections, issue = _canonical_report_sections(message)
-    return sections is not None, issue
-
-
-def _general_report_correction(report_issue: str) -> str:
-    headings = "\n".join(REPORT_HEADINGS)
-    return "\n".join(
-        [
-            "The explicit $troubleshoot invocation must end with a complete "
-            "structured troubleshooting report before this turn can stop.",
-            f"Current report issue: {_public_reason(report_issue)}.",
-            "Do not call tools or continue troubleshooting. Return one "
-            "evidence-backed report using this exact title and heading order:",
-            "# Troubleshooting Report",
-            headings,
-            "Under `## Outcome`, include exactly one supported "
-            "`- Classification:` value and `- Current workflow state: REPORTED`.",
-            "Supported classifications: " + ", ".join(GENERAL_REPORT_OUTCOMES) + ".",
-            "Use every canonical labeled field and table documented by the "
-            "troubleshoot report contract; each required table needs its exact "
-            "header, separator, and at least one substantive data row.",
-            "The Logs Examined table needs each canonical layer exactly once, "
-            "in order, with one lower-case canonical coverage status.",
-            "Under `## Completion Gate`, include exactly one table row for "
-            + ", ".join(COMPLETION_CRITERIA)
-            + "; use only PASS, FAIL, or UNKNOWN with substantive evidence and "
-            "a gap or next action. VERIFIED_FIXED requires every row to PASS.",
-            "Use honest unavailable or unverified statements when evidence is "
-            "missing; do not use placeholders or fabricate results.",
-        ]
-    )
-
-
-def _fallback_log_rows() -> list[str]:
-    return [
-        f"| {layer} | source not reported | window not reported | "
-        "finding unavailable | unavailable |"
-        for layer in CANONICAL_LOG_LAYERS
-    ]
-
-
-def _general_fallback_report(report_issue: str) -> str:
-    issue = _bounded_report_value(
-        _public_reason(report_issue),
-        "The assistant response omitted required report content.",
-        limit=120,
-    )
-    return "\n".join(
-        [
-            "# Troubleshooting Report",
-            "## Outcome",
-            "- Classification: UNRESOLVED",
-            "- Current workflow state: REPORTED",
-            "- Confidence: unknown because the assistant report was incomplete.",
-            "- Current impact: the requested troubleshooting outcome was not fully reported.",
-            "- Stabilization status: no stabilization state is inferred by this fallback.",
-            "## Failure Contract",
-            "- Expected: the explicit troubleshoot turn ends with the documented report.",
-            "- Actual: Stop observed an incomplete assistant response.",
-            f"- Scope and signature: terminal report validation failed because {issue}",
-            "- Reproduction or characterization: Stop rejected the incomplete response.",
-            "- Success criteria and constraints: return the full canonical report safely.",
-            "- Target, environment, blast radius, and allowed mutations: report-only fallback; no target mutation.",
-            "- Included system boundary: the explicit troubleshoot report obligation and Stop validator.",
-            "- Excluded system boundary: the unreported target system and installed runtime state.",
-            "- Exercised control and data paths: assistant response through canonical Stop validation.",
-            "- Incident-window start: unavailable because the assistant response omitted it.",
-            "- Incident-window end: Stop evaluation after the incomplete assistant response.",
-            "## Architecture Verdict",
-            "- Observed technologies, versions, and deployment model: unavailable from the incomplete response.",
-            "- Configuration authorities: the Stop hook owns only report validation.",
-            "- Components, dependencies, ports, protocols, and authentication: not established by the response.",
-            "- Control and data flows: only the prompt, response, and Stop validation flow is proven.",
-            "- Official vendor architecture comparison and verdict: unavailable; architecture remains UNKNOWN.",
-            "## Component Verification Matrix",
-            "| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| target components | existence unproven | configuration unproven | health unproven | dependency, authentication, and DNS evidence unproven | pressure and clocks unproven | restart and change history unproven | response omitted evidence |",
-            "## Incident Timeline",
-            "| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |",
-            "| --- | --- | --- | --- | --- |",
-            "| Stop evaluation | local hook sequence only | report obligation | incomplete report rejected | direct hook evidence |",
-            "## Logs Examined",
-            "| Layer | Source | Window and filters | Finding | Coverage status |",
-            "| --- | --- | --- | --- | --- |",
-            *_fallback_log_rows(),
-            "## Hypotheses And Experiments",
-            "| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |",
-            "| --- | --- | --- | --- | --- |",
-            "| report completeness failed | canonical validation should reject missing evidence | one bounded Stop validation | response was rejected | supported for report failure only |",
-            "## Code Debugging",
-            "- Reproduction and execution or data path: target code path was not reported.",
-            "- Stack trace, core dump, or equivalent runtime evidence: no artifact was reported.",
-            "- Configuration, environment, and data inputs: target inputs were not reported.",
-            "- Recent changes and affected or unaffected comparison: no comparison was reported.",
-            "- Focused tests, static or dynamic analysis, and instrumentation: no result was reported.",
-            "- Instrumentation cleanup and limitations: instrumentation state is unknown.",
-            "## Root Cause",
-            "- Earliest divergence: required terminal report content was missing.",
-            "- Causal chain: incomplete response caused canonical validation to fail.",
-            "- Counterfactual and reintroduction: a complete report would satisfy this reporting gate.",
-            "- Alternatives eliminated: no target-system alternative was eliminated.",
-            "- Confidence: high for report incompleteness; unknown for the target cause.",
-            "## Remediation",
-            "- Design classification and handoff: no target design conclusion is inferred.",
-            "- Changes made: the hook emitted this report; no target change was made.",
-            "- Authority and safety basis: Stop may close one failed report obligation.",
-            "- Rollback or recovery state: no target rollback state is inferred.",
-            "## Post-Fix Validation",
-            "- Original reproducer: not represented as verified by this fallback.",
-            "- Regression oracle: not represented as passed by this fallback.",
-            "- Targeted and boundary checks: only canonical report validation ran.",
-            "- Repeated or dynamic diagnostics: no repeated target diagnostic is proven.",
-            "- Live trial status and claim scope: no live target claim is made.",
-            "- Candidate, target, checkpoint, and replay range: target lineage was not reported.",
-            "- Intervention ledger and first contaminated boundary: intervention state is unknown.",
-            "- Product-owned transitions and independent postconditions: not proven by this fallback.",
-            "## Completion Gate",
-            "| Criterion | Verdict | Evidence | Gap or next action |",
-            "| --- | --- | --- | --- |",
-            *[
-                f"| {criterion} | UNKNOWN | The assistant report omitted decisive evidence. | "
-                "Resume with the missing scoped evidence before claiming completion. |"
-                for criterion in COMPLETION_CRITERIA
-            ],
-            "## Remaining Unknowns And Residual Risks",
-            "- Unknowns and coverage gaps: all target-system criteria lack decisive evidence.",
-            "- Residual risks: the target condition and any stabilization remain unknown.",
-            "- Exact next action: resume with the missing scoped evidence before any completion claim.",
-        ]
-    )
-
-
-def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
-    if not isinstance(message, str) or REPORT_MARKER not in message:
-        return False, f"missing `{REPORT_MARKER}`"
-    sections, issue = _canonical_report_sections(message)
-    if sections is None:
-        return False, issue
-    markers = [line for line in sections["## Outcome"] if line == f"- {REPORT_MARKER}"]
-    if markers != [f"- {REPORT_MARKER}"]:
-        return False, f"Outcome requires exactly one `- {REPORT_MARKER}` line"
-    classification_pattern = re.compile(
-        r"^-\s*Classification:\s*(?P<classification>[A-Z_]+)\.?$"
-    )
-    classification = next(
-        match.group("classification")
-        for line in sections["## Outcome"]
-        if (match := classification_pattern.fullmatch(line))
-    )
-    if classification not in (
-        "UNRESOLVED",
-        "BLOCKED_MISSING_EVIDENCE",
-        "DIAGNOSED_NOT_FIXED",
-    ):
-        return False, "Outcome lacks a supported unresolved classification"
-    stop_trigger_lines = [
-        line.removeprefix("- Stop trigger:").strip()
-        for line in sections["## Outcome"]
-        if line.startswith("- Stop trigger:")
-    ]
-    if stop_trigger_lines != [state.stop_trigger]:
-        return False, f"Outcome requires exact stop trigger `{state.stop_trigger}`"
-
-    data = state.data or {}
-    blocker = _prefixed_report_value(sections["## Root Cause"], "- Blocker:")
-    expected_blocker = _bounded_report_value(
-        data.get("blocker_summary"), "The recorded blocker remains unresolved."
-    )
-    if blocker is None:
-        return False, "Root Cause requires one substantive `- Blocker:` line"
-    if blocker != expected_blocker:
-        return (
-            False,
-            "Root Cause `- Blocker:` line must exactly match the bounded "
-            "marker-derived value",
-        )
-    blocker_key = _prefixed_report_value(sections["## Root Cause"], "- Blocker key:")
-    expected_blocker_key = _bounded_report_value(
-        data.get("blocker_key"), "The recorded blocker source is unavailable."
-    )
-    if blocker_key is None:
-        return False, "Root Cause requires one substantive `- Blocker key:` line"
-    if blocker_key != expected_blocker_key:
-        return (
-            False,
-            "Root Cause `- Blocker key:` line must exactly match the bounded "
-            "marker-derived value",
-        )
-
-    attempts = data.get("attempts")
-    if isinstance(attempts, list):
-        legacy_evidence = False
-        for index, attempt in enumerate(attempts, start=1):
-            if not isinstance(attempt, dict):
-                return False, f"{_attempt_label(index)} is not a valid attempt object"
-            attempt_label = _attempt_label(index)
-            attempt_fields = _attempt_report_fields(
-                sections["## Remediation"], attempt_label
-            )
-            if attempt_fields is None:
-                return (
-                    False,
-                    f"Remediation requires substantive Remediation, Verification, "
-                    f"and Result fields for {attempt_label}",
-                )
-            result = attempt.get("result")
-            expected_remediation = _bounded_attempt_report_value(
-                attempt.get("remediation"), "Remediation summary unavailable."
-            )
-            expected_verification = _bounded_attempt_report_value(
-                attempt.get("verification"), "Verification summary unavailable."
-            )
-            if (
-                attempt_fields[0] != expected_remediation
-                or attempt_fields[1] != expected_verification
-                or not isinstance(result, str)
-                or attempt_fields[2] != result
-            ):
-                return (
-                    False,
-                    f"Attempts does not match the bounded marker-derived fields "
-                    f"for {attempt_label}",
-                )
-            evidence = _evidence_report_value(
-                sections["## Post-Fix Validation"], attempt_label
-            )
-            new_evidence = attempt.get("new_evidence")
-            expected_evidence = (
-                "Historical evidence summary unavailable."
-                if new_evidence is None
-                else _bounded_report_value(
-                    new_evidence, "Evidence summary unavailable."
-                )
-            )
-            if evidence != expected_evidence:
-                return (
-                    False,
-                    f"Post-Fix Validation requires evidence for {attempt_label}",
-                )
-            if new_evidence is None:
-                legacy_evidence = True
-        if legacy_evidence and not any(
-            LEGACY_EVIDENCE_NOTE in line for line in sections["## Post-Fix Validation"]
-        ):
-            return False, "Post-Fix Validation omits the historical marker limitation"
-    return True, ""
 
 
 def _contains_sensitive_report_value(text: str) -> bool:
@@ -2155,6 +1423,253 @@ def _bounded_attempt_report_value(
     return _bounded_report_value(value, fallback, limit).replace("|", "/")
 
 
+def _concise_report_sections(
+    message: object,
+) -> tuple[dict[str, list[str]] | None, str]:
+    if not isinstance(message, str):
+        return None, "response is not text"
+    if _contains_sensitive_report_value(message):
+        return None, "report contains a sensitive value that must be redacted"
+    lines = [line.strip() for line in message.splitlines()]
+    if lines.count("# Troubleshooting Report") != 1:
+        return None, "report requires exactly one `# Troubleshooting Report` title"
+    title_position = lines.index("# Troubleshooting Report")
+    actual_headings = [
+        line for line in lines[title_position + 1 :] if line.startswith("## ")
+    ]
+    expected_headings = list(REPORT_HEADINGS)
+    if actual_headings not in (
+        expected_headings,
+        [*expected_headings, OPTIONAL_REPORT_HEADING],
+    ):
+        for heading in expected_headings:
+            if heading not in actual_headings:
+                return None, f"missing required heading `{heading}`"
+        return None, "report headings are duplicated, reordered, or unsupported"
+
+    positions = [
+        lines.index(heading, title_position + 1) for heading in actual_headings
+    ]
+    positions.append(len(lines))
+    sections: dict[str, list[str]] = {}
+    for index, position in enumerate(positions[:-1]):
+        heading = actual_headings[index]
+        section_lines = [
+            line for line in lines[position + 1 : positions[index + 1]] if line
+        ]
+        if not _substantive_report_value(" ".join(section_lines)):
+            return None, f"section `{heading}` is not substantive"
+        sections[heading] = section_lines
+
+    classification_pattern = re.compile(
+        r"^-\s*Classification:\s*(?P<classification>[A-Z_-]+)$"
+    )
+    classifications = [
+        match.group("classification")
+        for line in sections["## Outcome"]
+        if (match := classification_pattern.fullmatch(line))
+    ]
+    if len(classifications) != 1 or classifications[0] not in GENERAL_REPORT_OUTCOMES:
+        return None, "Outcome requires one supported `- Classification:` line"
+    classification = classifications[0]
+
+    required_fields = {
+        "## Outcome": (
+            "- Confidence:",
+            "- Fixed scope:",
+            "- Current state:",
+        ),
+        "## Root Cause And Fix": ("- Root cause:", "- Changes made:"),
+        "## Verification": ("- Verified:", "- Not verified:"),
+        "## Next Action": ("- Owner:", "- Action:", "- Done when:"),
+    }
+    values: dict[str, str] = {}
+    for heading, prefixes in required_fields.items():
+        for prefix in prefixes:
+            if prefix == "- Confidence:":
+                matches = [
+                    line[len(prefix) :].strip()
+                    for line in sections[heading]
+                    if line.casefold().startswith(prefix.casefold())
+                ]
+                value = matches[0] if len(matches) == 1 else None
+            else:
+                value = _prefixed_report_value(sections[heading], prefix)
+            if value is None:
+                return None, f"{heading} requires one substantive `{prefix}` line"
+            values[prefix] = value
+
+    confidence = values["- Confidence:"]
+    if confidence not in REPORT_CONFIDENCE_VALUES:
+        return None, "Confidence must be High, Medium, Low, or Unknown"
+
+    if classification in {"DIAGNOSED-FIXED", "VERIFIED_FIXED"}:
+        fixed_scope = values["- Fixed scope:"]
+        root_cause = values["- Root cause:"]
+        changes = values["- Changes made:"]
+        verified = values["- Verified:"]
+        if any(
+            INSUFFICIENT_PASS_DETAIL_RE.search(value)
+            for value in (fixed_scope, root_cause, verified)
+        ):
+            return None, f"{classification} requires affirmative scoped causal proof"
+        if re.search(
+            r"(?i)\b(?:no|not)\s+(?:owner-correct\s+)?(?:change|changes|repair|fix)\b",
+            changes,
+        ):
+            return None, f"{classification} requires an applied owner-correct repair"
+        if re.search(
+            r"(?i)\b(?:planned|proposed|pending|unapplied|not\s+yet\s+applied|"
+            r"awaiting\s+(?:implementation|repair))\b",
+            changes,
+        ):
+            return None, f"{classification} requires an applied owner-correct repair"
+    if classification == "VERIFIED_FIXED" and values["- Not verified:"] != VERIFIED_NO_GAP:
+        return None, (
+            "VERIFIED_FIXED requires `- Not verified: "
+            + VERIFIED_NO_GAP
+            + "`"
+        )
+    return sections, ""
+
+
+def _general_report_complete(message: object) -> tuple[bool, str]:
+    sections, issue = _concise_report_sections(message)
+    return sections is not None, issue
+
+
+def _general_report_correction(report_issue: str) -> str:
+    return "\n".join(
+        [
+            "The troubleshoot report must be redacted before this turn can stop.",
+            f"Current report issue: {_public_reason(report_issue)}.",
+            "Do not call tools. Return the concise report again without secrets, "
+            "private endpoints, internal hostnames, customer data, or local user paths.",
+        ]
+    )
+
+
+def _general_fallback_report(report_issue: str) -> str:
+    issue = _bounded_report_value(
+        _public_reason(report_issue),
+        "The assistant response could not be accepted safely.",
+        limit=120,
+    )
+    return "\n".join(
+        [
+            "# Troubleshooting Report",
+            "## Outcome",
+            "- Classification: UNRESOLVED",
+            "- Confidence: Unknown",
+            "- Fixed scope: No target repair is claimed by this safety fallback.",
+            "- Current state: Reporting stopped at the redaction or trusted-state boundary.",
+            "## Root Cause And Fix",
+            f"- Root cause: The report could not be accepted safely because {issue}",
+            "- Changes made: No target mutation was performed by the reporting fallback.",
+            "## Verification",
+            "- Verified: The hook detected the reporting safety boundary.",
+            "- Not verified: Target diagnosis, repair, and runtime state remain unverified.",
+            "## Next Action",
+            "- Owner: User and troubleshooting agent",
+            "- Action: Review the omitted evidence and resume with a redacted report.",
+            "- Done when: A public-safe report accurately states the target outcome.",
+        ]
+    )
+
+
+def _report_classification(sections: dict[str, list[str]]) -> str:
+    prefix = "- Classification:"
+    return next(
+        line[len(prefix) :].strip()
+        for line in sections["## Outcome"]
+        if line.startswith(prefix)
+    )
+
+
+def _report_complete(message: object, state: GuardState) -> tuple[bool, str]:
+    if not isinstance(message, str) or REPORT_MARKER not in message:
+        return False, f"missing `{REPORT_MARKER}`"
+    sections, issue = _concise_report_sections(message)
+    if sections is None:
+        return False, issue
+    markers = [line for line in sections["## Outcome"] if line == f"- {REPORT_MARKER}"]
+    if markers != [f"- {REPORT_MARKER}"]:
+        return False, f"Outcome requires exactly one `- {REPORT_MARKER}` line"
+    classification = _report_classification(sections)
+    if classification not in (
+        "UNRESOLVED",
+        "BLOCKED_MISSING_EVIDENCE",
+        "DIAGNOSED_NOT_FIXED",
+    ):
+        return False, "Outcome lacks a supported unresolved classification"
+    stop_trigger_lines = [
+        line.removeprefix("- Stop trigger:").strip()
+        for line in sections["## Outcome"]
+        if line.startswith("- Stop trigger:")
+    ]
+    if stop_trigger_lines != [state.stop_trigger]:
+        return False, f"Outcome requires exact stop trigger `{state.stop_trigger}`"
+
+    data = state.data or {}
+    blocker = _prefixed_report_value(
+        sections["## Root Cause And Fix"], "- Root cause:"
+    )
+    expected_blocker = _bounded_report_value(
+        data.get("blocker_summary"), "The recorded blocker remains unresolved."
+    )
+    if blocker != expected_blocker:
+        return False, "Root cause must exactly match the bounded marker-derived blocker"
+    blocker_key = _prefixed_report_value(
+        sections["## Root Cause And Fix"], "- Blocker key:"
+    )
+    expected_blocker_key = _bounded_report_value(
+        data.get("blocker_key"), "The recorded blocker source is unavailable."
+    )
+    if blocker_key != expected_blocker_key:
+        return False, "Blocker key must exactly match the bounded marker-derived value"
+
+    attempts = data.get("attempts")
+    if isinstance(attempts, list):
+        legacy_evidence = False
+        for index, attempt in enumerate(attempts, start=1):
+            if not isinstance(attempt, dict):
+                return False, f"{_attempt_label(index)} is not a valid attempt object"
+            label = _attempt_label(index)
+            fields = _attempt_report_fields(sections["## Root Cause And Fix"], label)
+            if fields is None:
+                return False, f"Root Cause And Fix requires marker-derived {label}"
+            expected_remediation = _bounded_attempt_report_value(
+                attempt.get("remediation"), "Remediation summary unavailable."
+            )
+            expected_verification = _bounded_attempt_report_value(
+                attempt.get("verification"), "Verification summary unavailable."
+            )
+            if fields != (
+                expected_remediation,
+                expected_verification,
+                attempt.get("result"),
+            ):
+                return False, f"{label} does not match its marker-derived fields"
+            evidence = _evidence_report_value(sections["## Verification"], label)
+            new_evidence = attempt.get("new_evidence")
+            expected_evidence = (
+                "Historical evidence summary unavailable."
+                if new_evidence is None
+                else _bounded_report_value(
+                    new_evidence, "Evidence summary unavailable."
+                )
+            )
+            if evidence != expected_evidence:
+                return False, f"Verification requires marker-derived evidence for {label}"
+            if new_evidence is None:
+                legacy_evidence = True
+        if legacy_evidence and not any(
+            LEGACY_EVIDENCE_NOTE in line for line in sections["## Verification"]
+        ):
+            return False, "Verification omits the historical marker limitation"
+    return True, ""
+
+
 def _fallback_report(state: GuardState, report_issue: str) -> str:
     data = state.data or {}
     attempts = data.get("attempts")
@@ -2166,137 +1681,53 @@ def _fallback_report(state: GuardState, report_issue: str) -> str:
             if not isinstance(attempt, dict):
                 continue
             label = _attempt_label(index)
-            remediation = _bounded_attempt_report_value(
-                attempt.get("remediation"), "Remediation summary unavailable."
-            )
-            verification = _bounded_attempt_report_value(
-                attempt.get("verification"), "Verification summary unavailable."
-            )
-            result = _bounded_report_value(
-                attempt.get("result"), "Result unavailable.", limit=40
-            )
             attempt_lines.append(
-                f"- {label} | Remediation: {remediation} | "
-                f"Verification: {verification} | Result: {result}"
+                f"- {label} | Remediation: "
+                f"{_bounded_attempt_report_value(attempt.get('remediation'), 'Remediation summary unavailable.')} | "
+                f"Verification: {_bounded_attempt_report_value(attempt.get('verification'), 'Verification summary unavailable.')} | "
+                f"Result: {_bounded_report_value(attempt.get('result'), 'Result unavailable.', limit=40)}"
             )
-            evidence = attempt.get("new_evidence")
-            if evidence is None:
+            new_evidence = attempt.get("new_evidence")
+            if new_evidence is None:
                 legacy_evidence = True
-                evidence_lines.append(
-                    f"- {label} | Evidence: Historical evidence summary unavailable."
-                )
+                evidence = "Historical evidence summary unavailable."
             else:
-                evidence_lines.append(
-                    f"- {label} | Evidence: "
-                    f"{_bounded_report_value(evidence, 'Evidence summary unavailable.')}"
+                evidence = _bounded_report_value(
+                    new_evidence, "Evidence summary unavailable."
                 )
+            evidence_lines.append(f"- {label} | Evidence: {evidence}")
     if legacy_evidence:
         evidence_lines.append(f"- {LEGACY_EVIDENCE_NOTE}")
-    if not attempt_lines:
-        attempt_lines.append("- No remediation attempts were recorded.")
-    if not evidence_lines:
-        evidence_lines.append("- The active-time ledger reached its configured limit.")
 
-    stop_trigger = state.stop_trigger or "unknown"
-    issue = _bounded_report_value(
-        _public_reason(report_issue),
-        "The assistant response omitted required report content.",
-        limit=120,
+    blocker = _bounded_report_value(
+        data.get("blocker_summary"), "The recorded blocker remains unresolved."
+    )
+    blocker_key = _bounded_report_value(
+        data.get("blocker_key"), "The recorded blocker source is unavailable."
     )
     return "\n".join(
         [
             "# Troubleshooting Report",
             "## Outcome",
             "- Classification: UNRESOLVED",
-            "- Current workflow state: REPORTED",
+            "- Confidence: Unknown",
+            "- Fixed scope: No fixed scope was proven before budget exhaustion.",
+            "- Current state: The bounded tranche is exhausted; further tools are denied.",
             f"- {REPORT_MARKER}",
-            f"- Stop trigger: {stop_trigger}",
-            "- Confidence: the recorded blocker remains unresolved after the bounded tranche.",
-            "- Current impact: no further remediation is authorized in this tranche.",
-            "- Stabilization status: no additional state change is authorized.",
-            "## Failure Contract",
-            "- Expected: the recorded blocker is removed and its verification oracle passes.",
-            "- Actual: the marker-derived blocker persisted through the recorded attempts.",
-            "- Scope and signature: bounded to the stable blocker and attempt ledger.",
-            "- Reproduction or characterization: each recorded verification retained the blocker.",
-            "- Success criteria and constraints: clear the blocker within the authorized budget.",
-            "- Target, environment, blast radius, and allowed mutations: frozen at exhaustion.",
-            "- Included system boundary: the stable blocker and recorded remediation ledger.",
-            "- Excluded system boundary: unrecorded target components and unexercised paths.",
-            "- Exercised control and data paths: marker-recorded attempts and verification results only.",
-            "- Incident-window start: the bounded tranche start recorded by the marker.",
-            "- Incident-window end: the marker exhaustion event for this report.",
-            "## Architecture Verdict",
-            "- Observed technologies, versions, and deployment model: unavailable at exhaustion.",
-            "- Configuration authorities: decisive authority remains unproven.",
-            "- Components, dependencies, ports, protocols, and authentication: coverage incomplete.",
-            "- Control and data flows: the failing flow remains unresolved.",
-            "- Official vendor architecture comparison and verdict: incomplete and UNKNOWN.",
-            "## Component Verification Matrix",
-            "| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| unresolved component | version unproven | config unproven | health unproven | dependency, authentication, and DNS evidence unproven | pressure and clocks unproven | restart and change history unproven | marker evidence only |",
-            "## Incident Timeline",
-            "| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |",
-            "| --- | --- | --- | --- | --- |",
-            "| bounded tranche | clock basis unavailable | blocker key | attempts remained unsuccessful | marker-derived order only |",
-            "## Logs Examined",
-            "| Layer | Source | Window and filters | Finding | Coverage status |",
-            "| --- | --- | --- | --- | --- |",
-            *_fallback_log_rows(),
-            "## Hypotheses And Experiments",
-            "| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |",
-            "| --- | --- | --- | --- | --- |",
-            "| recorded attempt hypotheses | predictions unavailable | bounded verifications | blocker persisted | unresolved |",
-            "## Code Debugging",
-            "- Reproduction and execution or data path: relevant path evidence is incomplete.",
-            "- Stack trace, core dump, or equivalent runtime evidence: artifact unavailable.",
-            "- Configuration, environment, and data inputs: input coverage is incomplete.",
-            "- Recent changes and affected or unaffected comparison: comparison unavailable.",
-            "- Focused tests, static or dynamic analysis, and instrumentation: coverage incomplete.",
-            "- Instrumentation cleanup and limitations: cleanup state cannot be inferred.",
-            "## Root Cause",
-            "- Blocker: "
-            + _bounded_report_value(
-                data.get("blocker_summary"), "The recorded blocker remains unresolved."
-            ),
-            "- Blocker key: "
-            + _bounded_report_value(
-                data.get("blocker_key"), "The recorded blocker source is unavailable."
-            ),
-            "- Earliest divergence: decisive divergence remains unproven.",
-            "- Causal chain: persistence is proven, but the complete chain is not.",
-            "- Counterfactual and reintroduction: decisive evidence is unavailable.",
-            "- Alternatives eliminated: competing alternatives remain unresolved.",
-            "- Confidence: unresolved after the bounded remediation attempts.",
-            "## Remediation",
+            f"- Stop trigger: {state.stop_trigger or 'unknown'}",
+            "## Root Cause And Fix",
+            f"- Root cause: {blocker}",
+            f"- Blocker key: {blocker_key}",
             *attempt_lines,
-            "- Design classification and handoff: no additional handoff is inferred.",
-            "- Changes made: only marker-recorded attempts are represented.",
-            "- Authority and safety basis: another attempt needs a new instruction.",
-            "- Rollback or recovery state: unavailable to this fallback.",
-            "## Post-Fix Validation",
+            "- Changes made: Marker-recorded attempts did not remove the blocker.",
+            "## Verification",
+            "- Verified: The recorded attempts retained the same bounded blocker.",
             *evidence_lines,
-            "- Original reproducer: not represented as passing by this fallback.",
-            "- Regression oracle: the recorded blocker verification remained unsuccessful.",
-            "- Targeted and boundary checks: boundary evidence is incomplete.",
-            "- Repeated or dynamic diagnostics: only marker evidence is represented.",
-            "- Live trial status and claim scope: no verified live-fix claim is made.",
-            "- Candidate, target, checkpoint, and replay range: lineage is unavailable.",
-            "- Intervention ledger and first contaminated boundary: state is unknown.",
-            "- Product-owned transitions and independent postconditions: not proven at exhaustion.",
-            "## Completion Gate",
-            "| Criterion | Verdict | Evidence | Gap or next action |",
-            "| --- | --- | --- | --- |",
-            *[
-                f"| {criterion} | UNKNOWN | The exhausted marker does not prove this criterion. | "
-                "Acquire criterion-specific evidence in a new authorized tranche. |"
-                for criterion in COMPLETION_CRITERIA
-            ],
-            "## Remaining Unknowns And Residual Risks",
-            f"- Unknowns and coverage gaps: report validation failed because {issue}",
-            "- Residual risks: the recorded blocker and unverified criteria remain unresolved.",
-            "- Exact next action: provide a new explicit instruction before another bounded tranche.",
+            "- Not verified: A durable repair and end-to-end recovery remain unverified.",
+            "## Next Action",
+            "- Owner: User",
+            "- Action: Review the evidence before authorizing another bounded tranche.",
+            "- Done when: A new explicit instruction authorizes the next safe action.",
         ]
     )
 
@@ -2698,7 +2129,8 @@ def evaluate_user_prompt(
         if _report_turn_matches(payload, report_obligation):
             report_notice = (
                 "Every explicit $troubleshoot invocation must end with the "
-                "structured terminal report before Stop can complete."
+                "concise terminal report. Ordinary report gaps are advisory; "
+                "safety and exhausted-budget boundaries remain strict."
             )
         else:
             report_notice = (
@@ -2888,12 +2320,23 @@ def evaluate_pre_tool(
     report_obligation: ReportObligationState,
 ) -> dict[str, Any]:
     report_denial: dict[str, Any] | None = None
-    if _report_obligation_active(report_obligation):
+    if report_obligation.kind == "invalid":
+        report_denial = _deny(
+            "Troubleshoot reporting state is invalid"
+            + (
+                f": {_public_reason(report_obligation.reason)}"
+                if report_obligation.reason
+                else ""
+            )
+            + ". Preserve the private state and resolve this trusted-state "
+            "boundary before calling another tool."
+        )
+    elif _report_obligation_active(report_obligation):
         corrections = int((report_obligation.data or {}).get("corrections", 0))
         if corrections > 0:
             report_denial = _deny(
-                "The troubleshoot report correction is pending. Return the "
-                "structured report without calling another tool."
+                "A sensitive troubleshoot report is awaiting redaction. Return "
+                "the concise public-safe report without calling another tool."
             )
     terminal = (
         (authorization.data or {}).get("terminal")
@@ -2987,7 +2430,22 @@ def _evaluate_general_report_stop(
             return {
                 "decision": "block",
                 "reason": _general_report_correction(
-                    "the validated report could not be recorded: "
+                    "the validated report could not be recorded safely: "
+                    + _public_reason(str(exc))
+                ),
+            }
+        return {"continue": True}
+
+    if report_issue != "report contains a sensitive value that must be redacted":
+        try:
+            _close_report_obligation(
+                payload, report_obligation, "advisory_incomplete"
+            )
+        except GuardStateError as exc:
+            return {
+                "decision": "block",
+                "reason": _general_report_correction(
+                    "the advisory report disposition could not be recorded safely: "
                     + _public_reason(str(exc))
                 ),
             }
@@ -3020,8 +2478,8 @@ def _evaluate_general_report_stop(
             "safely."
         )
     return _stop(
-        "A bounded troubleshoot UI fallback report was emitted after the "
-        "assistant report remained incomplete.",
+        "A bounded troubleshoot safety fallback was emitted after sensitive "
+        "report content remained unredacted.",
         warning=fallback,
     )
 

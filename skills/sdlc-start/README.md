@@ -58,22 +58,36 @@ rename plus intent edit or duplicate copies fail closed so prompt history and
 Stop continuation cannot drift.
 There is no bare `$sdlc-start` resume action.
 
-After initialization or an explicit run binds the Codex session, safe direct
-prompts can be staged by `prompt-session-intake`, losslessly refined by the
-agent, merged with compare-and-set and one operation ID, and routed through the
-same run path once. An exact interrupted retry resolves the applied operation
-instead of creating or appending again. A new objective publishes its complete
-marker-bearing Ask in one exclusive create, and refined user content cannot use
-the reserved operation-marker namespace.
+After initialization or an explicit run binds the Codex session, every direct
+prompt still runs normally in the current agent. When safe,
+`prompt-session-intake` may stage metadata only and never stores the submitted
+body. The agent records merge/no-op/sensitive and selects only durable
+project-intent; mixed-turn execution or conversation wrappers are excluded, while
+commands that define project contracts or examples remain eligible. The SDLC
+adapter rehashes the accepted projection and compare-and-set merges one marker
+bound to both operation ID and projection digest. Capture never starts,
+resumes, or selects Agentic SDLC. Exact retries and byte-identical projections
+do not append again, and distinct concurrent same-base updates never
+auto-rebase. A new objective publishes its complete marker-bearing Ask in one
+exclusive create, and projection content cannot use the reserved
+operation-marker namespace.
 Explicit bound runs register the authoritative active prompt for unambiguous
 fresh-session attachment and close it only after verified terminal completion.
-Manual prompt-file edits still require explicit `run`.
+Secrets and capture failures do not persist or block the direct request. Manual
+prompt-file edits and captured prompt updates still require explicit `run`.
 
 Before design or planning, the requirements adapter records the compiled
-`docs/requirements.md` digest in private refinement state. A private mechanical
-gate verifies that it belongs to the latest accepted prompt revision and still
-matches the exact requirements file; ambiguity or later drift returns to
-requirements instead of being treated as implementation truth.
+`docs/requirements.md` digest in private refinement state and supplies a
+complete statement-occurrence impact claim. The shared spec owner validates
+that claim against current requirements and design, derives retain/replan, and
+publishes append-only private impact evidence. Matching bytes or a bare
+`no_effect` classification cannot unlock execution. Each feature execution
+plan has a separate basis settlement; later no-effect revisions may retain it,
+while contract or execution effects and later spec drift block new progression
+until safe replanning with a distinct plan identity. Per-run locked publication
+compare-checks the ledger and preserves then skips crash-orphaned attempts.
+Public status is sanitized, no prompt hash header is
+written, and an edit still runs only after explicit `run`.
 
 For an unmanaged Git-backed workspace, intake resolves the actual symbolic
 `origin` default. A new run on that clean branch moves to a deterministic

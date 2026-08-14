@@ -95,6 +95,12 @@ CONTROLLER_BRIDGE_JWT_MATERIAL_PREFLIGHT_SCHEMA = (
     "nebius-cxcli-controller-jwt-material-preflight/v1"
 )
 CONTROLLER_BRIDGE_JWT_MATERIAL_PROOF_SCHEMA = "nebius-cxcli-controller-jwt-material-proof/v1"
+CONTROLLER_BRIDGE_DELETE_NOT_FOUND_TERMINAL_SCHEMA = (
+    "nebius-cxcli-controller-bridge-delete-not-found-terminal/v1"
+)
+CONTROLLER_BRIDGE_DELETE_OPERATION_NOT_FOUND_TERMINAL_SCHEMA = (
+    "nebius-cxcli-controller-bridge-delete-operation-not-found-terminal/v1"
+)
 
 
 def _utc_now() -> str:
@@ -130,6 +136,145 @@ def _journal_payload_fingerprint(value: object) -> str:
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def controller_bridge_delete_not_found_terminal_evidence_is_exact(
+    operation: Mapping[str, Any],
+) -> bool:
+    """Validate one identity-bound delete request that returned NOT_FOUND."""
+
+    evidence = operation.get("terminal_evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    evidence_material = dict(evidence)
+    evidence_sha256 = str(evidence_material.pop("evidence_sha256", "") or "")
+    resource_version = operation.get("resource_version")
+    if isinstance(resource_version, bool):
+        return False
+    try:
+        normalized_resource_version = int(resource_version)
+    except (TypeError, ValueError):
+        return False
+    expected_keys = {
+        "schema",
+        "kind",
+        "operation_kind",
+        "resource_id",
+        "resource_uid",
+        "resource_version",
+        "idempotency_key",
+        "intended_postcondition_sha256",
+        "requested_at",
+        "response_observed_at",
+        "response_code",
+        "response_source",
+        "response_detail_sha256",
+    }
+    return bool(
+        set(evidence_material) == expected_keys
+        and evidence_material.get("schema") == CONTROLLER_BRIDGE_DELETE_NOT_FOUND_TERMINAL_SCHEMA
+        and evidence_material.get("kind") == "delete-not-found-after-dispatch"
+        and operation.get("operation_kind") == "mk8s-node-group-delete"
+        and evidence_material.get("operation_kind") == operation.get("operation_kind")
+        and evidence_material.get("resource_id") == operation.get("resource_id")
+        and evidence_material.get("resource_uid") == operation.get("resource_uid")
+        and evidence_material.get("resource_version") == normalized_resource_version
+        and normalized_resource_version > 0
+        and str(operation.get("resource_id", "") or "").strip()
+        and str(operation.get("resource_uid", "") or "").strip()
+        and evidence_material.get("idempotency_key") == operation.get("idempotency_key")
+        and re.fullmatch(r"[0-9a-f]{64}", str(operation.get("idempotency_key", "") or ""))
+        and evidence_material.get("intended_postcondition_sha256")
+        == _journal_payload_fingerprint(operation.get("intended_postcondition"))
+        and str(evidence_material.get("requested_at", "") or "").strip()
+        and evidence_material.get("requested_at") == operation.get("requested_at")
+        and str(evidence_material.get("response_observed_at", "") or "").strip()
+        and evidence_material.get("response_code") == "NOT_FOUND"
+        and evidence_material.get("response_source")
+        in {"provider-dispatch", "journaled-provider-pending"}
+        and re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(evidence_material.get("response_detail_sha256", "") or ""),
+        )
+        and operation.get("verified_postcondition") == {"deleted": True}
+        and not str(operation.get("provider_operation_id", "") or "").strip()
+        and operation.get("attempt_state") in {"provider-terminal", "verified"}
+        and re.fullmatch(r"[0-9a-f]{64}", evidence_sha256)
+        and evidence_sha256 == _journal_payload_fingerprint(evidence_material)
+    )
+
+
+def controller_bridge_delete_operation_not_found_terminal_evidence_is_exact(
+    operation: Mapping[str, Any],
+) -> bool:
+    """Validate an accepted delete whose operation lookup vanished with its resource."""
+
+    evidence = operation.get("terminal_evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    evidence_material = dict(evidence)
+    evidence_sha256 = str(evidence_material.pop("evidence_sha256", "") or "")
+    resource_version = operation.get("resource_version")
+    if isinstance(resource_version, bool):
+        return False
+    try:
+        normalized_resource_version = int(resource_version)
+    except (TypeError, ValueError):
+        return False
+    provider_operation_id = str(operation.get("provider_operation_id", "") or "").strip()
+    expected_keys = {
+        "schema",
+        "kind",
+        "operation_kind",
+        "resource_id",
+        "resource_uid",
+        "resource_version",
+        "idempotency_key",
+        "intended_postcondition_sha256",
+        "requested_at",
+        "accepted_at",
+        "provider_operation_id",
+        "response_observed_at",
+        "response_code",
+        "response_source",
+        "response_detail_sha256",
+    }
+    return bool(
+        set(evidence_material) == expected_keys
+        and evidence_material.get("schema")
+        == CONTROLLER_BRIDGE_DELETE_OPERATION_NOT_FOUND_TERMINAL_SCHEMA
+        and evidence_material.get("kind")
+        == "accepted-delete-operation-not-found-after-resource-absence"
+        and operation.get("operation_kind") == "mk8s-node-group-delete"
+        and evidence_material.get("operation_kind") == operation.get("operation_kind")
+        and evidence_material.get("resource_id") == operation.get("resource_id")
+        and evidence_material.get("resource_uid") == operation.get("resource_uid")
+        and evidence_material.get("resource_version") == normalized_resource_version
+        and normalized_resource_version > 0
+        and str(operation.get("resource_id", "") or "").strip()
+        and str(operation.get("resource_uid", "") or "").strip()
+        and evidence_material.get("idempotency_key") == operation.get("idempotency_key")
+        and re.fullmatch(r"[0-9a-f]{64}", str(operation.get("idempotency_key", "") or ""))
+        and evidence_material.get("intended_postcondition_sha256")
+        == _journal_payload_fingerprint(operation.get("intended_postcondition"))
+        and str(evidence_material.get("requested_at", "") or "").strip()
+        and evidence_material.get("requested_at") == operation.get("requested_at")
+        and str(evidence_material.get("accepted_at", "") or "").strip()
+        and evidence_material.get("accepted_at") == operation.get("accepted_at")
+        and provider_operation_id
+        and evidence_material.get("provider_operation_id") == provider_operation_id
+        and str(evidence_material.get("response_observed_at", "") or "").strip()
+        and evidence_material.get("response_code") == "NOT_FOUND"
+        and evidence_material.get("response_source") == "provider-operation-lookup"
+        and re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(evidence_material.get("response_detail_sha256", "") or ""),
+        )
+        and operation.get("verified_postcondition") == {"deleted": True}
+        and operation.get("attempt_state") in {"provider-terminal", "verified"}
+        and re.fullmatch(r"[0-9a-f]{64}", evidence_sha256)
+        and evidence_sha256 == _journal_payload_fingerprint(evidence_material)
+    )
 
 
 def _image_digest_reference(value: object, *, field: str) -> str:
@@ -3352,10 +3497,25 @@ def validate_bridge_journal(journal: Mapping[str, Any]) -> None:
             )
         for state in node_group_operations.values():
             operation = state.get("operation") if isinstance(state, Mapping) else None
+            terminal_evidence = (
+                operation.get("terminal_evidence") if isinstance(operation, Mapping) else None
+            )
             if (
                 not isinstance(operation, Mapping)
                 or operation.get("attempt_state") not in {"provider-terminal", "verified"}
-                or not str(operation.get("provider_operation_id", "") or "").strip()
+                or (
+                    not str(operation.get("provider_operation_id", "") or "").strip()
+                    and not controller_bridge_delete_not_found_terminal_evidence_is_exact(operation)
+                )
+                or (
+                    terminal_evidence is not None
+                    and not controller_bridge_delete_not_found_terminal_evidence_is_exact(operation)
+                    and not (
+                        controller_bridge_delete_operation_not_found_terminal_evidence_is_exact(
+                            operation
+                        )
+                    )
+                )
             ):
                 raise ValueError(
                     "Controller bridge node-group cleanup lacks terminal provider evidence."

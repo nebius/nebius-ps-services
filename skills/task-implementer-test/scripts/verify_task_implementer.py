@@ -21,6 +21,7 @@ TEST_SCRIPTS = (
     "test-prompt-workspace.py",
     "test-task-specs.py",
     "test-task-execution.py",
+    "test-task-resume.py",
     "test-task-waves.py",
     "test-worktree-interoperability.py",
 )
@@ -34,6 +35,7 @@ HARNESS_TEST_SCRIPTS = (
     "test_verify_task_implementer.py",
 )
 IGNORED_NAMES = {"__pycache__", ".install-source-id"}
+DEFAULT_SUITE_TIMEOUT_SECONDS = 600
 
 
 def default_private_root() -> Path:
@@ -84,6 +86,7 @@ def contract(source: Path) -> tuple[str, str]:
     metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
     required_commands = (
         "$task-implementer workspace init [project-folder]",
+        "$task-implementer workspace reuse [project-folder]",
         "$task-implementer run <prompt-ref-or-file>",
         "$task-implementer integrate [project-folder]",
         "$task-implementer workspace remove [project-folder]",
@@ -96,7 +99,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "the source folder and frontmatter name do not match"
     observed_commands = tuple(re.findall(r"(?m)^\$task-implementer[^\n]*$", skill))
     if observed_commands != required_commands:
-        return "FAIL", "the public interface is not exactly the four canonical actions"
+        return "FAIL", "the public interface is not exactly the five canonical actions"
     policy_block = re.search(
         r"(?m)^policy:\s*(?:#.*)?\n(?P<body>(?:(?:[ \t]+[^\n]*|[ \t]*)\n?)*)",
         metadata,
@@ -118,7 +121,7 @@ def contract(source: Path) -> tuple[str, str]:
         return "FAIL", "an unsupported public compatibility command is present"
     return (
         "PASS",
-        "explicit-only metadata and the exact four-action surface are present",
+        "explicit-only metadata and the exact five-action surface are present",
     )
 
 
@@ -302,7 +305,7 @@ def main() -> int:
     parser.add_argument(
         "--report", type=Path, default=default_private_root() / "report.md"
     )
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int, default=DEFAULT_SUITE_TIMEOUT_SECONDS)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")

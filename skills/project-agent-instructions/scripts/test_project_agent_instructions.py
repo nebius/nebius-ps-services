@@ -826,6 +826,19 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.inspect()
         self.assertEqual(caught.exception.code, "SPEC_VALIDATION_REQUIRED")
 
+    def test_unchanged_specs_carry_receipt_to_descendant_commit(self) -> None:
+        (self.repo / "README.md").write_text("product-only change\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "advance without spec drift"],
+            cwd=self.repo,
+            check=True,
+        )
+
+        manifest = self.inspect()
+
+        self.assertEqual(manifest["spec_receipt"]["path"], str(self.receipt_path))
+
     def test_forged_receipt_cannot_authorize_marker_only_specs(self) -> None:
         requirements = self.repo / "docs/requirements.md"
         design = self.repo / "docs/design.md"

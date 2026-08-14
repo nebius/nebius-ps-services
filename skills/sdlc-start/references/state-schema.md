@@ -109,6 +109,19 @@ to categorized extraction, stable `Q-*` clarification state and provenance,
 the compiled requirements digest, and `extracting`, `needs_clarification`, or
 `ready` status. Material open or reopened questions prevent `ready`.
 
+`prompt-impact-claim.json` uses
+`maintain-project-specs.prompt-impact-claim.v1`. The shared owner converts its
+complete statement-occurrence dispositions into immutable
+`prompt-impact/attempt-NNNN.json` receipts and atomically selects the current
+head in `prompt-impact/ledger.json`. Per-run locked publication compare-checks
+the observed head and skips rather than overwrites a conflicting orphan attempt.
+`prompt-impact/execution/FEAT-NNN.json` separately binds each feature plan
+digest and plan-basis revision to the latest settled revision. Active state
+without this evidence freezes progression until a distinct safe replan creates
+a basis; terminal history reports `historical_no_receipt` without synthesizing
+coverage. Public status must use only the sanitized impact projection and never
+expose any digest or private path from these files.
+
 `prompt-queue.json` is a private FIFO of explicit run requests for prompts that
 cannot yet become active. Its immutable accepted snapshots live under
 `queued-prompts/`. Creation and saving never add entries; an edited queued
@@ -362,6 +375,9 @@ resources. This applies to completed records; there is no legacy read path.
    return the same `next_recommended_skill` without appending duplicate history.
 7. An unfinished active run without `prompt.json` fails with
    `WORKFLOW_UPGRADE_REQUIRED`; completed unbound history stays readable.
+8. A bound non-terminal run without current prompt-impact or execution-plan
+   settlement fails with `PROMPT_IMPACT_REQUIRED` or `REPLAN_REQUIRED` before
+   new dispatch, integration, or promotion. Terminal history remains readable.
 
 ## Hook Authorization Files
 

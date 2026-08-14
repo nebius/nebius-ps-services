@@ -87,7 +87,10 @@ completion.
   completed plan, armed seal, or seal instead of losing a late successful
   write. Canonical spec reconciliation admitted during planning or
   reconciliation is epoch-neutral. Stop owns the single accumulated
-  reconciliation request.
+  reconciliation request. Before an initial Stop continuation leaves
+  `implementation-open`, the lifecycle owner atomically enters
+  `reconciliation-required` and clears stale planning bindings; never depend on
+  that synthetic continuation emitting `UserPromptSubmit`.
 - Bind one explicit selected-project root. Do not infer multiple project scopes
   from one write; split the work or request an exact scope.
 - Preserve stable `REQ-*`, `FEAT-*`, `TI-REQ-*`, and `TI-DES-*` IDs. Never
@@ -113,6 +116,18 @@ completion.
   verify, and seal inputs to the exact current-session private bundle. Deny a
   coordinator-shaped command when its action or evidence paths are
   malformed instead of letting it fall through as an ordinary Python read.
+  The only alternate bundle is an exact Task Implementer run-owned inspect or
+  render for its active prepared integration checkout, authenticated by a
+  canonical installed or exact sibling-source Task helper during
+  implementation-open or reconciliation-required. Apply and verify remain on
+  the ordinary terminal seal path. An exact delegated worker commit uses the
+  Task adapter's command-derived worker session after the adapter binds it to
+  the running plane and canonical evidence; the outer payload session remains
+  authoritative for direct commits and lifecycle state. Delegated commit
+  interpreters are restricted to the hook runtime or an exact PATH-canonical
+  executable named `python3` or `python3.N`; arbitrary same-name paths remain
+  denied. The lifecycle hook still owns helper trust, selected-lane phase
+  policy, submitted-command digest verification, and checkpoint accounting.
 - Hooks are guardrails, not an absolute filesystem boundary. Proven material
   effects wholly outside the selected project pass through this lifecycle and
   remain subject to operating-system, Codex, destructive-action, and peer-hook
@@ -167,6 +182,15 @@ Create the canonical requirements region. Record observable outcomes,
 constraints, non-goals, acceptance criteria, and verification. For a new
 prompt, update or append stable records and the change log. Mark replaced
 requirements `superseded`; do not delete history.
+
+When Task Implementer or Agentic SDLC requests prompt-impact validation, act as
+the only semantic owner: reparse the exact canonical pair, enumerate the
+refinement's statement occurrences, validate complete bounded dispositions and
+active requirement/design mappings, then derive the aggregate effect and plan
+action. Do not accept caller-authored aggregate claims, mutate specs from this
+validator, store raw prompt text, or expose content-derived identities. The
+workflow adapter owns append-only private publication and downstream plan-basis
+checks.
 
 When the user says real users depend on existing behavior and future changes
 must remain safe, record compatibility as an accepted constraint. By default it
@@ -234,8 +258,10 @@ rendered file, render state, and project-instructions private root to lifecycle
 `plan`; the lifecycle reruns the authoritative renderer before injecting those
 rules. For a managed lifecycle, these are the canonical current-session
 `project-instructions/rules.md`, `project-instructions/render-state.json`, and
-`project-instructions/` paths; alternate same-project bundles are invalid. Do
-not run `apply` yet.
+`project-instructions/` paths. Task Implementer supplies its separately owned
+run paths only through the authenticated adapter above; agents never copy its
+receipt into the current-session bundle or substitute an arbitrary same-project
+bundle. Do not run `apply` yet.
 
 Explicit compatibility intent is durable and project-specific. Choose `needed`
 with the default compatibility rules unless active same-directory project
@@ -275,6 +301,10 @@ A successful material tool admitted before a concurrent plan or terminal
 transition may report completion afterward. Its PostToolUse accounting returns
 the lifecycle to `reconciliation-required`, advances the epoch, and invalidates
 the later evidence; reconcile and plan again rather than bypassing that state.
+An initial Stop from `implementation-open` performs the same owner-controlled
+reconciliation opening without advancing the write epoch, so its generated
+continuation can reconcile the canonical specs immediately even when no new
+prompt event fires.
 
 ### 7. Reconcile and seal
 

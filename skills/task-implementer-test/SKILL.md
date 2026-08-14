@@ -38,9 +38,8 @@ checks separate from the opt-in disposable application lifecycle.
 - Do not invoke this skill implicitly for ordinary implementation work.
 - Do not use it on a user, production, customer, remote-backed, or otherwise
   non-disposable project.
-- Do not use it instead of `$task-implementer workspace init` or
-  `$task-implementer run`, `integrate`, or `workspace remove` for real
-  brownfield work.
+- Do not use it instead of `$task-implementer workspace init`, `workspace
+  reuse`, `run`, `integrate`, or `workspace remove` for real brownfield work.
 - Do not add `--resume`, aliases, or compatibility modes.
 
 ## Inputs
@@ -106,11 +105,14 @@ evidence, and exact owned runtime resources do not.
    python3 task-implementer-test/scripts/verify_task_implementer.py
    ```
 
-   It validates explicit-only metadata, the exact four-action public surface,
+   It validates explicit-only metadata, the exact five-action public surface,
    source-installed parity, and all current Task Implementer contract,
    workspace, specification, scheduler, temporary-Git wave, and persistent-lane
    suites, plus the verifier's own helper/lifecycle/semantic suites. It must not
    call Docker, create workers, or touch a real project.
+   The bounded default is 600 seconds per suite so the complete disposable
+   linked-worktree crash matrix is not cut off by the worker's shorter
+   per-assignment runtime budget.
    Report the deterministic profile independently; absence of live evidence is
    `NOT_RUN`, not synthetic live PASS.
 3. For `--destroy`, invoke the lifecycle helper's `destroy` action. A missing

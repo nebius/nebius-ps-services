@@ -229,23 +229,20 @@ budget.
 
 When either limit is exhausted, transition to `REPORTED`, perform no further
 diagnostics or remediation after the exact exhaustion-state update, and return
-the existing Troubleshooting Report with these additional requirements:
+the concise Troubleshooting Report with these additional requirements:
 
 - include `REMEDIATION_BUDGET_EXHAUSTED`;
 - identify whether `attempt_limit` or `time_limit` stopped the tranche;
-- use the single canonical heading order and completion table in
-  `verification-and-reporting.md` rather than a separate exhaustion format;
-- under `## Root Cause`, use one substantive `- Blocker: ...` line with the
-  exact current error class, code, and message excerpt when available, redacted
-  as needed, plus the failing operation;
-- under `## Root Cause`, use one substantive `- Blocker key: ...` line identifying a
-  component, command, test, service, or bounded log location without copying
-  raw sensitive material;
-- under `## Remediation`, list each counted attempt as
+- use the single concise heading order in `verification-and-reporting.md`
+  rather than a separate exhaustion format;
+- under `## Root Cause And Fix`, use one substantive `- Root cause: ...` line
+  with the exact bounded marker-derived blocker summary;
+- under `## Root Cause And Fix`, use one substantive `- Blocker key: ...` line
+  identifying the bounded causal owner without copying raw sensitive material;
+- under `## Root Cause And Fix`, list each counted attempt as
   `- attempt-N | Remediation: ... | Verification: ... | Result: ...`;
-- under `## Post-Fix Validation`, list its evidence as
+- under `## Verification`, list its evidence as
   `- attempt-N | Evidence: ...`;
-- mark each completion criterion `FAIL` or `UNKNOWN` as the evidence supports;
 - use the hook's bounded, redacted marker-derived blocker, source, remediation,
   verification, result, and evidence summaries when the optional guard is
   active; generic prose or sensitive values do not satisfy delivery;
@@ -255,7 +252,7 @@ the existing Troubleshooting Report with these additional requirements:
 When the Stop hook provides its bounded marker-derived report, return it
 verbatim as the whole assistant response. Do not add an introduction, rewrite
 its fields, or substitute a richer narrative; even a semantically equivalent
-`- Blocker:` value does not satisfy the exact marker binding.
+root-cause value does not satisfy the exact marker binding.
 
 If the evidence or hypothesis gate blocks a retry before either numeric limit,
 transition to `REPORTED` without `REMEDIATION_BUDGET_EXHAUSTED`. Use the same
@@ -275,29 +272,25 @@ The optional hook bundle in `assets/hooks/` handles `UserPromptSubmit`,
 authorization sidecar under the private 0700 task-state directory. Non-default
 marker values must match that sidecar; `override_summary` and prompt text are
 not authorization. It blocks supported tools after exhaustion except an exact
-update to the advertised `current.md`. Its Stop handler requests one corrected
-report with the exact missing field or section and supplies a bounded, redacted
-minimum report for the assistant to return verbatim. If that continuation is
-still incomplete, it stops and emits that fallback as a UI/event-stream
-`systemMessage` warning rather than an assistant-authored response. The
-fallback includes an explicit limitation when a historical exhausted v1 data
-marker did not record retry-admission evidence. New v4 state defaults to 5/120
-and permits authorized values only through 10/180. Free-text
+update to the advertised `current.md`. At exhaustion, its Stop handler requests
+one corrected marker-bound concise report and supplies a bounded, redacted
+report for the assistant to return verbatim. If that continuation is still
+incomplete, it stops with the same concise UI fallback. The fallback includes
+an explicit limitation when a historical exhausted v1 data marker did not
+record retry-admission evidence. New v4 state defaults to 5/120 and permits
+authorized values only through 10/180. Free-text
 `override_summary` cannot authorize numbers; it records same-blocker
 continuation only.
 
 Separately, every explicit `$troubleshoot` invocation creates
 `troubleshoot-report-obligation.json` without changing the budget authorization
-schema. The duty applies with or without a remediation marker and requires
-`Current workflow state: REPORTED` for every terminal classification. It
-survives interruption into a resumed turn in the same session. The general
-report path requests one correction and then emits an honest bounded UI
-fallback. A valid report is finalized only when the shared Stop arbiter has no
-peer lifecycle continuation; otherwise the obligation remains active for the
-later terminal Stop. If a later peer returns a terminal result, that result
-keeps precedence after the arbiter finalizes the already validated report,
-preventing stale report state in a later turn. Process termination before Stop
-remains reportable only after a same-session resume.
+schema. The sidecar is an invocation and transactional-delivery record, not a
+general workflow lock. A valid concise report is finalized only when the shared
+Stop arbiter has no peer lifecycle continuation. An ordinary incomplete or
+malformed report records `advisory_incomplete` and returns `continue: true`;
+it requests no correction, denies no later tool, and emits no fallback. A
+sensitive report may receive one bounded redaction correction. Process
+termination before Stop remains reportable only after a same-session resume.
 For an active resize, the hook records a pending authorization and admits only
 the exact `current.md` patch until the marker matches it while preserving the
 blocker, tranche, attempt ledger, counters, lifecycle, and timestamps. It then

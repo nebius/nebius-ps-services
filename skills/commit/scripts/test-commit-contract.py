@@ -33,6 +33,8 @@ class CommitContractTest(unittest.TestCase):
             "one-direct-child authorization is minted by `task-start`",
             "interrupted-commit recovery",
             "repository-shaping Git environment",
+            "worker_session_fingerprint_sha256",
+            "PATH-canonical",
         ):
             self.assertIn(required, skill)
 
@@ -67,6 +69,7 @@ class CommitContractTest(unittest.TestCase):
             "commit_transaction.py",
             "revalidates live worker ownership",
             "Repository-shaping Git environment",
+            "persisted evidence only",
         ):
             self.assertIn(required, readme)
 

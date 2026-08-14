@@ -31,6 +31,12 @@ from project_specs_lib.lifecycle import (
     start_prompt,
     write_validation_receipt,
 )
+from project_specs_lib.impact import (
+    CLAIM_SCHEMA,
+    ProjectSpecError as ImpactError,
+    public_impact_status,
+    validate_prompt_impact,
+)
 from project_specs_lib import migration
 from project_specs_lib import lifecycle as lifecycle_module
 from project_specs_lib.migration import migrate_project, recover_migration
@@ -238,6 +244,157 @@ class ProjectSpecsTestCase(unittest.TestCase):
         )
         git(self.project, "add", "docs")
 
+    def prompt_impact_inputs(self) -> tuple[dict[str, object], dict[str, object]]:
+        refinement: dict[str, object] = {
+            "schema": "test/refinement-v1",
+            "prompt_id": "prompt-" + "a" * 32,
+            "revision": "r0002",
+            "intent_sha256": "b" * 64,
+            "status": "ready",
+            "extracted": {
+                "constraints": ["Preserve the canonical owner."],
+                "outcomes": ["Report the validated impact."],
+            },
+        }
+        claim: dict[str, object] = {
+            "schema": CLAIM_SCHEMA,
+            "prompt_id": refinement["prompt_id"],
+            "revision": refinement["revision"],
+            "intent_sha256": refinement["intent_sha256"],
+            "dispositions": [
+                {
+                    "statement": "constraints:0001",
+                    "disposition": "existing_contract",
+                    "requirements": ["TI-REQ-001"],
+                    "design": ["TI-DES-001"],
+                    "effects": [],
+                    "reason": None,
+                },
+                {
+                    "statement": "outcomes:0001",
+                    "disposition": "non_contract",
+                    "requirements": [],
+                    "design": [],
+                    "effects": [],
+                    "reason": "workflow_directive",
+                },
+            ],
+            "declared_effects": [],
+            "declared_plan_action": "retain_plan",
+        }
+        return refinement, claim
+
+    def validate_impact(
+        self,
+        refinement: dict[str, object],
+        claim: dict[str, object],
+        *,
+        prior_impact_sha256: str | None = None,
+        prior_spec_receipt_sha256: str | None = None,
+        generation: int = 1,
+    ) -> dict[str, object]:
+        return validate_prompt_impact(
+            self.project,
+            workflow="task-implementer",
+            prompt_id=str(refinement["prompt_id"]),
+            revision=str(refinement["revision"]),
+            prompt_sha256="c" * 64,
+            intent_sha256=str(refinement["intent_sha256"]),
+            refinement=refinement,
+            claim=claim,
+            prior_impact_sha256=prior_impact_sha256,
+            prior_spec_receipt_sha256=prior_spec_receipt_sha256,
+            generation=generation,
+        )
+
+    def test_prompt_impact_requires_complete_current_statement_coverage(self) -> None:
+        self.write_canonical()
+        refinement, claim = self.prompt_impact_inputs()
+        receipt = self.validate_impact(refinement, claim)
+        self.assertEqual(receipt["effects"], [])
+        self.assertEqual(receipt["plan_action"], "retain_plan")
+        self.assertEqual(len(receipt["coverage"]), 2)
+
+        missing = dict(claim)
+        missing["dispositions"] = list(claim["dispositions"])[1:]
+        with self.assertRaisesRegex(ImpactError, "every extracted statement"):
+            self.validate_impact(refinement, missing)
+
+        duplicate = dict(claim)
+        duplicate["dispositions"] = [
+            *list(claim["dispositions"]),
+            dict(list(claim["dispositions"])[0]),
+        ]
+        with self.assertRaisesRegex(ImpactError, "missing, duplicate, or unknown"):
+            self.validate_impact(refinement, duplicate)
+
+    def test_prompt_impact_derives_effect_and_rejects_aggregate_or_record_drift(
+        self,
+    ) -> None:
+        self.write_canonical()
+        refinement, claim = self.prompt_impact_inputs()
+        changed = dict(list(claim["dispositions"])[0])
+        changed["disposition"] = "changed_contract"
+        changed["effects"] = ["design", "requirements"]
+        claim["dispositions"] = [changed, list(claim["dispositions"])[1]]
+        claim["declared_effects"] = ["design", "requirements"]
+        claim["declared_plan_action"] = "replan_required"
+        receipt = self.validate_impact(refinement, claim)
+        self.assertEqual(receipt["effects"], ["design", "requirements"])
+
+        claim["declared_effects"] = []
+        with self.assertRaisesRegex(ImpactError, "declared impact effects"):
+            self.validate_impact(refinement, claim)
+
+        claim["declared_effects"] = ["design", "requirements"]
+        changed["requirements"] = ["TI-REQ-999"]
+        with self.assertRaisesRegex(ImpactError, "current requirement and design"):
+            self.validate_impact(refinement, claim)
+
+    def test_prompt_impact_public_status_exposes_only_bounded_records_and_action(
+        self,
+    ) -> None:
+        self.write_canonical()
+        refinement, claim = self.prompt_impact_inputs()
+        receipt = self.validate_impact(refinement, claim)
+        status = public_impact_status(receipt)
+        self.assertEqual(
+            status,
+            {
+                "classification": "no_effect",
+                "requirements": ["TI-REQ-001"],
+                "design": ["TI-DES-001"],
+                "reasons": ["workflow_directive"],
+                "plan_action": "retain_plan",
+            },
+        )
+        serialized = json.dumps(status, sort_keys=True)
+        self.assertNotIn("sha256", serialized)
+        self.assertNotIn("Preserve the canonical owner", serialized)
+
+    def test_prompt_impact_records_append_only_owner_spec_transition(self) -> None:
+        self.write_canonical()
+        refinement, claim = self.prompt_impact_inputs()
+        first = self.validate_impact(refinement, claim)
+        requirements = self.docs / "requirements.md"
+        requirements.write_bytes(b"Human context.\n\n" + requirements.read_bytes())
+        second = self.validate_impact(
+            refinement,
+            claim,
+            prior_impact_sha256="e" * 64,
+            prior_spec_receipt_sha256=str(first["spec_receipt_sha256"]),
+            generation=2,
+        )
+        transition = second["spec_transition"]
+        self.assertEqual(
+            transition["prior_spec_receipt_sha256"], first["spec_receipt_sha256"]
+        )
+        self.assertEqual(
+            transition["next_spec_receipt_sha256"], second["spec_receipt_sha256"]
+        )
+        self.assertEqual(transition["reason"], "owner_reconciliation")
+        self.assertRegex(str(second["spec_transition_sha256"]), r"^[0-9a-f]{64}$")
+
     def plan_with_empty_rules(self, session: str, turn: str) -> dict[str, object]:
         git_root = Path(git(self.project, "rev-parse", "--show-toplevel"))
         private_root = lifecycle_dir(git_root, session) / "project-instructions"
@@ -360,6 +517,65 @@ class ProjectSpecsTestCase(unittest.TestCase):
         )
         self.assertEqual(rejected.returncode, 2)
         self.assertFalse(wrong_session_output.exists())
+
+    def test_validate_can_store_one_task_implementer_attested_receipt(self) -> None:
+        self.write_canonical()
+        task_root = self.root / "codex/task-implementer"
+        output = task_root / "projects/project/scopes/scope/runs/run-1/orchestration"
+        current = task_root
+        current.mkdir(parents=True, mode=0o700)
+        current.chmod(0o700)
+        for part in output.relative_to(task_root).parts:
+            current /= part
+            current.mkdir(mode=0o700)
+            current.chmod(0o700)
+        receipt_path = output / "project-agent-spec-receipt.json"
+        workspace = task_root / "projects/project/scopes/scope/workspace.json"
+
+        def authorize(
+            arguments: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            command = str(kwargs["input"])
+            evidence = {
+                "status": "authorized",
+                "action": "validate",
+                "outer_project_root": str(self.project),
+                "project_root": str(self.project),
+                "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+            }
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                stdout=json.dumps(evidence),
+                stderr="",
+            )
+
+        expected_receipt = validate_project(self.project)
+        with (
+            mock.patch.object(
+                lifecycle_module, "validate_project", return_value=expected_receipt
+            ),
+            mock.patch.object(
+                lifecycle_module.subprocess, "run", side_effect=authorize
+            ),
+        ):
+            receipt = write_validation_receipt(
+                self.project,
+                receipt_path,
+                "019ff65c-3e02-7780-8f24-448c391b5f66",
+                task_implementer_workspace=workspace,
+                task_implementer_run_id="run-1",
+            )
+        self.assertEqual(json.loads(receipt_path.read_text()), receipt)
+        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+
+        with self.assertRaises(ProjectSpecError):
+            write_validation_receipt(
+                self.project,
+                receipt_path,
+                "019ff65c-3e02-7780-8f24-448c391b5f66",
+                task_implementer_workspace=workspace,
+            )
 
     def test_transition_token_reuses_current_hook_turn_without_raw_id(self) -> None:
         self.write_canonical()
@@ -750,7 +966,9 @@ class ProjectSpecsTestCase(unittest.TestCase):
                     "evidence": [
                         {
                             "path": "docs/design.md",
-                            "sha256": hashlib.sha256(design_path.read_bytes()).hexdigest(),
+                            "sha256": hashlib.sha256(
+                                design_path.read_bytes()
+                            ).hexdigest(),
                             "locator": "### TI-DES-001: Maintain one owner",
                         }
                     ],

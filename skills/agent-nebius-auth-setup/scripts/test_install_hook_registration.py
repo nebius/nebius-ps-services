@@ -894,6 +894,51 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             "Action required: hook files or registrations changed", second.stderr
         )
 
+    def test_installed_prompt_intake_never_blocks_direct_delivery(self) -> None:
+        installed = self.run_all_hooks_installer()
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        hook = self.installed_hook_target("prompt_session_intake.py")
+        project = self.root / "prompt-project"
+        project.mkdir(mode=0o700)
+        base = {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "prompt-session",
+            "turn_id": "bind",
+            "cwd": str(project),
+            "codex_home": str(self.codex_home),
+        }
+
+        def invoke(prompt: str, turn_id: str) -> tuple[dict[str, object], str]:
+            result = subprocess.run(
+                [sys.executable, str(hook)],
+                input=json.dumps({**base, "turn_id": turn_id, "prompt": prompt}),
+                cwd=str(project),
+                env=self.env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, "")
+            return json.loads(result.stdout), result.stdout
+
+        bound, _ = invoke("$task-implementer workspace init", "bind")
+        self.assertTrue(bound["continue"])
+        conflict, conflict_output = invoke(
+            "$sdlc-start workspace init", "binding-conflict"
+        )
+        self.assertTrue(conflict["continue"])
+        self.assertNotIn("stopReason", conflict)
+        self.assertIn("BINDING_CONFLICT", conflict_output)
+
+        secret = "OPENAI_API_KEY=" + "sk-" + ("a" * 24)
+        secret_result, secret_output = invoke(secret, "secret")
+        self.assertTrue(secret_result["continue"])
+        self.assertNotIn("stopReason", secret_result)
+        self.assertNotIn(secret, secret_output)
+        event_root = self.codex_home / "prompt-session-intake" / "sessions"
+        self.assertFalse(any(event_root.rglob("raw.md")))
+
     def test_install_all_migrates_only_legacy_stop_owners_to_arbiter(self) -> None:
         unrelated = {
             "matcher": "custom",

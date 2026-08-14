@@ -144,15 +144,43 @@ def require_mode(path: Path, expected: int, label: str) -> None:
 
 
 def ensure_private_dir(path: Path) -> None:
+    created = not path.exists()
     path.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
         raise PromptWorkspaceError(
             "WORKSPACE_PATH_INVALID", f"private directory is unsafe: {path}"
         )
     private_chmod(path, 0o700)
+    if created:
+        _fsync_directory(path.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory entries after private-state create or replacement."""
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID",
+            f"private directory cannot be synchronized: {path}",
+        ) from exc
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID",
+            f"private directory could not be synchronized: {path}",
+        ) from exc
+    finally:
+        os.close(descriptor)
 
 
 def write_exclusive(path: Path, data: bytes) -> None:
+    ensure_private_dir(path.parent)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(path, flags, 0o600)
     try:
@@ -164,6 +192,7 @@ def write_exclusive(path: Path, data: bytes) -> None:
         path.unlink(missing_ok=True)
         raise
     private_chmod(path, 0o600)
+    _fsync_directory(path.parent)
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -180,6 +209,7 @@ def write_atomic(path: Path, data: bytes) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         private_chmod(path, 0o600)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1443,12 +1473,16 @@ def read_prompt(
             "PROMPT_INPUT_INVALID", "prompt_id does not match the generated format"
         )
     prompt_ref = frontmatter.get("prompt_ref", "")
-    if not legacy and not migration and (
-        not PROMPT_REF_RE.fullmatch(prompt_ref)
-        or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
-        or (
-            prompt_root.name == "prompts"
-            and not canonical.name.startswith(f"{prompt_ref}--")
+    if (
+        not legacy
+        and not migration
+        and (
+            not PROMPT_REF_RE.fullmatch(prompt_ref)
+            or not prompt_id.removeprefix("prompt-").startswith(prompt_ref)
+            or (
+                prompt_root.name == "prompts"
+                and not canonical.name.startswith(f"{prompt_ref}--")
+            )
         )
     ):
         raise PromptWorkspaceError(
@@ -1612,7 +1646,9 @@ def allocate_prompt_ref(prompt_root: Path, prompt_id: str) -> str:
             refs.add(existing_ref)
     suffix = prompt_id.removeprefix("prompt-")
     if prompt_id in prompt_ids:
-        raise PromptWorkspaceError("PROMPT_CONFLICT", "generated prompt ID already exists")
+        raise PromptWorkspaceError(
+            "PROMPT_CONFLICT", "generated prompt ID already exists"
+        )
     for length in range(5, 33):
         candidate = suffix[:length]
         if candidate not in refs and all(
@@ -1644,14 +1680,13 @@ def _render_migrated_prompt(raw: bytes, prompt_ref: str) -> bytes:
             output.append(f"schema: {PROMPT_SCHEMA}{ending}")
             continue
         output.append(line)
-        if (
-            not frontmatter_closed
-            and content.split(":", 1)[0].strip() == "prompt_id"
-        ):
+        if not frontmatter_closed and content.split(":", 1)[0].strip() == "prompt_id":
             output.append(f"prompt_ref: {prompt_ref}{ending}")
             inserted = True
     if not inserted or not frontmatter_closed:
-        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt migration metadata is invalid")
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "prompt migration metadata is invalid"
+        )
     return "".join(output).encode("utf-8")
 
 
@@ -1685,7 +1720,9 @@ def _validated_prompt_v3_migrations(
         old_name = item["old_name"]
         new_name = item["new_name"]
         expected_name = (
-            old_name if old_name.startswith(f"{prompt_ref}--") else f"{prompt_ref}--{old_name}"
+            old_name
+            if old_name.startswith(f"{prompt_ref}--")
+            else f"{prompt_ref}--{old_name}"
         )
         if (
             not PROMPT_ID_RE.fullmatch(prompt_id)
@@ -1709,7 +1746,8 @@ def _validated_prompt_v3_migrations(
             )
         if (prompt_root / new_name).parent != prompt_root:
             raise PromptWorkspaceError(
-                "WORKSPACE_STATE_INVALID", "prompt migration marker escapes its prompt root"
+                "WORKSPACE_STATE_INVALID",
+                "prompt migration marker escapes its prompt root",
             )
         ids.add(prompt_id)
         names.add(new_name)
@@ -1727,7 +1765,11 @@ def _recover_prompt_v3_migration_files(
         old = prompt_root / item["old_name"]
         target = prompt_root / item["new_name"]
         if target.exists() or target.is_symlink():
-            if target.is_symlink() or not target.is_file() or target.stat().st_nlink != 1:
+            if (
+                target.is_symlink()
+                or not target.is_file()
+                or target.stat().st_nlink != 1
+            ):
                 raise PromptWorkspaceError(
                     "WORKSPACE_STATE_INVALID", "prompt migration target is unsafe"
                 )
@@ -1736,12 +1778,20 @@ def _recover_prompt_v3_migration_files(
             target_digest = hashlib.sha256(target_raw).hexdigest()
             if target_digest == item["new_sha256"]:
                 if old != target and (old.exists() or old.is_symlink()):
-                    if old.is_symlink() or not old.is_file() or old.stat().st_nlink != 1:
+                    if (
+                        old.is_symlink()
+                        or not old.is_file()
+                        or old.stat().st_nlink != 1
+                    ):
                         raise PromptWorkspaceError(
-                            "WORKSPACE_STATE_INVALID", "prompt migration source is unsafe"
+                            "WORKSPACE_STATE_INVALID",
+                            "prompt migration source is unsafe",
                         )
                     require_mode(old, 0o600, "prompt migration source")
-                    if hashlib.sha256(old.read_bytes()).hexdigest() != item["old_sha256"]:
+                    if (
+                        hashlib.sha256(old.read_bytes()).hexdigest()
+                        != item["old_sha256"]
+                    ):
                         raise PromptWorkspaceError(
                             "WORKSPACE_STATE_INVALID", "prompt migration source drifted"
                         )
@@ -1767,7 +1817,8 @@ def _recover_prompt_v3_migration_files(
         migrated = _render_migrated_prompt(source_raw, item["prompt_ref"])
         if hashlib.sha256(migrated).hexdigest() != item["new_sha256"]:
             raise PromptWorkspaceError(
-                "WORKSPACE_STATE_INVALID", "prompt migration rendering is not reproducible"
+                "WORKSPACE_STATE_INVALID",
+                "prompt migration rendering is not reproducible",
             )
         write_atomic(target, migrated)
         if old != target:
@@ -1785,17 +1836,15 @@ def migrate_prompt_files_v2(prompt_root: Path) -> list[dict[str, str]]:
             )
         require_mode(journal_path, 0o600, "prompt migration marker")
         journal = load_json_object(journal_path, "prompt migration marker")
-        if set(journal) != {"schema", "migrations"} or journal.get(
-            "schema"
-        ) != PROMPT_V3_MIGRATION_SCHEMA or not isinstance(
-            journal.get("migrations"), list
+        if (
+            set(journal) != {"schema", "migrations"}
+            or journal.get("schema") != PROMPT_V3_MIGRATION_SCHEMA
+            or not isinstance(journal.get("migrations"), list)
         ):
             raise PromptWorkspaceError(
                 "WORKSPACE_STATE_INVALID", "prompt migration marker is invalid"
             )
-        recovered = _validated_prompt_v3_migrations(
-            journal["migrations"], prompt_root
-        )
+        recovered = _validated_prompt_v3_migrations(journal["migrations"], prompt_root)
         _recover_prompt_v3_migration_files(prompt_root, recovered)
         return recovered
 
@@ -1805,16 +1854,22 @@ def migrate_prompt_files_v2(prompt_root: Path) -> list[dict[str, str]]:
         if candidate.name == HUB_FILENAME:
             continue
         if candidate.is_symlink() or not candidate.is_file():
-            raise PromptWorkspaceError("PROMPT_PATH_INVALID", "prompt migration input is unsafe")
+            raise PromptWorkspaceError(
+                "PROMPT_PATH_INVALID", "prompt migration input is unsafe"
+            )
         require_mode(candidate, 0o600, "prompt file")
         raw = candidate.read_bytes()
         try:
             metadata, _ = parse_frontmatter(raw.decode("utf-8").splitlines())
         except (UnicodeDecodeError, PromptWorkspaceError) as error:
-            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt migration input is invalid") from error
+            raise PromptWorkspaceError(
+                "PROMPT_INPUT_INVALID", "prompt migration input is invalid"
+            ) from error
         schema = metadata.get("schema")
         if schema not in {PROMPT_SCHEMA, MIGRATION_PROMPT_SCHEMA, LEGACY_PROMPT_SCHEMA}:
-            raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "prompt schema is unsupported")
+            raise PromptWorkspaceError(
+                "PROMPT_INPUT_INVALID", "prompt schema is unsupported"
+            )
         if schema == LEGACY_PROMPT_SCHEMA:
             continue
         prompt_id = metadata.get("prompt_id", "")
@@ -1834,10 +1889,16 @@ def migrate_prompt_files_v2(prompt_root: Path) -> list[dict[str, str]]:
             prompt_id, [value for value in all_ids if value != prompt_id]
         )
         target = path.with_name(
-            path.name if path.name.startswith(f"{prompt_ref}--") else f"{prompt_ref}--{path.name}"
+            path.name
+            if path.name.startswith(f"{prompt_ref}--")
+            else f"{prompt_ref}--{path.name}"
         )
-        if target in targets or (target != path and (target.exists() or target.is_symlink())):
-            raise PromptWorkspaceError("PROMPT_CONFLICT", "prompt migration target conflicts")
+        if target in targets or (
+            target != path and (target.exists() or target.is_symlink())
+        ):
+            raise PromptWorkspaceError(
+                "PROMPT_CONFLICT", "prompt migration target conflicts"
+            )
         targets.add(target)
         migrated = _render_migrated_prompt(raw, prompt_ref)
         migrations.append(

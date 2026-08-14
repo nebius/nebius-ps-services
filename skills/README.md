@@ -95,12 +95,12 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
 | `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, managed-tail ownership, guarded retirement, and fail-closed recovery. |
-| `prompt-session-intake` | Explicit only (hook-routed) | Internally capture safe direct prompts from an explicitly bound Task Implementer or Agentic SDLC session, preserve private provenance, and coordinate lossless refinement, CAS prompt updates, and exact-once workflow continuation. |
+| `prompt-session-intake` | Explicit only (hook-routed) | Capture eligible direct prompts from a bound Task Implementer or Agentic SDLC objective as a non-blocking sidecar, preserve private provenance, and coordinate lossless exact-once prompt updates without invoking either workflow. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves, integrate pending generations, and explicitly remove idle lanes. |
+| `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves with fail-closed current-schema recovery, integrate pending generations, and explicitly remove idle lanes. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 | `troubleshoot` | Implicit allowed | Discover deployed stacks, verify components and layered logs, causally debug difficult code and infrastructure failures, and gate completion on a canonical evidence matrix. |
@@ -249,6 +249,8 @@ $code-review Review the current local branch, fix only safe in-scope findings, v
 $system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
 
 $task-implementer workspace init services/nebius-cxcli
+
+$task-implementer workspace reuse services/nebius-cxcli
 
 $task-implementer run <prompt-ref-or-file>
 
@@ -583,23 +585,43 @@ window's extension host and may interrupt its terminal or Codex UI; editor
 failure remains non-fatal. One `run <prompt-ref-or-file>` validates
 and snapshots exact prompt bytes, creates or reconciles the internal task queue,
 locks dependencies, exact/prefix write claims, conflict domains, validation,
-and done criteria, then coordinates every wave until completion or a blocker.
+and done criteria, then reserves an exact whole-repository lane tree and path
+digest for review before atomically checkpointing that token as one clean
+direct-child baseline and coordinating
+every wave until completion or a blocker. A clean lane creates no checkpoint
+commit, active-generation dirt still blocks, and the primary checkout is never
+mutated. The post-checkpoint clean `HEAD` becomes the generation, coordinator,
+and first-wave baseline.
 Each completed run releases one immutable lane generation; back-to-back runs
 may accumulate pending generations while leaving the source checkout untouched.
 
+`workspace reuse [project-folder]` reopens the exact existing generated VS
+Code workspace from either the primary source project or its owning managed
+lane. It rejects unrelated worktrees and unavailable source refs, validates
+workspace and live lane identity, but never refreshes the lane, migrates
+prompts, checkpoints dirt, queues work, or claims readiness. Missing or
+mismatched state fails closed; `run <prompt-ref-or-file>` remains
+valid directly from the primary source project without reopening first.
+
 An explicit init or run binds the current Codex session. In that bound session,
-the separate capture-only `prompt-session-intake` hook may privately stage a
-later safe direct turn; the agent refines material intent losslessly, the Task
-Implementer adapter applies a stale-base-checked create or append exactly once
-per operation ID, and this same run path executes once. Explicit runs register
-the active prompt for unique
+every direct prompt still runs normally in the current agent. The separate
+`prompt-session-intake` hook may also stage safe input as a non-blocking
+sidecar; the agent refines material intent losslessly and the Task Implementer
+prompt adapter applies a stale-base-checked create or append exactly once per
+operation ID without starting or resuming the workflow. Only explicit runs
+register the active prompt for unique
 fresh-session attachment and close it only after verified terminal completion.
-Conversation, status, and control remain nonmaterial, and file edits never
-auto-run.
+Conversation, status, control, secrets, and failed capture remain nonmaterial
+and never block direct delivery; captured updates and file edits never auto-run.
 
 Users steer the workflow by editing the same prompt—preferably appending to its
 optional `## Steering` section—and running the same command. There is no public
-`steer` command or user-supplied ID. Steering may safely recompute a merely
+hash-maintenance step: exact-byte and normalized-intent digests detect the edit,
+while a shared owner requires complete statement-to-contract impact evidence
+before Task Implementer may retain or rebuild its plan. A bare `no_effect`
+decision cannot unlock work, and public status exposes no prompt-derived
+digest. There is no public `steer` command or user-supplied ID. Steering may
+safely recompute a merely
 planned wave. Once worktrees or assignments exist, it queues without changing
 the immutable active wave and is reconciled before promotion or at the next
 wave boundary.
@@ -699,7 +721,7 @@ is explicit-only. Use `global-context-management` for general context hygiene,
 ### `task-implementer-test`
 
 `task-implementer-test` verifies Task Implementer without using a real user
-project. With no flags it runs the current explicit-only and exact four-action
+project. With no flags it runs the current explicit-only and exact five-action
 contract checks plus the local temporary-fixture workspace, specification,
 scheduler, Git-wave, persistent-lane, verifier-helper, lifecycle, reporting, and
 semantic suites. It never starts Docker, dispatches implementation workers, or
@@ -915,16 +937,27 @@ record the next recommended phase in local run state. Editing the same managed
 prompt and repeating `run` is the steering path; bare `$sdlc-start` is not a
 resume interface.
 After an explicit init or run binds the session, `prompt-session-intake` may
-stage later safe direct material intent for agent-owned lossless refinement and
-an SDLC-owned compare-and-set create or append exactly once per operation ID
-before this same run path executes once. Explicit runs register and terminally
-close the active prompt so
+stage later safe direct-turn metadata as a non-blocking sidecar while the
+current agent handles the request normally. It never stores the submitted body.
+Agent-owned semantic selection keeps only durable project intent, including
+commands used as project contracts but excluding workflow/skill, shell/tool,
+delivery, agent-control, status, conversation, and unrelated wrappers. The
+SDLC adapter rehashes the accepted projection and binds its digest to the
+operation marker before compare-and-set create or append. Exact retries and
+byte-identical projections do not append again, capture never starts or resumes
+SDLC, and distinct concurrent drift never auto-rebases. Only explicit runs register and
+terminally close the active prompt so
 a fresh session attaches only when the objective is unique. Conversation,
 status, control, and prompt-file saves never auto-run.
 The committed project truth is `docs/requirements.md`, `docs/design.md`, and,
 only when the evidence gate requires it, a provenance-owned project-root
-`AGENTS.md`. The shared `project-agent-instructions` skill makes that
-conditional decision after design and before auto-steering or planning.
+`AGENTS.md`. For each accepted prompt revision, the shared owner validates one
+complete private statement-impact claim before execution planning. A later
+proven no-effect revision may retain an older feature plan; contract or
+execution effects and spec drift require safe replanning. Editable prompts
+receive no self-hash and still execute only through explicit `run`. The shared
+`project-agent-instructions` skill makes the instruction decision after design
+and before auto-steering or planning.
 Explicit existing-user no-break intent is rendered for the current execution
 and persisted at terminal seal; a conflicting personal global default cannot
 suppress the project rule.
@@ -1546,12 +1579,13 @@ observation plus a genuinely new falsifiable hypothesis. If that gate cannot be
 satisfied, no retry runs and a structured investigation report identifies the
 missing evidence and next action. Each non-terminal failure is reported as
 progress; after the exact private state update records exhaustion, other tool use
-stops and a complete user-visible report is returned. The Stop hook requests
-one correction containing a bounded, redacted minimum report for an incomplete
-response. If that correction is ignored, it stops and emits the fallback as a
-UI/event-stream warning instead of looping. When the hook supplies the bounded
-report, the assistant returns it verbatim instead of rewriting its exact
-marker-derived fields. Historical exhausted v1 data
+stops and a concise user-visible report is returned. An ordinary incomplete,
+malformed, partial, `FAIL`, or `UNKNOWN` report is advisory: the Stop hook
+records it without requesting another turn, denying later tools, or emitting a
+generated fallback. Sensitive report content and exact remediation-budget
+exhaustion retain one bounded correction and a redacted concise fallback. When
+the hook supplies an exhausted-budget report, the assistant returns it verbatim
+instead of rewriting its exact marker-derived fields. Historical exhausted v1 data
 markers remain report-only without requiring invented evidence or authored
 attempt IDs. Previous v2 and v3 state fails closed for exact marker repair rather
 than continuing under a dual-limits compatibility path, while all newly authored
@@ -1584,13 +1618,13 @@ single-Stop arbiter entry. This is a current-tree inventory, not a fixed allowli
 | `UserPromptSubmit` for all prompts | `commit` [`commit_intent.py`](commit/assets/hooks/commit_intent.py) | Recognizes optional `please`, then either a root-user `$commit` directly or a bounded leading directive from `run`, `apply`, `execute`, `invoke`, or `use`, while excluding casual mentions, questions, quotations, help, subagents, system turns, compaction, and Stop continuations. It stores only current repository/session/turn/prompt digests and owner metadata in an owner-private authorization, then injects the canonical authorization and claim paths; it never stages or commits. |
 | `UserPromptSubmit` for all prompts | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Parses only an exact leading `$troubleshoot`, authorizes default or explicitly bounded attempt/time limits, records the private authorization sidecar, and establishes a separate same-session terminal-report obligation without storing the prompt. It supplies bounded profile or repair context and blocks invalid authorization transitions. |
 | `UserPromptSubmit` for all prompts | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Binds the selected project and current turn, carries unfinished implementation or sealing state across follow-up prompts, and injects the requirement/design planning and bounded waiver contract. Only an exact committed project-policy blob may disable the lifecycle. |
-| `UserPromptSubmit` for all prompts | `prompt-session-intake` [`prompt_session_intake.py`](prompt-session-intake/assets/hooks/prompt_session_intake.py) | Binds only exact Task Implementer or Agentic SDLC init/run invocations. Later safe direct turns in that bound session are secret-scanned before private raw capture and staged with exact session/turn causality for coordinator-owned classification and refinement. Unbound, Stop-generated, compaction, system, and subagent prompts do not stage. The hook never edits a workflow prompt or starts a run. |
+| `UserPromptSubmit` for all prompts | `prompt-session-intake` [`prompt_session_intake.py`](prompt-session-intake/assets/hooks/prompt_session_intake.py) | Binds only exact Task Implementer or Agentic SDLC init/run invocations. Later direct turns always pass to the current agent; eligible safe input stages metadata-only event-v2 session/turn causality and never a prompt body. The current agent records merge/no-op/sensitive and only a durable project-intent projection may reach the canonical prompt through an operation-and-projection-bound adapter. Secrets, stale provenance, conflicts, unsafe state, ambiguity, and internal capture errors skip persistence without stopping delivery. Unbound, Stop-generated, compaction, system, and subagent prompts do not stage. The hook never edits a workflow prompt or starts a run. |
 | `PreToolUse` matching `^Bash$` | `agent-nebius-auth-setup` [`pre_tool_use_nebius_auth.py`](agent-nebius-auth-setup/assets/hooks/pre_tool_use_nebius_auth.py) | Activates only for Nebius-sensitive Bash commands. It resolves the explicit task project or sanitized default profile, validates the canonical owned mode-`0600` credential, rejects token or environment disclosure and conflicting auth state, and rewrites an allowed command with renewable project/profile/credential context. Unrelated Bash commands pass unchanged; relevant unsafe or internally failing cases are denied. |
 | `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `sdlc-start` [`pre_tool_use_sdlc_policy.py`](sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py) | Applies policy only when an active Agentic SDLC run covers the working directory. It blocks dangerous shell patterns, secret-bearing payloads, unauthorized Git, GitHub, merge, and MCP actions, can warn about spec-phase drift, and records private hook history. No active run passes immediately; corrupt active state or internal failure denies the tool call. |
-| `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for an exact `apply_patch` that updates only the advertised `current.md`; a pending report correction blocks new tools until the report is returned. |
-| `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Requires current planning and a verified project-rule render before selected-project implementation, protects canonical specs and lifecycle-owned `${CODEX_HOME}/project-specs` state, recognizes non-symlinked coordinators from canonical `~/.agents/skills`, binds project-instructions evidence to the exact current-session private bundle, and parses shell quoting before classifying effects. Proven fixed writes to config, hooks, task state, installed skills, credentials, and other external user files pass through epoch-neutral to their actual policy owners. Mixed, dynamic, ambiguous, selected-project, malformed coordinator-shaped, alternate-bundle, or lifecycle-private effects retain their gates. An exact digest-pinned commit transaction requires a sealed/waived direct lifecycle or Task Implementer owner evidence; raw Git stays denied. Exact current-session runtime/decision authoring, private-input mode tightening, and canonical spec intent-to-add break bounded bootstrap cycles without opening lifecycle state or Git-index mutation. Multiple implementation edits remain open after the first write. |
-| `PostToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Silently marks a successful material selected-project write as reconciliation-required and advances the compare-and-swap write epoch. Concurrent recorders converge; a late success after planning or sealing invalidates that later evidence and reopens reconciliation. Proven external effects, exact bootstrap transitions, admitted canonical spec reconciliation, and a completed digest-pinned commit prepare with its exact consumed authorization and claim remain epoch-neutral. Recording errors and invalid completed coordinator-shaped calls stay visible. After independently verifying the canonical current-session terminal project-instructions apply, it advances to `seal-armed`. It cannot undo a completed side effect. |
-| `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs the troubleshooting, project-contract, SDLC, and prompt-session Stop evaluators sequentially within one 25-second monotonic budget below the registered 30-second host timeout. A terminal result takes precedence; otherwise every initial continuation reason is combined. Each explicit troubleshoot turn must supply its structured terminal report; delivery is finalized transactionally only after no peer continuation remains, and an already validated report is finalized before a later terminal peer result returns, while one failed correction closes with an honest bounded UI fallback. Project reconciliation still requests one accumulated semantic review and a conditional project-instructions decision; verified `not-needed` leaves a missing file absent. Prompt-session intake blocks only the exact current unfinished event and releases its writer after successful consumption. Missing managed project state fails closed. Legacy independently registered Stop entries are migrated only when an exact singleton managed command is proven. |
+| `PreToolUse` matching `*` | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Validates the parent-authored remediation marker and its authorization handshake. A normally missing marker passes. Pending, invalid, exhausted, or terminally locked state blocks tool use except for an exact `apply_patch` that updates only the advertised `current.md`. Ordinary report-quality gaps never deny tools; only an active sensitive-output redaction correction remains a report-related tool boundary. |
+| `PreToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Requires current planning and a verified project-rule render before selected-project implementation, protects canonical specs and lifecycle-owned `${CODEX_HOME}/project-specs` state, recognizes non-symlinked coordinators from canonical `~/.agents/skills`, binds ordinary project-instructions evidence to the exact current-session private bundle, and parses shell quoting before classifying effects. The sole alternate bundle admits exact Task Implementer run-owned inspect and render during reconciliation-required, authenticated by a canonical installed or sibling-source helper for the active prepared integration checkout; the hook rechecks its command digest and selected outer project. Apply and verify retain the ordinary terminal seal path. Proven fixed writes to config, hooks, task state, installed skills, credentials, and other external user files pass through epoch-neutral to their actual policy owners. Mixed, dynamic, ambiguous, selected-project, malformed coordinator-shaped, unattested alternate-bundle, or lifecycle-private effects retain their gates. An exact digest-pinned commit transaction requires a sealed/waived direct lifecycle or Task Implementer owner evidence; raw Git stays denied. Exact current-session runtime/decision authoring, private-input mode tightening, and canonical spec intent-to-add break bounded bootstrap cycles without opening lifecycle state or Git-index mutation. Multiple implementation edits remain open after the first write. |
+| `PostToolUse` matching `Bash\|apply_patch\|Edit\|Write\|mcp__.*` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Silently marks a successful material selected-project write as reconciliation-required and advances the compare-and-swap write epoch. Concurrent recorders converge; a late success after planning or sealing invalidates that later evidence and reopens reconciliation. The first authenticated Task Implementer `wave-plan` similarly records its successful run-owned lane checkpoint before dispatch; failed or unbound commands cannot claim it. Proven external effects, exact bootstrap transitions, admitted canonical spec reconciliation, and a completed digest-pinned commit prepare with its exact consumed authorization and claim remain epoch-neutral. Recording errors and invalid completed coordinator-shaped calls stay visible. After independently verifying the canonical current-session terminal project-instructions apply, it advances to `seal-armed`. It cannot undo a completed side effect. |
+| `Stop` for all stops | shared [`stop_lifecycle_arbiter.py`](maintain-project-specs/assets/hooks/stop_lifecycle_arbiter.py), carried byte-identically by `maintain-project-specs`, `prompt-session-intake`, `sdlc-start`, and `troubleshoot` | Runs the troubleshooting, project-contract, SDLC, and prompt-session Stop evaluators sequentially within one 25-second monotonic budget below the registered 30-second host timeout. A terminal result takes precedence; otherwise every initial continuation reason is combined. Each explicit troubleshoot turn should supply the concise outcome, cause/fix, verification, and next-action report. Valid delivery is finalized transactionally only after no peer continuation remains; ordinary report-quality gaps record an advisory result and never request continuation or emit a fallback. Sensitive output and exact remediation-budget exhaustion retain bounded fail-closed reporting. Project reconciliation still requests one accumulated semantic review and a conditional project-instructions decision; verified `not-needed` leaves a missing file absent. Prompt-session cleanup always passes Stop and best-effort releases writer provenance; incomplete or invalid capture never requests continuation. Missing managed project state fails closed for its owning delegate. Legacy independently registered Stop entries are migrated only when an exact singleton managed command is proven. |
 
 Matching registrations are independent. Codex starts matching command hooks for
 the same event concurrently, so they must not depend on ordering or

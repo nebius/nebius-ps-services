@@ -245,7 +245,9 @@ def _commit_transaction_root(primary: Path) -> Path:
 
 def _commit_private_dir(path: Path) -> None:
     if path.is_symlink():
-        raise InteropError(f"commit transaction directory must not be a symlink: {path}")
+        raise InteropError(
+            f"commit transaction directory must not be a symlink: {path}"
+        )
     if not path.exists():
         if not path.parent.exists():
             _commit_private_dir(path.parent)
@@ -360,7 +362,9 @@ def task_lane_transition_lock(primary: Path) -> Iterator[None]:
     try:
         descriptor = os.open(path, flags, 0o600)
     except OSError as error:
-        raise InteropError(f"could not open Task lane transition lock: {path}") from error
+        raise InteropError(
+            f"could not open Task lane transition lock: {path}"
+        ) from error
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise InteropError(f"Task lane transition lock must be regular: {path}")
@@ -655,9 +659,7 @@ def all_leases(primary: Path) -> list[dict[str, object]]:
     return [leases[name] for name in sorted(leases)]
 
 
-def validate_preparation(
-    value: dict[str, object], name: str
-) -> dict[str, object]:
+def validate_preparation(value: dict[str, object], name: str) -> dict[str, object]:
     required = {
         "schema",
         "kind",
@@ -728,9 +730,7 @@ def validate_preparation(
                 "before_head": _sha(
                     commit.get("before_head"), "preparation commit base"
                 ),
-                "after_head": _sha(
-                    commit.get("after_head"), "preparation commit head"
-                ),
+                "after_head": _sha(commit.get("after_head"), "preparation commit head"),
                 "reviewed_tree": _sha(
                     commit.get("reviewed_tree"), "preparation reviewed tree"
                 ),
@@ -920,9 +920,7 @@ def approve_integration_preparation_commit(
             raise InteropError("integration preparation review identity changed")
         commit["reviewed_tree"] = commit_tree
         commit["status"] = "verified"
-        updated = validate_preparation(
-            {**preparation, "commits": commits}, name
-        )
+        updated = validate_preparation({**preparation, "commits": commits}, name)
         _atomic_json(preparation_path(primary, name), updated)
         return updated
 
@@ -1041,6 +1039,79 @@ def assert_idle(primary: Path, name: str) -> None:
         )
 
 
+def acquire_task_lease_unlocked(
+    primary: Path,
+    *,
+    name: str,
+    branch: str,
+    worktree: Path,
+    scope: str,
+    common_dir: Path,
+    workspace: Path,
+    run_id: str,
+    task_scope: str,
+    initial_head: str,
+    owner_kind: str,
+) -> dict[str, object]:
+    """Acquire a task lease while the caller holds ``interop_lock``."""
+
+    if owner_kind not in OWNER_KINDS:
+        raise InteropError("task lease owner kind is invalid")
+    try:
+        manifest = load_manifest(primary, name)
+    except StateError as error:
+        raise InteropError(str(error)) from error
+    assert manifest is not None
+    if load_preparation(primary, name) is not None:
+        raise InteropError(
+            "the outer worktree has an active integration commit preparation"
+        )
+    if load_reservation(primary, name) is not None:
+        raise InteropError("the outer worktree has an active integration reservation")
+    expected = {
+        "owner_kind": owner_kind,
+        "name": name,
+        "branch": branch,
+        "worktree": str(worktree.resolve()),
+        "scope": scope,
+        "common_dir": str(common_dir.resolve()),
+        "workspace": str(workspace.resolve()),
+        "run_id": run_id,
+        "task_scope": task_scope,
+        "initial_head": initial_head,
+    }
+    existing = load_lease(primary, name)
+    if manifest.lease_state in {"active", "released"} and existing is None:
+        raise InteropError("participating task lease is missing")
+    if existing is not None:
+        if manifest.lease_state == "active" and (
+            manifest.lease_owner != existing["owner_kind"]
+            or manifest.lease_token != existing["token"]
+        ):
+            raise InteropError("task lease disagrees with its ownership manifest")
+        if existing["state"] == "released":
+            raise InteropError(
+                "the outer worktree has a terminal released lease receipt; "
+                "remove it before starting another nested coordinator"
+            )
+        if any(existing.get(key) != value for key, value in expected.items()):
+            raise InteropError("the outer worktree is leased by a different task run")
+        return {**existing, "status": "resumed"}
+    lease: dict[str, object] = {
+        "schema": LEASE_SCHEMA,
+        "kind": LEASE_KIND,
+        "state": "active",
+        **expected,
+        "promoted_head": None,
+        "promotion_heads": [initial_head],
+        "token": secrets.token_hex(16),
+        "resources": [],
+    }
+    validate_lease(lease, name)
+    _atomic_json(lease_path(primary, name), lease)
+    return {**lease, "status": "acquired"}
+
+
 def acquire_task_lease(
     primary: Path,
     *,
@@ -1055,66 +1126,49 @@ def acquire_task_lease(
     initial_head: str,
     owner_kind: str,
 ) -> dict[str, object]:
-    if owner_kind not in OWNER_KINDS:
-        raise InteropError("task lease owner kind is invalid")
     with interop_lock(primary):
-        try:
-            manifest = load_manifest(primary, name)
-        except StateError as error:
-            raise InteropError(str(error)) from error
-        assert manifest is not None
-        if load_preparation(primary, name) is not None:
-            raise InteropError(
-                "the outer worktree has an active integration commit preparation"
-            )
-        if load_reservation(primary, name) is not None:
-            raise InteropError(
-                "the outer worktree has an active integration reservation"
-            )
-        expected = {
-            "owner_kind": owner_kind,
-            "name": name,
-            "branch": branch,
-            "worktree": str(worktree.resolve()),
-            "scope": scope,
-            "common_dir": str(common_dir.resolve()),
-            "workspace": str(workspace.resolve()),
-            "run_id": run_id,
-            "task_scope": task_scope,
-            "initial_head": initial_head,
-        }
-        existing = load_lease(primary, name)
-        if manifest.lease_state in {"active", "released"} and existing is None:
-            raise InteropError("participating task lease is missing")
-        if existing is not None:
-            if manifest.lease_state == "active" and (
-                manifest.lease_owner != existing["owner_kind"]
-                or manifest.lease_token != existing["token"]
-            ):
-                raise InteropError("task lease disagrees with its ownership manifest")
-            if existing["state"] == "released":
-                raise InteropError(
-                    "the outer worktree has a terminal released lease receipt; "
-                    "remove it before starting another nested coordinator"
-                )
-            if any(existing.get(key) != value for key, value in expected.items()):
-                raise InteropError(
-                    "the outer worktree is leased by a different task run"
-                )
-            return {**existing, "status": "resumed"}
-        lease: dict[str, object] = {
-            "schema": LEASE_SCHEMA,
-            "kind": LEASE_KIND,
-            "state": "active",
-            **expected,
-            "promoted_head": None,
-            "promotion_heads": [initial_head],
-            "token": secrets.token_hex(16),
-            "resources": [],
-        }
-        validate_lease(lease, name)
-        _atomic_json(lease_path(primary, name), lease)
-        return {**lease, "status": "acquired"}
+        return acquire_task_lease_unlocked(
+            primary,
+            name=name,
+            branch=branch,
+            worktree=worktree,
+            scope=scope,
+            common_dir=common_dir,
+            workspace=workspace,
+            run_id=run_id,
+            task_scope=task_scope,
+            initial_head=initial_head,
+            owner_kind=owner_kind,
+        )
+
+
+def rollback_task_lease_acquisition_unlocked(
+    primary: Path, *, name: str, token: str
+) -> dict[str, object]:
+    """Remove an unused lease while the caller holds ``interop_lock``."""
+
+    lease = load_lease(primary, name)
+    if lease is None:
+        return {"status": "already-absent", "name": name}
+    if lease["token"] != _token(token):
+        raise InteropError("task lease rollback token does not match")
+    manifest = load_manifest(primary, name)
+    assert manifest is not None
+    if (
+        lease["state"] != "active"
+        or lease["promoted_head"] is not None
+        or lease["promotion_heads"] != [lease["initial_head"]]
+        or lease["resources"]
+        or manifest.lease_state != "none"
+    ):
+        raise InteropError("task lease is no longer safe to roll back")
+    path = lease_path(primary, name)
+    try:
+        path.unlink()
+        fsync_directory(path.parent)
+    except OSError as error:
+        raise InteropError(f"could not roll back task lease: {path}") from error
+    return {"status": "rolled-back", "name": name}
 
 
 def rollback_task_lease_acquisition(
@@ -1123,28 +1177,7 @@ def rollback_task_lease_acquisition(
     """Remove only an unused lease whose post-acquisition Git check failed."""
 
     with interop_lock(primary):
-        lease = load_lease(primary, name)
-        if lease is None:
-            return {"status": "already-absent", "name": name}
-        if lease["token"] != _token(token):
-            raise InteropError("task lease rollback token does not match")
-        manifest = load_manifest(primary, name)
-        assert manifest is not None
-        if (
-            lease["state"] != "active"
-            or lease["promoted_head"] is not None
-            or lease["promotion_heads"] != [lease["initial_head"]]
-            or lease["resources"]
-            or manifest.lease_state != "none"
-        ):
-            raise InteropError("task lease is no longer safe to roll back")
-        path = lease_path(primary, name)
-        try:
-            path.unlink()
-            fsync_directory(path.parent)
-        except OSError as error:
-            raise InteropError(f"could not roll back task lease: {path}") from error
-        return {"status": "rolled-back", "name": name}
+        return rollback_task_lease_acquisition_unlocked(primary, name=name, token=token)
 
 
 def inspect_task_lease(
@@ -1425,8 +1458,7 @@ def begin_integration(
             ):
                 raise InteropError("integration preparation is not fully verified")
             committed_heads = {
-                str(commit["target"]): str(commit["after_head"])
-                for commit in commits
+                str(commit["target"]): str(commit["after_head"]) for commit in commits
             }
             expected_source = committed_heads.get(
                 "source", str(preparation["source_head"])

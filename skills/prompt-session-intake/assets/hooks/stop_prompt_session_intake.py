@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared-arbiter delegate for incomplete prompt-session transitions."""
+"""Non-blocking shared-arbiter cleanup for prompt-session transitions."""
 
 from __future__ import annotations
 
@@ -35,16 +35,10 @@ def main() -> int:
             output = {"continue": True}
         else:
             output = evaluate_stop(payload)
-    except PromptSessionError as error:
-        output = {
-            "continue": False,
-            "stopReason": f"Prompt-session Stop delegate blocked ({error.code}): {error.message}",
-        }
+    except PromptSessionError:
+        output = {"continue": True}
     except Exception:
-        output = {
-            "continue": False,
-            "stopReason": "Prompt-session Stop delegate failed closed.",
-        }
+        output = {"continue": True}
     print(json.dumps(output, sort_keys=True))
     return 0
 

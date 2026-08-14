@@ -109,7 +109,14 @@ $worktree remove <generated-worktree-name>
   fetches for lifecycle decisions, pushes, creates PRs, deletes remote branches,
   or writes private workflow state into the repo.
 - Private Task Implementer lane primitives keep separate schema-v1 lane state
-  and immutable generation receipts under the same protected state root while
+  and immutable generation receipts under the same protected state root. The
+  private prepare primitive journals and claims an exact whole-lane candidate
+  for review without mutating the real index or history. The token-bound open
+  creates at most one repo-root fixed-message checkpoint and publishes its exact
+  clean post-checkpoint head as the lane and lease baseline. Hook mutation
+  rotates the token; interrupted retries adopt only the exact reviewed staged
+  tree or exact reviewed clean direct child, and active-generation dirt never
+  triggers another checkpoint. These primitives continue
   reusing schema-v4 ownership, exact integration candidates, locks, and
   expected-head cleanup. Public `integrate` and `remove` reject those lanes,
   and ordinary coordinator lease acquisition rejects them before lease or

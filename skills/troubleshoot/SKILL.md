@@ -242,7 +242,11 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    - Before every remediation retry, acquire new evidence from logs, stack
      traces, code inspection, runtime state, or an equivalent observation,
      update the model, and state a genuinely new falsifiable hypothesis. If
-     either is unavailable, do not retry; transition to `REPORTED`.
+     either is unavailable, do not retry or patch speculatively. Return to
+     `DISCOVERY`, `MODEL`, or `HYPOTHESES` and seek the next safe bounded result
+     that can change a decision. Report early only when decisive evidence is
+     unavailable with no safe alternative, authority or safety requires user
+     action, the user asks to stop, or the remediation budget is exhausted.
 7. **LOCALIZED**
    - Find the earliest divergence across temporal, spatial, input, environment,
      or state-sequence dimensions.
@@ -288,7 +292,15 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
       alone cannot prove the product fixed.
 11. **REPORTED**
     - Classify the outcome as `VERIFIED_FIXED`, `MITIGATED_NOT_PROVEN`,
-      `DIAGNOSED_NOT_FIXED`, `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
+      `DIAGNOSED-FIXED`, `DIAGNOSED_NOT_FIXED`,
+      `BLOCKED_MISSING_EVIDENCE`, or `UNRESOLVED`.
+    - Use `DIAGNOSED-FIXED` when the causal owner and earliest divergence are
+      proven, the owner-correct repair is applied, and the original reproducer,
+      focused regression, and source or affected-boundary checks pass for the
+      named fixed scope. Put installation, deployment, restart, or live replay
+      that was not performed under `Not verified` with one exact next action.
+      Reserve `VERIFIED_FIXED` for complete end-to-end proof. Use
+      `DIAGNOSED_NOT_FIXED` only when no owner-correct repair was applied.
     - If an attempt or time budget is exhausted, record the stop in the exact
       private task-state marker, stop all other tool use, and return the
       remediation-budget report before any user-authorized continuation.
@@ -395,7 +407,10 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - If reproduction is unavailable, characterize the failure and state the exact
   evidence required to advance; do not fabricate proof.
 - If access, observability, or a safe environment is missing, return
-  `BLOCKED_MISSING_EVIDENCE` with the highest-information next experiment.
+  to non-observability evidence, a smaller safe reproducer, code inspection,
+  or another decision-changing path first. Return `BLOCKED_MISSING_EVIDENCE`
+  only when the missing evidence is decisive and no safe alternative remains;
+  name the highest-information next experiment.
 - If the evidence provider is `unavailable` or `partial`, continue with
   non-observability evidence when telemetry was optional. When the missing
   runtime signal is decisive and no safe alternative can answer the
@@ -417,8 +432,9 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   `BLOCKED_MISSING_EVIDENCE`, or `DIAGNOSED_NOT_FIXED` as supported by the
   evidence; do not attempt another remediation before a new user instruction.
 - If a retry lacks newly acquired evidence or a genuinely new hypothesis,
-  return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported instead of
-  repeating the prior remediation path.
+  do not repeat the prior remediation path. Rebuild the model and continue
+  safe evidence collection while a decision-changing experiment remains;
+  otherwise return `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` as supported.
 
 ## Must Not
 
@@ -465,25 +481,22 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
   cost when the path was considered.
 - No unrelated changes, diagnostic artifacts, credentials, or private data
   remain in the repository.
-- The final report contains exactly one verdict and supporting evidence for
-  each required criterion: Design, Infrastructure, Connectivity,
-  Configuration, Runtime health, Logs, and Relevant code paths. Use only
-  `PASS`, `FAIL`, or `UNKNOWN`; an unavailable source is `UNKNOWN`, not a pass.
-- The component matrix explicitly covers dependency reachability,
+- The internal component matrix covers dependency reachability,
   authentication, DNS or service-name resolution, resource and clock state,
-  restart history, and recent changes. The log ledger contains all eight
-  canonical rows exactly once and in order.
-- Every `PASS` row uses the exact canonical reference for its criterion and
-  `None after scoped verification.` as its gap value. The referenced
-  architecture verdict, component-matrix cells, log coverage, or code-debugging
-  and post-fix fields must carry the matching structured `PASS:` or examined
-  state. Referenced detail that explicitly reports missing, unavailable,
-  unexamined, unverified, or otherwise insufficient evidence invalidates the
-  pass; a status token cannot override contradictory evidence.
-- `VERIFIED_FIXED` is permitted only when all seven criteria are `PASS` and
-  post-fix validation includes the original failure contract. Passing tests do
-  not prove that relevant code paths are bug-free; code responsibility requires
-  the debugging evidence in `references/code-debugging.md`.
+  restart history, and recent changes. The internal log ledger contains all
+  eight canonical records exactly once and in order. Missing evidence stays
+  `UNKNOWN`; it does not stop the workflow while another safe bounded path can
+  change the decision.
+- The concise report accurately projects the causal result, fixed scope,
+  verified scope, material unverified scope, and exact next action. Detailed
+  matrices, timelines, log rows, and criterion verdicts stay in the working
+  evidence unless the user requests them or a hard boundary needs a bounded
+  appendix.
+- `VERIFIED_FIXED` requires the original failure contract and every applicable
+  end-to-end criterion to be proven. `DIAGNOSED-FIXED` requires proven cause,
+  applied owner repair, and passing source or affected-boundary verification,
+  but may name later activation or live proof explicitly as unverified.
+  Passing tests alone do not prove unrelated code paths or a live target.
 
 ## Learning Loop
 
@@ -496,65 +509,76 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Every explicit `$troubleshoot` invocation must end with a user-visible
-Troubleshooting Report for success, blocking, a tool or coordination error,
-ordinary early stop, unresolved work, or budget exhaustion. The optional hook
-records that duty in session-private `troubleshoot-report-obligation.json`,
-requires `Current workflow state: REPORTED`, and carries an undelivered duty to
-a resumed turn in the same session. It requests one correction for incomplete
-assistant text, then emits an honest bounded UI fallback instead of looping.
-A host or model process that terminates before any Stop event cannot emit an
-assistant response; report the interruption on the next resumed same-session
-turn and never claim that a different new session was mechanically covered.
+End every explicit `$troubleshoot` invocation with one concise, user-visible
+report. Lead with the result; do not make the user read the investigation
+ledger to discover whether the code was fixed.
 
-Use the exact title `# Troubleshooting Report` and the single canonical heading
-order and completion table in `references/verification-and-reporting.md` for
-every outcome, including budget exhaustion. Include one supported
-`- Classification:` value and `- Current workflow state: REPORTED` under
-`## Outcome`. Budget exhaustion adds marker-derived fields to the same envelope;
-it does not use a second report shape.
+```markdown
+# Troubleshooting Report
 
-Return:
+## Outcome
+- Classification: DIAGNOSED-FIXED
+- Confidence: High
+- Fixed scope:
+- Current state:
 
-- Architecture verdict and observed-to-vendor comparison, including versions,
-  configuration authorities, dependencies, ports, protocols, and control/data
-  flows.
-- Component verification matrix and timestamp-correlated incident timeline.
-- Included and excluded system boundaries, exercised control and data paths,
-  and incident-window start and end. Every conclusion is limited to that scope.
-- The eight canonical layered-log rows, findings, incident-window coverage,
-  and every unavailable, unsafe, or not-applicable log source.
-- Hypotheses tested and rejected, with expected evidence, bounds, observations,
-  and decision branches.
-- Code-debugging evidence when relevant: reproduction, execution and data path,
-  stack or core evidence, inputs, recent changes, focused tests and analysis,
-  temporary instrumentation, and cleanup.
-- Earliest divergence, root cause and confidence, alternatives eliminated,
-  remediation, and post-fix validation.
-- A completion-gate row for Design, Infrastructure, Connectivity,
-  Configuration, Runtime health, Logs, and Relevant code paths, each marked
-  `PASS`, `FAIL`, or `UNKNOWN` with evidence and the gap or next action.
-- Remaining unknowns, coverage gaps, residual risks, and exact next action. A
-  result of "no issue found" must name coverage gaps and cannot be
-  `VERIFIED_FIXED` unless every required criterion is `PASS`.
-- For live product verification, the declared trial boundary, candidate and
-  checkpoint identities, intervention and contamination record, clean replay
-  range, product-owned transition evidence, independent postconditions, and
-  exact scope of the supported claim.
-- Observability decision, matching-signal provenance, readiness reuse, stage,
-  relevant structured facts, data gaps, and query cost when applicable.
-- Final outcome classification, residual uncertainty, and exact next action.
-- In Agentic SDLC diagnostic mode, the `diagnosis-v1` ID, result, confidence,
-  complete owner handoff or exact missing evidence, removal of temporary
-  instrumentation, and return route to `sdlc-classify-failure`.
-- On budget exhaustion, the exact stop trigger, `REMEDIATION_BUDGET_EXHAUSTED`,
-  the blocking error and source, every counted attempt, current state, and the
-  user action required before another tranche.
-- When the Stop hook supplies its bounded marker-derived report, return that
-  report verbatim as the complete assistant response. Do not paraphrase,
-  enrich, prefix, or replace its exact `Blocker:` and attempt fields.
-- On an earlier retry-gate stop, the same structured investigation fields,
-  the missing evidence or hypothesis, and the highest-information next action.
+## Root Cause And Fix
+- Root cause:
+- Changes made:
+
+## Verification
+- Verified:
+- Not verified:
+
+## Next Action
+- Owner:
+- Action:
+- Done when:
+```
+
+Use exactly one supported classification:
+
+- `VERIFIED_FIXED`: complete end-to-end failure-contract proof.
+- `DIAGNOSED-FIXED`: proven cause, applied owner-correct repair, and passing
+  reproducer, regression, and source or affected-boundary checks for the
+  named fixed scope; activation or live proof may remain under `Not verified`.
+- `MITIGATED_NOT_PROVEN`: impact reduced without complete causal repair proof.
+- `DIAGNOSED_NOT_FIXED`: cause diagnosed but no owner-correct repair applied.
+- `BLOCKED_MISSING_EVIDENCE`: decisive evidence unavailable with no safe
+  alternative.
+- `UNRESOLVED`: competing hypotheses remain.
+
+Use `High`, `Medium`, `Low`, or `Unknown` for confidence. For every next
+action, name the owner, exact action, and observable done condition. If
+nothing remains within a `VERIFIED_FIXED` scope, write `None within the
+declared scope.` under `Not verified`.
+
+Add `## Evidence Appendix` only when the user requests detail, the evidence
+changes a decision, a live or production boundary needs explicit accounting,
+or the remediation budget is exhausted. Keep it bounded and public-safe.
+Architecture, component, timeline, layered-log, hypothesis, code-debugging,
+and completion ledgers remain internal investigation evidence by default.
+
+The optional hook records every explicit invocation in session-private
+`troubleshoot-report-obligation.json` and finalizes delivery transactionally.
+If the host terminates before Stop, only a resumed turn in the same session can
+report that interruption. An ordinary missing,
+malformed, partial, `FAIL`, or `UNKNOWN` report is advisory: Stop continues,
+no tool is denied, and no generated fallback replaces the assistant response.
+Sensitive output may receive one bounded redaction correction. Invalid trusted
+coordination state, missing authority, peer Stop policy, and exact remediation-
+budget exhaustion remain fail-closed.
+
+At budget exhaustion, use the same concise report, add
+`REMEDIATION_BUDGET_EXHAUSTED` and the exact stop trigger under `Outcome`,
+include the bounded marker-derived blocker, blocker key, attempts, and
+evidence, and use only `UNRESOLVED`, `BLOCKED_MISSING_EVIDENCE`, or
+`DIAGNOSED_NOT_FIXED`. Return a hook-supplied redacted exhaustion report
+verbatim. A new user instruction is required before another tranche.
+
+In Agentic SDLC diagnostic mode, return the required `diagnosis-v1` to
+`sdlc-classify-failure`, including the result, confidence, owner handoff or
+exact missing evidence, instrumentation cleanup, and return route.
 
 ## References
 

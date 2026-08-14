@@ -758,7 +758,7 @@ def test_completed_service_health_reuses_proof_after_planned_worker_outage() -> 
     )
 
 
-def test_accepted_worker_provider_operation_is_classified_for_bridge_resume() -> None:
+def test_accepted_client_provider_operations_are_classified_for_bridge_resume() -> None:
     phase = {
         "in_place_node_groups": {
             "worker": {
@@ -784,10 +784,13 @@ def test_accepted_worker_provider_operation_is_classified_for_bridge_resume() ->
         }
     }
 
-    pending = migration._accepted_in_place_worker_provider_operations_pending(  # noqa: SLF001
+    pending = migration._accepted_in_place_client_provider_operations_pending(  # noqa: SLF001
         phase
     )
-    assert [item["provider_operation_id"] for item in pending] == ["opmk8snodegroup-worker"]
+    assert [item["provider_operation_id"] for item in pending] == [
+        "opmk8snodegroup-worker",
+        "opmk8snodegroup-login",
+    ]
 
 
 def test_worker_provider_resume_reuses_predispatch_proofs_after_source_retirement() -> None:

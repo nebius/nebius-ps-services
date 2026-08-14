@@ -90,9 +90,15 @@ Use these boundaries:
   one whole-repository local child commit and then one source commit when the
   complete diffs are coherent and safe, no Git operation or conflict exists,
   and no integration reservation or orphan candidate exists.
-- Automatic child commits apply only to ordinary children. Any Task Implementer
-  or Agentic SDLC lease participation binds an exact child head, so a dirty
-  nested/coordinated child blocks and returns to its owning workflow.
+- Automatic integration commits apply only to ordinary children. A
+  resource-free Task Implementer `run` has its own private Worktree transaction:
+  `task-lane-generation-prepare` reserves the complete candidate tree, paths,
+  digest, and claims for review without real-index or history mutation; the
+  token-bound open then uses repo-root `git add -A` and normal hooks to create
+  at most one fixed-message direct-child checkpoint and atomically opens the
+  generation at that clean head. Hook mutation rotates the review token. Once a
+  Task Implementer or Agentic SDLC lease is active, nested/coordinated dirt
+  blocks and returns to its owning workflow.
 - Each automatic commit uses repo-root `git add -A`, a truthful message, and
   normal hooks. The reviewed staged tree is bound to the resulting commit tree;
   hook-added content requires complete actual-commit review before integration.

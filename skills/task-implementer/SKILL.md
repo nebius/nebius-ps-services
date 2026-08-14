@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Requires explicit invocation to create or reuse a persistent per-project Git worktree lane, run durable brownfield implementations through dependency waves, integrate pending generations, or remove an idle lane; after explicit session binding, also owns hook-routed accepted direct-prompt continuation. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
+description: "Requires explicit invocation to initialize or reopen a persistent per-project Git worktree workspace, run durable brownfield implementations through dependency waves, integrate pending generations, or remove an idle lane. Bound-session direct prompts may be captured into its canonical prompt as a non-blocking sidecar but never invoke this workflow. Do not use for ordinary one-shot implementation, Agentic SDLC, standalone Git workflows, or generic parallel-agent requests."
 ---
 
 # Task Implementer
@@ -29,22 +29,32 @@ wave atomically, and continues until the run is done or blocked.
 ## Invocation Policy
 
 Public entry requires explicit invocation. Keep
-`policy.allow_implicit_invocation: false` in `agents/openai.yaml`. After
-`workspace init` or explicit `run` binds the current session, only a current
-`prompt-session-intake` hook receipt may route a direct prompt internally.
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`. A
+`prompt-session-intake` receipt may authorize only a prompt-only capture merge;
+it never selects or invokes a public Task Implementer action. That internal
+path accepts only an agent-selected durable project-intent projection, rehashes
+it against the accepted digest, and binds the digest to the operation marker.
+Workflow/skill, shell/tool, delivery, agent-control, status, conversation, and
+unrelated wrappers do not enter the prompt; commands remain eligible when they
+define a project contract or example. Capture failures never block the direct
+prompt, exact duplicates never append, and distinct prompt drift never
+auto-rebases.
 
 ## Public Interface
 
-Expose exactly these four actions:
+Expose exactly these five actions:
 
 ```text
 $task-implementer workspace init [project-folder]
+$task-implementer workspace reuse [project-folder]
 $task-implementer run <prompt-ref-or-file>
 $task-implementer integrate [project-folder]
 $task-implementer workspace remove [project-folder]
 ```
 
 - `workspace init` defaults to the exact current directory.
+- `workspace reuse` defaults to the exact current directory and reopens only
+  the existing verified workspace without refreshing or repairing its lane.
 - `run` accepts one exact unique prompt ref, full prompt ID, managed absolute
   path, or managed filename.
 - `integrate` defaults to the exact current project and consumes every pending
@@ -61,9 +71,7 @@ $task-implementer workspace remove [project-folder]
 
 ## When To Use
 
-- The user explicitly invokes one of the four actions.
-- The prompt-session-intake hook routes the exact current accepted turn for a
-  session already bound by one of those explicit actions.
+- The user explicitly invokes one of the five actions.
 - A brownfield request benefits from durable steering, dependency ordering,
   isolated worker commits, combined validation, and resumable integration.
 - Independent tasks have complete, disjoint ownership and can run in parallel.
@@ -87,9 +95,11 @@ $task-implementer workspace remove [project-folder]
   full-repository linked worktree and its branch is the sole promotion target
   for internal dependency waves.
 - Source-checkout dirt is permitted during initialization and runs, is excluded
-  from the committed lane baseline, and is never copied or mutated. The lane
-  itself must be clean before a run. Integration requires both source checkout
-  and lane to be completely clean. If the primary source is dirty at
+  from the committed lane baseline, and is never copied or mutated. On the
+  resource-free first open of a run, Task Implementer reviews and checkpoints
+  coherent whole-repository lane dirt itself; a clean lane creates no commit.
+  An active or resumed generation must remain clean. Integration requires both
+  source checkout and lane to be completely clean. If the primary source is dirty at
   integration time, stop with one actionable handoff: the user invokes a fresh
   explicit `$commit` in that primary checkout to review and commit the complete
   repository diff, then repeats `integrate`. Never auto-commit source dirt and
@@ -112,7 +122,20 @@ $task-implementer workspace remove [project-folder]
 - After managed requirements and design are valid, explicitly route to
   `$project-agent-instructions` with the exact `spec-inspect` receipt. Verify
   its final v3 state and read any active selected-project instruction file
-  before locking the coordinator contract.
+  before locking the coordinator contract. Use the run-owned paths exactly as
+  emitted. The hidden lifecycle adapter authenticates inspect and render
+  against the active integration checkout during outer lifecycle
+  reconciliation: the original wave base for first preparation, the exact
+  recorded contract commit for an attested retained correction, or the sealed
+  integrated head while the coordinator has only its owned spec/docs/changelog
+  reconciliation diff at `promotion_pending`. The checkout must always be the
+  exact registered linked worktree sharing the lane's common Git directory. It
+  also authenticates an exact delegated commit against its
+  active worker checkout and command-derived worker session when the hook is
+  selected on the outer lane; apply and verify stay on the ordinary terminal
+  seal path.
+  Never copy run evidence into a lifecycle session bundle or ask the user to
+  reconcile private IDs.
 - Use `brainstorm` and `design` when their routing conditions apply.
 - Every worker uses `code-review` and exactly one `$commit`; the coordinator
   uses combined validation, integration `code-review`, and final `$align`.
@@ -138,6 +161,10 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │       ├── handoff.md
 │       └── orchestration/
 │           ├── coordinator.json
+│           ├── resume-control.json
+│           ├── plan-digest-recovery.json
+│           ├── contract-delta-adoption.json
+│           ├── pending-plans/wave-001/<tasks-sha256>.json
 │           ├── interop.json
 │           ├── project-agent-spec-receipt.json
 │           ├── project-agent-instructions/
@@ -192,14 +219,54 @@ and private result record.
 5. Return workspace and lane paths plus prompt metadata. Stop without queuing
    work.
 
+### `workspace reuse [project-folder]`
+
+1. Resolve the exact workspace identity from the current source ref and project
+   scope. Require the caller's Git root to be exactly the recorded primary
+   checkout or owning lane, plus an existing safe workspace-v2 manifest and
+   generated VS Code workspace; never scan other branches or create private
+   state.
+2. Verify the Worktree-owned live lane anchor, including its lane ID,
+   incarnation, branch, worktree, scope, existing source ref, common Git
+   directory, and primary checkout. Dirty, active, pending, integrating, conflicted, or
+   source-promoted live lanes may reopen; creating, recovery, removing,
+   removed, unsafe, or mismatched state fails closed.
+3. Ask VS Code to reuse its last active window for the existing workspace.
+   Editor failure is a non-fatal warning. Do not refresh, repair, checkpoint,
+   migrate, queue, run, integrate, remove, or claim that the lane is ready to
+   execute.
+4. Return only public-safe workspace and lane paths plus observed lane state.
+   `run <prompt-ref-or-file>` remains valid directly from the primary source
+   project and does not require this action first.
+
 ### `run <prompt-ref-or-file>`
 
 1. Invoke private `intake`; validate prompt-v3, acquire the scope lock, and
-   snapshot the accepted intent once. If another prompt owns active work,
+   snapshot the accepted intent once. For an existing coordinator-v7 run,
+   intake performs a read-only authoritative resume audit, adopts a validated
+   journal-less v7 stable boundary when needed, reconciles human handoff
+   projection, and returns exactly one `execute`, `wait`,
+   `requires_confirmation`, `blocked`, or `complete` outcome. `execute`
+   carries one digest-bound private token, canonical argument object, and exact
+   next transition; pass both unchanged to the returned coordinator transition.
+   Every successful controlled transition returns the next authoritative
+   `resume` plan; consume that object directly instead of reconstructing or
+   guessing the following command. Before the first controlled mutation of a
+   new run, the helper adopts resume control atomically under both execution
+   locks, so the same response pipeline applies from the first checkpoint.
+   Terminal finalization first requires fresh `$align` evidence, then private
+   `run-resume --alignment <summary>` mints the token bound to that exact
+   bounded single-line evidence. Confirmed worker/resource recovery records its stop authority and
+   mints the private token atomically before changing state. If another prompt owns active work,
    persist this explicit run request in the private FIFO queue and stop this
    invocation with its queue position. Saving or creating a prompt never
    queues it. Re-running an edited queued prompt updates its accepted snapshot
-   in place; an unaccepted queue-head edit blocks activation.
+   in place; an unaccepted queue-head edit blocks activation. If the only
+   workspace validation failure is a removed resolved Python executable in the
+   generated VS Code launcher, `run` may invoke canonical workspace
+   initialization for the same exact scope to refresh that generated file,
+   then must repeat full verification before intake. Do not apply this repair
+   to any other mismatch, and do not add it to non-mutating `workspace reuse`.
 2. For a new or safely reconcilable run, apply
    `references/prompt-requirements-refinement.md`: inspect discoverable facts,
    extract the Ask and optional headings into outcome, context, constraints,
@@ -207,17 +274,43 @@ and private result record.
    fields. Persist stable clarification IDs privately. Ask only for material
    ambiguity and block contract lock while such a question is open or
    reopened. Render and validate the managed requirements/design regions,
-   then require private `wave-plan` to bind the latest accepted intent and
-   `ready` refinement digest to the exact current managed requirements region
-   before acquiring resources. Normalize task IDs, dependencies, write claims, conflict domains,
+   write a complete private prompt-impact claim, and require private
+   refinement verification to obtain the shared owner's immutable impact
+   receipt. Only then may `wave-plan` bind the coordinator plan basis to the
+   latest settled revision and exact current canonical specs
+   before acquiring resources. Impact publication is per-run locked and
+   compare-checks the ledger; a conflicting crash orphan is preserved and
+   skipped. Material impact requires a distinct replanned plan identity rather
+   than rebinding unchanged plan bytes. Normalize task IDs, dependencies, write claims, conflict domains,
    validation, done criteria, and prompt/repository constraints in stable task
    order. Repeat every applicable constraint in each task's stop context. Do
    not decide project instructions until the managed requirements and design
    records have both been rendered and validated.
 3. Combine overlapping work before IDs lock when it is one coherent result.
-   Otherwise add an explicit dependency. Invoke private `wave-plan` and fail on
-   cycles or malformed ownership. Acquire the next monotonic lane generation
-   at the exact clean lane `HEAD` before creating task resources. Reconcile its
+   Otherwise add an explicit dependency. Invoke private `checkpoint-prepare`
+   to reserve the exact candidate tree, path digest, and initial claims without
+   mutating the real index or history. Fail on cycles or malformed ownership.
+   For a resource-free dirty lane, inspect the complete status and diff for
+   that reserved candidate. Resolve every changed path to
+   its applicable repository instruction chain and first-class project owner;
+   read every affected project's instructions, verify the changes are related
+   to the accepted run, and block secrets, private endpoints, unsupported
+   special paths, or unresolved cross-project ownership. The private helper is
+   transactional enforcement, not a substitute for that review. Only after
+   review, invoke private `wave-plan`; it consumes the exact preparation token,
+   candidate tree, path digest, and claims while atomically opening the next
+   monotonic generation. Let the Worktree-owned transaction run repo-root
+   `git add -A`
+   with normal hooks and the fixed checkpoint message
+   `chore(task-implementer): checkpoint managed lane`. A dirty candidate must
+   become one exact clean direct-child commit; a clean candidate retains
+   `HEAD`. Record the private lane-checkpoint receipt and use its resulting
+   post-checkpoint `HEAD` as the lane, lease, interop, coordinator, and
+   first-wave baseline.
+   Hook-modified commits rotate the preparation token, block for review, and
+   require a fresh private `checkpoint-prepare` followed by `wave-plan` after
+   that review; a blind retry cannot adopt them. Never reset, stash, clean,
+   amend, unstage, or manually commit the lane. Reconcile the generation's
    exact lane ID, incarnation, generation, lease token, run, promoted head,
    release state, clean checkout, and live Git identity on every resume; never
    trust local interop flags alone. Register repository-wide exact/prefix and
@@ -225,15 +318,28 @@ and private result record.
    live lane block the run and remain held through integration. Replanning
    extends the active generation's claims before replacement state is written;
    earlier claims remain as a conservative superset. The active generation
-   blocks lane integration and removal.
+   blocks lane integration and removal, and any dirt after open remains a
+   conflict rather than another checkpoint.
 4. Coordinate every recorded wave through the lifecycle below. A logical wave
    may dispatch in capacity-sized batches, but batching never changes its wave.
 5. Reconcile queued steering only at a safe wave boundary. Contradictory
    steering preserves work and stops before promotion. Before preparation,
    private `wave-replan` may replace the resource-free planned tail. After the
    final promoted wave is cleaned, it may also append a newly discovered
-   isolated correction tail before finalization. The active coordinator index
-   keeps only completed waves plus the replacement schedule;
+   isolated correction tail before finalization. When combined review blocks a
+   `promotion_pending` wave, the same action appends only the currently ready
+   correction frontier to that retained integration. Dependent frontiers repeat
+   the transition after the prior frontier merges. The lane stays at the wave's
+   original promotion base, prior worker assignments and commits remain
+   immutable, and the coordinator first stages the ready correction tasks as
+   one immutable `pending-plan-v1` artifact and consumes only those revalidated
+   bytes. A resource-free future task may change only its dependencies once the
+   correction target is indexed. The corrected integration must repeat combined
+   validation and review before the single promotion. The rendered project
+   contract may carry forward only to a descendant receipt that is otherwise
+   byte-identical and whose specification, traceability, project identity, and
+   instruction bytes revalidate exactly. The active coordinator
+   index keeps only completed waves plus the replacement schedule;
    superseded planned wave files remain blocked history outside that index.
 6. Continue with the next wave from the newly promoted lane `HEAD`. After
    the last cleanup, run final changed-surface `$align`, then invoke private
@@ -254,8 +360,8 @@ and private result record.
    prompt identity/digest through the internal prompt-session objective
    transition. Mark it terminal only after `ALREADY_COMPLETE` or successful
    finalization. Do not register the newly queued prompt as active while
-   another prompt still owns the scope. A hook-routed material turn passes the
-   same terminal fact when consuming its exact event.
+   another prompt still owns the scope. Direct-prompt capture never supplies a
+   run transition or terminal workflow fact.
 
 ### `integrate [project-folder]`
 
@@ -315,7 +421,7 @@ For each wave:
 1. Require the clean persistent lane branch at its recorded exact `HEAD`.
    Never create a promotion branch, fetch, consult a remote default, or touch
    the source checkout. Record the lane mode and exact identity in coordinator
-   v6.
+   v7.
 2. Register resource intent in the active lane generation, journal
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
@@ -353,14 +459,16 @@ For each wave:
    to available capacity. If unavailable, use fresh sequential `codex exec`
    workers in the same isolated worktrees; the coordinator never implements a worker task.
    Start every worker with only its immutable assignment, incoming handoff, and
-   opaque coordinator-issued start lease, without inherited coordinator
+   exact `start_context` returned by `task-arm` or `task-rearm`, without inherited coordinator
    transcript or unrelated conversation context.
    Invoke private `task-arm` only when a real worker slot is available, then
    spawn that worker immediately. Queued assignments remain unarmed and do not
    consume a start budget. The worker reads the assignment and makes
    `task-start` its first private transition after verifying immediate Git/cwd
    identity. It invokes the assignment's exact embedded helper/workspace paths
-   and passes the embedded digest plus coordinator-issued start lease unchanged;
+   and passes the embedded digest plus the exact returned `start_lease` unchanged.
+   Use `start_context.scope_cwd` and `start_context.start_argv` verbatim; never
+   transcribe or reconstruct visually similar private worktree paths.
    `task-start` performs authoritative canonical digest and exact lease checks,
    so the worker never invents JSON serialization or reuses another launch. It
    reads the incoming handoff and performs deeper preflight only after that
@@ -369,11 +477,34 @@ For each wave:
    active workers finish.
 7. Every worker first verifies its real worktree root, branch, base SHA, and
    absolute cwd, then invokes `task-start` with the embedded helper/workspace
-   paths, embedded digest, and coordinator-issued start lease unchanged. The
+   paths, embedded digest, and exact returned `start_lease` unchanged. The
    helper verifies the canonical assignment digest and exact current lease and
    returns private authorization and claim paths for one direct-child `$commit`,
-   bound to that assignment, running task plane, worker session, branch, and
-   base SHA. It next
+   plus one transient canonical `commit_context` bound to that assignment,
+   running task plane, worker session, branch, and base SHA. Use its exact
+   `prepare_argv` from its `lifecycle_cwd`; use the returned raw `session_id`
+   for every later execute or review transition. Never pass the
+   `worker_session_fingerprint_sha256` as `--session-id`: that value is
+   persisted ownership evidence, not a command input. The context's exact
+   PATH-canonical `python3` or `python3.N` remains subject to helper digest,
+   path, action, evidence, repository, and session validation. The helper also
+   returns an exact transient `result_context`; publish only to its
+   `result_path` while using its private `publication_cwd` as the explicit
+   external working directory, never the selected project cwd. Write the
+   unsigned final JSON to its exact `draft_path`, then invoke its exact
+   `publish_argv`; the helper computes the canonical digest and atomically
+   publishes the immutable result, with `changed_paths` canonicalized as a
+   sorted unique set. Never hand-compute or patch `result_sha256`, and never
+   replay publication merely because post-publication output rendering failed;
+   inspect the immutable result first.
+   A truthful `REPLAN_REQUIRED` result is terminal evidence, not a missing
+   result. Resume replays and accepts it idempotently. If that result proves an
+   exact clean no-op (`commit == base_commit`, no changed paths, clean worker
+   at the same base), a correction plan may retain the immutable task as
+   `superseded`, clean only its exact resource, and append a replacement task.
+   A committed or dirty failed partial is never superseded by this path and
+   remains retained evidence that requires an ordinary correction dependency.
+   It then
    verifies the incoming-handoff digest and claims; starts from a
    worker session never used by another task in the run; implements one task; validates; runs
    `code-review`; fixes scoped findings; creates exactly one direct-child
@@ -410,11 +541,23 @@ For each wave:
    `WORKER_START_LEASE_INVALID` and cannot start the task. If a running worker
    stops,
    a fresh replacement invokes private `task-recover --confirmed-stopped` from
-   the assigned scope cwd; that transition transfers only declared dirty state
+   the exact `worker_context.scope_cwd` returned by `run-resume`, using its
+   `recover_argv` verbatim; that transition transfers only declared dirty state
    or one direct-child commit. The coordinator must not invoke running-worker
    recovery on the worker's behalf because session ownership is bound to the
    caller. Session hashes are append-only history: a
    recovered-away or completed identity can never be reused.
+   If a running-wave integration or worker directory, or a promotion-pending
+   integration directory, is missing while its lease remains `present`, keep
+   the stopped run and retained Git administration intact. From the owning
+   scope, invoke private `wave-resource-recover --confirmed-stopped` before
+   replacement-worker transfer or promotion validation. It may rehydrate only
+   an exact locked registration with matching lease, branch, head,
+   administrative HEAD, and clean index. Running integration is bound to the
+   contract commit; promotion-pending integration is bound to the recorded
+   integrated head. Treat filesystem-only worker edits as lost and reported,
+   never reconstructed. Staged state, symlink collisions, drift, or ambiguous
+   registration stays blocked and retained.
 8. The coordinator independently verifies a clean branch, exactly one
    direct-child task commit, exact changed paths within claims, and complete
    validation/review evidence. Invoke private `batch-advance` after every task
@@ -431,9 +574,11 @@ For each wave:
    branch in stable task-ID order with `git merge --no-ff --no-edit`. Never
    cherry-pick, rebase, squash, push, or merge workers directly into the
    project branch.
-10. The coordinator updates only shared managed specs/docs/changelog and makes
-   one final integration commit only for a non-empty diff. Product-code fixes
-   become a new isolated correction task.
+10. The coordinator updates only shared managed specs/docs/changelog and invokes
+   private `coordinator-commit` once for a non-empty diff. The helper journals,
+   stages, and creates exactly one claim-bound direct-child integration commit;
+   replay only reuses that exact clean commit. Product-code fixes become a new
+   isolated correction task.
 11. Run combined validation and integration `code-review`; reconcile queued
    steering. Once that evidence is bound to the unchanged integration tip,
     unlock and remove every clean worker with
@@ -452,22 +597,117 @@ For each wave:
 ## Idempotency
 
 - Every Git mutation is journaled before execution and re-observed afterward.
-- Repeated `run` resumes recorded v6 execution state; it does not recreate assignments,
-  branches, worktrees, commits, merges, or revisions.
+- Repeated `run` resumes authoritative coordinator-v7 execution state; it does
+  not recreate assignments, branches, worktrees, commits, merges, promotions,
+  generations, queue activations, or revisions.
+- Private `resume-control-v1` records one monotonic transition intent, its
+  observed-state digest, canonical arguments plus their digest, phase, and
+  terminal digest. An interrupted intent replays only those stored arguments;
+  an effect-observed or state/projection-committed phase finishes validation
+  and projection without rerunning the mutation. A
+  second coordinator transition cannot begin until the first is reconciled.
+  One private execution lock and the owning reentrant scope lock span token
+  verification, the selected transition, and state/projection reconciliation;
+  each mutation still acquires its narrower Git/Worktree locks. A stale token
+  returns `RESUME_STALE` before any effect.
+- A journal-less coordinator-v7 run is adopted only at a completely validated
+  stable boundary. Unresolved journals, malformed planes, dirty or divergent
+  Git state, missing ownership proof, or ambiguous leases stay retained and
+  blocked. Coordinator-v1 through v6 remain unsupported.
+- The coordinator plan digest covers the complete ordered indexed wave plan,
+  including retained completed waves and every replacement correction wave.
+  A private current-v7 plan-digest recovery is permitted only for the proven
+  replacement-tail writer signature, exact old and combined digests, one done
+  retained prefix, deterministic replacement IDs, matching wave/task planes,
+  and no assigned or running replacement worker. When canonical spec receipt
+  bytes advanced, the owner must first refresh the ready refinement's compiled
+  managed-requirements digest. Recovery then republishes the validated impact,
+  accepts only `retain_plan`, and binds its digest in the fixed recovery
+  identity and prompt-impact plan basis before the coordinator write. It never
+  repairs a stale refinement or admits material impact. Either interrupted
+  write remains safely repeatable without changing task, worker, Git,
+  Worktree, lease, promotion, or public workflow state.
+- A sealed selected-lane requirements/design reconciliation may be adopted only
+  through the private current-v7 contract-delta owner. It accepts exactly the
+  canonical spec pair plus an optional provenance-owned `AGENTS.md`, binds the
+  sealed lifecycle and instruction-state digests, and creates one coordinator-
+  owned integration commit. Lane dirt is admissible only while those exact lane
+  bytes remain unchanged and the adoption commit remains in integration
+  ancestry. The one claim-bound final coordinator reconciliation may replace
+  adopted requirements or design bytes at the sealed promotion tip. Promotion
+  journals temporary lane cleanup and restores the original adopted overlay
+  from its immutable commit if fast-forward does not complete; arbitrary,
+  staged, untracked, partial, or unsealed dirt remains blocked.
+  Before deleting the promoted integration, cleanup refreshes the ready
+  refinement and prompt-impact plan only when that exact coordinator commit
+  explains the canonical spec advance and the remaining plan is retained. A
+  retained `promoted` journal cannot block later-wave recovery or completion:
+  it is historical only when its recorded wave is done, its promoted head is
+  exact, and that head is an ancestor of the later wave base. Any mismatch
+  remains fail-closed. If interruption occurs after the fast-forward but before
+  wave publication, replay accepts stale pre-promotion spec impact only when
+  the clean lane exactly equals the sealed integration target; cleanup retains
+  the strict final coordinator-commit reconciliation gate.
+- The final implementation promotion retains its exact integration resource
+  until the selected-project lifecycle is applied, verified, and sealed. A
+  private terminal-lifecycle receipt binds the sealed lifecycle and instruction
+  state, final-wave base, first promoted head, and complete canonical
+  requirements/design/instructions bytes. A clean seal creates no commit. An
+  exact tracked canonical spec or provenance-owned `AGENTS.md` overlay is
+  committed in the retained integration, temporarily cleared from the lane
+  under a journal, and fast-forwarded as a second promotion before cleanup.
+  Missing, stale, staged, untracked, deleted, partial, unrelated, or divergent
+  state blocks final cleanup. Finalization revalidates the promoted receipt; it
+  never releases first and relies on a later Stop mutation to dirty the
+  immutable generation.
+- An already-released historical run without that receipt may recover only
+  through a supplemental Worktree-owned generation. The private owner validates
+  the exact sealed lifecycle, canonical tracked overlay, original released
+  generation/head, absent resources, and ancestry; then the reviewed built-in
+  checkpoint opens and immediately releases the next generation. The original
+  receipt and task evidence remain immutable, and public `integrate` consumes
+  the contiguous original-plus-supplemental range. Never relax cleanliness,
+  amend the released generation, or reconstruct removed task resources.
+- Resume planning never repairs local interop while reading external lease
+  truth. Handoff is planning input only before coordinator creation; afterward
+  it is a compare-and-swap human projection of machine state.
+- Project planned tasks as `pending`; assigned, running, committed, or merged
+  tasks as `in_progress`; failed tasks as `blocked`; and tasks in promoted,
+  cleanup, or done waves as `done`. The hidden current-v7 projection recovery
+  accepts only caller-digest-bound historical `committed` fields that match an
+  idle resume controller and exact machine planes, journals the postimage, and
+  never changes machine state or admits `committed` as a handoff status.
+- Unindexed correction tasks are copied once into a digest-addressed immutable
+  `pending-plan-v1` artifact bound to the active resume epoch and token before
+  coordinator, wave, or task-plane mutation. Interrupted publication reuses
+  those exact staged bytes even if the editable handoff later changes; it never
+  mixes live Markdown with a partially published correction plan.
 - Immutable assignment retries must be byte-equivalent. Coordinator state owns
   mutable task/wave transitions.
+- Canonical worker guardrails must match current source through the first
+  successful `task-start`. After that transition binds the exact current-v7
+  assignment digest and worker identity in the task plane, source-only
+  guardrail wording growth does not invalidate the accepted immutable bytes;
+  normal resume still revalidates every other identity and returns current
+  transient recovery, commit, and result-publication contexts. Active
+  assignments require the exact current helper. For committed, merged, or
+  superseded assignments, the recorded helper path remains digest-bound
+  historical evidence across source/install relocation and is never executed
+  by terminal observation. Never rewrite the assignment, admit unstarted drift,
+  or accept an older assignment schema.
 - Reuse only a verified v3 project-agent-instructions state whose owner receipt,
   full-file spec receipt, effective config, evidence, and target still match.
   Any drift requires a fresh decision at a safe wave boundary before dispatch.
 - If promotion reports failure, classify observed project `HEAD` as unchanged,
   promoted, or unexpectedly moved before any retry.
 - Cleanup failure retains an exact inventory and never rolls back promotion.
-- A lane generation spans every wave and final `$align`. While active it blocks
-  lane integration and removal. It releases only from the clean lane at the
-  final promoted head with every internal resource absent. Released immutable
-  receipts and repository claims remain pending until `$task-implementer
-  integrate` consumes their contiguous range. Missing or malformed
-  coordination state fails closed.
+- A lane generation spans every wave, the terminal selected-project lifecycle
+  seal, and final `$align`. While active it blocks lane integration and removal.
+  It releases only from the clean lane at the terminal-sealed final promoted
+  head with every internal resource absent. Released immutable receipts and
+  repository claims remain pending until `$task-implementer integrate`
+  consumes their contiguous range. Missing or malformed coordination state
+  fails closed.
 - Execution-plane-v1 and coordinator-v1/v2/v3/v4/v5/v6 runs are unsupported and return
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records. Do not add a legacy
   read path, execution shim, or migration path.
@@ -477,6 +717,16 @@ For each wave:
 - Worker, merge, validation, review, steering, sandbox, or promotion failure
   leaves the persistent lane at its last proven head and retains exact recovery
   resources. Lane integration failure leaves the source ref unchanged.
+- A Stop-generated project-contract reconciliation does not require a new user
+  prompt: the shared lifecycle owner must atomically enter
+  `reconciliation-required` before the continuation. If installed runtime state
+  remains `implementation-open`, preserve the run and report a source/install/
+  runtime mismatch; never loosen spec gates or forge the transition.
+- A fresh worker heartbeat returns `wait`. An expired prestart or stale running
+  worker returns `requires_confirmation`; timestamps, PIDs, missing paths, or
+  Markdown alone never prove that the prior owner stopped. Unknown writer,
+  unexpected head, malformed state, unresolved journal, or dirty ambiguity
+  returns `blocked` with retained resources.
 - Use `REPLAN_REQUIRED` for undeclared paths/domains;
   `UNSUPPORTED_SUBMODULE_SCOPE` for claims crossing gitlinks;
   `UNSUPPORTED_SYMLINK_SCOPE` for claims crossing tracked symlinks;
@@ -514,12 +764,15 @@ For each wave:
 - Do not force-remove worktrees, force-delete branches, copy local state,
   initialize submodules, cherry-pick, rebase, squash, push, open a PR, publish,
   or perform live external writes without separate authorization.
+- Do not checkpoint a path whose applicable project instructions, ownership,
+  relationship to the accepted run, or sensitive-content safety has not been
+  reviewed. Never persist diff bodies or file contents in checkpoint state.
 
 ## Completion Criteria
 
-- The public interface remains exactly four explicit-only actions.
-- Hook-routed direct turns are an internal continuation of an explicit session
-  binding, not an additional public action or implicit skill selection.
+- The public interface remains exactly five explicit-only actions.
+- Hook-captured direct turns may merge into the canonical prompt but are not an
+  additional public action, implicit skill selection, or workflow execution.
 - Every task belongs to a deterministic wave and has locked ownership.
 - Every promoted task has one verified worker commit, ordered merge evidence,
   combined validation/review evidence, and handoff status updated after

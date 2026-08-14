@@ -10,11 +10,20 @@ reconciliation, inject exact pending project rules, and route unfinished work
 through one Stop arbiter. A planned state always carries verified render
 evidence, including an authoritative empty `not-needed` result. Semantic
 requirements, design, and project-rule decisions remain skill-owned.
+The same owner exposes an internal pure prompt-impact validator for Task
+Implementer and Agentic SDLC. It reparses the canonical specs, requires one
+bounded disposition for every extracted statement occurrence, verifies active
+requirement/design mappings, and derives retain/replan without storing prompt
+text or trusting a workflow-authored aggregate. Workflow adapters own only
+private append-only persistence and progression gates.
 PostToolUse accounting is silent for routine successful project writes; it
 keeps the write epoch current, including across concurrent recorder races,
 and invalidates a plan or seal if an earlier admitted write reports completion
 late. Canonical spec reconciliation remains epoch-neutral. Stop requests one
-accumulated semantic review, and ordinary
+accumulated semantic review. An initial Stop from `implementation-open`
+atomically enters `reconciliation-required` and clears stale planning bindings
+before generating that continuation, so reconciliation never depends on a
+synthetic turn firing `UserPromptSubmit`. Ordinary
 implementation-only or reverted changes may keep both specs byte-identical
 after validation at the latest epoch.
 
@@ -30,10 +39,21 @@ implementation, and persists them at terminal seal unless active project
 instructions are already sufficient. Personal global defaults are never copied
 or used to suppress that project rule.
 Lifecycle-owned project-instructions commands are bound to the canonical
-current-session private bundle; alternate same-project evidence and malformed
-coordinator-shaped commands fail closed. Inspection uses one uncomposed
-canonical command with the active Codex home declared explicitly and every
-receipt, runtime, private-root, and output path absolute within that bundle.
+current-session private bundle. The sole alternate bundle admits exact
+Task Implementer inspect and render commands for the active prepared run during
+implementation-open or reconciliation-required after the canonical adapter
+attests the integration checkout and every run-owned path; apply and verify remain on the current-session terminal seal path. Every
+other alternate same-project bundle and malformed coordinator-shaped command
+fails closed. Delegated worker commits retain their command-derived worker
+session after the adapter matches it to the running task plane and canonical
+evidence, while direct commits remain bound to the outer hook payload session.
+An attested delegated command may use either the hook runtime or an exact
+PATH-canonical executable named `python3` or `python3.N`. A different canonical
+Python version is therefore valid, while arbitrary same-name paths, wrappers,
+alternate helpers, and mismatched sessions remain denied.
+Inspection uses one uncomposed canonical command with the active
+Codex home declared explicitly and every receipt, runtime, private-root, and
+output path absolute within the owning bundle.
 Nested selected projects use the nearest effective root-marker ancestor within
 the enclosing Git worktree for instruction discovery while keeping the exact
 selected project as the lifecycle and `AGENTS.md` target.

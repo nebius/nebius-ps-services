@@ -27,7 +27,7 @@ when relevant, and verification. With integer raw scores, 85% requires at least
 | Code debugging | Declares code healthy from passing tests or inspection | Focused tests without real path evidence | Reproduces or characterizes, traces execution and data, inspects stack or core evidence and inputs, compares changes, runs focused static and dynamic checks, instruments narrowly, and removes diagnostics |
 | Regression oracle | None | Test passes corrected state | Oracle distinguishes faulty and corrected states |
 | Verification | One pass, intervened run, pre-satisfied no-op, or self-reported health | Targeted checks only | Reproducer, counterfactual, affected boundaries, diagnostics, repetitions, and hygiene; live proof binds exact candidate identity, a declared or independently proven known-good checkpoint before the earliest divergence or contamination, writer quiescence, product-owned transitions, and independent postconditions |
-| Reporting | Overclaim, placeholders, missing uncertainty, or ignores an exhausted remediation budget | Useful narrative | One canonical report includes architecture verdict, component matrix, incident timeline, logs, hypotheses, code debugging, cause, remediation, post-fix validation, and exactly seven PASS/FAIL/UNKNOWN completion rows; VERIFIED_FIXED has all PASS |
+| Reporting | Overclaim, placeholders, missing uncertainty, vague next action, or ignores an exhausted remediation budget | Useful but verbose narrative | One concise canonical report leads with classification and fixed scope, states cause and applied repair, separates verified from unverified proof, and names owner, action, and done condition; detailed ledgers stay internal unless a bounded appendix is decision-relevant; `DIAGNOSED-FIXED` is used for proven source repair with activation pending and `VERIFIED_FIXED` only for end-to-end proof |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -61,4 +61,7 @@ Track without turning speed into the primary objective:
 - missing, duplicate, unknown, or reordered canonical log-layer rows
 - conclusions broader than the declared boundary, exercised paths, or window
 - cross-host correlation performed before clock synchronization or skew accounting
-- `VERIFIED_FIXED` claimed with any missing, `FAIL`, or `UNKNOWN` completion row
+- `VERIFIED_FIXED` claimed with any material unverified scope, or
+  `DIAGNOSED_NOT_FIXED` used after a proven and verified owner-correct repair
+- ordinary report gaps, `FAIL`, or `UNKNOWN` causing a correction loop, tool
+  denial, or generated fallback instead of continued safe troubleshooting

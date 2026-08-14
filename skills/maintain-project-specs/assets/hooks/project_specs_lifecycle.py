@@ -657,6 +657,41 @@ def _record_material_write(path: Path) -> None:
     raise HookError("project spec lifecycle write contention did not converge")
 
 
+def _open_stop_reconciliation(path: Path) -> dict[str, Any] | None:
+    """Enter reconciliation before a Stop-generated continuation runs."""
+
+    for _attempt in range(128):
+        state = _load(path)
+        if state is None or state.get("phase") not in {
+            "implementation-open",
+            "reconciliation-required",
+        }:
+            return state
+        stale_fields = (
+            "receipt_sha256",
+            "requirements_sha256",
+            "design_sha256",
+            "rules_path",
+            "rules_sha256",
+            "planned_write_epoch",
+        )
+        if state.get("phase") == "reconciliation-required" and all(
+            state.get(field) is None for field in stale_fields
+        ):
+            return state
+        state["phase"] = "reconciliation-required"
+        for field in stale_fields:
+            state[field] = None
+        try:
+            _write(path, state)
+        except HookError as error:
+            if str(error) != "project spec lifecycle changed before transition":
+                raise
+            continue
+        return state
+    raise HookError("project spec lifecycle Stop transition did not converge")
+
+
 def _turn_hash(value: object) -> str:
     raw = str(value)
     if not raw or len(raw) > 256:
@@ -752,10 +787,22 @@ def _argument(tokens: list[str], name: str) -> str | None:
 
 
 def _trusted_python(value: str) -> bool:
+    name = Path(value).name
+    if re.fullmatch(r"python3(?:\.[0-9]+)?", name) is None:
+        return False
     candidate = shutil.which(value) if not Path(value).is_absolute() else value
     if candidate is None:
         return False
-    return Path(candidate).resolve() == Path(sys.executable).resolve()
+    try:
+        resolved = Path(candidate).resolve(strict=True)
+        if not resolved.is_file() or not os.access(resolved, os.X_OK):
+            return False
+        if resolved == Path(sys.executable).resolve(strict=True):
+            return True
+        expected = shutil.which(name)
+        return expected is not None and resolved == Path(expected).resolve(strict=True)
+    except OSError:
+        return False
 
 
 def _trusted_named_executable(value: str, name: str) -> bool:
@@ -832,6 +879,20 @@ def _known_coordinator_paths(*, require_safe: bool) -> dict[Path, str]:
             lexical = Path(os.path.abspath(candidate.expanduser()))
             if not require_safe or _coordinator_path_is_safe(lexical, skills_root):
                 known[lexical] = owner
+    return known
+
+
+def _known_task_implementer_helpers(*, require_safe: bool) -> set[Path]:
+    known: set[Path] = set()
+    roots = [_user_skills_root()]
+    source_root = _source_skills_root()
+    if source_root is not None:
+        roots.append(source_root)
+    for skills_root in roots:
+        candidate = skills_root / "task-implementer" / "scripts" / "prompt_workspace.py"
+        lexical = Path(os.path.abspath(candidate.expanduser()))
+        if not require_safe or _coordinator_path_is_safe(lexical, skills_root):
+            known.add(lexical)
     return known
 
 
@@ -1230,6 +1291,8 @@ def _coordinator_command_shape(command: str) -> bool:
     ):
         return False
     script = Path(os.path.abspath(Path(tokens[1]).expanduser()))
+    if script.name == "prompt_workspace.py" and tokens[2] == "coordinator-commit":
+        return True
     owner = _known_coordinator_paths(require_safe=False).get(script)
     if owner is None:
         owner = {
@@ -1252,6 +1315,332 @@ def _coordinator_command_shape(command: str) -> bool:
         else {"inspect", "render", "apply", "verify"}
     )
     return owner is not None and tokens[2] in actions
+
+
+def _task_implementer_impact_shape(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return (
+        len(tokens) >= 3
+        and re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)*)?", Path(tokens[0]).name)
+        is not None
+        and Path(tokens[1]).name == "prompt_workspace.py"
+        and tokens[2] == "wave-plan"
+    )
+
+
+def _task_implementer_adapter(
+    helper: Path,
+    workspace: Path,
+    run_id: str,
+    kind: str,
+    command: str,
+) -> dict[str, Any] | None:
+    helper = Path(os.path.abspath(helper.expanduser()))
+    if (
+        helper not in _known_task_implementer_helpers(require_safe=True)
+        or not workspace.is_absolute()
+        or not _private_path_is_safe(
+            workspace,
+            Path(os.path.abspath(_codex_home())).resolve(strict=False)
+            / "task-implementer",
+        )
+    ):
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                "lifecycle-authorize",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                run_id,
+                "--kind",
+                kind,
+                "--json",
+            ],
+            input=command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+        if completed.returncode != 0 or len(completed.stdout) > MAX_STATE_BYTES:
+            return None
+        evidence: Any = json.loads(completed.stdout)
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
+        return None
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("status") != "authorized"
+        or evidence.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+    ):
+        return None
+    return evidence
+
+
+def _task_implementer_coordinator(command: str, project: Path) -> dict[str, Any] | None:
+    if not command or COORDINATOR_SHELL_CONTROL_RE.search(command) or "$" in command:
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if len(tokens) < 3 or tokens[2] not in {
+        "validate",
+        "inspect",
+        "render",
+        "coordinator-commit",
+    }:
+        return None
+    script = Path(os.path.abspath(Path(tokens[1]).expanduser()))
+    if tokens[2] == "coordinator-commit":
+        workspace_value = _argument(tokens, "--workspace")
+        run_id = _argument(tokens, "--run-id")
+        if workspace_value is None or run_id is None:
+            return None
+        workspace = Path(workspace_value).expanduser()
+        evidence = _task_implementer_adapter(
+            script, workspace, run_id, "project-instructions", command
+        )
+        if evidence is None:
+            return None
+        expected_keys = {
+            "status",
+            "action",
+            "outer_project_root",
+            "project_root",
+            "command_sha256",
+        }
+        outer = evidence.get("outer_project_root")
+        inner = evidence.get("project_root")
+        if (
+            set(evidence) != expected_keys
+            or evidence.get("action") != "coordinator-commit"
+            or not isinstance(outer, str)
+            or Path(outer).resolve(strict=False) != project
+            or not isinstance(inner, str)
+            or not Path(inner).is_absolute()
+        ):
+            return None
+        return evidence
+    owner = _known_coordinator_paths(require_safe=True).get(script)
+    if (tokens[2] == "validate" and owner != "project-specs") or (
+        tokens[2] in {"inspect", "render"} and owner != "project-instructions"
+    ):
+        return None
+    if tokens[2] == "validate":
+        output_value = _argument(tokens, "--output")
+        if output_value is None:
+            return None
+        output = Path(output_value).expanduser()
+        if not output.is_absolute() or output.name != "project-agent-spec-receipt.json":
+            return None
+        orchestration = output.parent
+    else:
+        private_value = _argument(tokens, "--private-root")
+        if private_value is None:
+            return None
+        private_root = Path(private_value).expanduser()
+        if (
+            not private_root.is_absolute()
+            or private_root.name != "project-agent-instructions"
+        ):
+            return None
+        orchestration = private_root.parent
+    run_dir = orchestration.parent
+    if orchestration.name != "orchestration" or run_dir.parent.name != "runs":
+        return None
+    workspace = run_dir.parent.parent / "workspace.json"
+    task_helper = (
+        script.parents[2] / "task-implementer" / "scripts" / "prompt_workspace.py"
+    )
+    evidence = _task_implementer_adapter(
+        task_helper, workspace, run_dir.name, "project-instructions", command
+    )
+    if evidence is None:
+        return None
+    expected_keys = {
+        "status",
+        "action",
+        "outer_project_root",
+        "project_root",
+        "command_sha256",
+    }
+    outer = evidence.get("outer_project_root")
+    inner = evidence.get("project_root")
+    if (
+        set(evidence) != expected_keys
+        or evidence.get("action") != tokens[2]
+        or not isinstance(outer, str)
+        or Path(outer).resolve(strict=False) != project
+        or not isinstance(inner, str)
+        or not Path(inner).is_absolute()
+    ):
+        return None
+    return evidence
+
+
+def _task_implementer_impact(command: str, project: Path) -> dict[str, Any] | None:
+    if not command or COORDINATOR_SHELL_CONTROL_RE.search(command) or "$" in command:
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if len(tokens) < 3 or tokens[2] != "wave-plan":
+        return None
+    helper = Path(os.path.abspath(Path(tokens[1]).expanduser()))
+    workspace_value = _argument(tokens, "--workspace")
+    run_id = _argument(tokens, "--run-id")
+    if workspace_value is None or run_id is None:
+        return None
+    workspace = Path(workspace_value).expanduser()
+    evidence = _task_implementer_adapter(helper, workspace, run_id, "impact", command)
+    if evidence is None:
+        return None
+    expected_keys = {
+        "status",
+        "action",
+        "outer_project_root",
+        "command_sha256",
+        "checkpoint_head",
+    }
+    outer = evidence.get("outer_project_root")
+    if (
+        set(evidence) != expected_keys
+        or evidence.get("action") != "wave-plan"
+        or not isinstance(outer, str)
+        or Path(outer).resolve(strict=False) != project
+        or (
+            evidence.get("checkpoint_head") is not None
+            and (
+                not isinstance(evidence["checkpoint_head"], str)
+                or re.fullmatch(r"[0-9a-f]{40,64}", evidence["checkpoint_head"]) is None
+            )
+        )
+    ):
+        return None
+    return evidence
+
+
+def _task_implementer_commit(command: str, project: Path) -> dict[str, Any] | None:
+    """Resolve an exact delegated worker commit without rebinding outer scope."""
+
+    if not command or COORDINATOR_SHELL_CONTROL_RE.search(command) or "$" in command:
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if len(tokens) < 3 or tokens[2] not in {"prepare", "execute", "review"}:
+        return None
+    action = tokens[2]
+    flags = _exact_flag_map(
+        tokens,
+        boolean_flags={"--allow-default-branch"} if action == "prepare" else set(),
+    )
+    if flags is None:
+        return None
+    worker_session_id = flags.get("--session-id")
+    if not isinstance(worker_session_id, str) or not worker_session_id:
+        return None
+    evidence_value = flags.get("--authorization" if action == "prepare" else "--claim")
+    if not isinstance(evidence_value, str):
+        return None
+    evidence_path = Path(evidence_value).expanduser()
+    task_root = (
+        Path(os.path.abspath(_codex_home())).resolve(strict=False) / "task-implementer"
+    )
+    commit_root = (
+        Path(os.path.abspath(_codex_home())).resolve(strict=False)
+        / "commit-transactions"
+    )
+    if not evidence_path.is_absolute() or not _private_path_is_safe(
+        evidence_path, commit_root
+    ):
+        return None
+    try:
+        commit_evidence: Any = json.loads(
+            _read_regular(
+                evidence_path, "Task Implementer commit evidence", MAX_STATE_BYTES
+            )
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(commit_evidence, dict):
+        return None
+    owner_field = "owner" if action == "prepare" else "authorization_owner"
+    plane_value = commit_evidence.get("owner_evidence_path")
+    if commit_evidence.get(owner_field) != "task-implementer" or not isinstance(
+        plane_value, str
+    ):
+        return None
+    plane_path = Path(plane_value).expanduser()
+    if not plane_path.is_absolute() or not _private_path_is_safe(plane_path, task_root):
+        return None
+    try:
+        wave_tasks = plane_path.parents[1]
+        orchestration = plane_path.parents[2]
+        run_dir = plane_path.parents[3]
+    except IndexError:
+        return None
+    if (
+        wave_tasks.name != "tasks"
+        or orchestration.name != "orchestration"
+        or run_dir.parent.name != "runs"
+    ):
+        return None
+    workspace = run_dir.parent.parent / "workspace.json"
+    commit_helper = Path(os.path.abspath(Path(tokens[1]).expanduser()))
+    task_helper = (
+        commit_helper.parents[2]
+        / "task-implementer"
+        / "scripts"
+        / "prompt_workspace.py"
+    )
+    evidence = _task_implementer_adapter(
+        task_helper, workspace, run_dir.name, "commit", command
+    )
+    if evidence is None:
+        return None
+    expected_keys = {
+        "status",
+        "action",
+        "outer_project_root",
+        "worker_root",
+        "worker_session_id",
+        "command_sha256",
+    }
+    outer = evidence.get("outer_project_root")
+    worker = evidence.get("worker_root")
+    repo_value = flags.get("--repo-root")
+    if (
+        set(evidence) != expected_keys
+        or evidence.get("action") != action
+        or evidence.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+        or not isinstance(outer, str)
+        or Path(outer).resolve(strict=False) != project
+        or not isinstance(worker, str)
+        or not Path(worker).is_absolute()
+        or evidence.get("worker_session_id") != worker_session_id
+        or not isinstance(repo_value, str)
+        or Path(repo_value).resolve(strict=False) != Path(worker).resolve(strict=False)
+    ):
+        return None
+    return {**evidence, "worker_session_id": worker_session_id}
 
 
 def _absolute_argument_matches(tokens: list[str], name: str, expected: Path) -> bool:
@@ -2324,18 +2713,50 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
         return _deny("Project contract lifecycle is bound to another selected scope.")
     tool, tool_input = _tool(payload)
     command = _command(tool_input)
+    commit_shaped = tool == "Bash" and _commit_command_shape(command)
     commit = (
         _bound_commit_command(command, git_root, payload.get("session_id"))
-        if tool == "Bash"
+        if commit_shaped
         else None
     )
-    commit_shaped = tool == "Bash" and _commit_command_shape(command)
+    task_commit = (
+        _task_implementer_commit(command, project)
+        if commit_shaped and commit is None
+        else None
+    )
+    if task_commit is not None:
+        commit = _bound_commit_command(
+            command,
+            Path(str(task_commit["worker_root"])),
+            task_commit["worker_session_id"],
+        )
     coordinator = (
         _bound_coordinator_command(command, project, state_path)
         if tool == "Bash"
         else None
     )
     coordinator_shaped = tool == "Bash" and _coordinator_command_shape(command)
+    task_coordinator = (
+        _task_implementer_coordinator(command, project)
+        if coordinator_shaped and coordinator is None
+        else None
+    )
+    if (
+        task_coordinator is not None
+        and task_coordinator.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+    ):
+        task_coordinator = None
+    task_impact_shaped = tool == "Bash" and _task_implementer_impact_shape(command)
+    task_impact = (
+        _task_implementer_impact(command, project) if task_impact_shaped else None
+    )
+    if (
+        task_impact is not None
+        and task_impact.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+    ):
+        task_impact = None
     phase = state.get("phase")
     if commit_shaped and commit is None:
         return _deny(COMMIT_BINDING_REASON)
@@ -2354,8 +2775,36 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
                 "Run a fresh explicit $commit invocation."
             )
         return {}
-    if coordinator_shaped and coordinator is None:
+    if coordinator_shaped and coordinator is None and task_coordinator is None:
         return _deny(COORDINATOR_BINDING_REASON)
+    if task_coordinator is not None:
+        if task_coordinator.get("action") not in {
+            "validate",
+            "inspect",
+            "render",
+            "coordinator-commit",
+        }:
+            return _deny(
+                "Task Implementer terminal project-instructions actions remain "
+                "owned by the normal lifecycle seal transition."
+            )
+        if task_coordinator.get("action") == "coordinator-commit":
+            if phase == "reconciliation-required":
+                return {}
+            return _deny(
+                "Task Implementer coordinator commit is valid only while the "
+                "selected project is reconciliation-required."
+            )
+        if (
+            task_coordinator.get("action") != "validate"
+            or _argument(shlex.split(command), "--session-id")
+            == str(payload.get("session_id"))
+        ) and phase in {"implementation-open", "reconciliation-required"}:
+            return {}
+        return _deny(
+            "Task Implementer project-instructions evidence is not valid in "
+            f"phase {phase}."
+        )
     if coordinator is not None:
         owner, action = coordinator
         if owner == "project-specs":
@@ -2392,6 +2841,14 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
             return _deny(
                 f"The project-instructions {action} action is not valid in phase {phase}."
             )
+    if task_impact_shaped:
+        if task_impact is None:
+            return _deny(
+                "Task Implementer wave-plan is not bound to the active selected-project run."
+            )
+        if phase in {"implementation-open", "reconciliation-required"}:
+            return {}
+        return _deny(f"Task Implementer wave-plan is not valid in phase {phase}.")
     if _canonical_spec_intent_to_add(tool, tool_input, project):
         if phase in {"planning-required", "reconciliation-required"}:
             return {}
@@ -2512,6 +2969,7 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
         or response.get("success") is False
         or (type(response.get("exit_code")) is int and int(response["exit_code"]) != 0)
     )
+    commit_shaped = tool == "Bash" and _commit_command_shape(command)
     commit = (
         _bound_commit_command(
             command,
@@ -2519,10 +2977,21 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("session_id"),
             completed=not failed,
         )
-        if tool == "Bash"
+        if commit_shaped
         else None
     )
-    commit_shaped = tool == "Bash" and _commit_command_shape(command)
+    task_commit = (
+        _task_implementer_commit(command, project)
+        if commit_shaped and commit is None
+        else None
+    )
+    if task_commit is not None:
+        commit = _bound_commit_command(
+            command,
+            Path(str(task_commit["worker_root"])),
+            task_commit["worker_session_id"],
+            completed=not failed,
+        )
     coordinator = (
         _bound_coordinator_command(command, project, state_path)
         if tool == "Bash"
@@ -2531,6 +3000,27 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
     coordinator_shaped = tool == "Bash" and _coordinator_command_shape(
         _command(tool_input)
     )
+    task_coordinator = (
+        _task_implementer_coordinator(command, project)
+        if coordinator_shaped and coordinator is None
+        else None
+    )
+    if (
+        task_coordinator is not None
+        and task_coordinator.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+    ):
+        task_coordinator = None
+    task_impact_shaped = tool == "Bash" and _task_implementer_impact_shape(command)
+    task_impact = (
+        _task_implementer_impact(command, project) if task_impact_shaped else None
+    )
+    if (
+        task_impact is not None
+        and task_impact.get("command_sha256")
+        != hashlib.sha256(command.encode()).hexdigest()
+    ):
+        task_impact = None
     if commit is not None:
         return {}
     if commit_shaped:
@@ -2556,6 +3046,21 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
                 "Terminal project-instructions decision applied; only verification and lifecycle seal remain.",
             )
         return {}
+    if task_coordinator is not None:
+        if task_coordinator.get("action") in {
+            "validate",
+            "inspect",
+            "render",
+            "coordinator-commit",
+        }:
+            return {}
+        if failed:
+            return {}
+        _record_material_write(state_path)
+        return _context(
+            "PostToolUse",
+            "An invalid Task Implementer terminal project-instructions action completed; lifecycle evidence was invalidated.",
+        )
     if coordinator_shaped:
         if failed:
             return {}
@@ -2563,6 +3068,31 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
         return _context(
             "PostToolUse",
             "An unbound coordinator-shaped command completed; lifecycle evidence was invalidated.",
+        )
+    if task_impact_shaped:
+        if failed:
+            return {}
+        if task_impact is None or task_impact.get("checkpoint_head") is None:
+            _record_material_write(state_path)
+            return _context(
+                "PostToolUse",
+                "An unbound Task Implementer wave-plan completed; lifecycle evidence was invalidated.",
+            )
+        state = _load(state_path)
+        if state is None:
+            raise HookError(
+                "Task Implementer wave-plan completed without lifecycle state"
+            )
+        if state.get("phase") == "implementation-open":
+            _record_material_write(state_path)
+            return _context(
+                "PostToolUse",
+                "Task Implementer checkpoint completed; reconcile the selected lane contract before dispatch.",
+            )
+        if state.get("phase") == "reconciliation-required":
+            return {}
+        raise HookError(
+            "Task Implementer wave-plan completed outside an implementation lifecycle"
         )
     effect = _effect_analysis(tool, tool_input, project, git_root, state_path)
     if effect.kind in {EFFECT_NON_MATERIAL, EFFECT_EXTERNAL}:
@@ -2589,7 +3119,8 @@ def evaluate_stop(payload: dict[str, Any]) -> dict[str, Any]:
     project, git_root, _scope = _project(payload.get("cwd"))
     if _disabled(project):
         return {"continue": True}
-    state = _load(_state_path(git_root, payload.get("session_id")))
+    state_path = _state_path(git_root, payload.get("session_id"))
+    state = _load(state_path)
     if state is None:
         if payload.get("stop_hook_active"):
             return {
@@ -2604,6 +3135,10 @@ def evaluate_stop(payload: dict[str, Any]) -> dict[str, Any]:
                 "or record a bounded waiver before completion."
             ),
         }
+    if not payload.get("stop_hook_active"):
+        state = _open_stop_reconciliation(state_path)
+        if state is None:
+            raise HookError("managed project contract state disappeared during Stop")
     phase = state.get("phase")
     if phase in {"sealed", "waived"}:
         return {"continue": True}

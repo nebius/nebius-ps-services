@@ -201,7 +201,7 @@ class TroubleshootContractTest(unittest.TestCase):
             "$troubleshoot --attempt-limit=N --time-limit-minutes=N <problem>", skill
         )
         self.assertIn("hard maxima of 10 attempts and 180 minutes", skill)
-        self.assertIn("return that report verbatim", skill)
+        self.assertIn("hook-supplied redacted exhaustion report verbatim", skill)
         self.assertIn("A bare `$troubleshoot` keeps it", reference)
         self.assertIn("One flag changes only that field", reference)
         self.assertIn("explicit reset to 5/120", reference)
@@ -240,9 +240,11 @@ class TroubleshootContractTest(unittest.TestCase):
                 normalized = " ".join(value.split()).casefold()
                 self.assertIn("every explicit `$troubleshoot` invocation", normalized)
                 self.assertIn("troubleshoot-report-obligation.json", normalized)
-                self.assertIn("current workflow state: reported", normalized)
-                self.assertIn("bounded ui fallback", normalized)
-                self.assertIn("same session", normalized)
+        combined = " ".join(" ".join(value.split()).casefold() for value in surfaces.values())
+        self.assertIn("concise", combined)
+        self.assertIn("advisory_incomplete", combined)
+        self.assertIn("same session", combined)
+        self.assertIn("no generated fallback", combined)
 
     def test_remediation_hook_registers_prompt_tool_and_arbitrated_stop_boundaries(
         self,
@@ -378,21 +380,24 @@ class TroubleshootContractTest(unittest.TestCase):
         self.assertIn("exactly these eight rows", protocol)
         self.assertIn("not subject to Grafana provider-admission gates", protocol)
         for heading in (
-            "## Architecture Verdict",
-            "## Component Verification Matrix",
-            "## Incident Timeline",
-            "## Logs Examined",
-            "## Code Debugging",
-            "## Completion Gate",
-            "## Remaining Unknowns And Residual Risks",
+            "## Outcome",
+            "## Root Cause And Fix",
+            "## Verification",
+            "## Next Action",
         ):
             self.assertIn(heading, reporting)
         for field in (
-            "- Included system boundary:",
-            "- Excluded system boundary:",
-            "- Exercised control and data paths:",
-            "- Incident-window start:",
-            "- Incident-window end:",
+            "- Classification:",
+            "- Confidence:",
+            "- Fixed scope:",
+            "- Current state:",
+            "- Root cause:",
+            "- Changes made:",
+            "- Verified:",
+            "- Not verified:",
+            "- Owner:",
+            "- Action:",
+            "- Done when:",
         ):
             self.assertIn(field, reporting)
         for layer in (
@@ -405,10 +410,10 @@ class TroubleshootContractTest(unittest.TestCase):
             "Storage",
             "GPU or hardware",
         ):
-            self.assertIn(f"| {layer} |", reporting)
-        self.assertIn("each of the eight canonical log layers exactly once", reporting)
-        self.assertIn("Dependencies, authentication, and DNS", reporting)
-        self.assertIn("Restart history and recent changes", reporting)
+            self.assertIn(layer, protocol)
+        self.assertIn("Each canonical log layer remains exactly once", reporting)
+        self.assertIn("as working evidence", reporting)
+        self.assertIn("Do not make internal ledger formatting a Stop prerequisite", reporting)
         for criterion in (
             "Design",
             "Infrastructure",
@@ -418,8 +423,10 @@ class TroubleshootContractTest(unittest.TestCase):
             "Logs",
             "Relevant code paths",
         ):
-            self.assertIn(f"| {criterion} | PASS / FAIL / UNKNOWN |", reporting)
-        self.assertIn("`VERIFIED_FIXED` is invalid unless all seven", reporting)
+            self.assertIn(criterion, reporting)
+        self.assertIn("`DIAGNOSED-FIXED`", reporting)
+        self.assertIn("`VERIFIED_FIXED` additionally requires exactly", reporting)
+        self.assertIn("records `advisory_incomplete`", reporting)
 
     def test_technology_playbooks_are_present_and_vendor_anchored(self) -> None:
         expected = {

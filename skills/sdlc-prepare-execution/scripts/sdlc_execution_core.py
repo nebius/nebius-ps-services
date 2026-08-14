@@ -40,6 +40,16 @@ from git_promotion import (  # noqa: E402
     verify_remote_default,
 )
 
+SDLC_START_SCRIPTS = Path(__file__).resolve().parents[2] / "sdlc-start" / "scripts"
+if str(SDLC_START_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SDLC_START_SCRIPTS))
+from prompt_impact import (  # noqa: E402
+    PromptImpactError,
+    settle_execution as settle_prompt_impact_execution,
+    verify_current as verify_current_prompt_impact,
+    verify_execution as verify_prompt_impact_execution,
+)
+
 
 COORDINATOR_SCHEMA = "agentic-sdlc/execution-coordinator-v7"
 WAVE_SCHEMA = "agentic-sdlc/execution-wave-v2"
@@ -102,6 +112,26 @@ class ExecutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _impact(action: str, callback, *args):
+    try:
+        return callback(*args)
+    except PromptImpactError as exc:
+        raise ExecutionError(exc.code, f"{action}: {exc.message}") from exc
+
+
+def _verify_execution_prompt_impact(
+    run_dir: Path, feature_id: str, coordinator: dict[str, Any]
+) -> None:
+    _impact(
+        "prompt impact execution basis is stale",
+        verify_prompt_impact_execution,
+        run_dir,
+        feature_id,
+        str(coordinator.get("plan_digest") or ""),
+        Path(str(coordinator["selected_project_root"])),
+    )
 
 
 def _interop(action: str, callback, *args, **kwargs):
@@ -1060,6 +1090,12 @@ def prepare_execution(
     tasks = parse_locked_plan(plan_text)
     _verify_claim_paths(project_root, project_scope, tasks)
     waves = build_dependency_waves(tasks)
+    _impact(
+        "prompt impact verification failed",
+        verify_current_prompt_impact,
+        run_dir,
+        selected_project_root,
+    )
     anchor = _interop(
         "outer worktree inspection", inspect_outer_anchor, selected_project_root
     )
@@ -1113,6 +1149,15 @@ def prepare_execution(
             raise ExecutionError(
                 "REPLAN_REQUIRED", "prepared execution identity changed"
             )
+        _impact(
+            "prompt impact settlement failed",
+            settle_prompt_impact_execution,
+            run_dir,
+            feature_id,
+            plan_digest,
+            selected_project_root,
+            False,
+        )
         integration = Path(str(coordinator["integration_worktree"])).resolve()
         integration_branch = str(coordinator["integration_branch"])
         integration_worktree = integration
@@ -1173,6 +1218,15 @@ def prepare_execution(
             "created_at": utc_now(),
             "updated_at": utc_now(),
         }
+        _impact(
+            "prompt impact settlement failed",
+            settle_prompt_impact_execution,
+            run_dir,
+            feature_id,
+            plan_digest,
+            selected_project_root,
+            True,
+        )
         _save_coordinator(run_dir, feature_id, coordinator)
         append_journal(
             journal_path(run_dir, feature_id, "coordinator"),
@@ -1381,6 +1435,13 @@ def _replan_future_locked(
     capacity: int,
 ) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, feature_id)
+    selected_project_root = Path(str(coordinator["selected_project_root"]))
+    _impact(
+        "prompt impact verification failed",
+        verify_current_prompt_impact,
+        run_dir,
+        selected_project_root,
+    )
     if coordinator.get("status") in {"sealed", "promoted", "done"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "sealed execution cannot replan"
@@ -1402,6 +1463,15 @@ def _replan_future_locked(
     raw = plan_path.read_bytes()
     digest = sha256_bytes(raw)
     if digest == coordinator.get("plan_digest"):
+        _impact(
+            "prompt impact settlement failed",
+            settle_prompt_impact_execution,
+            run_dir,
+            feature_id,
+            digest,
+            selected_project_root,
+            False,
+        )
         return coordinator
     text = raw.decode("utf-8")
     if re.search(rf"(?m)^# {re.escape(feature_id)} Plan v[0-9]+\s*$", text) is None:
@@ -1592,6 +1662,15 @@ def _replan_future_locked(
         updated["plan_digest"] = digest
         updated["capacity"] = capacity
         updated["wave_ids"] = new_wave_ids
+        _impact(
+            "prompt impact settlement failed",
+            settle_prompt_impact_execution,
+            run_dir,
+            feature_id,
+            digest,
+            selected_project_root,
+            True,
+        )
         _save_coordinator(run_dir, feature_id, updated)
         coordinator = updated
     except Exception:
@@ -2033,6 +2112,14 @@ def _validate_assignment_handoff(
 
 def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
     coordinator = _load_coordinator(run_dir, feature_id)
+    _impact(
+        "prompt impact execution basis is stale",
+        verify_prompt_impact_execution,
+        run_dir,
+        feature_id,
+        str(coordinator.get("plan_digest") or ""),
+        Path(str(coordinator["selected_project_root"])),
+    )
     if coordinator["status"] not in {"tdd_sealed", "waves_running"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "wave preparation is not allowed"
@@ -2299,7 +2386,15 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
 
 
 def advance_batch(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
-    _load_coordinator(run_dir, feature_id)
+    coordinator = _load_coordinator(run_dir, feature_id)
+    _impact(
+        "prompt impact execution basis is stale",
+        verify_prompt_impact_execution,
+        run_dir,
+        feature_id,
+        str(coordinator.get("plan_digest") or ""),
+        Path(str(coordinator["selected_project_root"])),
+    )
     wave_file = wave_path(run_dir, feature_id, wave_id)
     wave = read_json(wave_file)
     active_index = wave.get("active_batch_index")
@@ -2338,6 +2433,7 @@ def arm_task(
 ) -> dict[str, Any]:
     with _execution_transition_lock(run_dir, feature_id):
         coordinator = _load_coordinator(run_dir, feature_id)
+        _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
         assignment = read_json(
             assignment_path(run_dir, feature_id, wave_id, task_id)
         )
@@ -2406,6 +2502,7 @@ def requeue_task(
         )
     with _execution_transition_lock(run_dir, feature_id):
         coordinator = _load_coordinator(run_dir, feature_id)
+        _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
         assignment = read_json(
             assignment_path(run_dir, feature_id, wave_id, task_id)
         )
@@ -2504,6 +2601,7 @@ def _start_task_locked(
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, feature_id)
+    _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
     assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
     _validate_assignment_record(assignment)
     if assignment.get("assignment_digest") != assignment_digest:
@@ -3555,6 +3653,14 @@ def _split_nul(value: str) -> list[str]:
 
 def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, feature_id)
+    _impact(
+        "prompt impact execution basis is stale",
+        verify_prompt_impact_execution,
+        run_dir,
+        feature_id,
+        str(coordinator.get("plan_digest") or ""),
+        Path(str(coordinator["selected_project_root"])),
+    )
     wave_file = wave_path(run_dir, feature_id, wave_id)
     wave = read_json(wave_file)
     if wave["status"] == "integrated":
@@ -3675,11 +3781,19 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
 def complete_wave(
     run_dir: Path, feature_id: str, wave_id: str, evidence: str
 ) -> dict[str, Any]:
+    with _execution_transition_lock(run_dir, feature_id):
+        return _complete_wave_locked(run_dir, feature_id, wave_id, evidence)
+
+
+def _complete_wave_locked(
+    run_dir: Path, feature_id: str, wave_id: str, evidence: str
+) -> dict[str, Any]:
     if not evidence.strip():
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED", "combined evidence is empty"
         )
     coordinator = _load_coordinator(run_dir, feature_id)
+    _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
     wave_file = wave_path(run_dir, feature_id, wave_id)
     wave = read_json(wave_file)
     if wave["status"] == "done":
@@ -3857,10 +3971,20 @@ def seal_feature(
 ) -> dict[str, Any]:
     """Seal final integration-only changes before project-branch promotion."""
 
+    with _execution_transition_lock(run_dir, feature_id):
+        return _seal_feature_locked(run_dir, feature_id, evidence, message)
+
+
+def _seal_feature_locked(
+    run_dir: Path, feature_id: str, evidence: str, message: str
+) -> dict[str, Any]:
+    """Seal final integration-only changes before project-branch promotion."""
+
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     _reject_sensitive_evidence(evidence, message)
     coordinator = _load_coordinator(run_dir, feature_id)
+    _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
     if coordinator["status"] == "sealed":
         integration = Path(coordinator["integration_worktree"])
         if head(integration) != coordinator["integration_head"] or not clean(
@@ -3938,6 +4062,14 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     coordinator = _load_coordinator(run_dir, feature_id)
+    _impact(
+        "prompt impact execution basis is stale",
+        verify_prompt_impact_execution,
+        run_dir,
+        feature_id,
+        str(coordinator.get("plan_digest") or ""),
+        Path(str(coordinator["selected_project_root"])),
+    )
     if coordinator["status"] in {"promoted", "cleanup", "done"}:
         promoted_head = coordinator.get("promoted_head")
         if not isinstance(promoted_head, str):

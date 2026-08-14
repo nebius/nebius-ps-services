@@ -91,8 +91,29 @@ owner instead of editing the file.
 Design may begin only after the latest intent has a `ready` refinement ledger,
 `docs/requirements.md` reflects its compiled truth, and no material question or
 contradiction remains. Run private `prompt_workspace.py refinement-verify` for
-the exact workspace and run before leaving requirements; it mechanically binds
-the ledger's latest prompt identity and intent to the exact current
-`docs/requirements.md` digest. A semantic no-effect follow-up may finish
-without implementation tasks after recording that current product truth
-already satisfies the compiled objective.
+the exact workspace and run before leaving requirements. Before that call,
+write one private `prompt-impact-claim.json` that classifies every extracted
+statement occurrence exactly once as `changed_contract`, `existing_contract`,
+`execution_only`, or `non_contract`. Contract classifications map active
+requirement and design IDs; non-contract classifications use only
+`workflow_directive`, `duplicate`, or `clarification_context`.
+
+The verifier sends the claim, ready refinement, and current canonical specs to
+the pure validator owned by `maintain-project-specs`. The owner derives the
+aggregate effect and `retain_plan` or `replan_required`; matching requirements
+bytes or a caller-authored `no_effect` label are not proof. It publishes an
+append-only private attempt and atomic ledger. Execution preparation settles a
+separate per-feature plan-basis receipt, and every later resource-creating,
+dispatch/integration, and promotion boundary verifies the latest settlement
+and exact current requirements/design bytes. A later proven no-effect revision
+may retain an older plan basis; contract or execution impact requires safe
+replanning with a distinct plan identity. Publication is serialized per run,
+compare-checks the ledger head, and preserves then skips a conflicting orphan
+attempt after interruption. Material ambiguity produces no impact receipt.
+
+Public status exposes only the revision, semantic edit state, impact class,
+mapped public record IDs or bounded reason class, and retain/replan action. It
+never exposes prompt or statement text, free-form rationale, private impact/run
+paths, or content-derived digests. The existing editable prompt path may remain
+in list output. Keep owner-computed raw and normalized-intent change
+detection; never write a hash header into the editable prompt.

@@ -94,6 +94,11 @@ validated, and reconciled before implementation can be represented as complete.
   project-root marker from that directory through the enclosing Git root as
   the instruction-chain root. An empty marker list retains selected-directory
   discovery semantics.
+- AC-010: The first Stop continuation from `implementation-open` atomically
+  enters `reconciliation-required` before requesting reconciliation, preserves
+  the implementation write epoch, and invalidates stale planning evidence. The
+  transition must not depend on a Stop-generated continuation emitting a new
+  `UserPromptSubmit` event.
 
 #### Negative Criteria
 
@@ -114,6 +119,8 @@ validated, and reconciled before implementation can be represented as complete.
 - NC-006: Hooks must not infer compatibility semantics, and nested selected
   projects must not be forced to contain a duplicate local root marker when an
   effective marker exists at an ancestor within the enclosing Git worktree.
+- NC-007: A continuation must not ask the agent to reconcile canonical specs
+  while retaining a lifecycle phase that denies those exact spec mutations.
 
 #### Validation Method
 
@@ -128,7 +135,8 @@ reconciliation, unchanged-spec seal, and missing-target `not-needed` outcome
 using disposable repositories and private state roots. Cover paraphrased
 user-dependence intent, global-policy isolation, missing and human-owned
 targets, same-directory overrides, nearest-ancestor root discovery, and empty
-root-marker configuration.
+root-marker configuration. Exercise an `implementation-open` Stop followed by
+canonical spec reconciliation without an intervening `UserPromptSubmit`.
 
 #### Evaluation Method
 
@@ -139,6 +147,9 @@ the selected project reaches `sealed` with a current receipt or an explicit
 bounded waiver. Confirm that explicit no-break intent is injected for the
 current implementation and persists at terminal seal when project rules are
 needed, without requiring magic words or weakening higher-level safeguards.
+Confirm a Stop-generated continuation can immediately reconcile canonical
+specs and that the transition neither advances the write epoch nor preserves
+stale receipt, spec, rules, or planned-epoch bindings.
 
 <!-- /REQUIREMENT: REQ-002 -->
 
@@ -400,70 +411,82 @@ that protected project lifecycle state remains denied.
 <!-- /REQUIREMENT: REQ-007 -->
 
 <!-- REQUIREMENT: REQ-008 status=active priority=P0 type=constraint -->
-### REQ-008: End every troubleshoot invocation with a structured report
+### REQ-008: End every troubleshoot invocation with a concise outcome report
 
 #### User Story
 
-Users invoking `$troubleshoot` need a durable terminal report whether the work
-succeeds, is blocked, encounters a tool or coordination error, exhausts its
-budget, or remains unresolved.
+Users invoking `$troubleshoot` need a clear answer about what was fixed, what
+was verified, and who must do what next without a report-format problem
+interrupting safe diagnostic or repair work.
 
 #### Acceptance Criteria
 
 - AC-001: Every explicit `$troubleshoot` turn establishes a turn-scoped report
-  obligation even when no remediation-budget marker is created.
-- AC-002: Stop accepts only a substantive report containing outcome, failure
-  contract, architecture verdict, component matrix, incident timeline, logs,
-  hypotheses, code debugging, cause, remediation, post-fix validation,
-  completion gate, and remaining uncertainty, with one supported terminal
-  classification.
-- AC-003: Incomplete final text receives a bounded corrective continuation;
-  exhaustion retains marker-derived attempt and blocker evidence inside the
-  same canonical report envelope, and an undelivered obligation survives into
-  the next available agent turn.
-- AC-004: The workflow documents that a host or process termination before any
-  Stop event cannot be converted into an assistant response by a local hook;
-  the next resumed turn must report the interrupted state before completion.
-- AC-005: The completion gate records `PASS`, `FAIL`, or `UNKNOWN`, with
-  evidence and gaps, for design, infrastructure, connectivity, configuration,
-  runtime health, logs, and relevant code paths; `VERIFIED_FIXED` requires all
-  seven criteria to be `PASS`. A `PASS` row requires its canonical evidence
-  reference and exact no-gap sentinel, cross-validated against structured
-  architecture, component, log-coverage, code-debugging, and post-fix proof
-  state. Referenced detail that explicitly reports missing, unavailable,
-  unexamined, unverified, or otherwise insufficient evidence invalidates the
-  pass even when a structured status token is present.
-- AC-006: The shared Stop arbiter keeps a peer continuation authoritative, but
-  finalizes an already validated report before returning a later terminal peer
-  result so the delivered report obligation cannot leak into another turn.
+  obligation even when no remediation-budget marker is created, but the
+  obligation is advisory during an ordinary, non-exhausted Stop.
+- AC-002: The normal user-visible report has exactly four required sections:
+  `Outcome`, `Root Cause And Fix`, `Verification`, and `Next Action`. It states
+  one supported classification, confidence, fixed scope, current state, root
+  cause, changes made, verified and unverified scope, and an exact next-action
+  owner, action, and done condition. A bounded `Evidence Appendix` is optional.
+- AC-003: `DIAGNOSED-FIXED` means the causal owner and earliest divergence are
+  proven, an owner-correct repair is applied, and the original reproducer plus
+  focused regression and source or boundary checks pass for the named fixed
+  scope. Installation, deployment, restart, or live replay may remain
+  explicitly unverified with a concise next action. `VERIFIED_FIXED` remains
+  reserved for complete end-to-end proof, while `DIAGNOSED_NOT_FIXED` means the
+  cause is diagnosed but no owner-correct repair was applied.
+- AC-004: Ordinary malformed, incomplete, `FAIL`, or `UNKNOWN` report content
+  records an advisory-incomplete disposition and allows Stop to continue. It
+  must not request another turn, deny later tools, or substitute a generated
+  fallback report. The workflow continues safe evidence collection and repair
+  while a decision-changing bounded experiment remains.
+- AC-005: Exact remediation-budget exhaustion remains a hard Stop contract and
+  cannot use `DIAGNOSED-FIXED`. Sensitive output may receive one bounded
+  redaction correction. Invalid trusted coordination state, missing mutation
+  authority, and independent peer Stop policy remain fail-closed.
+- AC-006: The workflow documents that host or process termination before any
+  Stop event cannot be converted into an assistant response by a local hook.
+  A later resumed turn reports the interrupted state without claiming proof
+  that the hook could not observe.
+- AC-007: The shared Stop arbiter keeps a peer continuation or terminal result
+  authoritative. A valid concise report is finalized transactionally, while
+  an ordinary advisory-incomplete report never becomes a competing Stop
+  decision.
 
 #### Negative Criteria
 
-- NC-001: Success, ordinary blocking, tool failure, non-exhausted early stop,
-  or absence of a remediation marker must not silently bypass report checking.
-- NC-002: Report enforcement must not loop indefinitely, fabricate evidence,
-  expose secrets, or replace a required report with only a hook system message.
-- NC-003: A result of "no issue found" must not hide unavailable components,
-  missing log intervals, unexamined code paths, or another coverage gap.
+- NC-001: An ordinary report-format defect, unknown criterion, unavailable log
+  source, or non-passing check must not stop the agent, deny tools, or consume a
+  remediation attempt by itself.
+- NC-002: Reporting must not loop, fabricate evidence, expose secrets, emit a
+  large generated substitute report, or obscure a successful source repair
+  behind `DIAGNOSED_NOT_FIXED` merely because activation remains pending.
+- NC-003: A concise report must not hide material unavailable components,
+  unverified activation or live state, missing log intervals, or another
+  decision-relevant coverage gap; summarize them under `Not verified` and give
+  the exact next action.
 
 #### Validation Method
 
-Validate explicit-invocation tracking, the canonical report schema, completion
-matrix parsing, bounded corrections, exhaustion composition, interruption
-carry-forward, and Stop-arbiter behavior.
+Validate invocation tracking, concise field-specific parsing, advisory ordinary
+Stop behavior, `DIAGNOSED-FIXED` semantics, sensitive-output correction,
+strict exhaustion composition, interruption handling, and Stop-arbiter
+behavior.
 
 #### Test Method
 
-Cover success, blocked, tool error, ordinary early stop, unresolved work,
-budget exhaustion, missing or duplicate criteria, invalid verdicts, incomplete
-or contradictory success claims, bounded correction, resumed interruption, and
-composition with continuing and terminal project-contract and SDLC Stop
-delegates.
+Cover source-fixed/runtime-pending, verified, diagnosed-unrepaired, blocked,
+tool-error, ordinary early-stop, malformed and partial reports, sensitive
+content, budget exhaustion, inclusive 5/120 limits, resumed interruption, and
+composition with continuing and terminal project-contract and SDLC delegates.
 
 #### Evaluation Method
 
-Invoke `$troubleshoot` with and without a remediation marker and verify every
-reachable terminal path produces the documented user-visible report.
+Invoke `$troubleshoot` with and without a remediation marker and confirm that
+ordinary report quality is advisory, hard boundaries remain fail-closed, and a
+successful source repair produces one concise `DIAGNOSED-FIXED` report with an
+exact activation next action.
 
 <!-- /REQUIREMENT: REQ-008 -->
 
@@ -472,70 +495,117 @@ reachable terminal path produces the documented user-visible report.
 
 #### User Story
 
-Task Implementer and Agentic SDLC users need direct prompts in an explicitly
-bound Codex session to refine the active objective and continue its workflow
-without repeatedly locating or hand-editing a prompt file.
+Task Implementer and Agentic SDLC users need every direct prompt to reach the
+current agent normally. When the session is bound to an active managed
+objective, eligible material intent should also be captured in that
+objective's canonical prompt without turning capture into an execution gate or
+requiring the user to locate and edit the prompt file.
 
 #### Acceptance Criteria
 
-- AC-001: An explicit workspace initialization or workflow invocation binds
-  one Codex session to exactly one canonical project and workflow before direct
-  prompt capture can affect an objective.
-- AC-002: Every safe direct turn receives durable session and turn provenance,
-  while only intent, steering, constraint, clarification-answer, or acceptance
-  changes update the objective-owned canonical prompt.
-- AC-003: Semantic and grammatical refinement is coordinator-owned, concise,
-  and lossless with respect to user facts, constraints, data, and acceptance
-  intent; hooks only stage bounded input and cannot author or execute workflow
-  semantics.
-- AC-004: Accepted prompt updates use staged, accepted, and consumed states,
-  reject stale base digests or manual-edit drift, and automatically start or
-  resume only the session's bound workflow.
-- AC-005: Prompt workspaces use one canonical v3 schema with a collision-safe
+- AC-001: An explicit workspace initialization or workflow invocation registers
+  one active canonical objective for the selected workflow and project.
+  Session binding and prompt capture are subordinate metadata and must never be
+  prerequisites for delivering or executing a direct prompt in the current
+  agent turn.
+- AC-002: `UserPromptSubmit` prompt intake is non-blocking for direct root-agent
+  prompts. Recognized secrets, stale writer provenance, binding conflicts,
+  ambiguous objectives, unsafe private state, capture failures, and unexpected
+  intake errors skip or report capture without returning a stop decision.
+- AC-003: Every eligible safe direct turn in a bound workflow receives durable
+  session and turn provenance when metadata-only staging succeeds. Staging
+  persists bounded identity, digest, workflow, project, token, and timing
+  fields but never the submitted prompt body or a raw prompt journal.
+- AC-004: The current agent classifies the already-delivered prompt as merge,
+  no-op, or sensitive. Only objective intent, steering, constraints, material
+  clarification answers, and acceptance changes may produce a project-intent
+  projection. Skill, workflow, shell, tool, delivery, agent-control, status,
+  conversation, unrelated, and duplicate-only turns do not mutate the prompt.
+- AC-005: A mixed turn persists and merges only its durable project-intent
+  projection. That projection is concise and lossless with respect to every
+  selected fact, value, negation, decision, uncertainty, example, reference,
+  constraint, and acceptance outcome while excluding ephemeral execution or
+  conversation clauses. Commands remain eligible when they define a project
+  interface, behavior, example, or verification contract rather than request
+  immediate execution.
+- AC-006: Accepted prompt updates use version-separated staged, accepted, and
+  consumed event-v2 states, canonical prompt identity, compare-and-set writes,
+  and an exact-once operation marker bound to both the operation identity and
+  accepted projection digest. A capture conflict may leave bounded private
+  diagnostic state but cannot stop the direct request, auto-rebase over prompt
+  drift, or create a second workflow execution path.
+- AC-007: A staged event may be newly classified only by its matching current
+  Codex session and current-turn claim. An already-accepted immutable
+  projection may complete its exact merge and consume transition, but an older
+  staged event must never be classified from later conversation context.
+- AC-008: Task Implementer resolves its primary-checkout project and
+  manifest-proven managed-lane project as one logical active objective for
+  attachment, capture, registry updates, and prompt-result validation.
+  Unrelated projects remain ineligible for capture.
+- AC-009: Prompt workspaces use one canonical v3 schema with a collision-safe
   five-character user-facing prompt reference at the filename prefix and the
   existing full internal prompt ID as authority.
-- AC-006: A one-time v2-to-v3 migration preserves editable prompts, immutable
+- AC-010: A one-time prompt-workspace v2-to-v3 migration preserves editable prompts, immutable
   run revisions, bindings, queues, active objectives, and manual edit support;
   users can resolve `run` targets by unique reference, full ID, or filename.
-- AC-007: Manual prompt-file edits never auto-run and remain effective only
+- AC-011: Prompt-session event-v1 records and their raw journals remain inert
+  in their original namespace. Event-v2 does not read, migrate, rewrite, or
+  delete them, and it has no legacy compatibility path.
+- AC-012: Manual prompt-file edits never auto-run and remain effective only
   through an explicit Task Implementer or SDLC `run` invocation.
-- AC-008: Source implementation, hook installation, hook registration and
+- AC-013: Source implementation, hook installation, hook registration and
   trust, restart, and fresh-session behavior remain separately reported proof
   gates.
 
 #### Negative Criteria
 
-- NC-001: Unbound, ambiguous, peer-blocked, Stop-generated continuation,
-  subagent, duplicate, stale-session, or replayed turns must not update or run
-  an objective.
+- NC-001: Unbound, ambiguous, Stop-generated continuation, subagent, no-op,
+  sensitive, stale-session, failed-capture, or replayed turns must not update an
+  objective, but prompt-intake policy must not prevent the direct user turn
+  from running.
 - NC-002: Secrets or recognized credential material must not be persisted in a
-  raw journal, staged event, canonical prompt, diagnostic, or test artifact.
+  prompt body, project-intent projection, canonical prompt, diagnostic, or
+  test artifact. A recognized pre-stage match creates no event; a later
+  sensitive disposition retains no submitted digest, operation token, or
+  projection.
 - NC-003: A short prompt reference must never become canonical identity, and a
   collision must fail closed rather than select an arbitrary prompt.
 - NC-004: The generic context hook must not become a workflow router, and a
   second independent Stop hook must not race the shared lifecycle arbiter.
+  Prompt-session Stop evaluation must not block completion or request a
+  continuation solely because capture is staged, accepted, incomplete, or
+  internally invalid.
 - NC-005: Prompt schema v3 must not retain parallel v2 write behavior,
   compatibility aliases, or a second canonical prompt path.
 
 #### Validation Method
 
-Validate state ownership, file modes, atomic writes, no-follow path handling,
-secret rejection, idempotency, prompt migration, ref resolution, workflow
-adapters, shared Stop arbitration, and source/install/runtime separation.
+Validate unconditional hook pass-through, metadata-only event-v2 ownership,
+current-session/current-turn authorization, file modes, atomic writes,
+no-follow path handling, selective projection, secret non-persistence,
+projection-bound operation identity, idempotency, prompt migration, ref
+resolution, logical primary/lane identity, workflow adapters, non-blocking
+shared Stop arbitration, and source/install/runtime separation.
 
 #### Test Method
 
-Use disposable Codex homes and repositories to cover binding, classification,
-stage/accept/consume, concurrent and duplicate turns, manual drift, secrets,
-ambiguous attachment, workflow isolation, migration, ref collisions, immutable
-revisions, explicit manual reruns, and Stop/subagent exclusions.
+Use disposable Codex homes and repositories to cover wrapper-level pass-through
+for every structured and unexpected intake failure, binding, dispositions,
+the project-intent allowlist and no-op list, mixed prompts, commands as data,
+contextual clarification answers, metadata-only stage/accept/consume/discard,
+concurrent and duplicate turns, projection substitution, manual drift,
+secrets, stale events, event-v1 isolation, primary/lane attachment, workflow
+isolation, prompt migration, ref collisions, immutable revisions, explicit
+manual reruns, and Stop/subagent exclusions.
 
 #### Evaluation Method
 
 After separately authorized installation and restart, bind fresh Task
-Implementer and SDLC sessions, submit direct steering prompts, and confirm each
-objective is refined and resumed once while unrelated, unsafe, and manually
-edited prompts remain inert.
+Implementer and SDLC sessions, submit direct material and nonmaterial prompts,
+and confirm every prompt reaches the current agent. Verify safe project intent
+is projected and captured once without starting either workflow, excluded
+clauses and prompt bodies are never persisted, and secret, unrelated, unsafe,
+and manually edited input is not captured or auto-executed.
 
 <!-- /REQUIREMENT: REQ-009 -->
 
@@ -583,6 +653,11 @@ stopping after a few status commands or passive terminal waiting.
   customer jobs.
 - AC-008: Every health conclusion is limited to the declared components,
   dependencies, exercised control and data paths, and observation window.
+- AC-009: Detailed architecture, component, incident, log, hypothesis, code,
+  and completion ledgers are retained as internal decision evidence. The
+  ordinary user-visible report summarizes only decision-relevant proof and
+  gaps; it does not reproduce those ledgers unless an optional evidence
+  appendix is requested or needed for a hard boundary.
 
 #### Negative Criteria
 
@@ -600,24 +675,23 @@ stopping after a few status commands or passive terminal waiting.
 #### Validation Method
 
 Validate state-machine routing, component/log/timeline ledgers, playbook source
-quality, report completion enforcement, mutation classification, and debug
+quality, concise report projection, mutation classification, and debug
 restoration against the skill contract and optional Stop hook.
 
 #### Test Method
 
-Use adversarial fixtures where status appears healthy but logs reveal
-configuration drift, clock or MUNGE failure, controller-worker connectivity,
-accounting errors, stale logs, GPU Xid events, resource exhaustion, Soperator
-check failures, Nebius control-plane constraints, or application defects.
-Reject missing or duplicate canonical log-layer rows, placeholder component
-identities or component/log evidence, and missing assertion-boundary or
-incident-window fields.
+Use adversarial fixtures where status appears healthy but internal evidence
+reveals configuration drift, clock or MUNGE failure, controller-worker
+connectivity, accounting errors, stale logs, GPU Xid events, resource
+exhaustion, Soperator check failures, Nebius control-plane constraints, or
+application defects. Reject unsupported internal conclusions while confirming
+that an incomplete ordinary final report remains advisory and non-blocking.
 
 #### Evaluation Method
 
-Run fresh-session graded scenarios and require evidence-backed coverage for
-every completion criterion; static text tests alone do not prove runtime
-investigation quality.
+Run fresh-session graded scenarios and require evidence-backed internal
+coverage for every applicable completion criterion plus an accurate concise
+projection; static text tests alone do not prove runtime investigation quality.
 
 <!-- /REQUIREMENT: REQ-010 -->
 
@@ -658,7 +732,25 @@ SDLC ownership.
   their exact delegated claims, and interrupted exact-child adoption revalidates
   that delegated ownership before completing the claim. Dirty Task Implementer
   source checkouts direct the user to a separate explicit `$commit`, and active
-  Agentic SDLC continues to require `sdlc-commit`.
+  Agentic SDLC continues to require `sdlc-commit`. Task start and base-state
+  recovery return one transient canonical commit context with the exact
+  PATH-canonical Python-family executable, helper, outer lifecycle cwd, worker
+  root, raw session ID, authorization, claim, and prepare argv; persisted
+  session fingerprints are never accepted as raw `--session-id` values. Task
+  start and recovery also return a transient result context with the exact
+  private result path and explicit external publication working directory;
+  workers never publish results from the selected project cwd. The context also
+  exposes an exact draft path and publisher argv; the helper, not the worker,
+  computes the final canonical digest, canonicalizes changed paths as a sorted
+  unique set, and atomically publishes the result. Coordinator acceptance does
+  not treat list order as scope authority and may revalidate only an exact
+  digest-and-commit-bound prior ordering rejection.
+- AC-005a: Task arm and rearm expose their opaque worker deadline only as the
+  canonical `start_lease` output consumed unchanged by `task-start`, together
+  with an exact assignment-derived start argv and scope cwd. A confirmed
+  running-task recovery exposes the equivalent exact recovery argv and scope
+  cwd. Internal task-plane `dispatched_at` state is not presented as a worker
+  command input, and coordinators do not manually reconstruct private paths.
 - AC-006: Interrupted execution can adopt only an exact staged state or exact
   direct-child commit, including from a fresh explicit invocation after the
   commit completed but claim persistence did not; a hook-modified committed
@@ -670,7 +762,8 @@ SDLC ownership.
 #### Negative Criteria
 
 - NC-001: Raw `git add`, path-scoped staging, `git add .`, composed or wrapped
-  helper commands, alternate helpers, untrusted helper bytes, stale sessions,
+  helper commands, alternate helpers, untrusted helper bytes, non-PATH or
+  non-Python-family interpreters, stale sessions,
   claim replay, malformed Worktree ownership/coordination records, and
   mismatched worktree/ref identities remain denied. Caller-provided Git
   environment that can reshape repository discovery or state remains denied;
@@ -690,7 +783,9 @@ SDLC ownership.
 Use disposable multi-project Git repositories and private Codex homes to prove
 prompt binding, helper trust, whole-tree review, claim consumption, shared-ref
 serialization, crash recovery, workflow isolation, and unchanged lifecycle
-write epochs for verified Git-only effects.
+write epochs for verified Git-only effects. Run the lifecycle hook and worker
+adapter under different canonical Python versions, prove the exact returned raw
+session succeeds, and prove substituting its fingerprint fails before staging.
 
 #### Test Method
 
@@ -711,5 +806,679 @@ verify exact committed tree, direct ancestry, clean status, hook admission, and
 absence of a second commit on recovery.
 
 <!-- /REQUIREMENT: REQ-011 -->
+
+<!-- REQUIREMENT: REQ-012 status=active priority=P0 type=feature -->
+### REQ-012: Checkpoint a dirty persistent Task Implementer lane before a run
+
+#### User Story
+
+Task Implementer users need one explicit `run` invocation to preserve a
+coherent dirty persistent lane as the next generation baseline, including
+related changes that span repository root and sibling project folders, without
+manually committing, stashing, resetting, or cleaning the managed checkout.
+
+#### Acceptance Criteria
+
+- AC-001: A resource-free run against an idle or safely reconcilable persistent
+  lane computes and reviews the complete lane candidate before acquiring its
+  first generation. A clean candidate keeps the current `HEAD` and creates no
+  commit.
+- AC-002: A dirty candidate uses repository-root `git add -A`, normal commit
+  hooks, and one fixed Task Implementer checkpoint message to create one
+  single-parent direct-child commit containing staged, unstaged, deleted,
+  renamed, and untracked non-ignored changes across the whole lane.
+- AC-003: Every changed lane path, including both sides of a rename, becomes an
+  exact initial generation claim in addition to the planned coordinator, task,
+  and conflict-domain claims. Any live overlapping lane claim blocks before
+  real-index or history mutation.
+- AC-004: Worktree owns one recoverable checkpoint-and-generation-open
+  transaction that binds the lane, run, workspace, branch, pre-checkpoint
+  `HEAD`, status digest, candidate tree, complete changed paths, and claims.
+  Task Implementer persists the preparation token, candidate tree, path digest,
+  and claims digest, pauses dirty candidates for review, and the open consumes
+  only that exact evidence. The resulting checkpoint `HEAD` becomes the lane,
+  lease, interop, coordinator, and first-wave baseline before task resources
+  are created.
+- AC-005: The primary/source checkout remains byte-for-byte and Git-state
+  untouched. `workspace init`, `workspace reuse`, `integrate`, and
+  `workspace remove` never create a checkpoint, and dirt discovered after
+  generation acquisition remains a conflict rather than another automatic
+  commit.
+- AC-006: Interrupted execution adopts only the exact staged candidate or the
+  exact clean direct-child checkpoint. Hook-modified commits require review
+  and rotate the preparation token so a blind retry cannot adopt them.
+  Conflicts, unsafe content, unexpected paths, gitlinks, tracked symlinks,
+  wrong branch or head, Git operations, or non-quiescent writers block without
+  reset, stash, clean, amend, unstage, or duplicate history.
+
+#### Negative Criteria
+
+- NC-001: Checkpoint behavior must not become a sixth public action, a manual
+  managed-lane repair instruction, or a compatibility alias for the former
+  clean-lane acquisition path.
+- NC-002: Private checkpoint state must not persist prompt bodies, diff
+  contents, repository file contents, secrets, private endpoints, or commit
+  message input.
+- NC-003: A checkpoint must not weaken selected-project lifecycle gates,
+  bypass applicable repository instructions, silently absorb an unresolved
+  cross-project ownership conflict, or create task resources before its exact
+  generation baseline is durable.
+
+#### Validation Method
+
+Use disposable multi-project repositories, linked persistent lanes, private
+Codex homes, normal and adversarial commit hooks, injected crash boundaries,
+and concurrent generation attempts to verify exact tree, ancestry, claims,
+recovery, source isolation, and public-interface invariants.
+
+#### Test Method
+
+Cover clean no-op; root, selected-project, and sibling-project dirt; staged and
+unstaged files; additions, deletions, renames, untracked and ignored files;
+conflicting claims; operations in progress; gitlinks and symlinks; hook
+failure, mutation, and timeout; crashes before and after commit; concurrent
+runs; active-generation dirt; final wave integration; and no implicit
+checkpoint from the other four public actions.
+
+#### Evaluation Method
+
+After source validation and separately authorized installation, restart into a
+fresh session and run one dirty-lane prompt in a disposable repository. Verify
+one checkpoint commit, clean managed lane, unchanged primary checkout, exact
+post-checkpoint generation baseline, and no second commit on retry.
+
+<!-- /REQUIREMENT: REQ-012 -->
+
+<!-- REQUIREMENT: REQ-013 status=active priority=P1 type=feature -->
+### REQ-013: Reopen an existing Task Implementer workspace without lane mutation
+
+#### User Story
+
+Task Implementer users need one explicit command from the primary project or
+its owning managed lane to reopen the same generated workspace after an editor
+window closes, without knowing private workspace or worktree paths.
+
+#### Acceptance Criteria
+
+- AC-001: `$task-implementer workspace reuse [project-folder]` defaults to the
+  current directory and resolves exactly the current repository, source ref,
+  and repo-relative project scope. Primary-project and owning-lane invocations
+  resolve the same workspace; every other caller Git root is rejected even if
+  branch metadata aliases the recorded source ref.
+- AC-002: Reuse requires an existing safe workspace-v2 manifest, generated VS
+  Code workspace, and authoritative live Worktree lane identity including lane
+  ID, incarnation, branch, worktree, scope, an existing source ref, common Git
+  directory, and primary checkout.
+- AC-003: Reuse opens dirty, idle, active, pending, integrating, conflicted, or
+  source-promoted live lanes without refreshing Git, changing lane or prompt
+  state, checkpointing, migrating, queuing, integrating, removing, or claiming
+  execution readiness.
+- AC-004: Missing workspace state returns `WORKSPACE_NOT_FOUND` with
+  `workspace init` guidance and creates nothing. Unsafe, creating,
+  creation-recovery, removing, removed, or identity-mismatched state fails
+  closed before editor launch.
+- AC-005: Editor unavailability, timeout, or nonzero exit is a warning after
+  successful validation and does not invalidate reuse. `run <prompt-ref>`
+  remains valid directly from the primary source project.
+
+#### Negative Criteria
+
+- NC-001: Reuse must not scan other branches, guess among workspaces, accept a
+  user-supplied editor target, or become `workspace open`, `workspace --reuse`,
+  or another compatibility alias.
+- NC-002: Reuse must not invoke lane ensure, idle refresh, creation recovery,
+  prompt migration, intake, generation, integration, removal, or public
+  Worktree lifecycle actions.
+
+#### Validation Method
+
+Use disposable repositories, persistent lanes, and isolated private homes to
+compare source-project and lane-project resolution and to snapshot Git,
+workspace, prompt, run, and lane state before and after repeated reuse.
+
+#### Test Method
+
+Cover clean and dirty idle lanes, active and retained live lifecycle state,
+missing workspace state, unsafe paths and permissions, removed or mismatched
+lane identity, repeated invocation, source and lane cwd aliases, and editor
+unavailable, timeout, and nonzero exit behavior.
+
+#### Evaluation Method
+
+After separately authorized installation, invoke reuse from a disposable
+source project and its managed lane, confirm the same generated workspace opens,
+and independently verify unchanged Git and private workflow state.
+
+<!-- /REQUIREMENT: REQ-013 -->
+
+<!-- REQUIREMENT: REQ-014 status=active priority=P0 type=feature -->
+### REQ-014: Bridge Task Implementer project contracts through the owner lifecycle
+
+#### User Story
+
+Task Implementer users need one explicit `run` to move from a reviewed lane
+checkpoint into worker dispatch without manually reconciling incompatible
+private project-instruction bundles or bypassing the selected-project
+lifecycle.
+
+#### Acceptance Criteria
+
+- AC-001: The project lifecycle admits a canonical project-instructions
+  inspect or render command bound to a Task Implementer run-owned bundle only
+  after a trusted, read-only Task Implementer adapter proves the exact
+  workspace, run, active wave, integration checkout, selected project, source
+  lane, canonical installed or sibling-source helpers, action, and every
+  action-specific private path. First preparation is bound to the original
+  wave base; a retained correction is bound to its exact recorded contract
+  commit, and an adopted sealed-contract head additionally requires the
+  authoritative owner journal. The integration checkout remains the exact
+  registered linked worktree sharing the source lane's common Git directory;
+  an independent repository cannot substitute at replan, prepare,
+  authorization, or dispatch. The integration checkout may be clean or have
+  only the complete selected-project requirements and design staged; unstaged,
+  untracked, deleted, symlinked, sibling, or other staged paths remain invalid.
+- AC-002: The run-owned receipt, runtime declaration, manifest, decision,
+  rendered rules, ownership, and state remain under the retained run
+  orchestration root. The current lifecycle session remains authoritative for
+  the outer selected lane and does not copy, rewrite, or impersonate that
+  evidence.
+- AC-003: A successful first `wave-plan` that opens the lane generation makes
+  the selected lane lifecycle reconciliation-required before Stop. Repeated
+  resume observations do not reopen a sealed lifecycle or require a second
+  checkpoint.
+- AC-004: The prepared-wave bridge admits only non-repository-mutating inspect
+  and render during reconciliation or while implementation remains open at an
+  exact prepared-wave boundary. Apply and verify remain on the ordinary
+  terminal project lifecycle path, preserving the project-instructions
+  helper's validation, repository-mutation, and terminal-state contracts. Task
+  Implementer dispatch continues to replay the exact run-owned render against
+  the clean contract commit.
+- AC-005: The public Task Implementer interface remains exactly five actions,
+  and users are never asked to supply lifecycle session paths, run IDs, wave
+  IDs, integration paths, or an adapter attestation.
+- AC-006: When the selected-project hook is bound to the persistent lane, it
+  may admit an exact Task Implementer worker `prepare`, `execute`, or `review`
+  commit transaction only after the read-only adapter proves the active
+  capacity batch, assignment digest, running task plane, worker session,
+  worker worktree, canonical commit evidence, original command digest, and
+  outer selected project. The adapter returns the exact command-derived worker
+  session only after matching its digest to that plane and evidence; commit
+  validation then uses the attested worker root and worker session even when
+  the hook payload retains the outer lifecycle session. Direct commits remain
+  payload-session-bound, and selected-project lifecycle ownership is unchanged.
+
+#### Negative Criteria
+
+- NC-001: An arbitrary alternate bundle, inactive or stale run, mismatched
+  selected project, different integration worktree, unsafe private path,
+  symlink, unrelated integration delta, malformed action, untrusted helper, or
+  basename lookalike must remain denied.
+- NC-002: The bridge must not make every external project-instructions command
+  lifecycle-neutral, weaken current-session evidence for ordinary work, or
+  let Task Implementer author lifecycle state directly.
+- NC-003: The lifecycle impact path must not infer a successful repository
+  mutation from a failed Task Implementer command or from read-only workspace,
+  intake, verification, reuse, integration inspection, or help actions.
+- NC-004: Cross-worktree commit admission must not authorize raw Git, a
+  coordinator-root transaction, an undispatched task, a sibling worktree, a
+  stale assignment or session, altered evidence, or a composed command.
+
+#### Validation Method
+
+Use disposable linked-worktree repositories and isolated Codex homes to submit
+the real Task Implementer run-owned project-instructions command through the
+lifecycle hook and to observe the post-`wave-plan` lifecycle transition.
+
+#### Test Method
+
+Cover exact inspect and render admission; apply and verify bridge rejection;
+ordinary terminal apply and verify behavior; current-session coordinator
+behavior; alternate run, session, project, worktree, path, mode, symlink,
+helper, action, and digest rejection; failed and repeated `wave-plan`;
+dispatch replay; exact coordinator-bound worker commit prepare, execute, and
+review; wrong-root and future-batch rejection; and unchanged public command
+metadata.
+
+#### Evaluation Method
+
+After source validation and separately authorized installation, restart Codex
+and resume a disposable retained run from the first-wave pre-dispatch boundary.
+Verify canonical run-owned rendering, worker dispatch, one outer lifecycle
+reconciliation, terminal sealing, retained recovery safety, and no user-visible
+adapter ceremony.
+
+<!-- /REQUIREMENT: REQ-014 -->
+
+<!-- REQUIREMENT: REQ-015 status=active priority=P0 type=feature -->
+### REQ-015: Recover missing active-wave worktree paths without discarding evidence
+
+#### User Story
+
+Task Implementer coordinators need an owner-supported way to continue a
+stopped run when an active wave's worker or integration directory disappears
+but the Worktree lease, branch, and Git administrative registration remain,
+including an integrated checkout that disappears before promotion validation.
+
+#### Acceptance Criteria
+
+- AC-001: Recovery requires explicit confirmation that prior workers stopped,
+  runs only from the exact owning project scope, and revalidates the active
+  workspace, run, wave, running capacity batch or promotion-pending phase, and
+  active Worktree generation lease before Git mutation. Running worker
+  recovery also revalidates its assignment and task plane.
+- AC-002: Each recovered path must have one exact `present` lease resource and
+  one locked Git registration with the expected path, branch, administrative
+  `HEAD`, branch tip, clean index, and no index lock. A running wave's
+  integration tip must equal the wave contract commit; a promotion-pending
+  integration tip must equal the recorded integrated head. A running worker
+  tip may equal its base or one direct child of that base.
+- AC-003: A proven missing path is rehydrated through Git's locked-worktree
+  recovery mechanism, journaled, independently revalidated as a clean linked
+  checkout, and kept `present` in the lease. The result explicitly reports
+  that filesystem-only state was not recoverable.
+- AC-004: Resource recovery changes no task plane or wave state and infers no
+  commit, result, integration, or promotion. A fresh replacement worker still
+  invokes normal `task-recover` from the restored assigned scope to transfer
+  session ownership; promotion-pending recovery restores only the integration
+  checkout needed for validation and promotion.
+- AC-005: Worktree anchor discovery ignores lexically unrelated missing
+  registrations before strict resolution while continuing to strictly resolve
+  and validate the one current managed checkout candidate.
+
+#### Negative Criteria
+
+- NC-001: Recovery must not mark retained resources absent, prune Git
+  administration, delete or recreate branches, reset, stash, clean, copy a
+  worker patch, reconstruct a commit, release a lease, or promote a wave.
+- NC-002: Missing or ambiguous registrations, unlocked records, broken
+  symlinks, path collisions, staged index state, index locks, lease mismatch,
+  branch or head drift, more than one worker commit, stale run state, or an
+  unconfirmed worker stop remain retained and fail closed.
+- NC-003: The internal recovery path must not become a sixth public Task
+  Implementer action or authorize cloud, network, infrastructure, or service
+  mutation.
+
+#### Validation Method
+
+Use disposable real linked worktrees and isolated Worktree lease state. Remove
+active directories without removing their locked Git registrations, invoke
+the exact owner recovery, and compare Git registrations, branches, lease rows,
+task planes, wave state, and repository heads before and after.
+
+#### Test Method
+
+Cover missing integration and worker paths, worker base and one-direct-child
+tips, explicit stop confirmation, idempotent present paths, staged index and
+index-lock retention, broken symlinks, wrong lease tuples, branch/head drift,
+future-batch assignments, normal post-rehydration `task-recover`, and unchanged
+promotion state.
+
+#### Evaluation Method
+
+After separately authorized installation and restart, inspect a disposable
+retained run with the same failure shape, rehydrate only the exact active-wave
+resources, start a fresh replacement session through `task-recover`, and
+independently verify that no product commit or promotion was inferred.
+
+<!-- /REQUIREMENT: REQ-015 -->
+
+<!-- REQUIREMENT: REQ-016 status=active priority=P0 type=feature -->
+### REQ-016: Prove prompt-revision impact before workflow progression
+
+#### User Story
+
+Task Implementer and Agentic SDLC users need a semantic edit to an editable
+objective prompt to be reflected in the canonical project contract, or proven
+already satisfied, before an existing execution plan can continue. Users also
+need concise status that explains whether the latest accepted revision changed
+the contract without exposing prompt-derived content or private digests.
+
+#### Acceptance Criteria
+
+- AC-001: Both workflows continue to detect editable prompt changes from
+  owner-computed exact-byte and normalized-intent digests and immutable prompt
+  revisions. The editable prompt is never rewritten to embed a self-hash or
+  caller-maintained digest.
+- AC-002: For every accepted prompt revision, a shared owner validator requires
+  exactly one disposition for every extracted statement occurrence. A
+  disposition either maps the statement to current requirement and design
+  record IDs, identifies an execution-only effect, or uses a bounded
+  non-contract reason. Missing, duplicate, nonexistent, or superseded record
+  mappings fail closed.
+- AC-003: An immutable private impact attempt binds the workflow, prompt ID and
+  revision, prompt intent identity, refinement identity, current canonical
+  spec receipt, exact requirements and design identities, the complete
+  statement-set identity, prior accepted impact head, and the derived effect
+  and plan action. An atomic ledger selects one accepted attempt; identical
+  retries adopt it and changed inputs create a superseding attempt rather than
+  replacing history. Publication serializes per run, compare-checks the
+  observed ledger head, and preserves then skips a conflicting orphan attempt
+  after interruption instead of wedging or overwriting history.
+- AC-004: `no_effect` is valid only when every statement is mapped to an active
+  existing contract record or a bounded non-contract reason. Requirements or
+  design effects require reconciliation and safe-boundary replanning before
+  new dispatch or promotion. Material ambiguity remains pending clarification
+  and produces no unlocking impact receipt.
+- AC-005: Workflow state distinguishes the latest settled prompt revision from
+  the execution plan's basis revision. A later proven no-effect revision may
+  retain the older plan; an impactful revision freezes new dispatch and
+  promotion while preserving already-running resources until a safe replan.
+- AC-006: One plan-basis receipt binds the accepted impact and canonical
+  spec-transition identities to the Task coordinator plan or Agentic feature
+  plan. Every resource creation, dispatch, integration, promotion, and terminal
+  progression boundary verifies that receipt against the current prompt,
+  accepted impact head, plan identity, and canonical spec bytes so a stale
+  downstream artifact cannot advance another generation.
+- AC-007: Existing non-terminal state without an impact receipt is reconciled
+  forward: new progression is frozen until the current basis is reconstructed
+  and validated or safely replanned with a distinct plan identity. An existing
+  coordinator cannot adopt the latest material revision as its historical
+  basis merely because its old plan bytes still match. Terminal history remains
+  readable as historical state without fabricating retroactive evidence.
+- AC-008: Task Implementer and Agentic SDLC status report the public prompt
+  reference and revision, editable-versus-accepted snapshot state, semantic
+  edit detection, impact classification, mapped public record IDs or bounded
+  reason category, and retain/replan/clarification action. Status never exposes
+  raw prompt text, extracted statements, free-form rationale, private impact or
+  run paths, or prompt-derived digest values. Existing editable prompt-path
+  output remains unchanged.
+- AC-009: The shared impact validator remains an internal
+  `maintain-project-specs` owner boundary. Task Implementer and Agentic SDLC
+  remain adapters with separate workflow roots and retain their explicit
+  public `run` boundary.
+
+#### Negative Criteria
+
+- NC-001: Matching spec bytes, an agent-authored `no_effect` label, or a
+  requirements-only digest must not independently prove that a changed prompt
+  revision is satisfied.
+- NC-002: Impact evidence must not become a second semantic requirements/design
+  owner, mutate canonical specs, persist raw prompt content, or expose
+  content-derived digests in public output.
+- NC-003: Migration must not invent historical semantic coverage, retain a
+  permanent legacy execution path, discard active resources, or allow stale
+  coordinator evidence to bypass forward reconciliation.
+
+#### Validation Method
+
+Reparse the exact canonical specs, validate their current record inventory and
+receipt, enumerate every refinement statement occurrence, derive the aggregate
+effect and plan action from its dispositions, and verify the accepted impact
+plus plan-basis chain at every progression boundary.
+
+#### Test Method
+
+Use disposable prompt workspaces and canonical spec pairs to cover omitted and
+duplicate statements, inactive or nonexistent IDs, changed aggregate claims,
+spec drift, concurrent writers, interrupted receipt publication, multiple
+revisions, no-effect retention, impactful safe replanning, stale plan bases,
+forward migration, terminal history, and sanitized status for both workflows.
+
+#### Evaluation Method
+
+Edit an accepted prompt after requirements and design exist, explicitly rerun
+each workflow, and confirm the new revision is either traced to current record
+IDs or forces reconciliation and replanning before new work. Confirm a real
+semantic edit can no longer disappear behind an unsubstantiated `no_effect`
+message and that no prompt hash header is created.
+
+<!-- /REQUIREMENT: REQ-016 -->
+
+<!-- REQUIREMENT: REQ-017 status=active priority=P0 type=feature -->
+### REQ-017: Correct a reviewed wave without promoting known-bad integration
+
+#### User Story
+
+Task Implementer coordinators need blockers found by combined integration
+review to be fixed by isolated workers while the reviewed wave remains
+unpromoted and all accepted worker evidence remains intact.
+
+#### Acceptance Criteria
+
+- AC-001: An exact clean `promotion_pending` wave may append one correction
+  round only when every indexed task is merged, every batch is done, the
+  integration tip equals the sealed integrated head, and the persistent lane
+  remains clean at the wave's original base.
+- AC-002: Correction tasks are new immutable task IDs, cannot rewrite indexed
+  task plans or depend on future waves, and extend the active generation's
+  repository claims before coordinator or wave state changes.
+- AC-003: Correction workers receive ordinary assignments and one-direct-child
+  commit authorization from the sealed integrated head. Previously merged
+  assignments remain valid against their own immutable task-plane bases and
+  plan identities; assigned or running work must match the current correction
+  plan and base.
+- AC-004: Correction commits merge into the retained integration branch in
+  stable task order. The new integration head contains every original and
+  correction task commit, and promotion requires fresh combined validation and
+  review evidence bound to that exact head.
+- AC-005: Promotion remains one fast-forward from the original wave base. Task
+  and integration cleanup retains the existing proof gates and marks original
+  and correction tasks done only after successful promotion.
+
+#### Negative Criteria
+
+- NC-001: A failed review must not be represented as passing evidence, promote
+  a known-bad integration, reset or rebuild worker history, or authorize the
+  coordinator to write product fixes.
+- NC-002: Corrections must not depend on unpromoted future work, overwrite an
+  existing assignment or result, change the persistent lane before promotion,
+  or bypass normal worker commit and result validation.
+
+#### Validation Method
+
+Use disposable persistent-lane, integration, and worker worktrees to retain a
+reviewed integration, append correction tasks, dispatch from the exact sealed
+head, merge the resulting direct-child commits, and compare lane and wave state
+before and after the final promotion.
+
+#### Test Method
+
+Cover exact retained state, stale or dirty integration and lane rejection,
+indexed-task mutation, future dependency rejection, plan-digest advancement,
+historical assignment validation, correction dispatch, ordered re-integration,
+fresh evidence, one fast-forward promotion, cleanup, and interrupted replay.
+
+#### Evaluation Method
+
+Reproduce a blocking combined-review finding in a disposable retained run,
+append a worker-owned correction, and independently verify that the lane does
+not move until the corrected integration passes review and promotes once.
+
+<!-- /REQUIREMENT: REQ-017 -->
+
+<!-- REQUIREMENT: REQ-018 status=active priority=P0 type=feature -->
+### REQ-018: Resume interrupted Task Implementer runs from authoritative state
+
+#### User Story
+
+Task Implementer users need to rerun the same accepted prompt after any
+interruption without duplicating completed work, losing retained evidence, or
+requiring knowledge of private coordinator commands.
+
+#### Acceptance Criteria
+
+- AC-001: Repeating public `run` for the same prompt revision derives one
+  bounded outcome from authoritative coordinator-v7, wave, task, immutable,
+  Git, Worktree, lifecycle, and lease evidence: execute one exact transition,
+  wait for a proven active owner, require stop confirmation, block on
+  ambiguity, or report the unchanged run complete.
+- AC-002: Coordinator-owned transitions use a durable monotonic intent record
+  whose pre-state digest, expected effects, phase, and terminal digest prevent
+  duplicate external effects and make interruption before or after state
+  publication independently recoverable.
+- AC-003: A current coordinator-v7 run without the new intent record is
+  adopted only at a fully validated stable boundary. Partial, malformed,
+  journal-inconsistent, dirty, or ownership-ambiguous state remains retained
+  and fails closed with one minimum recovery action.
+- AC-004: Resume planning is read-only. Execution reacquires every owning lock,
+  recomputes the observed-state digest, and holds the resume-execution and
+  reentrant project-scope locks through the selected transition and projection
+  commit. It replans instead of mutating when another writer advanced the run.
+- AC-005: Machine-readable coordinator, wave, task, immutable, interop, lease,
+  and Git state owns effective execution status after coordinator creation.
+  Human handoff status is a compare-and-swap projection that is reconciled
+  after every transition without overwriting unconsumed correction input or
+  user-authored history.
+- AC-006: Final completion is published only after promotion, cleanup, external
+  lease release, local interop reconciliation, handoff projection, and queued
+  activation each have exact-once evidence.
+- AC-007: Lifecycle continuation uses the project-contract owner's explicit
+  state transition and never assumes a synthetic Stop continuation emits
+  `UserPromptSubmit`. A required fresh runtime returns one precise reload
+  boundary while preserving the run.
+- AC-008: Promotion-review corrections become immutable, digest-addressed
+  `pending-plan-v1` input bound to the active resume epoch and token before
+  coordinator, wave, or task-plane publication. A retry consumes the same
+  bytes regardless of later live Markdown edits, and another epoch cannot
+  inherit an abandoned staged plan.
+- AC-009: Every behavior-affecting coordinator argument is stored canonically
+  and digest-bound. An interrupted intent replays only those arguments;
+  effect-observed and state/projection-committed phases finish reconciliation
+  without rerunning the mutation. Finalization binds fresh alignment evidence,
+  and confirmed recovery binds explicit stop authority before changing state.
+- AC-010: The lightweight deterministic verifier gives the real linked-
+  worktree regression suite a bounded budget that exceeds its validated
+  runtime; normal long-running crash coverage must not be reported as a test
+  failure solely because an obsolete verifier timeout expired.
+- AC-011: A new run bootstraps resume control under the execution and scope
+  locks before its first controlled mutation. Every successful controlled
+  response carries the next authoritative outcome, canonical arguments, and
+  token when executable, so the coordinator never needs to infer or silently
+  bypass the resume boundary between transitions.
+- AC-012: Replanning computes the coordinator plan identity from the complete
+  final ordered wave index, including every retained completed wave and the
+  replacement correction tail. A retained current-v7 run written with only a
+  deterministic replacement-tail digest is recoverable only through one
+  owner-invoked, exact-digest, journaled repair that revalidates the completed
+  prefix, replacement wave IDs, wave/task consistency, prompt-impact basis,
+  and absence of assigned or running replacement workers before updating the
+  plan basis and coordinator in recoverable order. Repeating an unchanged
+  retained-prefix replan is byte-idempotent and never blocks its active
+  replacement wave; successful recovery proceeds through ordinary resume
+  adoption and its controlled next transition. If canonical spec receipt bytes
+  advanced before recovery, the owner first refreshes the ready refinement's
+  compiled managed-requirements digest; recovery republishes the current
+  validated impact, accepts only `retain_plan`, and binds that exact impact into
+  the repaired plan basis before the coordinator write.
+- AC-013: When a sealed selected-lane lifecycle reconciliation leaves only the
+  canonical requirements/design pair and provenance-owned `AGENTS.md` dirty
+  during an active promotion review, one owner-invoked adoption binds the exact
+  lifecycle and file digests, journals a single coordinator-owned integration
+  commit, and treats that overlay as admissible only while the lane bytes and
+  integration blobs remain identical. Promotion journals the temporary lane
+  cleanup and either completes the fast-forward or restores the exact adopted
+  bytes after interruption. No product path, arbitrary dirt, staged state, or
+  unsealed lifecycle is admitted.
+- AC-014: A promotion-review correction graph may span multiple dependency
+  frontiers. Replanning appends only the currently dependency-ready frontier
+  to the retained integration, dispatches it from the latest sealed integration
+  head, and repeats after that frontier is merged. A future resource-free task
+  may update only its dependencies to the newly indexed correction chain; its
+  remaining immutable plan and claims stay unchanged.
+- AC-015: Handoff projection maps every machine task state to the canonical
+  human task-status vocabulary before publication. Unpromoted `committed` and
+  `merged` planes remain `in_progress`; only a promoted or cleaned wave becomes
+  `done`. A current-v7 handoff written with the unsupported historical
+  `committed` projection is recoverable only through one owner-invoked,
+  caller-digest-bound, journaled rewrite that validates coordinator, wave, and
+  task-plane identity before normal repeated resume parses the handoff again.
+- AC-016: Worker arm, start, recovery, commit, and result-publication responses
+  return transient structured contexts containing the exact canonical cwd,
+  argv, raw session binding where required, immutable assignment identity, and
+  private result target. Coordinators and workers consume those values without
+  reconstructing visually similar private paths or substituting persisted
+  fingerprints for raw command inputs.
+- AC-017: The canonical worker-result publisher validates assignment identity,
+  exact changed paths, commit and tree evidence, stable schema, and destination
+  before computing the final digest and publishing the immutable mode-0600
+  result atomically. A malformed, partial, foreign, or digest-mismatched draft
+  leaves no final result file.
+- AC-018: An explicit public `run` may repair only a stale generated VS Code
+  Python launcher caused by removal of its formerly resolved executable. The
+  repair reuses canonical workspace initialization, preserves lane identity,
+  prompts, runs, and orchestration state, then repeats full workspace
+  verification before intake. Every other workspace mismatch remains
+  fail-closed, and non-mutating `workspace reuse` never performs this repair.
+- AC-019: A current-v7 assignment must match the current canonical worker
+  guardrails until its first successful `task-start`. After start binds the
+  exact immutable assignment digest and worker session into the task plane,
+  later source-only guardrail wording growth must not strand that running,
+  committed, or merged assignment. Resume still revalidates every other
+  assignment, task, handoff, Git, Worktree, and lease identity and returns the
+  current transient recovery and result-publication contexts without rewriting
+  the accepted assignment.
+
+#### Negative Criteria
+
+- NC-001: Repeated `run` must not create another run, prompt revision,
+  assignment, worker, branch, worktree, commit, merge, promotion, generation,
+  or queue activation for an already accepted identity.
+- NC-002: Stale heartbeats, process identifiers, elapsed time, Markdown status,
+  or missing local paths alone must not prove worker termination or authorize
+  cleanup, recovery, promotion, or finalization.
+- NC-003: The recovery contract must not add a sixth public Task Implementer
+  action, a public resume flag, support for coordinator-v1 through v6, a
+  compatibility execution path, or coordinator-authored product changes.
+- NC-004: An interrupted transition must not be abandoned in order to begin a
+  second transition, and ambiguous Git or Worktree evidence must not be reset,
+  pruned, force-cleaned, or silently reconstructed.
+- NC-005: Plan-digest recovery must not infer an expected digest, rewrite a
+  task or worker plane, change Git, Worktree, lease, promotion, or public
+  workflow state, run after resume-control adoption, accept an ambiguous
+  replacement suffix, follow a symlink or non-file recovery artifact, appear
+  in ordinary helper help, repair a stale refinement, accept material
+  `replan_required` impact, or become a legacy coordinator compatibility layer.
+- NC-006: Contract-delta adoption must not generalize lane cleanliness, move or
+  stage the persistent-lane index, accept README, changelog, product, untracked,
+  deleted, renamed, symlinked, or partially reviewed paths, copy private
+  lifecycle bytes into Git, or lose the lane overlay before its exact bytes are
+  durable in the retained integration.
+- NC-007: Projection recovery must not accept arbitrary Markdown edits, change
+  machine state, infer completion, rewrite pending correction content or
+  narrative, expose a public action, or retain `committed` as a second accepted
+  handoff status.
+- NC-008: Transient raw session IDs, start leases, or canonical argv must not be
+  persisted in assignment, coordinator, authorization, prompt, handoff, or
+  durable run state beyond the already required hashed ownership evidence.
+- NC-009: Generated-launcher repair must not accept a user-edited task, change
+  a lane incarnation, refresh source content, mutate Git, advance a run, scan
+  other workspaces, or broaden recovery from the exact missing-executable
+  failure.
+
+#### Validation Method
+
+Use isolated repositories, Codex homes, Worktree state, and subprocess fault
+injection to compare authoritative identities before and after repeated public
+run evaluation at every persistent and external-effect boundary.
+
+#### Test Method
+
+Cover interruption during intake, revision settlement, checkpoint, generation
+open, plan publication, preparation, dispatch, worker execution and result
+publication, integration, promotion, cleanup, final release, handoff
+projection, queue activation, lifecycle continuation, and concurrent resume.
+Include journal-less coordinator-v7 adoption, stale projections, file and
+directory sync failures, partial journals, storage exhaustion, retained
+completed prefixes with deterministic replacement-tail digests, interrupted
+plan-basis-first and coordinator-first repair completion, broken-symlink and
+  live-worker rejection, hidden owner-command routing, repeated unchanged
+  replanning, spec-receipt-only retain-impact refresh, stale-refinement and
+  material-impact rejection, sealed contract-delta adoption, interrupted
+  promotion cleanup restoration, multi-frontier correction chaining, future
+  dependency-only rebinding, canonical unpromoted task projection, exact
+  unsupported-status recovery, repeated ordinary resume, and unchanged
+  terminal replay. Change canonical worker guardrail wording after a task has
+  started and prove that its exact accepted assignment remains resumable while
+  an unstarted assignment with the same source drift stays fail-closed.
+
+#### Evaluation Method
+
+Interrupt a disposable run immediately before and after each durable write or
+external effect, restart in a fresh process with the same prompt reference,
+and confirm it either resumes from the first unproved transition or fails
+closed without changing evidence. Confirm an unchanged completed objective
+returns `ALREADY_COMPLETE` and a changed prompt creates a linked new revision.
+
+<!-- /REQUIREMENT: REQ-018 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

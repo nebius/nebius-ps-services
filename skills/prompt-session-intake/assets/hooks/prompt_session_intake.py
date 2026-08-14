@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture-only UserPromptSubmit hook for explicitly bound workflow sessions."""
+"""Non-blocking capture sidecar for direct workflow-session prompts."""
 
 from __future__ import annotations
 
@@ -8,6 +8,21 @@ import sys
 from typing import Any
 
 from prompt_session_state import PromptSessionError, evaluate_submit
+
+
+def _capture_skipped(code: str) -> dict[str, Any]:
+    safe_code = code if code.replace("_", "").isalnum() else "CAPTURE_ERROR"
+    return {
+        "continue": True,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                f"Prompt-session capture was skipped ({safe_code}). Continue "
+                "handling the direct user prompt normally; do not retry or replay "
+                "it solely for capture."
+            ),
+        },
+    }
 
 
 def main() -> int:
@@ -19,15 +34,9 @@ def main() -> int:
             )
         output = evaluate_submit(payload)
     except PromptSessionError as error:
-        output = {
-            "continue": False,
-            "stopReason": f"Prompt-session intake blocked ({error.code}): {error.message}",
-        }
+        output = _capture_skipped(error.code)
     except Exception:
-        output = {
-            "continue": False,
-            "stopReason": "Prompt-session intake failed closed without persisting prompt content.",
-        }
+        output = _capture_skipped("CAPTURE_ERROR")
     print(json.dumps(output, sort_keys=True))
     return 0
 

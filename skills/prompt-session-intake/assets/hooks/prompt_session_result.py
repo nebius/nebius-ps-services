@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from prompt_session_storage import (
     PROMPT_SCHEMAS,
@@ -14,6 +15,7 @@ from prompt_session_storage import (
 
 
 OPERATION_MARKER_PREFIX = b"<!-- prompt-session-operation:"
+OPERATION_MARKER_VERSION = "v2"
 TASK_WORKSPACE_SCHEMA = "task-implementer/workspace-v2"
 SDLC_WORKSPACE_SCHEMA = "agentic-sdlc/prompt-workspace-v1"
 
@@ -57,6 +59,9 @@ def validate_prompt_result(
     prompt_id: str,
     prompt_ref: str,
     operation_id: str | None = None,
+    projection_sha256: str | None = None,
+    projection: bytes | None = None,
+    duplicate: bool = False,
 ) -> None:
     metadata = prompt_frontmatter(raw)
     if (
@@ -69,12 +74,36 @@ def validate_prompt_result(
             "canonical prompt identity differs from the workflow result",
         )
     if operation_id is not None:
-        marker = f"<!-- prompt-session-operation:{operation_id} -->".encode("utf-8")
-        if raw.count(marker) != 1:
+        if projection_sha256 is None or projection is None:
+            raise PromptSessionError(
+                "PROMPT_RESULT_INVALID", "project-intent projection proof is missing"
+            )
+        marker = (
+            f"<!-- prompt-session-operation:{OPERATION_MARKER_VERSION}:"
+            f"{operation_id}:{projection_sha256} -->"
+        ).encode("utf-8")
+        if not duplicate and raw.count(marker) != 1:
             raise PromptSessionError(
                 "PROMPT_RESULT_INVALID",
                 "canonical prompt does not contain the exact intake operation",
             )
+        if duplicate:
+            marker_pattern = re.compile(
+                rb"<!-- prompt-session-operation:v2:[0-9a-f]{64}:"
+                + projection_sha256.encode("ascii")
+                + rb" -->"
+            )
+            selected = projection.decode("utf-8").strip().encode("utf-8")
+            matches = [
+                match
+                for match in marker_pattern.finditer(raw)
+                if raw[: match.start()].endswith(selected + b"\n\n")
+            ]
+            if len(matches) != 1:
+                raise PromptSessionError(
+                    "PROMPT_RESULT_INVALID",
+                    "canonical prompt does not contain one exact duplicate projection",
+                )
 
 
 def _canonical_manifest_path(value: object, label: str) -> Path:
@@ -92,7 +121,7 @@ def _canonical_manifest_path(value: object, label: str) -> Path:
     return resolved
 
 
-def _task_manifest_project(manifest: dict[str, object]) -> Path:
+def _task_manifest_projects(manifest: dict[str, object]) -> frozenset[Path]:
     primary_root = _canonical_manifest_path(
         manifest.get("primary_root"), "canonical Task primary root"
     )
@@ -129,7 +158,7 @@ def _task_manifest_project(manifest: dict[str, object]) -> Path:
         raise PromptSessionError(
             "PROMPT_RESULT_INVALID", "canonical Task lane scope is inconsistent"
         )
-    return primary_project
+    return frozenset((primary_project, lane_project))
 
 
 def validate_prompt_location(
@@ -172,14 +201,21 @@ def validate_prompt_location(
         else str(workspace_root / "prompts"),
         "canonical prompt workspace root",
     )
-    manifest_project = (
-        _task_manifest_project(manifest)
+    manifest_projects = (
+        _task_manifest_projects(manifest)
         if workflow == "task-implementer"
-        else _canonical_manifest_path(
-            manifest.get("project_root"), "canonical prompt bound project"
+        else frozenset(
+            (
+                _canonical_manifest_path(
+                    manifest.get("project_root"), "canonical prompt bound project"
+                ),
+            )
         )
     )
-    if manifest_prompt_root != prompt_path.parent or manifest_project != canonical_project:
+    if (
+        manifest_prompt_root != prompt_path.parent
+        or canonical_project not in manifest_projects
+    ):
         raise PromptSessionError(
             "PROMPT_RESULT_INVALID",
             "canonical prompt does not belong to the bound project",

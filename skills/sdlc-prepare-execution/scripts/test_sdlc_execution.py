@@ -166,6 +166,73 @@ def git(cwd: Path, *args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def write_private(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+
+def seed_prompt_impact(run_dir: Path, selected_project: Path) -> None:
+    prompt_id = "prompt-" + "a" * 32
+    intent_sha256 = "b" * 64
+    write_private(
+        run_dir / "prompt.json",
+        {
+            "prompt_id": prompt_id,
+            "revisions": [
+                {
+                    "revision": "r0001",
+                    "sha256": "c" * 64,
+                    "intent_sha256": intent_sha256,
+                }
+            ],
+        },
+    )
+    requirements_bytes = (selected_project / "docs" / "requirements.md").read_bytes()
+    design_bytes = (selected_project / "docs" / "design.md").read_bytes()
+    impact_receipt = {
+        "schema": "maintain-project-specs.prompt-impact-receipt.v1",
+        "workflow": "agentic-sdlc",
+        "generation": 1,
+        "prompt_id": prompt_id,
+        "revision": "r0001",
+        "intent_sha256": intent_sha256,
+        "spec_receipt_sha256": "d" * 64,
+        "requirements_sha256": hashlib.sha256(requirements_bytes).hexdigest(),
+        "design_sha256": hashlib.sha256(design_bytes).hexdigest(),
+        "effects": [],
+        "plan_action": "retain_plan",
+    }
+    impact_sha256 = hashlib.sha256(
+        json.dumps(
+            impact_receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    write_private(
+        run_dir / "prompt-impact" / "attempt-0001.json",
+        impact_receipt,
+    )
+    write_private(
+        run_dir / "prompt-impact" / "ledger.json",
+        {
+            "schema": "agentic-sdlc/prompt-impact-ledger-v1",
+            "workflow": "agentic-sdlc",
+            "current": {
+                "generation": 1,
+                "revision": "r0001",
+                "path": "attempt-0001.json",
+                "sha256": impact_sha256,
+            },
+        },
+    )
+
+
 class SchedulerTests(unittest.TestCase):
     def test_independent_tasks_share_wave_and_dependencies_follow(self) -> None:
         tasks = parse_locked_plan(PLAN)
@@ -247,11 +314,18 @@ class GitLifecycleTests(unittest.TestCase):
         self.run_dir = self.root / "private" / "run-1"
         self.plan = self.run_dir / "plans" / "FEAT-001.plan.v1.md"
         self.project.mkdir(parents=True)
+        docs = self.project / "docs"
+        docs.mkdir()
+        requirements_bytes = b"test requirements\n"
+        design_bytes = b"test design\n"
+        (docs / "requirements.md").write_bytes(requirements_bytes)
+        (docs / "design.md").write_bytes(design_bytes)
         self.plan.parent.mkdir(parents=True)
         self.plan.write_text(PLAN, encoding="utf-8")
         self.plan.with_suffix(self.plan.suffix + ".lock").write_text(
             "locked\n", encoding="utf-8"
         )
+        seed_prompt_impact(self.run_dir, self.project)
         try:
             git(self.project, "init", "-b", "main")
         except AssertionError:
@@ -274,6 +348,16 @@ class GitLifecycleTests(unittest.TestCase):
     def prepare(self) -> dict:
         return prepare_execution(
             self.run_dir, self.project, "FEAT-001", self.plan, capacity=2
+        )
+
+    def install_scoped_specs(self, selected: Path) -> None:
+        docs = selected / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "requirements.md").write_bytes(
+            (self.project / "docs" / "requirements.md").read_bytes()
+        )
+        (docs / "design.md").write_bytes(
+            (self.project / "docs" / "design.md").read_bytes()
         )
 
     def start_assignment(
@@ -318,6 +402,293 @@ class GitLifecycleTests(unittest.TestCase):
             )
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
         complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+
+    def append_prompt_revision(self) -> None:
+        binding_path = self.run_dir / "prompt.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["revisions"].append(
+            {
+                "revision": "r0002",
+                "sha256": "e" * 64,
+                "intent_sha256": "f" * 64,
+            }
+        )
+        write_private(binding_path, binding)
+
+    def test_new_prompt_revision_freezes_dispatch_until_impact_reconciliation(
+        self,
+    ) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): impact gate")
+        binding_path = self.run_dir / "prompt.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["revisions"].append(
+            {
+                "revision": "r0002",
+                "sha256": "e" * 64,
+                "intent_sha256": "f" * 64,
+            }
+        )
+        binding_path.write_text(
+            json.dumps(binding, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        binding_path.chmod(0o600)
+
+        with self.assertRaises(ExecutionError) as caught:
+            prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(caught.exception.code, "PROMPT_IMPACT_REQUIRED")
+        self.assertFalse(
+            execution_core.assignment_path(
+                self.run_dir, "FEAT-001", "WAVE-001", "TASK-001"
+            ).exists()
+        )
+
+    def test_new_prompt_revision_freezes_arm_and_start_before_mutation(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): impact gate")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.append_prompt_revision()
+
+        for action in (
+            lambda: arm_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                assignment["assignment_digest"],
+            ),
+            lambda: start_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                assignment["assignment_digest"],
+                "stale-impact-worker",
+                Path(assignment["scope_cwd"]),
+            ),
+        ):
+            with self.assertRaises(ExecutionError) as caught:
+                action()
+            self.assertEqual(caught.exception.code, "PROMPT_IMPACT_REQUIRED")
+        task = json.loads(
+            task_path(
+                self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"]
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(task["status"], "assigned")
+        self.assertIsNone(task["dispatched_at"])
+
+    def test_new_prompt_revision_freezes_wave_completion_and_feature_seal(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): impact gate")
+        assignments = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        for assignment in assignments:
+            self.start_assignment(assignment, "WAVE-001")
+            worker = Path(assignment["worktree"])
+            (worker / "src").mkdir(exist_ok=True)
+            filename = "a.py" if assignment["task_id"] == "TASK-001" else "b.py"
+            (worker / "src" / filename).write_text("VALUE = 1\n", encoding="utf-8")
+            finish_task(
+                self.run_dir,
+                "FEAT-001",
+                "WAVE-001",
+                assignment["task_id"],
+                "focused test passed",
+                "review passed",
+                f"feat: {assignment['task_id']}",
+                summary=f"completed {assignment['task_id']}",
+            )
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.append_prompt_revision()
+
+        with self.assertRaises(ExecutionError) as completion:
+            complete_wave(
+                self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
+            )
+        self.assertEqual(completion.exception.code, "PROMPT_IMPACT_REQUIRED")
+        wave = json.loads(
+            wave_path(self.run_dir, "FEAT-001", "WAVE-001").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(wave["status"], "integrated")
+
+        state_path = coordinator_path(self.run_dir, "FEAT-001")
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["status"] = "integrated"
+        expected_integration_head = state["integration_head"]
+        write_private(state_path, state)
+
+        with self.assertRaises(ExecutionError) as caught:
+            seal_feature(
+                self.run_dir,
+                "FEAT-001",
+                "final evidence passed",
+                "feat(FEAT-001): stale impact must not seal",
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_IMPACT_REQUIRED")
+        persisted = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["status"], "integrated")
+        self.assertEqual(persisted["integration_head"], expected_integration_head)
+
+    @unittest.skipUnless(hasattr(os, "link"), "hard links are unavailable")
+    def test_hardlinked_canonical_spec_freezes_progression(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): impact gate")
+        design = self.project / "docs" / "design.md"
+        backing = design.with_name("design.backing")
+        design.rename(backing)
+        os.link(backing, design)
+        with self.assertRaises(ExecutionError) as caught:
+            prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(caught.exception.code, "SPEC_CONFLICT")
+
+    def test_existing_execution_without_impact_basis_requires_explicit_replan(self) -> None:
+        self.prepare()
+        binding_path = self.run_dir / "prompt.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["revisions"].append(
+            {
+                "revision": "r0002",
+                "sha256": "e" * 64,
+                "intent_sha256": "f" * 64,
+            }
+        )
+        write_private(binding_path, binding)
+        prior = json.loads(
+            (self.run_dir / "prompt-impact" / "attempt-0001.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        material = {
+            **prior,
+            "generation": 2,
+            "revision": "r0002",
+            "intent_sha256": "f" * 64,
+            "effects": ["execution"],
+            "plan_action": "replan_required",
+        }
+        material_sha256 = hashlib.sha256(
+            json.dumps(
+                material,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        write_private(
+            self.run_dir / "prompt-impact" / "attempt-0002.json", material
+        )
+        write_private(
+            self.run_dir / "prompt-impact" / "ledger.json",
+            {
+                "schema": "agentic-sdlc/prompt-impact-ledger-v1",
+                "workflow": "agentic-sdlc",
+                "current": {
+                    "generation": 2,
+                    "revision": "r0002",
+                    "path": "attempt-0002.json",
+                    "sha256": material_sha256,
+                },
+            },
+        )
+        (self.run_dir / "prompt-impact" / "execution" / "FEAT-001.json").unlink()
+        with self.assertRaises(ExecutionError) as caught:
+            self.prepare()
+        self.assertEqual(caught.exception.code, "REPLAN_REQUIRED")
+
+    def test_spec_drift_after_impact_settlement_freezes_dispatch(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): impact gate")
+        design = self.project / "docs" / "design.md"
+        design.write_text("drifted design\n", encoding="utf-8")
+        with self.assertRaises(ExecutionError) as caught:
+            prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(caught.exception.code, "REPLAN_REQUIRED")
+
+    def test_later_no_effect_retains_plan_but_material_effect_requires_new_plan(
+        self,
+    ) -> None:
+        coordinator = self.prepare()
+        binding_path = self.run_dir / "prompt.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+
+        def publish_revision(
+            generation: int, revision: str, intent: str, effects: list[str]
+        ) -> None:
+            binding["revisions"].append(
+                {
+                    "revision": revision,
+                    "sha256": str(generation) * 64,
+                    "intent_sha256": intent,
+                }
+            )
+            write_private(binding_path, binding)
+            receipt = {
+                "schema": "maintain-project-specs.prompt-impact-receipt.v1",
+                "workflow": "agentic-sdlc",
+                "generation": generation,
+                "prompt_id": binding["prompt_id"],
+                "revision": revision,
+                "intent_sha256": intent,
+                "spec_receipt_sha256": "d" * 64,
+                "spec_transition_sha256": None,
+                "requirements_sha256": hashlib.sha256(
+                    (self.project / "docs" / "requirements.md").read_bytes()
+                ).hexdigest(),
+                "design_sha256": hashlib.sha256(
+                    (self.project / "docs" / "design.md").read_bytes()
+                ).hexdigest(),
+                "effects": effects,
+                "plan_action": "retain_plan" if not effects else "replan_required",
+            }
+            receipt_sha256 = hashlib.sha256(
+                json.dumps(
+                    receipt,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            write_private(
+                self.run_dir
+                / "prompt-impact"
+                / f"attempt-{generation:04d}.json",
+                receipt,
+            )
+            write_private(
+                self.run_dir / "prompt-impact" / "ledger.json",
+                {
+                    "schema": "agentic-sdlc/prompt-impact-ledger-v1",
+                    "workflow": "agentic-sdlc",
+                    "current": {
+                        "generation": generation,
+                        "revision": revision,
+                        "path": f"attempt-{generation:04d}.json",
+                        "sha256": receipt_sha256,
+                    },
+                },
+            )
+
+        publish_revision(2, "r0002", "e" * 64, [])
+        retained = execution_core.settle_prompt_impact_execution(
+            self.run_dir,
+            "FEAT-001",
+            coordinator["plan_digest"],
+            self.project,
+        )
+        self.assertEqual(retained["plan_basis_revision"], "r0001")
+        self.assertEqual(retained["latest_settled_revision"], "r0002")
+
+        publish_revision(3, "r0003", "f" * 64, ["execution"])
+        with self.assertRaises(execution_core.PromptImpactError) as caught:
+            execution_core.settle_prompt_impact_execution(
+                self.run_dir,
+                "FEAT-001",
+                coordinator["plan_digest"],
+                self.project,
+            )
+        self.assertEqual(caught.exception.code, "REPLAN_REQUIRED")
 
     def test_parallel_session_claim_is_atomic(self) -> None:
         def claim(task_id: str) -> str:
@@ -524,6 +895,7 @@ class GitLifecycleTests(unittest.TestCase):
         sibling = self.project / "services" / "b"
         selected.mkdir(parents=True)
         sibling.mkdir(parents=True)
+        self.install_scoped_specs(selected)
         (selected / ".keep").write_text("a\n", encoding="utf-8")
         (sibling / ".keep").write_text("b\n", encoding="utf-8")
         git(self.project, "add", "services")
@@ -568,6 +940,7 @@ class GitLifecycleTests(unittest.TestCase):
         sibling = self.project / "services" / "b"
         selected.mkdir(parents=True)
         sibling.mkdir(parents=True)
+        self.install_scoped_specs(selected)
         (selected / ".keep").write_text("a\n", encoding="utf-8")
         (sibling / ".keep").write_text("b\n", encoding="utf-8")
         git(self.project, "add", "services")
@@ -588,6 +961,7 @@ class GitLifecycleTests(unittest.TestCase):
     def test_claim_outside_nested_project_scope_fails_before_resources(self) -> None:
         selected = self.project / "services" / "a"
         selected.mkdir(parents=True)
+        self.install_scoped_specs(selected)
         (selected / ".keep").write_text("a\n", encoding="utf-8")
         git(self.project, "add", "services")
         git(self.project, "commit", "-m", "add selected scope")
@@ -624,9 +998,7 @@ class GitLifecycleTests(unittest.TestCase):
         outside = self.root / "outside"
         outside.mkdir()
         (self.project / "src").mkdir()
-        (self.project / "src" / "linked").symlink_to(
-            outside, target_is_directory=True
-        )
+        (self.project / "src" / "linked").symlink_to(outside, target_is_directory=True)
         git(self.project, "add", "src/linked")
         git(self.project, "commit", "-m", "add tracked symlink")
         self.plan.write_text(
@@ -1534,7 +1906,7 @@ class GitLifecycleTests(unittest.TestCase):
         complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed")
 
         self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.base_head)
-        (integration / "docs").mkdir()
+        (integration / "docs").mkdir(exist_ok=True)
         (integration / "docs" / "release.md").write_text("done\n", encoding="utf-8")
         sealed = seal_feature(
             self.run_dir,
@@ -2116,6 +2488,13 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             selected = repository / "services" / "example"
             selected.mkdir(parents=True)
             (selected / "service.txt").write_text("base\n", encoding="utf-8")
+            (selected / "docs").mkdir()
+            (selected / "docs" / "requirements.md").write_text(
+                "test requirements\n", encoding="utf-8"
+            )
+            (selected / "docs" / "design.md").write_text(
+                "test design\n", encoding="utf-8"
+            )
             git(repository, "add", "-A")
             git(repository, "commit", "-qm", "initial")
             git(repository, "remote", "add", "origin", str(origin))
@@ -2149,6 +2528,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             plan.with_suffix(plan.suffix + ".lock").write_text(
                 "locked\n", encoding="utf-8"
             )
+            seed_prompt_impact(run_dir, Path(str(lane["scope_cwd"])))
 
             with self.assertRaises(ExecutionError) as caught:
                 prepare_execution(
@@ -2162,12 +2542,20 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "WORKTREE_CONFLICT")
             self.assertFalse(coordinator_path(run_dir, "FEAT-001").exists())
             self.assertFalse((run_dir / "execution" / "interop.json").exists())
-            acquired = manager.task_lane_generation_acquire(
-                cwd=Path(str(lane["scope_cwd"])),
-                workspace=root / "task-workspace.json",
-                run_id="task-run-after-agentic-rejection",
-                task_scope="services/example",
-                initial_head=str(lane["lane_head"]),
+            generation_arguments = {
+                "cwd": Path(str(lane["scope_cwd"])),
+                "workspace": root / "task-workspace.json",
+                "run_id": "task-run-after-agentic-rejection",
+                "task_scope": "services/example",
+                "expected_head": str(lane["lane_head"]),
+                "claims": [],
+            }
+            prepared = manager.task_lane_generation_prepare(**generation_arguments)
+            acquired = manager.task_lane_generation_open(
+                **generation_arguments,
+                review_token=str(prepared["review_token"]),
+                reviewed_tree=str(prepared["candidate_tree"]),
+                reviewed_paths_sha256=str(prepared["paths_sha256"]),
             )
             self.assertEqual(acquired["generation"], 1)
             manager.task_lease_promote(
@@ -2200,6 +2588,13 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             selected = repository / "services" / "example"
             selected.mkdir(parents=True)
             (selected / "service.txt").write_text("base\n", encoding="utf-8")
+            (selected / "docs").mkdir()
+            (selected / "docs" / "requirements.md").write_text(
+                "test requirements\n", encoding="utf-8"
+            )
+            (selected / "docs" / "design.md").write_text(
+                "test design\n", encoding="utf-8"
+            )
             git(repository, "add", "-A")
             git(repository, "commit", "-qm", "initial")
             git(repository, "remote", "add", "origin", str(origin))
@@ -2238,6 +2633,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             plan.with_suffix(plan.suffix + ".lock").write_text(
                 "locked\n", encoding="utf-8"
             )
+            seed_prompt_impact(run_dir, outer_selected)
 
             prepare_execution(run_dir, outer_selected, "FEAT-001", plan, capacity=1)
             with self.assertRaisesRegex(manager.WorktreeError, "still owns"):

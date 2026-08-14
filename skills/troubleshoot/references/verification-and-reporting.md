@@ -45,202 +45,123 @@ intervening when it can alter criterion-relevant state or execution.
 
 ## Outcome Classification
 
-- `VERIFIED_FIXED`: causal mechanism is proven or high confidence, repair is
-  applied, original reproducer and required adjacent checks pass.
-- `MITIGATED_NOT_PROVEN`: impact is reduced or symptom is absent, but the cause
-  or counterfactual is incomplete.
-- `DIAGNOSED_NOT_FIXED`: cause is sufficiently established but repair was not
-  authorized, safe, feasible, or completed.
-- `BLOCKED_MISSING_EVIDENCE`: access, observability, reproduction, or safe
-  experiment capability is missing; exact next evidence is named.
+- `VERIFIED_FIXED`: complete end-to-end failure-contract proof. The causal
+  mechanism is proven or high confidence, the owner-correct repair is applied,
+  the original reproducer and adjacent checks pass, and no material item
+  remains unverified inside the declared scope.
+- `DIAGNOSED-FIXED`: the causal owner and earliest divergence are proven, the
+  owner-correct repair is applied, and the original reproducer, focused
+  regression, and source or affected-boundary checks pass for the named fixed
+  scope. Installation, deployment, restart, or live replay may remain
+  explicitly unverified.
+- `MITIGATED_NOT_PROVEN`: impact is reduced or the symptom is absent, but the
+  cause, counterfactual, or durable repair proof is incomplete.
+- `DIAGNOSED_NOT_FIXED`: the cause is sufficiently established but no
+  owner-correct repair was authorized, safe, feasible, or completed.
+- `BLOCKED_MISSING_EVIDENCE`: decisive access, reproduction, or safe experiment
+  capability is missing and no safe alternative remains.
 - `UNRESOLVED`: competing hypotheses remain without a decisive next result.
 
-`VERIFIED_FIXED` additionally requires all seven completion criteria below to
-be `PASS`. Other classifications may contain honest `FAIL` or `UNKNOWN` rows.
-Passing tests alone cannot establish Design, Infrastructure, Logs, or Relevant
-code paths as `PASS`.
+`FAIL` and `UNKNOWN` are evidence states, not automatic stop reasons. Continue
+through discovery, modeling, or bounded experiments while another safe result
+can change the decision. Do not apply another remediation without new evidence
+and a genuinely new falsifiable hypothesis. Report early only for a real
+authority or safety boundary, unavailable decisive evidence with no safe
+alternative, explicit user stop, or exhausted remediation budget.
 
-## Report Template
+## Internal Evidence And User Projection
 
-Every explicit `$troubleshoot` invocation uses this report, including success,
-blocking, tool or coordination error, ordinary early stop, and unresolved work.
-The optional hook records the duty in
-`troubleshoot-report-obligation.json`, retains an undelivered duty across a
-resumed turn in the same session, and validates
-`Current workflow state: REPORTED`. It requests one correction and then emits
-an honest bounded UI fallback rather than looping. If the host terminates
-before Stop, no local hook can create an assistant response; the next resumed
-same-session turn must report the interruption.
+Maintain the detailed architecture verdict, component matrix, incident
+timeline, eight-layer log ledger, hypothesis history, code-debugging record,
+post-fix validation, and completion verdicts as working evidence. Each
+canonical log layer remains exactly once as `examined`, `unavailable`,
+`unsafe`, or `not applicable`. Missing evidence stays `UNKNOWN`; a neighboring
+status or aggregate health result cannot turn it into a pass.
+
+Keep one internal completion verdict for each of: Design, Infrastructure,
+Connectivity, Configuration, Runtime health, Logs, and Relevant code paths.
+Record each as `PASS`, `FAIL`, or `UNKNOWN` with evidence and a gap or next
+action. These verdicts constrain classification and guide continued work, but
+they are not mandatory rows in the ordinary user-visible report.
+
+Project only decision-relevant facts into the ordinary user-visible report:
+classification, confidence, fixed scope, current state, root cause, changes
+made, verified and unverified scope, and the exact next action. Do not make
+internal ledger formatting a Stop prerequisite.
+
+## Concise Report Template
 
 ```markdown
 # Troubleshooting Report
 
 ## Outcome
 - Classification:
-- Current workflow state: REPORTED
 - Confidence:
-- Current impact:
-- Stabilization status:
+- Fixed scope:
+- Current state:
 
-## Failure Contract
-- Expected:
-- Actual:
-- Scope and signature:
-- Reproduction or characterization:
-- Success criteria and constraints:
-- Target, environment, blast radius, and allowed mutations:
-- Included system boundary:
-- Excluded system boundary:
-- Exercised control and data paths:
-- Incident-window start:
-- Incident-window end:
-
-## Architecture Verdict
-- Observed technologies, versions, and deployment model:
-- Configuration authorities:
-- Components, dependencies, ports, protocols, and authentication:
-- Control and data flows:
-- Official vendor architecture comparison and verdict:
-
-## Component Verification Matrix
-| Component | Version and existence | Active configuration | Runtime health | Dependencies, authentication, and DNS | Resources and time sync | Restart history and recent changes | Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-
-## Incident Timeline
-| Time | Source and clock basis | Correlation identifier | Event | Evidence or inference |
-| --- | --- | --- | --- | --- |
-
-## Logs Examined
-| Layer | Source | Window and filters | Finding | Coverage status |
-| --- | --- | --- | --- | --- |
-| Component | | | | examined / unavailable / unsafe / not applicable |
-| Application or job | | | | examined / unavailable / unsafe / not applicable |
-| Container or orchestrator | | | | examined / unavailable / unsafe / not applicable |
-| Service manager | | | | examined / unavailable / unsafe / not applicable |
-| OS and kernel | | | | examined / unavailable / unsafe / not applicable |
-| Network and firewall | | | | examined / unavailable / unsafe / not applicable |
-| Storage | | | | examined / unavailable / unsafe / not applicable |
-| GPU or hardware | | | | examined / unavailable / unsafe / not applicable |
-
-## Hypotheses And Experiments
-| Hypothesis | Prediction and falsifier | Bounded experiment | Observation | Decision |
-| --- | --- | --- | --- | --- |
-
-## Code Debugging
-- Reproduction and execution or data path:
-- Stack trace, core dump, or equivalent runtime evidence:
-- Configuration, environment, and data inputs:
-- Recent changes and affected or unaffected comparison:
-- Focused tests, static or dynamic analysis, and instrumentation:
-- Instrumentation cleanup and limitations:
-
-## Root Cause
-- Earliest divergence:
-- Causal chain:
-- Counterfactual and reintroduction:
-- Alternatives eliminated:
-- Confidence:
-
-## Remediation
-- Design classification and handoff:
+## Root Cause And Fix
+- Root cause:
 - Changes made:
-- Authority and safety basis:
-- Rollback or recovery state:
 
-## Post-Fix Validation
-- Original reproducer:
-- Regression oracle:
-- Targeted and boundary checks:
-- Repeated or dynamic diagnostics:
-- Live trial status and claim scope:
-- Candidate, target, checkpoint, and replay range:
-- Intervention ledger and first contaminated boundary:
-- Product-owned transitions and independent postconditions:
+## Verification
+- Verified:
+- Not verified:
 
-## Completion Gate
-| Criterion | Verdict | Evidence | Gap or next action |
-| --- | --- | --- | --- |
-| Design | PASS / FAIL / UNKNOWN | | |
-| Infrastructure | PASS / FAIL / UNKNOWN | | |
-| Connectivity | PASS / FAIL / UNKNOWN | | |
-| Configuration | PASS / FAIL / UNKNOWN | | |
-| Runtime health | PASS / FAIL / UNKNOWN | | |
-| Logs | PASS / FAIL / UNKNOWN | | |
-| Relevant code paths | PASS / FAIL / UNKNOWN | | |
-
-## Remaining Unknowns And Residual Risks
-- Unknowns and coverage gaps:
-- Residual risks:
-- Exact next action:
+## Next Action
+- Owner:
+- Action:
+- Done when:
 ```
 
-The completion table must contain exactly one row for each named criterion and
-only `PASS`, `FAIL`, or `UNKNOWN`. Every row needs evidence and a substantive
-gap or next action. A `PASS` row uses the exact evidence cell below and exactly
-`None after scoped verification.` in the final cell:
+Use `High`, `Medium`, `Low`, or `Unknown` for confidence. Every narrative
+field must be substantive and public-safe. `DIAGNOSED-FIXED` requires an
+affirmative fixed scope, causal statement, applied change, and verification.
+`VERIFIED_FIXED` additionally requires exactly `None within the declared
+scope.` under `Not verified`.
 
-| Criterion | Exact `PASS` evidence cell | Cross-validated proof state |
-| --- | --- | --- |
-| Design | `Verified: Architecture Verdict.` | Every Architecture Verdict value starts `PASS:` |
-| Infrastructure | `Verified: Component Verification Matrix.` | Version/existence, resources/time, and evidence cells start `PASS:` for every row |
-| Connectivity | `Verified: Component Verification Matrix.` | Dependencies/authentication/DNS and evidence cells start `PASS:` for every row |
-| Configuration | `Verified: Component Verification Matrix.` | Active-configuration and evidence cells start `PASS:` for every row |
-| Runtime health | `Verified: Component Verification Matrix.` | Runtime-health, restart/recent-change, and evidence cells start `PASS:` for every row |
-| Logs | `Verified: Logs Examined.` | Sources and findings are affirmative; coverage is `examined` or `not applicable` |
-| Relevant code paths | `Verified: Code Debugging and Post-Fix Validation.` | Every Code Debugging and Post-Fix Validation value starts `PASS:` |
+Add `## Evidence Appendix` only when requested, decision-relevant, needed for
+a live or production claim, or required at budget exhaustion. The appendix
+may summarize `PASS`, `FAIL`, and `UNKNOWN` evidence without changing the
+outcome solely because an item is unknown.
 
-A `FAIL` or `UNKNOWN` row must name a real gap or next action instead of using
-the no-gap sentinel. Free-text evidence cannot override the referenced
-structured state, and a structured token cannot override referenced detail that
-explicitly reports absent, missing, unavailable, unexamined, unverified,
-unproven, unknown, incomplete, insufficient, or uncollected evidence.
-`VERIFIED_FIXED` is invalid unless all seven verdicts are `PASS`. An unavailable
-source is `UNKNOWN`, not `PASS`. A "no issue found" result remains `UNRESOLVED`
-or `BLOCKED_MISSING_EVIDENCE` unless every required criterion is supported;
-name all coverage gaps.
+## Hook Behavior
 
-The report validator requires each of the eight canonical log layers exactly
-once, in the order shown, with one lower-case canonical coverage status. It
-rejects missing, duplicate, unknown, or reordered layers even when the
-completion verdict is not `PASS`. Scope every conclusion to the declared
-included components and dependencies, exercised paths, and incident window;
-do not generalize beyond that boundary or observed period.
-Every evidence-bearing component and log cell must be substantive on its own;
-other cells in the row cannot make a placeholder count as evidence. Text after
-`PASS:` must also be substantive before the structured state can pass.
+Every explicit `$troubleshoot` invocation creates session-private
+`troubleshoot-report-obligation.json`. A host interruption before Stop can be
+reported only after a resumed turn in the same session. On an ordinary
+non-exhausted Stop:
 
-For remediation-budget exhaustion, keep this same canonical envelope. Add
-`REMEDIATION_BUDGET_EXHAUSTED` and `- Stop trigger: attempt_limit` or
-`- Stop trigger: time_limit` under `## Outcome`; add `- Blocker: ...` and
-`- Blocker key: ...` under `## Root Cause`; list every marker-derived
-`- attempt-N | Remediation: ... | Verification: ... | Result: ...` under
-`## Remediation`; and list every `- attempt-N | Evidence: ...` under
-`## Post-Fix Validation`. Include the highest-information next action and mark
-completion criteria `FAIL` or `UNKNOWN` as the evidence supports. The optional
-guard uses bounded, redacted marker-derived summaries; filler or sensitive
-values do not satisfy report delivery.
+- a valid concise report is finalized transactionally after peer Stop policy;
+- an incomplete, malformed, partial, `FAIL`, or `UNKNOWN` report records
+  `advisory_incomplete` and returns `continue: true`;
+- the hook does not request another agent turn, deny later tools, or emit a
+  generated fallback for ordinary report quality.
 
-If a retry stops earlier because no new evidence or genuinely new hypothesis is
-available, use the same canonical report without
-`REMEDIATION_BUDGET_EXHAUSTED`. Classify the outcome as
-`BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`, state which retry-admission gate
-failed, and identify the highest-information evidence needed next.
+A report containing a secret, private endpoint, internal hostname, customer
+data, or local user path may receive one bounded redaction correction. If it
+remains sensitive, the hook emits a concise redacted safety fallback and
+stops. Invalid trusted coordination state, missing authority, exact
+remediation-budget exhaustion, and independent peer Stop policy remain
+fail-closed.
 
-Do not use placeholders merely to satisfy the section headings. Every included
-section must summarize the evidence-backed investigation state available at the
-stop boundary, including failed attempts, residual uncertainty, and rollback or
-runtime state where applicable.
+## Exhaustion Additions
 
-The optional Stop hook requests one correction when the report is missing a
-required section, completion row, or marker-bound attempt and includes a bounded, redacted
-minimum report for the assistant to return verbatim as the whole response. Do
-not prefix, enrich, or paraphrase its exact marker-derived fields. If the
-continued response is still
-incomplete, it stops instead of recursing indefinitely and emits that fallback
-as a UI/event-stream warning, not an assistant-authored response. For a
-historical exhausted v1 data marker that predates recorded `new_evidence`, the
-fallback states that limitation rather than inventing evidence.
+At exact attempt or active-time exhaustion, use the same concise core and add:
 
-Keep reports public-safe when committed. Do not include secrets, private URLs,
+- `REMEDIATION_BUDGET_EXHAUSTED` and the exact stop trigger under `Outcome`;
+- the exact bounded marker-derived blocker and blocker key under
+  `Root Cause And Fix`;
+- each marker-derived remediation and verification result under
+  `Root Cause And Fix`;
+- each marker-derived evidence summary under `Verification`.
+
+Exhaustion permits only `UNRESOLVED`, `BLOCKED_MISSING_EVIDENCE`, or
+`DIAGNOSED_NOT_FIXED`; it never permits `DIAGNOSED-FIXED`. Return the
+hook-supplied redacted report verbatim. A historical exhausted marker that
+did not record retry-admission evidence must state that limitation instead of
+inventing evidence.
+
+Keep committed reports public-safe. Do not include secrets, private URLs,
 internal hostnames, customer data, raw production logs, or environment-specific
 credential paths.

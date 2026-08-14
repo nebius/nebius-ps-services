@@ -1189,7 +1189,11 @@ def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
     assert not any("scontrol show nodes" in command for command in commands)
 
 
-def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_for_review", [False, True])
+def test_soperator_upgrade_command_args_include_requeue_jobs(
+    tmp_path: Path,
+    stop_for_review: bool,
+) -> None:
     args = cli._soperator_upgrade_command_args(
         config_path=tmp_path / "config.yaml",
         target_ref="mk8s",
@@ -1217,7 +1221,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         login_session_policy="target-ready",
         login_session_drain_timeout="0s",
         dry_run=False,
-        approve_remediation=False,
+        stop_for_remediation_approval=stop_for_review,
     )
 
     assert "--cancel-job" in args
@@ -1238,6 +1242,9 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     assert args[args.index("--max-parallel-worker-groups") + 1] == "8"
     assert "--execute" in args
     assert "--approve" in args
+    assert ("--stop-for-remediation-approval" in args) is stop_for_review
+    assert "--approve-remediation" not in args
+    assert "--no-approve-remediation" not in args
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
         "43",
@@ -1446,7 +1453,11 @@ def test_managed_ephemeral_scale_lower_autoscaling_min_preserves_max() -> None:
     }
 
 
-def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_for_review", [False, True])
+def test_ext_soperator_upgrade_command_args_include_requeue_jobs(
+    tmp_path: Path,
+    stop_for_review: bool,
+) -> None:
     args = cli._external_soperator_upgrade_command_args(
         config_path=tmp_path / "config.yaml",
         target_ref="external",
@@ -1463,7 +1474,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         slurm_scheduling_pause=False,
         dry_run=False,
         approve=True,
-        approve_remediation=False,
+        stop_for_remediation_approval=stop_for_review,
         interactive=False,
     )
 
@@ -1484,6 +1495,9 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--target") + 1] == "external"
+    assert ("--stop-for-remediation-approval" in args) is stop_for_review
+    assert "--approve-remediation" not in args
+    assert "--no-approve-remediation" not in args
     assert args[args.index("--cancel-job") + 1] == "17"
     assert "--login-session-policy" not in args
     assert "--login-session-drain-timeout" not in args
@@ -1513,6 +1527,7 @@ def _run_soperator_upgrade_for_test(
     slurm_scheduling_pause: bool = True,
     dry_run: bool = False,
     interactive: bool = False,
+    stop_for_remediation_approval: bool = False,
 ) -> None:
     cli._run_soperator_upgrade_command(
         config_path=config_path,
@@ -1542,6 +1557,7 @@ def _run_soperator_upgrade_for_test(
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
         interactive=interactive,
+        stop_for_remediation_approval=stop_for_remediation_approval,
     )
 
 
@@ -8755,6 +8771,151 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     assert "`completed`" in upgrade_report
 
 
+@pytest.mark.parametrize("stop_for_review", [False, True])
+def test_managed_soperator_upgrade_remediation_policy_is_checkpoint_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stop_for_review: bool,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_a, **_k: {})
+    monkeypatch.setattr(cli, "render_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "flux_apply_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_verify_soperator_static_upgrade_ready", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", lambda *_a, **_k: ())
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+
+    after_state = cli.ProtectedCustomerState(
+        target_ref="mk8s",
+        namespace="soperator",
+        captured_at="after",
+        sections={"configmaps": {"available": True, "items": []}},
+    )
+    approved_fingerprints: list[str | None] = []
+
+    def _post_verification(**kwargs: Any) -> SimpleNamespace:
+        approved = kwargs["approved_remediation_fingerprint"]
+        approved_fingerprints.append(approved)
+        passed = bool(approved)
+        comparison = {
+            "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+            "status": "drift-detected",
+            "before_hash": "a" * 64,
+            "after_hash": "c" * 64,
+            "blocked_count": 0,
+            "approval_required_count": 1,
+            "deltas": [
+                {
+                    "kind": "configmaps",
+                    "resource": "soperator/config",
+                    "field": "data_sha256_by_key",
+                    "before_digest": "b" * 64,
+                    "after_digest": "c" * 64,
+                    "classification": "remediation_required",
+                    "approval_required": True,
+                }
+            ],
+        }
+        checks = (
+            {
+                "name": "protected-state-comparison",
+                "status": "passed" if passed else "failed",
+                "summary": "fixture",
+            },
+        )
+        payload = {
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "checks": list(checks),
+            "comparison": comparison,
+        }
+        return SimpleNamespace(
+            status=payload["status"],
+            passed=passed,
+            checks=checks,
+            protected_state=after_state,
+            comparison=comparison,
+            command_audit=(),
+            heavy_validation_followups=(),
+            zero_downtime_eligibility={"status": "passed", "eligible": True},
+            as_payload=lambda: payload,
+        )
+
+    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
+    original_converge = cli._converge_stage_fast_verification_checks
+    approval_provider_is_none: list[bool] = []
+
+    def _converge(**kwargs: Any) -> Any:
+        if any(check.get("name") == "protected-state-comparison" for check in kwargs["checks"]):
+            approval_provider_is_none.append(kwargs["checks_provider"] is None)
+        return original_converge(**kwargs)
+
+    monkeypatch.setattr(cli, "_converge_stage_fast_verification_checks", _converge)
+
+    if stop_for_review:
+        with pytest.raises(RuntimeError, match="protected-state-comparison"):
+            _run_soperator_upgrade_for_test(
+                config_path=paths.config_path,
+                stop_for_remediation_approval=True,
+            )
+    else:
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    checkpoint = json.loads(
+        _soperator_upgrade_checkpoint_path(paths).read_text(encoding="utf-8")
+    )
+    approval = checkpoint["upgrade_safety"]["remediation_approval"]
+    assert approval_provider_is_none == [True]
+    assert approved_fingerprints[0] is None
+    if stop_for_review:
+        assert approved_fingerprints == [None]
+        assert approval["policy"] == "stop-for-review"
+        assert approval["approved"] is False
+    else:
+        assert len(approved_fingerprints) == 3
+        assert all(item == approval["approval_fingerprint"] for item in approved_fingerprints[1:])
+        assert approval["policy"] == "automatic"
+        assert approval["approved"] is True
+        assert "shared-safety-automatic-remediation-verified" in {
+            event["event"] for event in checkpoint["events"]
+        }
+
+
 def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -12146,7 +12307,7 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
             dry_run=False,
             execute=True,
             approve=True,
-            approve_remediation=False,
+            stop_for_remediation_approval=False,
             interactive=True,
         )
 
@@ -12307,7 +12468,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
             dry_run=False,
             execute=True,
             approve=True,
-            approve_remediation=False,
+            stop_for_remediation_approval=False,
             interactive=interactive,
         )
 
@@ -12499,7 +12660,7 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
             dry_run=False,
             execute=True,
             approve=True,
-            approve_remediation=False,
+            stop_for_remediation_approval=False,
             interactive=False,
         )
 
@@ -26426,6 +26587,7 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
     )
     assert ext_soperator_onboard_result.exit_code == 0, ext_soperator_onboard_result.output
     ext_soperator_onboard_help = _plain_output(ext_soperator_onboard_result.output)
+    normalized_ext_soperator_onboard_help = " ".join(ext_soperator_onboard_help.split())
     ext_soperator_onboard_examples = ext_soperator_onboard_help.split("Examples:", maxsplit=1)[
         1
     ].split("Comments:", maxsplit=1)[0]
@@ -26442,6 +26604,12 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
     assert "The command updates" not in ext_soperator_onboard_examples
     assert "generated/reports/soperator-discovery" not in ext_soperator_onboard_examples
     assert "next run" not in ext_soperator_onboard_examples.lower()
+    assert (
+        "optionally inspect the campaign with nebius-cxcli ext-soperator upgrade "
+        "<config.yaml> --target <target> --dry-run, or run the upgrade directly with"
+        in normalized_ext_soperator_onboard_help
+    )
+    assert "then nebius-cxcli ext-soperator upgrade" not in normalized_ext_soperator_onboard_help
 
     ext_soperator_upgrade_result = runner.invoke(
         cli.app,

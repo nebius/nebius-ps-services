@@ -18,6 +18,8 @@ from .runtime_config import to_plain_data
 SOPERATOR_UPGRADE_SAFETY_SCHEMA = "nebius-cxcli-soperator-upgrade-safety/v1"
 SOPERATOR_INTENTIONAL_DELTA_PROOF_SCHEMA = "nebius-cxcli-soperator-intentional-delta-proof/v1"
 SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA = "nebius-cxcli-soperator-remediation-approval-plan/v1"
+REMEDIATION_APPROVAL_POLICY_AUTOMATIC = "automatic"
+REMEDIATION_APPROVAL_POLICY_STOP_FOR_REVIEW = "stop-for-review"
 EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION = 1
 _INTENTIONAL_PROOF_REQUIRED_CLASSIFICATION = "intentional_proof_required"
 _PROTECTED_PVC_KEYS = ("jail", "controller-spool", "accounting")
@@ -1417,31 +1419,29 @@ def build_remediation_approval_plan(
         if item.get("classification") == "remediation_required"
         or bool(item.get("approval_required"))
     ]
-    comparison_envelope = {
-        "comparison_schema": comparison.get("schema"),
-        "status": comparison.get("status"),
-        "before_hash": comparison.get("before_hash"),
-        "after_hash": comparison.get("after_hash"),
-        "blocked_count": len(blocked),
-        "approval_required_count": len(remediation),
-        "deltas": sorted(
-            (
-                {
-                    "kind": item.get("kind"),
-                    "resource": item.get("resource"),
-                    "field": item.get("field"),
-                    "before_digest": item.get("before_digest"),
-                    "after_digest": item.get("after_digest"),
-                    "classification": item.get("classification"),
-                    "approval_required": bool(item.get("approval_required")),
-                    "intentional_proof_fingerprint": (
-                        item.get("intentional_proof", {}).get("proof_fingerprint")
-                        if isinstance(item.get("intentional_proof"), Mapping)
-                        else None
-                    ),
-                }
-                for item in deltas
+    plan_status = "blocked" if blocked else ("approval-required" if remediation else "not-required")
+
+    def _delta_envelope(item: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "kind": item.get("kind"),
+            "resource": item.get("resource"),
+            "field": item.get("field"),
+            "before_digest": item.get("before_digest"),
+            "after_digest": item.get("after_digest"),
+            "classification": item.get("classification"),
+            "approval_required": bool(item.get("approval_required")),
+            "intentional_proof_fingerprint": (
+                item.get("intentional_proof", {}).get("proof_fingerprint")
+                if isinstance(item.get("intentional_proof"), Mapping)
+                else None
             ),
+        }
+
+    def _sorted_delta_envelopes(
+        items: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return sorted(
+            (_delta_envelope(item) for item in items),
             key=lambda item: (
                 str(item.get("kind") or ""),
                 str(item.get("resource") or ""),
@@ -1449,16 +1449,34 @@ def build_remediation_approval_plan(
                 str(item.get("before_digest") or ""),
                 str(item.get("after_digest") or ""),
             ),
-        ),
+        )
+
+    comparison_envelope = {
+        "comparison_schema": comparison.get("schema"),
+        "status": comparison.get("status"),
+        "before_hash": comparison.get("before_hash"),
+        "after_hash": comparison.get("after_hash"),
+        "blocked_count": len(blocked),
+        "approval_required_count": len(remediation),
+        "deltas": _sorted_delta_envelopes(deltas),
+    }
+    approval_envelope = {
+        "comparison_schema": comparison.get("schema"),
+        "status": plan_status,
+        "before_hash": comparison.get("before_hash"),
+        "blocked_count": len(blocked),
+        "approval_required_count": len(remediation),
+        "deltas": _sorted_delta_envelopes([*blocked, *remediation]),
     }
     comparison_fingerprint = _stable_hash(comparison_envelope)
+    approval_fingerprint = _stable_hash(approval_envelope)
     return {
         "schema": SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA,
-        "status": "blocked"
-        if blocked
-        else ("approval-required" if remediation else "not-required"),
+        "status": plan_status,
         "comparison_fingerprint": comparison_fingerprint,
         "comparison_envelope": comparison_envelope,
+        "approval_fingerprint": approval_fingerprint,
+        "approval_envelope": approval_envelope,
         "blocked": blocked,
         "remediation_required": remediation,
         "requires_approval": bool(remediation),
@@ -1470,7 +1488,7 @@ def checkpointed_remediation_approval_fingerprint(
     *,
     approval_requested: bool,
 ) -> str | None:
-    """Return only a previously persisted, internally consistent plan fingerprint."""
+    """Return the approval fingerprint derived from one exact persisted comparison."""
 
     if not approval_requested or not isinstance(safety_payload, Mapping):
         return None
@@ -1494,7 +1512,31 @@ def checkpointed_remediation_approval_fingerprint(
         raise ValueError(
             "Checkpointed protected-state remediation plan fingerprint is inconsistent."
         )
-    return persisted
+    approval_fingerprint = str(recomputed.get("approval_fingerprint", "") or "")
+    persisted_approval_fingerprint = str(plan_map.get("approval_fingerprint", "") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", approval_fingerprint) or (
+        persisted_approval_fingerprint and persisted_approval_fingerprint != approval_fingerprint
+    ):
+        raise ValueError(
+            "Checkpointed protected-state remediation approval fingerprint is inconsistent."
+        )
+    return approval_fingerprint
+
+
+def remediation_approval_reverification_required(
+    result: PostUpgradeVerificationResult,
+) -> bool:
+    """Return whether one checkpoint-first automatic approval recapture is allowed."""
+
+    plan = build_remediation_approval_plan(result.comparison)
+    if plan.get("status") != "approval-required":
+        return False
+    return any(
+        isinstance(check, Mapping)
+        and check.get("name") == "protected-state-comparison"
+        and check.get("status") == "failed"
+        for check in result.checks
+    )
 
 
 def _external_open_metrics_handoff_check(
@@ -1855,6 +1897,7 @@ def upgrade_safety_checkpoint_payload() -> dict[str, Any]:
             "schema": SOPERATOR_REMEDIATION_APPROVAL_PLAN_SCHEMA,
             "status": "not-required",
             "comparison_fingerprint": None,
+            "approval_fingerprint": None,
             "blocked": [],
             "remediation_required": [],
             "requires_approval": False,
@@ -1904,7 +1947,15 @@ def update_safety_payload_with_verification(
     result: PostUpgradeVerificationResult,
     *,
     approved_remediation_fingerprint: str | None = None,
+    remediation_approval_policy: str = REMEDIATION_APPROVAL_POLICY_STOP_FOR_REVIEW,
 ) -> dict[str, Any]:
+    if remediation_approval_policy not in {
+        REMEDIATION_APPROVAL_POLICY_AUTOMATIC,
+        REMEDIATION_APPROVAL_POLICY_STOP_FOR_REVIEW,
+    }:
+        raise ValueError(
+            "Remediation approval policy must be 'automatic' or 'stop-for-review'."
+        )
     payload = _safety_payload_copy(safety_payload)
     comparison = dict(result.comparison)
     protected = dict(payload.get("protected_customer_state") or {})
@@ -1924,11 +1975,12 @@ def update_safety_payload_with_verification(
     ]
     payload["zero_downtime_eligibility"] = to_plain_data(result.zero_downtime_eligibility)
     approval_plan = build_remediation_approval_plan(comparison)
-    current_fingerprint = str(approval_plan.get("comparison_fingerprint", "") or "")
+    comparison_fingerprint = str(approval_plan.get("comparison_fingerprint", "") or "")
+    approval_fingerprint = str(approval_plan.get("approval_fingerprint", "") or "")
     approval_consumed = bool(
         approval_plan.get("requires_approval")
         and approved_remediation_fingerprint
-        and approved_remediation_fingerprint == current_fingerprint
+        and approved_remediation_fingerprint == approval_fingerprint
     )
     remediation_items = approval_plan.get("remediation_required", [])
     if isinstance(remediation_items, list):
@@ -1936,7 +1988,8 @@ def update_safety_payload_with_verification(
             {
                 **dict(item),
                 "approved": approval_consumed,
-                "comparison_fingerprint": current_fingerprint,
+                "comparison_fingerprint": comparison_fingerprint,
+                "approval_fingerprint": approval_fingerprint,
             }
             for item in remediation_items
             if isinstance(item, Mapping)
@@ -1945,9 +1998,11 @@ def update_safety_payload_with_verification(
         payload["remediation_approvals"] = []
     payload["remediation_approval_plan"] = approval_plan
     payload["remediation_approval"] = {
+        "policy": remediation_approval_policy,
         "approved": approval_consumed,
         "required": bool(approval_plan.get("requires_approval")),
-        "comparison_fingerprint": current_fingerprint,
+        "comparison_fingerprint": comparison_fingerprint,
+        "approval_fingerprint": approval_fingerprint,
         "approved_fingerprint": (approved_remediation_fingerprint if approval_consumed else None),
         "status": (
             "approved" if approval_consumed else str(approval_plan.get("status") or "not-required")
@@ -1964,6 +2019,8 @@ def safety_report_markdown_lines(safety_payload: Mapping[str, Any] | None) -> li
     verification_map = verification if isinstance(verification, Mapping) else {}
     approval_plan = safety.get("remediation_approval_plan")
     approval_plan_map = approval_plan if isinstance(approval_plan, Mapping) else {}
+    approval = safety.get("remediation_approval")
+    approval_map = approval if isinstance(approval, Mapping) else {}
     terminal = safety.get("terminal_verification")
     terminal_map = terminal if isinstance(terminal, Mapping) else {}
     checks = verification_map.get("checks") or safety.get("fast_smoke", {}).get("checks", [])
@@ -1975,8 +2032,12 @@ def safety_report_markdown_lines(safety_payload: Mapping[str, Any] | None) -> li
         f"- Protected-state result: `{protected_map.get('status') or 'not-run'}`",
         f"- Fast verification: `{verification_map.get('status') or 'not-run'}`",
         f"- Terminal verification: `{terminal_map.get('status') or 'not-run'}`",
-        "- Remediation comparison fingerprint: `"
+        f"- Remediation approval policy: `{approval_map.get('policy') or 'not-recorded'}`",
+        "- Protected-state comparison audit fingerprint: `"
         + str(approval_plan_map.get("comparison_fingerprint") or "not-recorded")
+        + "`",
+        "- Remediation approval fingerprint: `"
+        + str(approval_plan_map.get("approval_fingerprint") or "not-recorded")
         + "`",
         "",
         "### Fast Checks",
@@ -3119,7 +3180,7 @@ def _protected_comparison_check(
         }
     if approval_count:
         approval_plan = build_remediation_approval_plan(comparison)
-        current_fingerprint = str(approval_plan.get("comparison_fingerprint", "") or "")
+        current_fingerprint = str(approval_plan.get("approval_fingerprint", "") or "")
         if not (
             approved_remediation_fingerprint
             and approved_remediation_fingerprint == current_fingerprint
@@ -3129,8 +3190,9 @@ def _protected_comparison_check(
                 "status": "failed",
                 "summary": (
                     f"{approval_count} protected-state delta(s) require remediation approval. "
-                    "Review the checkpointed comparison fingerprint and rerun with "
-                    "--approve-remediation only if that exact remediation plan is acceptable."
+                    "Review the checkpointed remediation approval fingerprint and rerun without "
+                    "--stop-for-remediation-approval only if that exact remediation plan is "
+                    "acceptable."
                 ),
             }
         return {
@@ -3138,7 +3200,7 @@ def _protected_comparison_check(
             "status": "passed",
             "summary": (
                 f"{approval_count} protected-state delta(s) matched the exact "
-                "remediation-approved comparison fingerprint."
+                "remediation approval fingerprint."
             ),
         }
     return {

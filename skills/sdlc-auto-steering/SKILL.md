@@ -113,6 +113,9 @@ changing committed product-truth documents directly.
   machine-readable with the same pending disposition state.
 - After both ledgers are durably updated, invoke the private prompt helper's
   `steering-resolve` transition with `applied`, `blocked`, or `no_effect`.
+  `applied` and `no_effect` additionally require the current accepted prompt
+  impact receipt and must agree with its owner-derived effect; a steering
+  summary or unchanged spec bytes are not sufficient evidence.
 - Return the requested routing signal for `sdlc-start` instead of invoking the
   next SDLC phase directly.
 

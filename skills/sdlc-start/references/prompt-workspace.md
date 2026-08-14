@@ -31,6 +31,11 @@ ${CODEX_HOME:-$HOME/.codex}/sdlc-runs/<project-id>/
 └── <run-id>/
     ├── prompt.json
     ├── requirements-refinement.json
+    ├── prompt-impact-claim.json
+    ├── prompt-impact/
+    │   ├── attempt-0001.json
+    │   ├── ledger.json
+    │   └── execution/FEAT-001.json
     ├── inputs/r0001/prompt.md
     ├── run.json
     └── ... existing Agentic SDLC state ...
@@ -103,16 +108,20 @@ The helper writes `active-run.json`, the immutable snapshot, and `prompt.json`.
 phase routing, and the active workflow lock.
 
 After an explicit init or run binds a Codex session, the separate
-`prompt-session-intake` hook may stage a later safe direct turn. The agent
-classifies and losslessly refines material intent, accepts it against the exact
-canonical digest, then private `session-merge` creates or updates the prompt
-with the accepted operation ID before this same run path executes exactly once.
-An interrupted retry with the same operation ID resolves the already-applied
-prompt rather than creating or appending twice. Conversation, status, and
-control turns do not mutate or run a prompt. New-objective publication is one
-exclusive marker-bearing file creation; refined content that uses the reserved
-operation-marker namespace is rejected. Editing or saving a prompt file
-never triggers execution; manual changes require explicit `run`.
+`prompt-session-intake` hook may stage a later safe direct turn while the
+current agent handles it normally. Staging is event-v2 metadata only and never
+persists the submitted body. The agent records merge/no-op/sensitive and writes
+only a durable project-intent projection for merge. Private `session-merge`
+rehashes it and binds its digest to the operation marker before compare-and-set
+create or update. Exact retries and byte-identical projections do not append
+twice; distinct concurrent same-base updates never auto-rebase. Workflow/skill,
+shell/tool, delivery, agent-control, status, conversation, and unrelated turns
+do not mutate or run a prompt, while commands used as project contracts remain
+eligible. New-objective publication is one exclusive marker-bearing file
+creation; projection content that uses the reserved operation-marker namespace
+is rejected. Editing or saving a prompt file
+never triggers execution; captured updates and manual changes require explicit
+`run`. Secrets and capture failures do not persist or block the direct request.
 Explicit bound runs register the authoritative active prompt for unique
 fresh-session attachment and close it only after verified terminal completion;
 queued prompts remain inactive until activation.
@@ -141,12 +150,15 @@ discoverable facts before asking, allocate stable private `Q-*` IDs only for
 material ambiguity, and keep the refinement ledger outside Git. Omission does
 not delete existing product truth. The private `refinement-verify` helper must
 bind the latest accepted revision and intent digest to the exact current
-`docs/requirements.md` digest before the workflow can leave requirements.
+canonical specs and publish the shared owner's complete impact receipt before
+the workflow can leave requirements.
 
 Only an `active_steering` revision after `r0001` starts with steering status `pending`.
 `sdlc-auto-steering` records exactly one corresponding inbox entry containing
 the prompt ID, revision, digest, and snapshot pointer, then calls the private
 `steering-resolve` transition with `applied`, `blocked`, or `no_effect`.
+`applied` and `no_effect` are accepted only when the current revision's
+owner-validated impact receipt has the corresponding derived effect.
 
 The steering ledger stores only a safe summary. The immutable private snapshot
 is the historical input and must never be copied into committed project files
@@ -160,6 +172,11 @@ An unfinished active run without `prompt.json` returns
 `WORKFLOW_UPGRADE_REQUIRED`; do not adopt it, synthesize a prompt, or add a
 compatibility alias. Completed unbound history remains readable and a managed
 prompt may start a new run.
+
+An active bound run without prompt-impact evidence freezes new progression as
+`PROMPT_IMPACT_REQUIRED` until refinement reconstructs the current basis or a
+safe replan settles it. Terminal history remains readable as
+`historical_no_receipt`; no migration invents semantic coverage.
 
 Prompt-v1 files and unfinished prompt-binding-v1 runs are read-only and return
 `WORKFLOW_UPGRADE_REQUIRED`. Preserve their bytes as history; there is no

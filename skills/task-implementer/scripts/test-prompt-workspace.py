@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -34,6 +36,10 @@ SPEC.loader.exec_module(pw)
 
 FIXED_LOCAL = datetime(2026, 7, 12, 14, 30, tzinfo=timezone.utc)
 FIXED_UTC = datetime(2026, 7, 12, 21, 30, tzinfo=timezone.utc)
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -103,6 +109,31 @@ class PromptWorkspaceTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_task_result_publish_emits_without_optional_json_flag(self) -> None:
+        published = {"status": "published", "result_sha256": "a" * 64}
+        assignment = self.root / "assignment.json"
+        draft = self.root / "draft.json"
+        result = self.root / "result.json"
+
+        with (
+            mock.patch.object(pw, "publish_task_result", return_value=published),
+            mock.patch.object(pw, "emit") as emit,
+        ):
+            status = pw.main(
+                [
+                    "task-result-publish",
+                    "--assignment",
+                    str(assignment),
+                    "--draft",
+                    str(draft),
+                    "--result",
+                    str(result),
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        emit.assert_called_once_with(published, False)
 
     def new_prompt(
         self,
@@ -288,6 +319,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         first_result = json.loads(first.stdout)
         self.assertNotIn("project_id", first_result)
         self.assertNotIn("scope_id", first_result)
+        self.assertNotIn("lane_id", first_result)
         starter = Path(first_result["starter_prompt"])
         self.assertTrue(first_result["starter_created"])
         self.assertTrue(starter.is_file())
@@ -360,6 +392,215 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertTrue(Path(json.loads(result.stdout)["workspace"]).is_file())
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
 
+    def test_workspace_reuse_resolves_source_and_lane_without_mutation(self) -> None:
+        dirty = self.lane_root / "reuse-dirty.txt"
+        dirty.write_text("preserve\n", encoding="utf-8")
+        vscode = Path(self.workspace_result["vscode_workspace"])
+        workspace_before = self.workspace.read_bytes()
+        workspace_mtime = self.workspace.stat().st_mtime_ns
+        vscode_before = vscode.read_bytes()
+        vscode_mtime = vscode.stat().st_mtime_ns
+        prompt_entries = sorted(path.name for path in self.prompt_root.iterdir())
+
+        from_source = pw.reuse_project_workspace(self.scope, self.codex_home)
+        from_lane = pw.reuse_project_workspace(self.lane_scope, self.codex_home)
+
+        self.assertEqual(from_source, from_lane)
+        self.assertEqual(from_source["status"], "reused")
+        self.assertEqual(from_source["workspace"], str(self.workspace))
+        self.assertEqual(from_source["vscode_workspace"], str(vscode))
+        self.assertEqual(from_source["lane_state"], "idle")
+        self.assertEqual(from_source["lane_worktree"], str(self.lane_root))
+        self.assertEqual(self.workspace.read_bytes(), workspace_before)
+        self.assertEqual(self.workspace.stat().st_mtime_ns, workspace_mtime)
+        self.assertEqual(vscode.read_bytes(), vscode_before)
+        self.assertEqual(vscode.stat().st_mtime_ns, vscode_mtime)
+        self.assertEqual(
+            sorted(path.name for path in self.prompt_root.iterdir()), prompt_entries
+        )
+        self.assertEqual(
+            git("status", "--porcelain=v1", cwd=self.lane_root),
+            "?? reuse-dirty.txt",
+        )
+
+    def test_workspace_reuse_blocks_missing_and_mismatched_state(self) -> None:
+        missing_home = self.root / "missing reuse home"
+        self.assert_error(
+            "WORKSPACE_NOT_FOUND",
+            pw.reuse_project_workspace,
+            self.scope,
+            missing_home,
+        )
+        self.assertFalse(missing_home.exists())
+
+        manifest = json.loads(self.workspace.read_text(encoding="utf-8"))
+        manifest["lane_incarnation"] = int(manifest["lane_incarnation"]) + 1
+        self.workspace.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        self.workspace.chmod(0o600)
+        self.assert_error(
+            "WORKTREE_CONFLICT",
+            pw.reuse_project_workspace,
+            self.scope,
+            self.codex_home,
+        )
+
+    def test_workspace_reuse_rejects_an_unrelated_worktree_spoof(self) -> None:
+        unrelated_root = self.root / "unrelated worktree"
+        git(
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "unrelated-feature",
+            str(unrelated_root),
+            cwd=self.repo,
+        )
+        unrelated_scope = unrelated_root / "services" / "example"
+        git(
+            "config",
+            "--local",
+            "branch.unrelated-feature.worktreeSkillTaskLaneSourceRef",
+            "refs/heads/prompt-feature",
+            cwd=self.repo,
+        )
+        self.assertEqual(
+            core.project_workspace_manifest(unrelated_scope, self.codex_home),
+            self.workspace,
+        )
+
+        self.assert_error(
+            "WORKSPACE_MISMATCH",
+            pw.reuse_project_workspace,
+            unrelated_scope,
+            self.codex_home,
+        )
+
+    def test_workspace_reuse_rejects_a_deleted_source_ref_before_editor(self) -> None:
+        git("switch", "-q", "main", cwd=self.repo)
+        git("branch", "-D", "prompt-feature", cwd=self.repo)
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(pw, "open_in_editor") as open_editor,
+            mock.patch.object(pw.sys, "stderr", stderr),
+        ):
+            result = pw.main(
+                [
+                    "reuse",
+                    str(self.lane_scope),
+                    "--codex-home",
+                    str(self.codex_home),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("WORKTREE_CONFLICT", stderr.getvalue())
+        open_editor.assert_not_called()
+
+    def test_workspace_reuse_rejects_an_unsafe_manifest_before_editor(self) -> None:
+        real_manifest = self.workspace.with_name("workspace-real.json")
+        self.workspace.rename(real_manifest)
+        self.workspace.symlink_to(real_manifest)
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(pw, "open_in_editor") as open_editor,
+            mock.patch.object(pw.sys, "stderr", stderr),
+        ):
+            result = pw.main(
+                [
+                    "reuse",
+                    str(self.scope),
+                    "--codex-home",
+                    str(self.codex_home),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("WORKSPACE_PATH_INVALID", stderr.getvalue())
+        open_editor.assert_not_called()
+
+    def test_workspace_reuse_rejects_a_removed_lane_before_editor(self) -> None:
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        removed = lanes.remove_lane(workspace)
+        self.assertEqual(removed["status"], "removed")
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(pw, "open_in_editor") as open_editor,
+            mock.patch.object(pw.sys, "stderr", stderr),
+        ):
+            result = pw.main(
+                [
+                    "reuse",
+                    str(self.scope),
+                    "--codex-home",
+                    str(self.codex_home),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        self.assertIn("REPO_ROOT_INVALID", stderr.getvalue())
+        open_editor.assert_not_called()
+
+    def test_workspace_reuse_succeeds_when_editor_is_unavailable(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "reuse",
+                str(self.scope),
+                "--codex-home",
+                str(self.codex_home),
+                "--editor",
+                "task-implementer-editor-that-does-not-exist",
+                "--json",
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        reuse_result = json.loads(result.stdout)
+        self.assertEqual(reuse_result["status"], "reused")
+        self.assertNotIn("project_id", reuse_result)
+        self.assertNotIn("scope_id", reuse_result)
+        self.assertNotIn("lane_id", reuse_result)
+        self.assertIn("WARN editor executable is unavailable", result.stderr)
+        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
+
+    def test_workspace_reuse_human_output_redacts_ids_and_defaults_to_cwd(
+        self,
+    ) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "reuse",
+                "--codex-home",
+                str(self.codex_home),
+                "--no-open",
+            ],
+            cwd=self.scope,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("status: reused", result.stdout)
+        self.assertNotIn("project_id", result.stdout)
+        self.assertNotIn("scope_id", result.stdout)
+        self.assertNotIn("lane_id", result.stdout)
+
     def test_open_in_editor_reuses_last_active_window(self) -> None:
         target = self.root / "workspace with spaces.code-workspace"
         cases = (
@@ -374,6 +615,38 @@ class PromptWorkspaceTest(unittest.TestCase):
                     pw.open_in_editor("code", target, workspace=workspace)
 
                 run.assert_called_once_with(expected, check=False, timeout=15)
+
+    def test_open_in_editor_warns_for_timeout_and_nonzero_status(self) -> None:
+        target = self.root / "workspace.code-workspace"
+        cases = (
+            (
+                PermissionError("editor is not executable"),
+                "WARN editor could not be launched",
+            ),
+            (
+                subprocess.TimeoutExpired(["code", str(target)], 15),
+                "WARN editor did not return promptly",
+            ),
+            (
+                subprocess.CompletedProcess(["code", str(target)], 7),
+                "WARN editor exited with status 7",
+            ),
+        )
+
+        for outcome, warning in cases:
+            with self.subTest(warning=warning):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(pw.subprocess, "run") as run,
+                    mock.patch.object(pw.sys, "stderr", stderr),
+                ):
+                    if isinstance(outcome, BaseException):
+                        run.side_effect = outcome
+                    else:
+                        run.return_value = outcome
+                    pw.open_in_editor("code", target, workspace=True)
+
+                self.assertIn(warning, stderr.getvalue())
 
     def test_project_init_preserves_prompts_and_run_history(self) -> None:
         prompt = self.new_prompt()
@@ -786,7 +1059,9 @@ class PromptWorkspaceTest(unittest.TestCase):
         core.complete_prompt_files_v3_migration(self.prompt_root)
         self.assertEqual(core.migrate_prompt_files_v2(self.prompt_root), [])
         self.assertEqual(
-            core.resolve_prompt_reference(self.workspace, "aaaaa", require_content=True).path,
+            core.resolve_prompt_reference(
+                self.workspace, "aaaaa", require_content=True
+            ).path,
             target,
         )
         self.assertEqual(
@@ -812,11 +1087,15 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(historical.prompt_id, document.prompt_id)
         self.assertEqual(historical.prompt_ref, "")
 
-    def test_prompt_ref_collision_extends_new_ref_without_changing_identity(self) -> None:
+    def test_prompt_ref_collision_extends_new_ref_without_changing_identity(
+        self,
+    ) -> None:
         first = self.new_prompt(prompt_hex="abcde0" + "0" * 26)
         second = self.new_prompt(prompt_hex="abcde1" + "1" * 26)
         first_document = core.read_prompt(first, self.prompt_root, require_content=True)
-        second_document = core.read_prompt(second, self.prompt_root, require_content=True)
+        second_document = core.read_prompt(
+            second, self.prompt_root, require_content=True
+        )
         self.assertEqual(first_document.prompt_ref, "abcde")
         self.assertEqual(second_document.prompt_ref, "abcde1")
         self.assertEqual(
@@ -826,7 +1105,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             second_document.prompt_id,
         )
 
-    def test_v2_migration_recovers_from_journaled_source_and_rejects_escape(self) -> None:
+    def test_v2_migration_recovers_from_journaled_source_and_rejects_escape(
+        self,
+    ) -> None:
         prompt = self.new_prompt()
         original = prompt.read_bytes()
         v2 = original.replace(
@@ -873,10 +1154,14 @@ class PromptWorkspaceTest(unittest.TestCase):
         document = core.read_prompt(prompt, self.prompt_root, require_content=True)
         scope_dir = self.workspace.parent
         runs.enqueue_prompt_unlocked(scope_dir, document, FIXED_UTC)
-        v2 = prompt.read_bytes().replace(
-            b"schema: task-implementer/prompt-v3",
-            b"schema: task-implementer/prompt-v2",
-        ).replace(f"prompt_ref: {document.prompt_ref}\n".encode(), b"")
+        v2 = (
+            prompt.read_bytes()
+            .replace(
+                b"schema: task-implementer/prompt-v3",
+                b"schema: task-implementer/prompt-v2",
+            )
+            .replace(f"prompt_ref: {document.prompt_ref}\n".encode(), b"")
+        )
         legacy = prompt.with_name(prompt.name.removeprefix(f"{document.prompt_ref}--"))
         prompt.unlink()
         legacy.write_bytes(v2)
@@ -895,7 +1180,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             (self.prompt_root / migrations[0]["new_name"]).read_bytes(),
         )
 
-    def test_session_refinement_creates_lossless_prompt_and_rejects_stale_merge(self) -> None:
+    def test_session_projection_creates_lossless_prompt_and_rejects_stale_merge(
+        self,
+    ) -> None:
         refined = self.root / "refined.md"
         refinement = (
             "Implement automatic prompt intake.\n\n"
@@ -904,13 +1191,14 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         refined.write_text(refinement, encoding="utf-8")
         refined.chmod(0o600)
-        created = runs.merge_session_refinement(
+        created = runs.merge_session_projection(
             self.workspace,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="1" * 64,
+            projection_sha256=file_sha256(refined),
             clock=lambda: FIXED_UTC,
         )
         prompt = Path(str(created["path"]))
@@ -918,54 +1206,78 @@ class PromptWorkspaceTest(unittest.TestCase):
         base = core.read_prompt(prompt, self.prompt_root, require_content=True)
 
         delta = self.root / "delta.md"
-        delta.write_text("Also retain collision-safe prompt references.", encoding="utf-8")
+        delta.write_text(
+            "Also retain collision-safe prompt references.", encoding="utf-8"
+        )
         delta.chmod(0o600)
-        merged = runs.merge_session_refinement(
+        merged = runs.merge_session_projection(
             self.workspace,
             delta,
             prompt_reference=base.prompt_ref,
             expected_sha256=base.sha256,
             new_objective=False,
             operation_id="2" * 64,
+            projection_sha256=file_sha256(delta),
             clock=lambda: FIXED_UTC.replace(second=1),
         )
         self.assertEqual(merged["prompt_id"], base.prompt_id)
         self.assertIn("Also retain collision-safe", prompt.read_text(encoding="utf-8"))
-        self.assert_error(
-            "PROMPT_DRIFT",
-            runs.merge_session_refinement,
+        duplicate = runs.merge_session_projection(
             self.workspace,
             delta,
             prompt_reference=base.prompt_ref,
             expected_sha256=base.sha256,
             new_objective=False,
             operation_id="3" * 64,
+            projection_sha256=file_sha256(delta),
+        )
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["sha256"], merged["sha256"])
+        other_delta = self.root / "other-delta.md"
+        other_delta.write_text(
+            "Require a distinct second constraint.\n", encoding="utf-8"
+        )
+        other_delta.chmod(0o600)
+        self.assert_error(
+            "PROMPT_DRIFT",
+            runs.merge_session_projection,
+            self.workspace,
+            other_delta,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id="3" * 64,
+            projection_sha256=file_sha256(other_delta),
         )
 
-        retried = runs.merge_session_refinement(
+        retried = runs.merge_session_projection(
             self.workspace,
             delta,
             prompt_reference=base.prompt_ref,
             expected_sha256=base.sha256,
             new_objective=False,
             operation_id="2" * 64,
+            projection_sha256=file_sha256(delta),
         )
         self.assertEqual(retried["sha256"], merged["sha256"])
-        recreated = runs.merge_session_refinement(
+        recreated = runs.merge_session_projection(
             self.workspace,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="1" * 64,
+            projection_sha256=file_sha256(refined),
         )
         self.assertEqual(recreated["prompt_id"], created["prompt_id"])
 
-    def test_session_refinement_new_objective_recovers_after_create_interruption(
+    def test_session_projection_new_objective_recovers_after_create_interruption(
         self,
     ) -> None:
         refined = self.root / "interrupted-refinement.md"
-        refined.write_text("Create exactly one crash-safe objective.\n", encoding="utf-8")
+        refined.write_text(
+            "Create exactly one crash-safe objective.\n", encoding="utf-8"
+        )
         refined.chmod(0o600)
         before = set(self.prompt_root.glob("*.md"))
         original_write = core.write_exclusive
@@ -974,37 +1286,111 @@ class PromptWorkspaceTest(unittest.TestCase):
             original_write(path, data)
             raise KeyboardInterrupt("simulated process termination")
 
-        with mock.patch.object(core, "write_exclusive", side_effect=interrupt_after_write):
+        with mock.patch.object(
+            core, "write_exclusive", side_effect=interrupt_after_write
+        ):
             with self.assertRaises(KeyboardInterrupt):
-                runs.merge_session_refinement(
+                runs.merge_session_projection(
                     self.workspace,
                     refined,
                     prompt_reference=None,
                     expected_sha256=None,
                     new_objective=True,
                     operation_id="4" * 64,
+                    projection_sha256=file_sha256(refined),
                     clock=lambda: FIXED_UTC,
                 )
 
-        recovered = runs.merge_session_refinement(
+        recovered = runs.merge_session_projection(
             self.workspace,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="4" * 64,
+            projection_sha256=file_sha256(refined),
             clock=lambda: FIXED_UTC,
         )
         created = set(self.prompt_root.glob("*.md")) - before
         self.assertEqual(len(created), 1)
         self.assertEqual(
-            Path(str(recovered["path"])).read_text(encoding="utf-8").count(
-                f"<!-- prompt-session-operation:{'4' * 64} -->"
+            Path(str(recovered["path"]))
+            .read_text(encoding="utf-8")
+            .count(
+                "<!-- prompt-session-operation:v2:"
+                f"{'4' * 64}:{file_sha256(refined)} -->"
             ),
             1,
         )
 
-    def test_session_refinement_rejects_reserved_operation_marker(self) -> None:
+    def test_managed_lane_capture_merges_once_without_implicit_run(self) -> None:
+        original_ask = "Keep the managed lane direct prompt authoritative"
+        prompt = self.new_prompt(ask=original_ask)
+        self.complete_prompt(prompt)
+        base = core.read_prompt(prompt, self.prompt_root, require_content=True)
+        refinement = self.root / "managed-lane-refinement.md"
+        new_constraint = "Also capture this managed-lane constraint exactly once."
+        refinement.write_text(new_constraint + "\n", encoding="utf-8")
+        refinement.chmod(0o600)
+        operation_id = "6" * 64
+        workspace = core.verify_workspace(self.workspace)
+        self.assertEqual(Path(str(workspace["source_root"])), self.lane_scope)
+        runs_root = Path(str(workspace["runs_root"]))
+        self.assertEqual(runs.load_run_manifests(runs_root), [])
+
+        merged = runs.merge_session_projection(
+            self.workspace,
+            refinement,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id=operation_id,
+            projection_sha256=file_sha256(refinement),
+            clock=lambda: FIXED_UTC,
+        )
+        text = prompt.read_text(encoding="utf-8")
+        self.assertIn(original_ask, text)
+        self.assertIn(new_constraint, text)
+        self.assertEqual(
+            text.count(
+                "<!-- prompt-session-operation:v2:"
+                f"{operation_id}:{file_sha256(refinement)} -->"
+            ),
+            1,
+        )
+        self.assertEqual(runs.load_run_manifests(runs_root), [])
+
+        retried = runs.merge_session_projection(
+            self.workspace,
+            refinement,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id=operation_id,
+            projection_sha256=file_sha256(refinement),
+        )
+        self.assertEqual(retried["sha256"], merged["sha256"])
+        self.assertEqual(runs.load_run_manifests(runs_root), [])
+
+        first_run = pw.route_project_prompt(
+            self.lane_scope,
+            self.codex_home,
+            base.prompt_ref,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        second_run = pw.route_project_prompt(
+            self.lane_scope,
+            self.codex_home,
+            base.prompt_ref,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(first_run["prompt"], str(prompt))
+        self.assertEqual(second_run["prompt"], str(prompt))
+        self.assertEqual(
+            first_run["_internal"]["run_id"], second_run["_internal"]["run_id"]
+        )
+
+    def test_session_projection_rejects_reserved_operation_marker(self) -> None:
         refined = self.root / "reserved-marker.md"
         refined.write_text(
             f"Do not inject <!-- prompt-session-operation:{'5' * 64} -->.\n",
@@ -1013,14 +1399,86 @@ class PromptWorkspaceTest(unittest.TestCase):
         refined.chmod(0o600)
         self.assert_error(
             "PROMPT_INPUT_INVALID",
-            runs.merge_session_refinement,
+            runs.merge_session_projection,
             self.workspace,
             refined,
             prompt_reference=None,
             expected_sha256=None,
             new_objective=True,
             operation_id="5" * 64,
+            projection_sha256=file_sha256(refined),
         )
+
+    def test_session_projection_rejects_symlink_input(self) -> None:
+        target = self.root / "projection-target.md"
+        target.write_text("Require one durable constraint.\n", encoding="utf-8")
+        target.chmod(0o600)
+        projection = self.root / "projection-link.md"
+        projection.symlink_to(target)
+
+        self.assert_error(
+            "PROMPT_PATH_INVALID",
+            runs.merge_session_projection,
+            self.workspace,
+            projection,
+            prompt_reference=None,
+            expected_sha256=None,
+            new_objective=True,
+            operation_id="a" * 64,
+            projection_sha256=file_sha256(target),
+        )
+
+    def test_session_projection_rejects_substitution_and_serializes_same_base(
+        self,
+    ) -> None:
+        prompt = self.new_prompt(ask="Keep the accepted base stable")
+        base = core.read_prompt(prompt, self.prompt_root, require_content=True)
+        first = self.root / "first-project-intent.md"
+        second = self.root / "second-project-intent.md"
+        first.write_text("Require the first durable constraint.\n", encoding="utf-8")
+        second.write_text("Require the second durable constraint.\n", encoding="utf-8")
+        first.chmod(0o600)
+        second.chmod(0o600)
+        before = prompt.read_bytes()
+        self.assert_error(
+            "PROMPT_DRIFT",
+            runs.merge_session_projection,
+            self.workspace,
+            second,
+            prompt_reference=base.prompt_ref,
+            expected_sha256=base.sha256,
+            new_objective=False,
+            operation_id="7" * 64,
+            projection_sha256=file_sha256(first),
+        )
+        self.assertEqual(prompt.read_bytes(), before)
+
+        def merge(path: Path, operation_id: str) -> tuple[str, object]:
+            try:
+                result = runs.merge_session_projection(
+                    self.workspace,
+                    path,
+                    prompt_reference=base.prompt_ref,
+                    expected_sha256=base.sha256,
+                    new_objective=False,
+                    operation_id=operation_id,
+                    projection_sha256=file_sha256(path),
+                    clock=lambda: FIXED_UTC,
+                )
+                return "ok", result
+            except runs.PromptWorkspaceError as error:
+                return error.code, error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda item: merge(*item),
+                    ((first, "8" * 64), (second, "9" * 64)),
+                )
+            )
+        self.assertEqual(sorted(code for code, _ in results), ["PROMPT_DRIFT", "ok"])
+        workspace = core.verify_workspace(self.workspace)
+        self.assertEqual(runs.load_run_manifests(Path(str(workspace["runs_root"]))), [])
 
     def test_new_treats_metacharacters_as_data(self) -> None:
         ask = "Add '$() ; & pipes' and café 🔒 safely"
@@ -1459,6 +1917,40 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertIn("## Context", document.sections["Ask"])
         self.assertNotIn("Context", document.sections)
 
+    def test_run_intake_refreshes_stale_generated_python_launcher(self) -> None:
+        prompt = self.new_prompt()
+        workspace_manifest = json.loads(self.workspace.read_text(encoding="utf-8"))
+        vscode_path = Path(workspace_manifest["vscode_workspace"])
+        vscode = json.loads(vscode_path.read_text(encoding="utf-8"))
+        stale_python = self.root / "removed-python3.12"
+        for task in vscode["tasks"]["tasks"]:
+            task["command"] = str(stale_python)
+        core.write_atomic(vscode_path, core.stable_json(vscode))
+
+        with self.assertRaises(core.PromptWorkspaceError) as blocked:
+            core.verify_workspace(self.workspace)
+        self.assertEqual(blocked.exception.code, "WORKSPACE_STATE_INVALID")
+        self.assertEqual(
+            blocked.exception.message, "VS Code workspace command is unsafe"
+        )
+
+        routed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+
+        self.assertEqual(routed["status"], "snapshot_only")
+        refreshed = json.loads(vscode_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {task["command"] for task in refreshed["tasks"]["tasks"]},
+            {str(Path(sys.executable).resolve())},
+        )
+        self.assertEqual(
+            core.verify_workspace(self.workspace)["scope"], "services/example"
+        )
+
     def test_interrupted_refinement_reset_retries_from_manifest_commit_point(
         self,
     ) -> None:
@@ -1552,6 +2044,33 @@ class PromptWorkspaceTest(unittest.TestCase):
             self.workspace, None, str(second["_internal"]["run_id"])
         )
         self.assertEqual(verified["run"]["sha256"], second["_internal"]["sha256"])
+
+    def test_bound_pre_impact_status_is_pending_then_historical(self) -> None:
+        prompt = self.new_prompt()
+        first = pw.route_project_prompt(
+            self.scope, self.codex_home, prompt.name, clock=lambda: FIXED_UTC
+        )
+        pending = next(
+            item
+            for item in pw.prompt_rows(self.workspace, None, None)
+            if item.get("path") == str(prompt)
+        )
+        self.assertEqual(pending["impact"]["classification"], "pending")
+        self.assertEqual(
+            pending["impact"]["plan_action"],
+            "clarification_or_reconciliation_required",
+        )
+
+        self.write_handoff(str(first["_internal"]["run_id"]), status="done")
+        historical = next(
+            item
+            for item in pw.prompt_rows(self.workspace, None, None)
+            if item.get("path") == str(prompt)
+        )
+        self.assertEqual(
+            historical["impact"]["classification"], "historical_no_receipt"
+        )
+        self.assertEqual(historical["impact"]["plan_action"], "none")
 
     def test_run_validation_binds_intent_metadata_to_snapshot(self) -> None:
         prompt = self.new_prompt()
@@ -2525,7 +3044,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        prompt_ref = core.read_prompt(
+            prompt, self.prompt_root, require_content=True
+        ).prompt_ref
         exact = self.prompt_root / f"{prompt_ref}--renamed-exact.md"
         edited = self.prompt_root / f"{prompt_ref}--renamed-edited.md"
         shutil.copyfile(prompt, exact)
@@ -2559,7 +3080,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        prompt_ref = core.read_prompt(
+            prompt, self.prompt_root, require_content=True
+        ).prompt_ref
         stale = self.prompt_root / f"{prompt_ref}--stale-copy.md"
         shutil.copyfile(prompt, stale)
         stale.chmod(0o600)
@@ -2598,7 +3121,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC,
         )
         self.write_handoff(snapshot["run_id"], status="prepared")
-        prompt_ref = core.read_prompt(prompt, self.prompt_root, require_content=True).prompt_ref
+        prompt_ref = core.read_prompt(
+            prompt, self.prompt_root, require_content=True
+        ).prompt_ref
         renamed = self.prompt_root / f"{prompt_ref}--renamed-prompt.md"
         prompt.rename(renamed)
         verified = pw.verify_command(self.workspace, None, snapshot["run_id"])

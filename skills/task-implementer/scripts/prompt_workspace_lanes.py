@@ -15,7 +15,6 @@ from prompt_workspace_core import PromptWorkspaceError, required_string
 PRIVATE_LANE_ACTIONS = frozenset(
     {
         "task-lane-ensure",
-        "task-lane-generation-acquire",
         "task-lane-generation-inspect",
         "task-lane-generation-claims",
         "task-lane-generation-release",

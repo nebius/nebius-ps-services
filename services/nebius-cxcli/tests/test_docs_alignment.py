@@ -117,6 +117,8 @@ def test_worker_bridge_config_docs_classify_digest_before_readiness() -> None:
     assert "Route both exact predecessor and exact projected-successor sources" in design
     assert "binds that exact runtime as the replacement source" in readme
     assert "routes that exact Pod through the existing" in changelog
+    assert "exact compatibility-adoption receipt" in readme
+    assert "records equal predecessor and target digests" in changelog
     assert "sealed standard, bootstrap, or rearm authority" in readme
     assert "standard-pause-only Kubernetes resource version" in changelog
 
@@ -710,7 +712,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--jail-sfs-resize-policy`, `--jail-sfs-resize-to-gib`, "
         "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
         "`--job-refresh-interval`, `--dry-run`, `--execute`, `--approve/--no-approve`, "
-        "`--approve-remediation/--no-approve-remediation`, "
+        "`--stop-for-remediation-approval`, "
         "`--interactive/--no-interactive`"
     ) in common_flags_flat
     assert (
@@ -761,7 +763,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
         "`--job-refresh-interval`, `--dry-run/--execute`, "
         "`--approve/--no-approve`, "
-        "`--approve-remediation/--no-approve-remediation`, "
+        "`--stop-for-remediation-approval`, "
         "`--slurm-scheduling-pause/--no-slurm-scheduling-pause`, "
         "`--interactive/--no-interactive`"
     ) in common_flags_flat

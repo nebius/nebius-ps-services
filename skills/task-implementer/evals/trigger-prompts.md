@@ -12,11 +12,11 @@ $task-implementer -h
 ```
 
 Return concise, report-only help with purpose, explicit invocation policy,
-exactly four workflow actions (`workspace init`, `run`, `integrate`, and
-`workspace remove`), their arguments, and
+exactly five workflow actions (`workspace init`, `workspace reuse`, `run`,
+`integrate`, and `workspace remove`), their arguments, and
 `-h, --help`, then stop. After the selected `SKILL.md` loads, do not initialize
 a workspace, inspect the project, call additional tools, change private state,
-or start either workflow action.
+or start any workflow action.
 
 ```text
 $task-implementer workspace init
@@ -32,6 +32,15 @@ $task-implementer workspace init services/nebius-cxcli
 Resolve the monorepo scope while keeping every future worker worktree a full
 repository checkout. Create or reuse the persistent lane from committed source
 `HEAD`; source-checkout dirt is allowed and excluded.
+
+```text
+$task-implementer workspace reuse services/nebius-cxcli
+```
+
+From either the primary source project or its owning managed lane, resolve and
+open the exact existing workspace. Permit dirty or active live lane state
+without refreshing, repairing, checkpointing, migrating, queuing, or running
+anything. Missing or mismatched state fails closed.
 
 ```text
 $task-implementer integrate services/nebius-cxcli
@@ -141,12 +150,14 @@ $task-implementer cleanup <run-id>
 $task-implementer upgrade <run-id>
 $task-implementer workspace new "Add retries"
 $task-implementer workspace list
+$task-implementer workspace open
+$task-implementer workspace --reuse
 $task-implementer prepare <prompt-path>
 $task-implementer continue <run-id>
 $task-implementer steer <steering-file>
 ```
 
-Explain the four-action interface without exposing internal IDs.
+Explain the five-action interface without exposing internal IDs.
 
 ## Should Not Trigger
 

@@ -210,6 +210,25 @@ def _validate_spec_receipt(
         "path": _relative_project_path(project_root, design_path),
         "sha256": _sha256_bytes(_read_regular(design_path, "design")),
     }
+    current_head = _git_text(
+        git_root, ["rev-parse", "HEAD"], "resolve spec receipt HEAD"
+    )
+    receipt_head = receipt.get("git_head") if isinstance(receipt, dict) else None
+    receipt_head_is_ancestor = False
+    if (
+        isinstance(receipt_head, str)
+        and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", receipt_head) is not None
+    ):
+        try:
+            _git_text(
+                git_root,
+                ["merge-base", "--is-ancestor", receipt_head, current_head],
+                "verify spec receipt ancestry",
+            )
+        except ProjectInstructionsError:
+            pass
+        else:
+            receipt_head_is_ancestor = True
     if (
         not isinstance(receipt, dict)
         or set(receipt) != required
@@ -219,8 +238,7 @@ def _validate_spec_receipt(
         or receipt.get("project_root") != str(project_root)
         or receipt.get("git_root") != str(git_root)
         or receipt.get("project_scope") != project_scope
-        or receipt.get("git_head")
-        != _git_text(git_root, ["rev-parse", "HEAD"], "resolve spec receipt HEAD")
+        or not receipt_head_is_ancestor
         or not isinstance(receipt.get("validator"), str)
         or not receipt.get("validator")
         or type(receipt.get("validator_version")) is not int
@@ -251,7 +269,15 @@ def _validate_spec_receipt(
         raise ProjectInstructionsError(
             "SPEC_VALIDATION_REQUIRED", "owner spec validation could not run"
         ) from error
-    if completed.returncode != 0 or authoritative != receipt:
+    recorded_contract = dict(receipt)
+    current_contract = dict(authoritative) if isinstance(authoritative, dict) else {}
+    recorded_contract.pop("git_head", None)
+    authoritative_head = current_contract.pop("git_head", None)
+    if (
+        completed.returncode != 0
+        or authoritative_head != current_head
+        or current_contract != recorded_contract
+    ):
         raise ProjectInstructionsError(
             "SPEC_VALIDATION_REQUIRED",
             "spec validation receipt is not the current owner-issued receipt",

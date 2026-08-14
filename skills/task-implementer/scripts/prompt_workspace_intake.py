@@ -24,6 +24,7 @@ from prompt_workspace_runs import (
     _activate_next_queued_prompt_unlocked,
     _snapshot_prompt_unlocked,
     enqueue_prompt_unlocked,
+    initialize_project_workspace,
     load_prompt_queue,
     load_prompt_activity,
     load_run_manifests,
@@ -35,6 +36,12 @@ from prompt_workspace_runs import (
     scope_lock,
     touch_handoff_invocation,
     verify_run,
+)
+from prompt_workspace_resume import (
+    adopt_resume_plan,
+    plan_run_resume,
+    reconcile_committed_resume,
+    reconcile_handoff_projection,
 )
 from prompt_workspace_specs import record_steering_revision
 
@@ -120,6 +127,50 @@ def _run_resources_active(run_dir: Path) -> bool:
     )
 
 
+def _resume_route(
+    workspace: dict[str, object],
+    run_dir: Path,
+    internal: dict[str, object],
+    *,
+    clock: Callable[[], datetime],
+) -> tuple[str, str, str, dict[str, object]]:
+    """Adopt one stable v7 observation and return its public-safe route."""
+
+    reconcile_committed_resume(workspace, run_dir.name, clock=clock)
+    plan = plan_run_resume(workspace, run_dir.name, clock=clock)
+    plan = adopt_resume_plan(workspace, run_dir.name, plan, clock=clock)
+    if not plan.get("replay", False):
+        reconcile_handoff_projection(
+            workspace,
+            run_dir.name,
+            plan,
+            expected_sha256=str(plan["handoff_sha256"]),
+        )
+    internal = {**internal, "resume": plan}
+    outcome = str(plan["outcome"])
+    if outcome == "execute":
+        if plan.get("next_transition") == "run-finalize":
+            return (
+                "finalize",
+                "finalization_pending",
+                "TASK_LEASE_RELEASE_REQUIRED",
+                internal,
+            )
+        return "continue", "running", "RESUME_EXECUTE", internal
+    if outcome == "wait":
+        return "wait", "running", "WORKER_ACTIVE", internal
+    if outcome == "requires_confirmation":
+        return (
+            "blocked",
+            "blocked",
+            "RECOVERY_CONFIRMATION_REQUIRED",
+            internal,
+        )
+    if outcome == "blocked":
+        return "blocked", "blocked", "RESUME_BLOCKED", internal
+    return "done", "done", "ALREADY_COMPLETE", internal
+
+
 def route_project_prompt(
     project_path: Path,
     codex_home: Path,
@@ -136,7 +187,30 @@ def route_project_prompt(
             "project prompt workspace is missing; run "
             "`$task-implementer workspace init [project-folder]` first",
         )
-    workspace = verify_workspace(manifest_path)
+    try:
+        workspace = verify_workspace(manifest_path)
+    except PromptWorkspaceError as exc:
+        if (
+            exc.code != "WORKSPACE_STATE_INVALID"
+            or exc.message != "VS Code workspace command is unsafe"
+        ):
+            raise
+        # The generated editor launcher records a resolved Python executable so
+        # that it never follows an unreviewed wrapper or symlink. Package-manager
+        # upgrades can remove that exact executable while leaving the managed
+        # lane, prompts, and run state valid. An explicit run may refresh only
+        # this generated workspace surface through the canonical initializer;
+        # every other workspace validation failure remains fail-closed.
+        refreshed = initialize_project_workspace(project_path, codex_home)
+        refreshed_manifest = Path(
+            required_string(refreshed, "workspace", "workspace refresh")
+        )
+        if refreshed_manifest != manifest_path:
+            raise PromptWorkspaceError(
+                "WORKSPACE_MISMATCH",
+                "workspace refresh resolved a different project scope",
+            )
+        workspace = verify_workspace(manifest_path)
     resolve_prompt_reference(
         manifest_path,
         prompt_reference,
@@ -372,6 +446,16 @@ def route_project_prompt(
                 active_dir,
                 datetime.fromisoformat(invoked_at_text),
             )
+            coordinator = load_coordinator_state(active_dir)
+            if (
+                coordinator is not None
+                and document.intent_sha256 == str(verified["latest_intent_sha256"])
+                and not bool(verified["steering_pending"])
+                and not bool(verified["reconciliation_pending"])
+            ):
+                action, status, outcome, internal = _resume_route(
+                    workspace, active_dir, internal, clock=clock
+                )
         else:
             queue = load_prompt_queue(runs_root.parent)
             if queue["entries"]:
@@ -426,6 +510,7 @@ def route_project_prompt(
                 latest_dir, latest_manifest = latest_matching
                 verified = verified_runs[latest_dir.name]
                 latest_intent_sha256 = str(verified["latest_intent_sha256"])
+                latest_coordinator = None
                 if str(verified["status"]) == "done":
                     completed_handoff = read_handoff_text(latest_dir)
                     if completed_handoff is None:
@@ -433,8 +518,8 @@ def route_project_prompt(
                             "RUN_STATE_INVALID", "completed run handoff is missing"
                         )
                     # Completed prompt history is readable only when its
-                    # canonical v4 execution state validates.
-                    load_coordinator_state(latest_dir)
+                    # canonical coordinator-v7 execution state validates.
+                    latest_coordinator = load_coordinator_state(latest_dir)
                 if (
                     str(verified["status"]) == "done"
                     and document.intent_sha256 == latest_intent_sha256
@@ -463,6 +548,10 @@ def route_project_prompt(
                         latest_dir,
                         datetime.fromisoformat(invoked_at_text),
                     )
+                    if latest_coordinator is not None:
+                        action, status, outcome, internal = _resume_route(
+                            workspace, latest_dir, internal, clock=clock
+                        )
                 else:
                     internal = _snapshot_prompt_unlocked(
                         manifest_path,

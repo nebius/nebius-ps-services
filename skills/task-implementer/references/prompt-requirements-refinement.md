@@ -90,8 +90,40 @@ Do not delete accepted truth on omission alone.
 
 Contract lock requires the latest accepted intent digest, a `ready` refinement
 ledger, valid managed requirements/design regions, and no unresolved
-contradiction. The wave planner verifies that the compiled digest equals the
-exact current Task Implementer-owned requirements region before acquiring
-repository or worktree resources. A semantic no-effect follow-up may finish
-without implementation tasks after recording that current product truth
-already satisfies the compiled objective.
+contradiction. Before wave planning, write one private
+`prompt-impact-claim.json` for the accepted revision. It must classify every
+extracted statement occurrence exactly once as `changed_contract`,
+`existing_contract`, `execution_only`, or `non_contract`. Contract
+classifications map current requirement and design IDs; non-contract
+classifications use only the bounded reasons `workflow_directive`, `duplicate`,
+or `clarification_context`.
+
+Private `refinement-verify` sends that claim, the ready refinement, and the
+current canonical specs to the pure validator owned by
+`maintain-project-specs`. The owner derives the aggregate effect and either
+`retain_plan` or `replan_required`; matching spec bytes or a caller-authored
+`no_effect` label are not sufficient. Accepted receipts are append-only under
+`prompt-impact/`, and `plan-basis.json` separately binds the coordinator plan
+revision to the latest settled revision. Every resource-creating,
+dispatch/integration, promotion, and finalization boundary verifies that basis
+and the current requirements/design bytes. A later proven no-effect revision
+may retain an older plan basis; any contract or execution effect requires a
+safe replan with a distinct plan identity. Publication is serialized per run,
+compare-checks the ledger head, and preserves then skips a conflicting orphan
+attempt after interruption. Material ambiguity produces no impact receipt.
+
+If owner-controlled lifecycle reconciliation changes only canonical spec
+receipt bytes while a retained plan awaits exact recovery, refresh the ready
+refinement's compiled digest to the current managed requirements before the
+recovery command runs. Recovery may then publish and bind a newly validated
+`retain_plan` impact. Recovery never edits the refinement, and any material
+`replan_required` result must use ordinary replanning instead.
+
+Impact state is private coordination evidence. Public status exposes only the
+revision, semantic edit state, impact class, mapped public record IDs, bounded
+reason classes, and retain/replan action. It never exposes prompt text,
+statement text, free-form rationale, private impact/run paths, or
+content-derived digests. The existing editable prompt path may remain in
+prompt-list output.
+The workflow continues to detect edits with owner-computed raw and normalized
+intent hashes; never add a hash header to an editable prompt.

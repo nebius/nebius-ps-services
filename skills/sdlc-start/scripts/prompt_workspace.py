@@ -25,6 +25,9 @@ except ImportError:  # pragma: no cover - Agentic SDLC currently targets POSIX h
     fcntl = None  # type: ignore[assignment]
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 WORKTREE_SCRIPTS = Path(__file__).resolve().parents[2] / "worktree" / "scripts"
 if str(WORKTREE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(WORKTREE_SCRIPTS))
@@ -35,6 +38,14 @@ from git_promotion import (  # noqa: E402
     ensure_promotion_branch,
     repository_root,
     resolve_remote_default,
+)
+from prompt_impact import (  # noqa: E402
+    PromptImpactError,
+    load_current as load_current_prompt_impact,
+    publish as publish_prompt_impact,
+    public_execution_bases,
+    public_impact_status,
+    verify_current as verify_current_prompt_impact,
 )
 
 
@@ -2204,12 +2215,20 @@ def verify_requirements_refinement_contract(
             "REQUIREMENTS_REFINEMENT_REQUIRED",
             "docs/requirements.md changed after the latest refinement was compiled",
         )
+    try:
+        impact, impact_sha256 = publish_prompt_impact(
+            project_root, run_dir, binding, refinement
+        )
+    except PromptImpactError as error:
+        raise PromptWorkspaceError(error.code, error.message) from error
     return {
         "action": "requirements_refinement_verified",
         "run_id": run_id,
         "revision": latest["revision"],
         "intent_sha256": latest["intent_sha256"],
         "compiled_requirements_sha256": digest,
+        "impact": public_impact_status(impact),
+        "impact_sha256": impact_sha256,
     }
 
 
@@ -2656,53 +2675,111 @@ def create_prompt(
     }
 
 
-def merge_session_refinement(
+def _read_projection_input(path: Path) -> bytes:
+    """Read one private projection through the validated file descriptor."""
+
+    requested = path.expanduser()
+    if requested.is_symlink():
+        raise PromptWorkspaceError(
+            "PROMPT_PATH_INVALID", "projection input must not be a symlink"
+        )
+    try:
+        resolved = requested.resolve(strict=True)
+    except OSError as error:
+        raise PromptWorkspaceError(
+            "PROMPT_PATH_INVALID", "projection input is unavailable"
+        ) from error
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(resolved, flags)
+    except OSError as error:
+        raise PromptWorkspaceError(
+            "PROMPT_PATH_INVALID", "projection input could not be opened safely"
+        ) from error
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise PromptWorkspaceError(
+                "PROMPT_PATH_INVALID", "projection input must be one regular file"
+            )
+        if os.name == "posix" and stat.S_IMODE(opened.st_mode) != 0o600:
+            raise PromptWorkspaceError(
+                "PROMPT_PATH_INVALID", "project-intent projection must use mode 0600"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_PROMPT_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > MAX_PROMPT_BYTES:
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "projection input exceeds 256 KiB"
+        )
+    return raw
+
+
+def merge_session_projection(
     workspace_path: Path,
-    refined_file: Path,
+    projection_file: Path,
     *,
     prompt_reference: str | None,
     expected_sha256: str | None,
     new_objective: bool,
     operation_id: str,
+    projection_sha256: str,
     clock=now_utc,
 ) -> dict[str, object]:
-    """CAS-merge one accepted session refinement into an SDLC prompt."""
+    """CAS-merge one accepted project-intent projection into an SDLC prompt."""
 
     manifest_path = workspace_path.expanduser().resolve()
     workspace = validate_workspace(manifest_path)
     project_dir = manifest_path.parent
     prompt_root = project_dir / "prompts"
-    requested = refined_file.expanduser()
-    if requested.is_symlink():
-        raise PromptWorkspaceError("PROMPT_PATH_INVALID", "refined input must not be a symlink")
+    projection_raw = _read_projection_input(projection_file)
     try:
-        resolved = requested.resolve(strict=True)
-    except OSError as error:
-        raise PromptWorkspaceError("PROMPT_PATH_INVALID", "refined input is unavailable") from error
-    if not resolved.is_file() or resolved.stat().st_nlink != 1:
-        raise PromptWorkspaceError("PROMPT_PATH_INVALID", "refined input must be one regular file")
-    require_mode(resolved, 0o600, "refined session input")
-    try:
-        refined = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "refined input is not UTF-8") from error
-    sensitive = contains_secret(refined)
-    if not refined.strip() or sensitive or "\x00" in refined:
+        projection = projection_raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "projection input is not UTF-8") from error
+    sensitive = contains_secret(projection)
+    if not projection.strip() or sensitive or "\x00" in projection:
         raise PromptWorkspaceError(
             "PROMPT_SENSITIVE_INPUT" if sensitive else "PROMPT_INPUT_INVALID",
-            "refined input is empty or contains secret material",
+            "projection input is empty or contains secret material",
         )
     if not SHA256_RE.fullmatch(operation_id):
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID", "session operation identity is invalid"
         )
-    if "<!-- prompt-session-operation:" in refined:
+    if not SHA256_RE.fullmatch(projection_sha256):
+        raise PromptWorkspaceError(
+            "PROMPT_INPUT_INVALID", "accepted projection digest is invalid"
+        )
+    if hashlib.sha256(projection_raw).hexdigest() != projection_sha256:
+        raise PromptWorkspaceError(
+            "PROMPT_DRIFT", "project-intent projection changed after acceptance"
+        )
+    if "<!-- prompt-session-operation:" in projection:
         raise PromptWorkspaceError(
             "PROMPT_INPUT_INVALID",
-            "refined input uses the reserved operation marker namespace",
+            "projection input uses the reserved operation marker namespace",
         )
-    operation_marker = f"<!-- prompt-session-operation:{operation_id} -->"
+    operation_marker = (
+        f"<!-- prompt-session-operation:v2:{operation_id}:{projection_sha256} -->"
+    )
     marker_bytes = operation_marker.encode("utf-8")
+    selected = projection.strip().encode("utf-8")
+    duplicate_pattern = re.compile(
+        rb"<!-- prompt-session-operation:v2:[0-9a-f]{64}:"
+        + projection_sha256.encode("ascii")
+        + rb" -->"
+    )
+
+    def duplicate_count(raw: bytes) -> int:
+        return sum(
+            1
+            for match in duplicate_pattern.finditer(raw)
+            if raw[: match.start()].endswith(selected + b"\n\n")
+        )
+
     accepted_at = clock()
     if accepted_at.tzinfo is None or accepted_at.utcoffset() is None:
         raise PromptWorkspaceError("PROMPT_INPUT_INVALID", "merge clock must be timezone-aware")
@@ -2713,6 +2790,7 @@ def merge_session_refinement(
                     "PROMPT_INPUT_INVALID", "new objective cannot name an existing prompt base"
                 )
             applied: list[dict[str, object]] = []
+            duplicates: list[dict[str, object]] = []
             for candidate_path in sorted(prompt_root.glob("*.md")):
                 if candidate_path.name == HUB_FILENAME:
                     continue
@@ -2725,6 +2803,14 @@ def merge_session_refinement(
                     )
                 if marker_count == 1:
                     applied.append(parse_prompt(candidate_path))
+                duplicate_matches = duplicate_count(bytes(candidate["raw"]))
+                if duplicate_matches > 1:
+                    raise PromptWorkspaceError(
+                        "PROMPT_STATE_INVALID",
+                        "project-intent projection appears more than once in one prompt",
+                    )
+                if duplicate_matches == 1 and marker_count == 0:
+                    duplicates.append(parse_prompt(candidate_path))
             if len(applied) > 1:
                 raise PromptWorkspaceError(
                     "PROMPT_PATH_AMBIGUOUS",
@@ -2741,8 +2827,27 @@ def merge_session_refinement(
                     "prompt_ref": document["prompt_ref"],
                     "sha256": document["sha256"],
                     "intent_sha256": document["intent_sha256"],
+                    "duplicate": False,
                 }
-            normalized_title = " ".join(refined.split())
+            if len(duplicates) > 1:
+                raise PromptWorkspaceError(
+                    "PROMPT_PATH_AMBIGUOUS",
+                    "project-intent projection is claimed by multiple prompts",
+                )
+            if duplicates:
+                document = duplicates[0]
+                return {
+                    "action": "duplicate",
+                    "workspace": str(manifest_path),
+                    "project_root": workspace["project_root"],
+                    "path": str(document["path"]),
+                    "prompt_id": document["prompt_id"],
+                    "prompt_ref": document["prompt_ref"],
+                    "sha256": document["sha256"],
+                    "intent_sha256": document["intent_sha256"],
+                    "duplicate": True,
+                }
+            normalized_title = " ".join(projection.split())
             title = normalized_title[:157].rstrip() + (
                 "..." if len(normalized_title) > 160 else ""
             )
@@ -2750,7 +2855,7 @@ def merge_session_refinement(
                 prompt_root,
                 title,
                 accepted_at,
-                ask_body=f"{refined.strip()}\n\n{operation_marker}",
+                ask_body=f"{projection.strip()}\n\n{operation_marker}",
             )
             document = parse_prompt(path)
             if bytes(document["raw"]).count(marker_bytes) != 1:
@@ -2800,6 +2905,25 @@ def merge_session_refinement(
                     "prompt_ref": document["prompt_ref"],
                     "sha256": document["sha256"],
                     "intent_sha256": document["intent_sha256"],
+                    "duplicate": False,
+                }
+            duplicate_matches = duplicate_count(bytes(document["raw"]))
+            if duplicate_matches > 1:
+                raise PromptWorkspaceError(
+                    "PROMPT_STATE_INVALID",
+                    "project-intent projection appears more than once in the prompt",
+                )
+            if duplicate_matches == 1:
+                return {
+                    "action": "duplicate",
+                    "workspace": str(manifest_path),
+                    "project_root": workspace["project_root"],
+                    "path": str(document["path"]),
+                    "prompt_id": document["prompt_id"],
+                    "prompt_ref": document["prompt_ref"],
+                    "sha256": document["sha256"],
+                    "intent_sha256": document["intent_sha256"],
+                    "duplicate": True,
                 }
             if document["sha256"] != expected_sha256:
                 raise PromptWorkspaceError(
@@ -2817,7 +2941,7 @@ def merge_session_refinement(
                 text
                 + separator
                 + heading
-                + refined.strip()
+                + projection.strip()
                 + "\n\n"
                 + operation_marker
                 + "\n"
@@ -2840,6 +2964,7 @@ def merge_session_refinement(
             "prompt_ref": document["prompt_ref"],
             "sha256": document["sha256"],
             "intent_sha256": document["intent_sha256"],
+            "duplicate": False,
         }
 
 
@@ -2944,6 +3069,56 @@ def prompt_rows(
             "completed_run_count": completed,
             "path": str(path.resolve()),
         }
+        if prompt_runs:
+            latest_dir, latest_binding = prompt_runs[-1]
+            latest_revision = latest_binding["revisions"][-1]
+            try:
+                current_impact = load_current_prompt_impact(
+                    latest_dir, required=False
+                )
+            except PromptImpactError as error:
+                raise PromptWorkspaceError(error.code, error.message) from error
+            impact_receipt = current_impact[0] if current_impact is not None else None
+            impact_is_current = bool(
+                impact_receipt is not None
+                and impact_receipt.get("revision") == latest_revision["revision"]
+                and impact_receipt.get("intent_sha256")
+                == (latest_revision.get("intent_sha256") or latest_revision["sha256"])
+            )
+            row["prompt_revision"] = latest_revision["revision"]
+            row["editable_snapshot_matches"] = (
+                document["sha256"] == latest_revision["sha256"]
+            )
+            row["semantic_edit_detected"] = (
+                document["intent_sha256"]
+                != (latest_revision.get("intent_sha256") or latest_revision["sha256"])
+            )
+            row["impact"] = (
+                public_impact_status(impact_receipt)
+                if impact_is_current and impact_receipt is not None
+                else {
+                    "classification": (
+                        "historical_no_receipt"
+                        if run_status(latest_dir) in TERMINAL_STATUSES
+                        else "pending"
+                    ),
+                    "requirements": [],
+                    "design": [],
+                    "reasons": [],
+                    "plan_action": (
+                        "none"
+                        if run_status(latest_dir) in TERMINAL_STATUSES
+                        else "clarification_or_reconciliation_required"
+                    ),
+                }
+            )
+            row["latest_settled_revision"] = (
+                impact_receipt["revision"] if impact_is_current else None
+            )
+            try:
+                row["execution_plan_bases"] = public_execution_bases(latest_dir)
+            except PromptImpactError as error:
+                raise PromptWorkspaceError(error.code, error.message) from error
         if queue_position is not None:
             row["queue_position"] = queue_position
         rows.append(row)
@@ -3260,7 +3435,7 @@ def steering_resolve(
     workspace: Path, run_id: str, revision_id: str, disposition: str
 ) -> dict[str, object]:
     manifest_path = workspace.expanduser().resolve()
-    validate_workspace(manifest_path)
+    workspace_value = validate_workspace(manifest_path)
     if not RUN_ID_RE.fullmatch(run_id) or not REVISION_RE.fullmatch(revision_id):
         raise PromptWorkspaceError("RUN_STATE_INVALID", "run or revision ID is invalid")
     if disposition not in STEERING_DISPOSITIONS:
@@ -3279,6 +3454,26 @@ def steering_resolve(
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "steering revision is not pending"
             )
+        if disposition in {"applied", "no_effect"}:
+            try:
+                impact, _impact_sha256 = verify_current_prompt_impact(
+                    run_dir, Path(str(workspace_value["project_root"]))
+                )
+            except PromptImpactError as error:
+                raise PromptWorkspaceError(error.code, error.message) from error
+            if impact.get("revision") != revision_id:
+                raise PromptWorkspaceError(
+                    "PROMPT_IMPACT_REQUIRED",
+                    "steering cannot resolve without impact evidence for its revision",
+                )
+            has_effect = bool(impact.get("effects"))
+            if (disposition == "no_effect" and has_effect) or (
+                disposition == "applied" and not has_effect
+            ):
+                raise PromptWorkspaceError(
+                    "PROMPT_IMPACT_REQUIRED",
+                    "steering disposition does not match the validated prompt impact",
+                )
         target["steering_status"] = disposition
         target["resolved_at"] = iso_seconds(now_utc())
         binding["revisions"] = revisions
@@ -3342,10 +3537,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     new_parser.add_argument("--json", action="store_true")
     session_merge = subparsers.add_parser(
-        "session-merge", help="Internal: merge one accepted bound-session refinement."
+        "session-merge", help="Internal: merge one accepted project-intent projection."
     )
     session_merge.add_argument("--workspace", required=True, type=Path)
-    session_merge.add_argument("--refined-file", required=True, type=Path)
+    session_merge.add_argument("--projection-file", required=True, type=Path)
+    session_merge.add_argument("--projection-sha256", required=True)
     session_merge.add_argument("--prompt")
     session_merge.add_argument("--expected-sha256")
     session_merge.add_argument("--new-objective", action="store_true")
@@ -3458,13 +3654,14 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr,
                     )
         elif args.command == "session-merge":
-            result = merge_session_refinement(
+            result = merge_session_projection(
                 args.workspace,
-                args.refined_file,
+                args.projection_file,
                 prompt_reference=args.prompt,
                 expected_sha256=args.expected_sha256,
                 new_objective=args.new_objective,
                 operation_id=args.operation_id,
+                projection_sha256=args.projection_sha256,
             )
         elif args.command == "list":
             result = prompt_rows(args.workspace, args.query, args.date)

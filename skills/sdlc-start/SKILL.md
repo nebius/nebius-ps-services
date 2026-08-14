@@ -1,6 +1,6 @@
 ---
 name: sdlc-start
-description: "Use only as part of the Agentic SDLC workflow; act as its coordinator when the user explicitly invokes `workspace init` or `run`, or when prompt-session-intake routes an accepted direct turn from that explicitly bound session. Initialize, start, resume, continue, or steer one prompt-bound run by exact prompt ref or managed file."
+description: "Use only as part of the Agentic SDLC workflow; when the user explicitly invokes `workspace init` or `run`, initialize, start, resume, continue, or steer one prompt-bound run by exact prompt ref or managed file. Bound-session direct prompts may be captured into the canonical prompt as a non-blocking sidecar but never invoke this coordinator."
 ---
 
 # Start SDLC
@@ -39,16 +39,21 @@ $sdlc-start run <prompt-ref-or-file>
 - `run` accepts one exact unique prompt ref, full prompt ID, managed absolute
   path, or managed filename.
 - Steering means editing the same prompt and repeating `run`.
-- After explicit binding, a current prompt-session-intake receipt may route one
-  accepted direct turn internally through the same canonical run path.
+- After explicit binding, prompt-session intake may merge a captured direct
+  turn into the canonical prompt, but it does not invoke either public action.
+  The internal merge accepts only a durable project-intent projection, rehashes
+  it against the accepted digest, and binds that digest to the operation
+  marker. Ephemeral workflow/skill, shell/tool, delivery, agent-control,
+  status, conversation, and unrelated wrappers remain outside the prompt;
+  commands remain eligible when they define a project contract or example.
+  Capture failure never blocks the direct turn, exact duplicates never append,
+  and distinct prompt drift never auto-rebases.
 - Do not expose bare resume, prompt IDs, run IDs, phase actions, aliases, or a
   separate steering command.
 
 ## When To Use
 
 - The user explicitly invokes one of the two public actions.
-- The prompt-session-intake hook routes the exact current accepted turn for a
-  session already bound by one of those public actions.
 - A Stop-hook continuation prompt repeats `run` with the bound prompt filename.
 - An active run needs the next phase selected after a skill completes.
 
@@ -157,7 +162,9 @@ $sdlc-start run <prompt-ref-or-file>
   once, then edit and rerun.
 - Require `sdlc-auto-steering` to link the accepted prompt ID, revision,
   digest, and snapshot in its ledger, then call private `steering-resolve`
-  after recording an `applied`, `blocked`, or `no_effect` disposition.
+  after recording an `applied`, `blocked`, or `no_effect` disposition. An
+  `applied` or `no_effect` transition additionally requires the current
+  owner-validated impact receipt and matching derived effect.
 - At the beginning of a new run, first apply
   `references/prompt-requirements-refinement.md`. Extract the full Ask and any
   optional headings into normalized product truth, inspect discoverable facts,
@@ -166,8 +173,13 @@ $sdlc-start run <prompt-ref-or-file>
   reopened questions. Answers may arrive through chat or a later prompt
   revision, and a contradiction reopens the same question ID. Before leaving
   requirements, invoke private `prompt_workspace.py refinement-verify` for the
-  exact workspace and run; do not route to design unless it binds the latest
-  accepted identity and intent to the exact current `docs/requirements.md`.
+  exact workspace and run after writing the complete private impact claim; do
+  not route to design unless the shared owner binds the latest accepted
+  identity and intent to the exact current canonical specs and publishes the
+  immutable impact receipt. Publication is per-run locked, compare-checks the
+  ledger, and preserves then skips conflicting crash orphans. An existing
+  execution without a basis receipt must use a distinct safe replan for
+  material impact; never relabel unchanged plan bytes as current evidence.
   Then, when
   `docs/requirements.md` is missing or
   lacks a Live Experiment Environment section, encourage the user to provide a
@@ -310,8 +322,8 @@ $sdlc-start run <prompt-ref-or-file>
   prompt identity/digest through the internal prompt-session objective
   transition. Mark it terminal only after `ALREADY_COMPLETE` or verified
   workflow completion. Do not register a queued prompt as active before its
-  authoritative activation. A hook-routed material turn passes the same
-  terminal fact when consuming its exact event.
+  authoritative activation. Direct-prompt capture never supplies a run
+  transition or terminal workflow fact.
 
 ## Idempotency
 

@@ -19,11 +19,13 @@ from prompt_session_result import (
 )
 from prompt_session_storage import (
     BINDING_SCHEMA,
-    CLASSIFICATIONS,
     CONTINUATION_SCHEMA,
+    CURRENT_EVENT_SCHEMA,
+    DISPOSITIONS,
     EVENT_SCHEMA,
     MATERIAL_CLASSIFICATIONS,
     MAX_PROMPT_BYTES,
+    NOOP_REASONS,
     PROMPT_ID_RE,
     PROMPT_REF_RE,
     REGISTRY_SCHEMA,
@@ -35,12 +37,15 @@ from prompt_session_storage import (
     codex_home,
     contains_secret,
     continuation_path as _continuation_path,
+    current_event_path as _current_event_path,
     ensure_root as _ensure_root,
+    event_operation_id,
     event_path as _event_path,
     identity_sha256,
     load_json as _load_json,
     load_registry as _load_registry,
     require_private_directory as _require_private_directory,
+    require_private_file as _require_private_file,
     sha256_bytes,
     stable_json,
     state_lock,
@@ -144,8 +149,8 @@ def bind_session(
     expected = _binding_record(session_id, workflow, project)
     if path.exists():
         current = _validated_binding(_load_json(path), session_id)
-        if current.get("workflow") != workflow or current.get("project_root") != str(
-            project
+        if current.get("workflow") != workflow or not _binding_matches_project(
+            root, current, project
         ):
             raise PromptSessionError(
                 "BINDING_CONFLICT",
@@ -163,6 +168,52 @@ def load_binding(root: Path, session_id: object) -> dict[str, Any] | None:
     return _validated_binding(_load_json(path), session_id)
 
 
+def _entry_matches_project(root: Path, entry: dict[str, Any], project: Path) -> bool:
+    if entry.get("project_root") == str(project):
+        return True
+    if entry.get("workflow") != "task-implementer":
+        return False
+    prompt_path = entry.get("prompt_path")
+    if not isinstance(prompt_path, str) or not Path(prompt_path).is_absolute():
+        return False
+    try:
+        _validate_prompt_location(
+            root.parent,
+            "task-implementer",
+            Path(prompt_path),
+            project,
+        )
+    except PromptSessionError:
+        return False
+    return True
+
+
+def _binding_matches_project(
+    root: Path, binding: dict[str, Any], project: Path
+) -> bool:
+    bound_project = binding.get("project_root")
+    if bound_project == str(project):
+        return True
+    if binding.get("workflow") != "task-implementer":
+        return False
+    registry = _load_registry(root)
+    return any(
+        isinstance(entry, dict)
+        and entry.get("active") is True
+        and entry.get("workflow") == "task-implementer"
+        and _entry_matches_project(root, entry, Path(str(bound_project)))
+        and _entry_matches_project(root, entry, project)
+        for entry in registry["entries"]
+    )
+
+
+def _objective_identities(entries: list[dict[str, Any]]) -> set[tuple[object, ...]]:
+    return {
+        (entry.get("workflow"), entry.get("prompt_id"), entry.get("prompt_path"))
+        for entry in entries
+    }
+
+
 def _attach_unique_active(
     root: Path, session_id: object, project: Path
 ) -> dict[str, Any] | None:
@@ -172,22 +223,16 @@ def _attach_unique_active(
         for entry in registry["entries"]
         if isinstance(entry, dict)
         and entry.get("active") is True
-        and entry.get("project_root") == str(project)
+        and _entry_matches_project(root, entry, project)
         and entry.get("workflow") in WORKFLOWS
     ]
-    if len(candidates) > 1:
+    if len(_objective_identities(candidates)) > 1:
         raise PromptSessionError(
             "OBJECTIVE_AMBIGUOUS",
             "multiple active objectives require an explicit workflow selection",
         )
     if not candidates:
         return None
-    writer = candidates[0].get("writer_session_sha256")
-    if writer not in {None, identity_sha256(session_id)}:
-        raise PromptSessionError(
-            "WRITER_CONFLICT",
-            "active objective currently has a different writer session",
-        )
     return bind_session(root, session_id, str(candidates[0]["workflow"]), project)
 
 
@@ -218,27 +263,34 @@ def _stage_turn(
     turn_id: object,
     prompt: str,
 ) -> dict[str, Any]:
-    raw = prompt.encode("utf-8")
-    if len(raw) > MAX_PROMPT_BYTES or b"\x00" in raw:
+    submitted = prompt.encode("utf-8")
+    if len(submitted) > MAX_PROMPT_BYTES or b"\x00" in submitted:
         raise PromptSessionError(
-            "PROMPT_TOO_LARGE" if len(raw) > MAX_PROMPT_BYTES else "PROMPT_INVALID",
+            "PROMPT_TOO_LARGE"
+            if len(submitted) > MAX_PROMPT_BYTES
+            else "PROMPT_INVALID",
             "direct prompt is invalid or exceeds the intake limit",
         )
-    digest = sha256_bytes(raw)
+    submitted_digest = sha256_bytes(submitted)
+    session_digest = identity_sha256(session_id)
+    turn_digest = identity_sha256(turn_id)
+    operation_id = event_operation_id(
+        session_digest, turn_digest, submitted_digest
+    )
     path = _event_path(root, session_id, turn_id)
+    current_path = _current_event_path(root, session_id)
     if path.exists():
         event = _load_event(path)
-        expected_operation = sha256_bytes(
-            (
-                f"{identity_sha256(session_id)}:{identity_sha256(turn_id)}:{digest}"
-            ).encode("utf-8")
-        )
+        if event.get("phase") == "discarded":
+            return _context(
+                "Prompt-session intake already discarded capture for this exact turn. "
+                "Continue the direct request without staging or replaying it."
+            )
         if (
-            event.get("schema") != EVENT_SCHEMA
-            or event.get("session_sha256") != identity_sha256(session_id)
-            or event.get("turn_sha256") != identity_sha256(turn_id)
-            or event.get("raw_sha256") != digest
-            or event.get("operation_id") != expected_operation
+            event.get("session_sha256") != session_digest
+            or event.get("turn_sha256") != turn_digest
+            or event.get("submitted_sha256") != submitted_digest
+            or event.get("operation_id") != operation_id
             or event.get("workflow") != binding.get("workflow")
             or event.get("project_root") != binding.get("project_root")
             or event.get("phase") not in {"staged", "accepted", "consumed"}
@@ -252,7 +304,7 @@ def _stage_turn(
         if event.get("phase") == "consumed":
             return _context(
                 "Prompt-session intake recognized this exact turn as already consumed. "
-                "Continue without refining, merging, or running it again."
+                "Continue the direct request without projecting or merging it again."
             )
         _claim_bound_writer(root, binding, session_id)
     else:
@@ -260,42 +312,84 @@ def _stage_turn(
         event = {
             "schema": EVENT_SCHEMA,
             "phase": "staged",
-            "session_sha256": identity_sha256(session_id),
-            "turn_sha256": identity_sha256(turn_id),
-            "raw_sha256": digest,
-            "operation_id": sha256_bytes(
-                (
-                    f"{identity_sha256(session_id)}:{identity_sha256(turn_id)}:{digest}"
-                ).encode("utf-8")
-            ),
+            "session_sha256": session_digest,
+            "turn_sha256": turn_digest,
+            "submitted_sha256": submitted_digest,
+            "operation_id": operation_id,
             "workflow": binding["workflow"],
             "project_root": binding["project_root"],
             "project_sha256": binding["project_sha256"],
             "accept_token": token,
+            "disposition": None,
             "classification": None,
+            "reason": None,
             "staged_at": utc_now(),
             "accepted_at": None,
             "consumed_at": None,
         }
         _claim_bound_writer(root, binding, session_id)
-        _atomic_write(path.parent / "raw.md", raw, exclusive=True)
         _atomic_write(path, stable_json(event), exclusive=True)
+        sequence = 1
+        if current_path.exists():
+            current = _load_json(current_path)
+            if (
+                current.get("schema") != CURRENT_EVENT_SCHEMA
+                or current.get("session_sha256") != session_digest
+                or not isinstance(current.get("sequence"), int)
+                or isinstance(current.get("sequence"), bool)
+                or current["sequence"] < 1
+            ):
+                raise PromptSessionError(
+                    "CURRENT_EVENT_INVALID", "current-event receipt is invalid"
+                )
+            sequence = int(current["sequence"]) + 1
+        current = {
+            "schema": CURRENT_EVENT_SCHEMA,
+            "session_sha256": session_digest,
+            "turn_sha256": turn_digest,
+            "event_sha256": identity_sha256(path),
+            "sequence": sequence,
+            "updated_at": utc_now(),
+        }
+        _atomic_write(current_path, stable_json(current))
     if event.get("phase") == "accepted":
         return _context(
             "Prompt-session intake recognized this exact turn as already accepted. "
             f"Resume only its existing `{path}` transition with token `{token}`, reuse "
-            "its recorded operation ID, and consume it after the bound workflow result. "
-            "Do not refine, merge, or execute through a second path."
+            "its recorded operation ID, and consume it after the canonical prompt merge. "
+            "Continue handling the direct request; do not project, merge, or execute "
+            "through a second path."
+        )
+    if not current_path.exists():
+        return _context(
+            "Prompt-session intake found that this staged turn has no current capture "
+            "claim. Continue the direct request without classifying or merging it."
+        )
+    current = _load_json(current_path)
+    if (
+        current.get("schema") != CURRENT_EVENT_SCHEMA
+        or current.get("session_sha256") != session_digest
+        or current.get("turn_sha256") != turn_digest
+        or current.get("event_sha256") != identity_sha256(path)
+    ):
+        return _context(
+            "Prompt-session intake found that this staged turn is no longer the "
+            "session's current capture claim. Continue the direct request without "
+            "classifying or merging the stale event."
         )
     return _context(
-        "Prompt-session intake staged the current direct turn. Use the internal "
-        "$prompt-session-intake coordinator now: classify the delivered prompt; "
-        "for material intent create a concise lossless refined file, accept this "
-        f"exact event `{path}` with token `{token}`, merge through the bound "
-        f"{binding['workflow']} adapter, run or resume that workflow once, then "
-        "consume the same event. Conversation, status, or control turns must be "
-        "accepted and consumed without prompt mutation or execution. Never expose "
-        "the private event path, token, or raw journal in the final response."
+        "Continue handling the current direct request normally. Prompt-session intake "
+        "also staged metadata-only capture. Use the internal $prompt-session-intake "
+        "coordinator to record merge, noop, or sensitive for the already-delivered "
+        "prompt. For merge, create a private project-intent projection containing only "
+        "durable objective facts, accept this exact "
+        f"event `{path}` with token `{token}`, merge only through the bound "
+        f"{binding['workflow']} prompt adapter, then consume the same event. Exclude "
+        "skill/workflow execution, shell/tool actions, delivery or agent control, "
+        "status, conversation, unrelated, and duplicate-only content; retain commands "
+        "only when they define a project contract or example. Do not start, resume, or "
+        "select a workflow from capture. Never expose the private event path, token, "
+        "or project-intent file in the final response."
     )
 
 
@@ -308,9 +402,11 @@ def _claim_bound_writer(
         for entry in registry["entries"]
         if isinstance(entry, dict)
         and entry.get("active") is True
-        and entry.get("project_root") == binding.get("project_root")
+        and _entry_matches_project(
+            root, entry, Path(str(binding.get("project_root")))
+        )
     ]
-    if len(active) > 1:
+    if len(_objective_identities(active)) > 1:
         raise PromptSessionError(
             "REGISTRY_INVALID", "project has multiple active prompt objectives"
         )
@@ -322,14 +418,18 @@ def _claim_bound_writer(
             "WORKFLOW_CONFLICT", "active objective is owned by another workflow"
         )
     session_digest = identity_sha256(session_id)
-    writer = entry.get("writer_session_sha256")
-    if writer not in {None, session_digest}:
-        raise PromptSessionError(
-            "WRITER_CONFLICT",
-            "active objective currently has a different writer session",
-        )
+    active_ids = {id(candidate) for candidate in active}
+    registry["entries"] = [
+        candidate
+        for candidate in registry["entries"]
+        if id(candidate) not in active_ids
+    ]
+    entry = dict(entry)
+    entry["project_root"] = str(binding["project_root"])
+    entry["project_sha256"] = identity_sha256(binding["project_root"])
     entry["writer_session_sha256"] = session_digest
     entry["updated_at"] = utc_now()
+    registry["entries"].append(entry)
     _write_registry(root, registry)
 
 
@@ -346,10 +446,11 @@ def evaluate_submit(
     if session_id in {None, ""} or not isinstance(prompt, str):
         return {}
     if contains_secret(prompt):
-        return {
-            "continue": False,
-            "stopReason": "Prompt-session intake rejected recognized secret material before persistence.",
-        }
+        return _context(
+            "Prompt-session capture was skipped because the direct input matched "
+            "secret detection. Continue handling the user request normally, but do "
+            "not persist, quote, or repeat sensitive content."
+        )
     project = _canonical_project(payload.get("cwd"))
     selected_home = (home or codex_home(payload)).resolve()
     root = _ensure_root(selected_home)
@@ -389,7 +490,7 @@ def evaluate_submit(
             binding = _attach_unique_active(root, session_id, project)
         if binding is None or turn_id in {None, ""}:
             return {}
-        if binding.get("project_root") != str(project):
+        if not _binding_matches_project(root, binding, project):
             raise PromptSessionError(
                 "PROJECT_MISMATCH",
                 "current directory does not match the session's bound project",
@@ -426,14 +527,20 @@ def _resolve_event(root: Path, event_path: Path) -> Path:
     try:
         resolved = requested.resolve(strict=True)
         expected_root = root.resolve(strict=True)
-        resolved.relative_to(expected_root / "sessions")
+        relative = resolved.relative_to(expected_root / "sessions")
     except (OSError, ValueError) as error:
         raise PromptSessionError(
             "EVENT_PATH_INVALID", "event path is outside prompt-session state"
         ) from error
-    if resolved.name != "event.json":
+    if (
+        len(relative.parts) != 4
+        or relative.parts[1] != "events-v2"
+        or relative.parts[3] != "event.json"
+        or not re.fullmatch(r"[0-9a-f]{24}", relative.parts[0])
+        or not re.fullmatch(r"[0-9a-f]{24}", relative.parts[2])
+    ):
         raise PromptSessionError(
-            "EVENT_PATH_INVALID", "event path must name event.json"
+            "EVENT_PATH_INVALID", "event path must name one event-v2 receipt"
         )
     return resolved
 
@@ -443,6 +550,46 @@ def _check_token(event: dict[str, Any], token: str) -> None:
     if not expected or not secrets.compare_digest(expected, token):
         raise PromptSessionError(
             "EVENT_TOKEN_INVALID", "event acceptance token is invalid"
+        )
+
+
+def _check_session(event: dict[str, Any], session_id: object) -> None:
+    if event.get("session_sha256") != identity_sha256(session_id):
+        raise PromptSessionError(
+            "SESSION_MISMATCH", "event does not belong to the current Codex session"
+        )
+
+
+def _check_current_event(path: Path, event: dict[str, Any]) -> None:
+    # current_event_path normally hashes the raw session ID. Resolve the receipt from
+    # the validated event's session directory instead so no digest is hashed twice.
+    current_path = path.parents[2] / "current-event-v2.json"
+    if not current_path.exists():
+        raise PromptSessionError(
+            "STALE_EVENT", "staged event is not the current capture claim"
+        )
+    current = _load_json(current_path)
+    if (
+        set(current)
+        != {
+            "schema",
+            "session_sha256",
+            "turn_sha256",
+            "event_sha256",
+            "sequence",
+            "updated_at",
+        }
+        or current.get("schema") != CURRENT_EVENT_SCHEMA
+        or current.get("session_sha256") != event.get("session_sha256")
+        or current.get("turn_sha256") != event.get("turn_sha256")
+        or current.get("event_sha256") != identity_sha256(path)
+        or not isinstance(current.get("sequence"), int)
+        or isinstance(current.get("sequence"), bool)
+        or current["sequence"] < 1
+        or not isinstance(current.get("updated_at"), str)
+    ):
+        raise PromptSessionError(
+            "STALE_EVENT", "staged event is not the current capture claim"
         )
 
 
@@ -482,49 +629,93 @@ def _safe_external_file(path: Path, label: str) -> tuple[Path, bytes]:
     return resolved, raw
 
 
+def _validate_merge_base_request(
+    *,
+    prompt_path: Path | None,
+    base_sha256: str | None,
+    new_objective: bool,
+) -> None:
+    if new_objective:
+        if prompt_path is not None or base_sha256 is not None:
+            raise PromptSessionError(
+                "PROMPT_BASE_CONFLICT",
+                "new objective cannot name an existing prompt base",
+            )
+        return
+    if prompt_path is None or base_sha256 is None:
+        raise PromptSessionError(
+            "PROMPT_BASE_REQUIRED",
+            "material intent needs both a current prompt path and digest",
+        )
+
+
 def accept_event(
     home: Path,
     event_path: Path,
     token: str,
-    classification: str,
+    disposition: str,
     *,
-    refined_file: Path | None = None,
+    session_id: object,
+    classification: str | None = None,
+    reason: str | None = None,
+    projection_file: Path | None = None,
     prompt_path: Path | None = None,
     base_sha256: str | None = None,
     new_objective: bool = False,
 ) -> dict[str, Any]:
-    if classification not in CLASSIFICATIONS:
+    if disposition not in DISPOSITIONS:
         raise PromptSessionError(
-            "CLASSIFICATION_INVALID", "turn classification is unsupported"
+            "DISPOSITION_INVALID", "turn disposition is unsupported"
         )
     root = _ensure_root(home.resolve())
     with state_lock(root):
         path = _resolve_event(root, event_path)
         event = _load_event(path)
-        if event.get("schema") != EVENT_SCHEMA:
-            raise PromptSessionError("EVENT_INVALID", "event schema is invalid")
+        _check_session(event, session_id)
+        if event.get("phase") == "discarded":
+            if disposition != "sensitive":
+                raise PromptSessionError(
+                    "EVENT_CONFLICT", "discarded event disposition differs"
+                )
+            return _public_event(event, path)
         _check_token(event, token)
         if event.get("phase") == "consumed":
             raise PromptSessionError("EVENT_CONSUMED", "event was already consumed")
         if event.get("phase") == "accepted":
-            if event.get("classification") != classification:
+            if (
+                event.get("disposition") != disposition
+                or event.get("classification") != classification
+                or event.get("reason") != reason
+            ):
                 raise PromptSessionError(
-                    "EVENT_CONFLICT", "accepted event classification differs"
+                    "EVENT_CONFLICT", "accepted event disposition differs"
                 )
-            material = classification in MATERIAL_CLASSIFICATIONS
-            if material:
-                if refined_file is None:
+            if disposition == "merge":
+                if projection_file is None:
                     raise PromptSessionError(
-                        "EVENT_CONFLICT", "accepted event retry omits its refinement"
+                        "EVENT_CONFLICT", "accepted event retry omits its projection"
                     )
-                _, refined = _safe_external_file(refined_file, "refined prompt input")
+                _validate_merge_base_request(
+                    prompt_path=prompt_path,
+                    base_sha256=base_sha256,
+                    new_objective=new_objective,
+                )
+                _, supplied = _safe_external_file(
+                    projection_file, "project-intent projection"
+                )
+                try:
+                    projection = supplied.decode("utf-8").strip().encode("utf-8") + b"\n"
+                except UnicodeDecodeError as error:
+                    raise PromptSessionError(
+                        "INPUT_INVALID", "project-intent projection is not UTF-8"
+                    ) from error
                 requested_prompt = (
                     str(prompt_path.expanduser().resolve())
                     if prompt_path is not None
                     else None
                 )
                 if (
-                    sha256_bytes(refined) != event.get("refined_sha256")
+                    sha256_bytes(projection) != event.get("projection_sha256")
                     or requested_prompt != event.get("base_prompt_path")
                     or base_sha256 != event.get("base_prompt_sha256")
                     or new_objective is not event.get("new_objective")
@@ -532,51 +723,97 @@ def accept_event(
                     raise PromptSessionError(
                         "EVENT_CONFLICT", "accepted event retry differs"
                     )
-            elif any((refined_file, prompt_path, base_sha256, new_objective)):
+            elif any((projection_file, prompt_path, base_sha256, new_objective)):
                 raise PromptSessionError(
-                    "NONMATERIAL_MUTATION",
-                    "nonmaterial turns cannot carry prompt mutation inputs",
+                    "NONMERGE_MUTATION",
+                    "non-merge turns cannot carry prompt mutation inputs",
                 )
             return _public_event(event, path)
         if event.get("phase") != "staged":
             raise PromptSessionError("EVENT_INVALID", "event phase is invalid")
-        material = classification in MATERIAL_CLASSIFICATIONS
-        if material:
-            if refined_file is None:
+        _check_current_event(path, event)
+        if disposition == "sensitive":
+            if classification is not None or reason not in {None, "sensitive"}:
                 raise PromptSessionError(
-                    "REFINEMENT_REQUIRED", "material intent requires a refined file"
+                    "SENSITIVE_DISPOSITION_INVALID",
+                    "sensitive disposition cannot carry classification or detail",
                 )
-            refined_path, refined = _safe_external_file(
-                refined_file, "refined prompt input"
+            if any((projection_file, prompt_path, base_sha256, new_objective)):
+                raise PromptSessionError(
+                    "SENSITIVE_MUTATION",
+                    "sensitive disposition cannot carry prompt mutation inputs",
+                )
+            discarded_at = utc_now()
+            event.update(
+                {
+                    "phase": "discarded",
+                    "disposition": "sensitive",
+                    "classification": None,
+                    "reason": "sensitive",
+                    "accepted_at": discarded_at,
+                    "consumed_at": discarded_at,
+                }
+            )
+            for key in ("submitted_sha256", "operation_id", "accept_token"):
+                event.pop(key, None)
+            projection_path = path.parent / "project-intent.md"
+            if projection_path.exists() or projection_path.is_symlink():
+                _require_private_file(projection_path)
+                projection_path.unlink()
+            _atomic_write(path, stable_json(event))
+            return _public_event(event, path)
+        if disposition == "merge":
+            if classification not in MATERIAL_CLASSIFICATIONS:
+                raise PromptSessionError(
+                    "CLASSIFICATION_INVALID",
+                    "merge requires a material project-intent classification",
+                )
+            if reason is not None:
+                raise PromptSessionError(
+                    "MERGE_REASON_INVALID", "merge disposition cannot carry a no-op reason"
+                )
+            if projection_file is None:
+                raise PromptSessionError(
+                    "PROJECTION_REQUIRED", "merge requires a project-intent projection"
+                )
+            _validate_merge_base_request(
+                prompt_path=prompt_path,
+                base_sha256=base_sha256,
+                new_objective=new_objective,
+            )
+            projection_source, supplied = _safe_external_file(
+                projection_file, "project-intent projection"
             )
             try:
-                refined_text = refined.decode("utf-8")
+                projection_text = supplied.decode("utf-8").strip()
             except UnicodeDecodeError as error:
                 raise PromptSessionError(
-                    "INPUT_INVALID", "refined prompt input is not UTF-8"
+                    "INPUT_INVALID", "project-intent projection is not UTF-8"
                 ) from error
-            if not refined_text.strip():
+            if not projection_text:
                 raise PromptSessionError(
-                    "INPUT_INVALID", "refined prompt input is empty"
+                    "INPUT_INVALID", "project-intent projection is empty"
                 )
-            if OPERATION_MARKER_PREFIX in refined:
+            projection = projection_text.encode("utf-8") + b"\n"
+            if OPERATION_MARKER_PREFIX in projection:
                 raise PromptSessionError(
                     "PROMPT_RESERVED_INPUT",
-                    "refined prompt uses the reserved operation marker namespace",
+                    "project-intent projection uses the reserved operation marker namespace",
                 )
-            if contains_secret(refined_text):
+            if contains_secret(projection_text):
                 raise PromptSessionError(
-                    "PROMPT_SENSITIVE_INPUT", "refined prompt contains secret material"
+                    "PROMPT_SENSITIVE_INPUT",
+                    "project-intent projection contains secret material",
                 )
-            if prompt_path is None:
-                if not new_objective:
-                    raise PromptSessionError(
-                        "PROMPT_BASE_REQUIRED",
-                        "material intent needs a current prompt digest or explicit new objective",
-                    )
+            if new_objective:
                 current_prompt = None
                 current_digest = None
             else:
+                if prompt_path is None:
+                    raise PromptSessionError(
+                        "PROMPT_BASE_REQUIRED",
+                        "material intent needs both a current prompt path and digest",
+                    )
                 current_prompt, current = _safe_external_file(
                     prompt_path, "canonical prompt"
                 )
@@ -592,29 +829,35 @@ def accept_event(
                         "PROMPT_DRIFT",
                         "canonical prompt changed after staging; reconcile the manual edit explicitly",
                     )
-            _atomic_write(path.parent / "refined.md", refined)
+            _atomic_write(path.parent / "project-intent.md", projection)
             event.update(
                 {
-                    "refined_sha256": sha256_bytes(refined),
-                    "refined_source_sha256": identity_sha256(refined_path),
+                    "projection_sha256": sha256_bytes(projection),
+                    "projection_source_sha256": identity_sha256(projection_source),
                     "base_prompt_path": str(current_prompt) if current_prompt else None,
                     "base_prompt_sha256": current_digest,
                     "new_objective": new_objective,
                 }
             )
         else:
+            if classification is not None or reason not in NOOP_REASONS:
+                raise PromptSessionError(
+                    "NOOP_REASON_INVALID", "no-op requires one supported reason"
+                )
             if (
-                refined_file is not None
+                projection_file is not None
                 or prompt_path is not None
                 or base_sha256 is not None
                 or new_objective
             ):
                 raise PromptSessionError(
-                    "NONMATERIAL_MUTATION",
-                    "nonmaterial turns cannot carry prompt mutation inputs",
+                    "NONMERGE_MUTATION",
+                    "no-op turns cannot carry prompt mutation inputs",
                 )
         event["phase"] = "accepted"
+        event["disposition"] = disposition
         event["classification"] = classification
+        event["reason"] = reason
         event["accepted_at"] = utc_now()
         _atomic_write(path, stable_json(event))
         return _public_event(event, path)
@@ -623,15 +866,19 @@ def accept_event(
 def _public_event(event: dict[str, Any], path: Path) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": event.get("phase"),
+        "disposition": event.get("disposition"),
         "classification": event.get("classification"),
+        "reason": event.get("reason"),
         "workflow": event.get("workflow"),
         "event": str(path),
-        "raw_sha256": event.get("raw_sha256"),
-        "operation_id": event.get("operation_id"),
     }
-    if event.get("refined_sha256"):
-        result["refined_sha256"] = event["refined_sha256"]
-        result["refined_file"] = str(path.parent / "refined.md")
+    if event.get("operation_id"):
+        result["operation_id"] = event["operation_id"]
+    if event.get("projection_sha256"):
+        result["projection_sha256"] = event["projection_sha256"]
+        result["projection_file"] = str(path.parent / "project-intent.md")
+    if "duplicate" in event:
+        result["duplicate"] = event["duplicate"]
     return result
 
 
@@ -679,11 +926,19 @@ def _upsert_registry_objective(
     last_turn_sha256: str | None,
     terminal: bool,
 ) -> None:
+    project = Path(project_root)
     project_entries = [
-        entry for entry in entries if entry.get("project_root") == project_root
+        entry
+        for entry in entries
+        if entry.get("project_root") == project_root
+        or (
+            workflow == "task-implementer"
+            and entry.get("workflow") == workflow
+            and _entry_matches_project(root, entry, project)
+        )
     ]
     active_entries = [entry for entry in project_entries if entry.get("active") is True]
-    if len(active_entries) > 1:
+    if len(_objective_identities(active_entries)) > 1:
         raise PromptSessionError(
             "REGISTRY_INVALID", "project has multiple active prompt objectives"
         )
@@ -699,14 +954,9 @@ def _upsert_registry_objective(
                 "OBJECTIVE_CONFLICT",
                 "another active objective already owns this project intake registry",
             )
-        writer = active.get("writer_session_sha256")
-        if writer not in {None, session_digest}:
-            raise PromptSessionError(
-                "WRITER_CONFLICT",
-                "active objective currently has a different writer session",
-            )
+    project_entry_ids = {id(entry) for entry in project_entries}
     entries[:] = [
-        entry for entry in entries if entry.get("project_root") != project_root
+        entry for entry in entries if id(entry) not in project_entry_ids
     ]
     entries.append(
         {
@@ -779,9 +1029,17 @@ def register_objective(
                 "BINDING_REQUIRED",
                 "objective registration requires an explicit session binding",
             )
-        if binding.get("workflow") != workflow or binding.get("project_root") != str(
-            canonical_project
-        ):
+        binding_project = Path(str(binding.get("project_root")))
+        binding_matches = binding_project == canonical_project
+        if not binding_matches and workflow == "task-implementer":
+            try:
+                _validate_prompt_location(
+                    home.resolve(), workflow, resolved_prompt, binding_project
+                )
+                binding_matches = True
+            except PromptSessionError:
+                binding_matches = False
+        if binding.get("workflow") != workflow or not binding_matches:
             raise PromptSessionError(
                 "BINDING_CONFLICT", "objective result differs from the session binding"
             )
@@ -813,6 +1071,7 @@ def consume_event(
     event_path: Path,
     token: str,
     *,
+    session_id: object,
     workflow: str,
     prompt_id: str | None = None,
     prompt_ref: str | None = None,
@@ -820,19 +1079,22 @@ def consume_event(
     prompt_sha256: str | None = None,
     run_id: str | None = None,
     objective_terminal: bool = False,
+    duplicate: bool = False,
 ) -> dict[str, Any]:
     root = _ensure_root(home.resolve())
     with state_lock(root):
         path = _resolve_event(root, event_path)
         event = _load_event(path)
+        _check_session(event, session_id)
+        if event.get("phase") == "discarded":
+            return _public_event(event, path)
         _check_token(event, token)
         if event.get("workflow") != workflow or workflow not in WORKFLOWS:
             raise PromptSessionError(
                 "WORKFLOW_CONFLICT", "consume workflow differs from binding"
             )
         if event.get("phase") == "consumed":
-            material = event.get("classification") in MATERIAL_CLASSIFICATIONS
-            if material:
+            if event.get("disposition") == "merge":
                 requested_path = (
                     str(prompt_path.expanduser().resolve())
                     if prompt_path is not None
@@ -845,6 +1107,7 @@ def consume_event(
                     or prompt_sha256 != event.get("prompt_sha256")
                     or run_id != event.get("run_id")
                     or objective_terminal is not event.get("objective_terminal")
+                    or duplicate is not event.get("duplicate")
                 ):
                     raise PromptSessionError(
                         "EVENT_CONFLICT", "consumed event retry differs"
@@ -857,19 +1120,19 @@ def consume_event(
                     prompt_sha256,
                     run_id,
                     objective_terminal,
+                    duplicate,
                 )
             ):
                 raise PromptSessionError(
-                    "NONMATERIAL_MUTATION",
-                    "nonmaterial consume cannot carry prompt or run identity",
+                    "NONMERGE_MUTATION",
+                    "no-op consume cannot carry prompt or run identity",
                 )
             return _public_event(event, path)
         if event.get("phase") != "accepted":
             raise PromptSessionError(
                 "EVENT_NOT_ACCEPTED", "event must be accepted before consume"
             )
-        material = event.get("classification") in MATERIAL_CLASSIFICATIONS
-        if material:
+        if event.get("disposition") == "merge":
             if not all((prompt_id, prompt_ref, prompt_path, prompt_sha256)):
                 raise PromptSessionError(
                     "PROMPT_RESULT_REQUIRED",
@@ -907,12 +1170,22 @@ def consume_event(
                 raise PromptSessionError(
                     "EVENT_INVALID", "event operation identity is invalid"
                 )
+            projection_path = path.parent / "project-intent.md"
+            projection = projection_path.read_bytes()
+            projection_sha256 = str(event.get("projection_sha256") or "")
+            if sha256_bytes(projection) != projection_sha256:
+                raise PromptSessionError(
+                    "EVENT_INVALID", "project-intent projection digest changed"
+                )
             _validate_prompt_result(
                 raw,
                 workflow=workflow,
                 prompt_id=str(prompt_id),
                 prompt_ref=str(prompt_ref),
                 operation_id=operation_id,
+                projection_sha256=projection_sha256,
+                projection=projection,
+                duplicate=duplicate,
             )
             _claim_registry(
                 root,
@@ -931,6 +1204,7 @@ def consume_event(
                     "prompt_sha256": prompt_sha256,
                     "run_id": run_id,
                     "objective_terminal": objective_terminal,
+                    "duplicate": duplicate,
                 }
             )
         elif any(
@@ -941,11 +1215,12 @@ def consume_event(
                 prompt_sha256,
                 run_id,
                 objective_terminal,
+                duplicate,
             )
         ):
             raise PromptSessionError(
-                "NONMATERIAL_MUTATION",
-                "nonmaterial consume cannot carry prompt or run identity",
+                "NONMERGE_MUTATION",
+                "no-op consume cannot carry prompt or run identity",
             )
         event["phase"] = "consumed"
         event["consumed_at"] = utc_now()
@@ -970,7 +1245,6 @@ def evaluate_stop(payload: dict[str, Any], home: Path | None = None) -> dict[str
     if payload.get("hook_event_name") != "Stop":
         return {"continue": True}
     session_id = payload.get("session_id")
-    turn_id = payload.get("turn_id")
     if session_id in {None, ""}:
         return {"continue": True}
     selected_home = (home or codex_home(payload)).resolve()
@@ -979,20 +1253,5 @@ def evaluate_stop(payload: dict[str, Any], home: Path | None = None) -> dict[str
         return {"continue": True}
     _require_private_directory(root)
     with state_lock(root):
-        if turn_id not in {None, ""}:
-            path = _event_path(root, session_id, turn_id)
-            if path.exists():
-                event = _load_event(path)
-                phase = event.get("phase")
-                if phase in {"staged", "accepted"}:
-                    return {
-                        "decision": "block",
-                        "reason": "Complete the current prompt-session staged/accepted transition before stopping; do not replay any older turn.",
-                    }
-                if phase != "consumed":
-                    return {
-                        "continue": False,
-                        "stopReason": "Prompt-session event state is invalid.",
-                    }
         release_writer(root, session_id)
         return {"continue": True}

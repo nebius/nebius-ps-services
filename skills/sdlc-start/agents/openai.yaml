@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Start"
   short_description: "Run prompt-bound Agentic SDLC"
-  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-ref-or-file> to continue the prompt-bound workflow. A bound-session capture receipt may route later accepted direct intent through the same run path; manual file edits still require explicit run. Preserve exact execution identity through validation and promotion."
+  default_prompt: "Use $sdlc-start workspace init [project-folder] to create a private prompt workspace, then use $sdlc-start run <prompt-ref-or-file> to continue the prompt-bound workflow. Bound-session capture may merge only its accepted durable project-intent projection; it never blocks the direct prompt or invokes Agentic SDLC, and captured or manual edits still require explicit run. Preserve exact execution identity through validation and promotion."
 policy:
   allow_implicit_invocation: false

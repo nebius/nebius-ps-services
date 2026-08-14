@@ -2736,6 +2736,33 @@ fails closed for exact-command checkpoint resume.
 | `nebius-cxcli ext-soperator jobs <config.yaml> --target <target> [--acknowledge-login-exit <fingerprint>] [--authorize-login-timeout-continuation <fingerprint>] [--acknowledge-job-ended <job-id>]` | Control Slurm jobs and resolve a confirmed protected-session exit through the active v6 upgrade journal. | For a Nebius target registered only by `cluster_id`, the command creates the same non-persisted temporary kubeconfig handoff as `ext-soperator upgrade`; onboarding does not need a durable `kube_context`. The TUI shows every current active or pending job; `r` performs a fresh live all-job poll, including jobs submitted after the screen opened. It remains available during controller gaps and shows controller authority, connectivity, snapshot age, durable action results, and any SSH socket fingerprint awaiting confirmation. Use `--acknowledge-login-exit` only after the user confirms voluntary exit; use `--authorize-login-timeout-continuation` only after the user confirms an involuntary timeout and explicitly authorizes continuation. Both bind the exact fingerprint and observed absence epoch; neither can release a live or reappeared socket. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
+External in-place resume treats durable receipts as historical authority rather
+than refreshing their first-attempt chronology. Terminal marker and controller
+lineage proofs, accepted worker scope for an intentionally empty provider
+segment, and continuous manager-pause receipts are reused only through exact
+fingerprint and live-identity checks. Source cleanup normally requires the
+rolling provider-release receipt; an explicitly empty provider segment may
+instead consume the effective post-Jail release only when it is sealed by the
+topology-drain authority and paired with fresh final worker runtime plus exact
+immutable target-child bindings. It never invents a provider rollout or edits
+the checkpoint to move that receipt. Rolling fast verification compares the
+journal with the current locked segment's exact node-group set, so a deliberate
+empty scope plus an explicitly recorded empty journal converges as `0/0`;
+absent, malformed, missing, unexpected, duplicate, blank, or incomplete
+evidence remains failed.
+
+Immutable-child cleanup scales each exact captured old ReplicaSet to zero and
+proves that its selector has no remaining Pods before deleting the owner. This
+prevents the ReplicaSet controller from recreating a child between child
+retirement and orphan deletion. If a historical completed cleanup already
+sealed that race, validation can remove only checkpointed exact non-Ready
+residual orphans after proving the source SlurmCluster absent, the independent
+target replacement Ready, the captured owner deleted, and every Pod's
+name/selector/UID lineage and stable workload fingerprint unchanged. Deletion
+uses the approved exact UID and resourceVersion; Ready, target-matching,
+foreign-owned, live-owner, unapproved, or drifted Pods remain blocking and are
+never filtered out of smoke validation.
+
 Managed and external Soperator upgrades use the same Nebius provider adapter
 and checkpoint-continuation driver. Every synchronous SDK request and attached
 operation wait is bounded. Mutation dispatch stays one-shot until it returns an
@@ -2747,6 +2774,16 @@ honor the provider operation's declared one-hour stall budget at the normal
 poll interval. That driver also freezes an absolute deadline for each exact
 boundary instance, so changing progress metadata or interleaving another
 operation cannot keep one transition alive indefinitely.
+An exact temporary controller-bridge node-group delete that instead returns
+`NOT_FOUND` at dispatch is terminal only after cxcli has durably requested the
+delete and verified the live group ID, name, resource version, ownership labels,
+and bridge slot. The receipt records that classified response without inventing
+a provider operation ID. When an accepted delete already has a real checkpointed
+operation ID, exact node-group absence plus `NOT_FOUND` from that same operation
+lookup is sealed separately with the original request, acceptance, resource,
+operation, and deleted-postcondition bindings. Absence before dispatch, identity
+drift, transient lookup failures, unrelated errors, and malformed receipts
+remain recovery-required.
 Controller-bridge node groups follow the same rule. A group becomes
 `created` only after its accepted create operation has terminal-success proof
 bound to the exact live group ID and complete intended postcondition. For the
@@ -2759,6 +2796,11 @@ If a target-version controller transition fails before target write, cxcli
 best-effort restores and proves source bridge authority, then stops; it does not
 automatically redispatch an unclassified failure, and Ctrl+C remains an
 interrupt after recovery.
+Post-upgrade MK8s readiness uses the retained source inventory. If discovery
+was refreshed while the controller bridge existed, cxcli validates the current
+bridge journal and excludes only exact IDs owned as temporary create/delete
+domains. Bridge-like customer names, managed-existing bridge domains, and every
+other discovered source group are still queried and must be Ready.
 
 Target-chart dependency preparation retries bounded transient repository
 download failures twice with backoff. Deterministic chart and lock errors still
@@ -2976,6 +3018,23 @@ During a checkpointed source-fenced, state-promoted, or target-transition cold
 stop, the outer discovery bundle is reused instead of serially timing out
 login-side Slurm commands; live provider and recovery gates still run in the
 checkpointed executor.
+If an incomplete controller bridge already carries a real accepted temporary
+node-group provider operation, command entry defers fresh source discovery and
+reuses the campaign's existing report until the executor reconciles that exact
+operation. This prevents the checkpoint-owned temporary group from being
+misclassified as config-waypoint drift. The active mutation boundary retains
+the journal's current segment even if an earlier failed command already
+refreshed that report to the intermediate state; it does not mark the operation
+complete, advance a segment, or bypass provider identity and postcondition
+checks.
+The first controller-inspector admission preflight seals the exact current Node
+set after validating stable identity and server-side dry-running its inspector
+Pod on every member. An automatic continuation replays only that sealed set:
+it requires every recorded Node UID, provider ID, system UUID, and non-deleting
+state to remain exact, but it does not add a newly joining bridge Node whose
+kubelet identity is still incomplete. The later pre-writer census remains a
+fresh all-current-Node proof and therefore still blocks membership or identity
+drift before authority transfer.
 The controller-bridge phase performs one full all-node process census before
 its authority mutation. Its immediately following fast verification reuses that
 fresh proof and checks the live Lease, workload, Pod, image, HA roles, and API
@@ -3170,7 +3229,11 @@ checkpoint after its config bindings have been rebound and its original bridge
 digests intentionally retired, but only when source retirement, the manager
 pause/restore generations, the SConfig writer's `0 -> 1 -> 0` digest refresh,
 and every target identity and fingerprint form one exact receipt. A status-only
-target-compatibility intent is not sufficient. The same receipt is the manager
+target-compatibility intent is not sufficient. After the pulse completes, replay
+accepts the producer's `target-compatibility-active` state only when the terminal
+stable marker, zero writer, complete jail-boundary shape, post-retirement
+bindings, accounting retirement, and manager UID/spec/generation chain all
+remain exact. The same receipt is the manager
 rearm authority for later bridge-owned service Helm pulses: it uses the
 compatibility restore generation, including an exact adopted immutable-child
 pause origin, instead of assuming every intervening Helm pulse leaves
@@ -3199,6 +3262,23 @@ to the exact journaled target login UID, owner, and selector. This preserves an
 original adopted login Pod when possible without treating the retired source
 StatefulSet UID as permanently live; any UID outside those two durable handoff
 identities remains an error.
+Those target-side legacy-rootfs probes retain the top-level campaign checkpoint
+and its durable writer through login digest, Slurm health, compatibility,
+immutable-child cleanup, Jail-boundary, writer-release, and Helm-replay
+verification. Consequently, an
+intentionally partial login rollout is admitted only when its sole
+old-revision Pod is the exact verified active-session hold; dropping either
+authority remains a blocking readiness failure.
+When active-bridge service replay has already verified the inert target
+controller command gate while the source-HA bridge still owns authority, the
+target login's legacy config can legitimately contain only that gated target
+controller. Slurm health therefore revalidates the exact journaled bridge
+workload and Pods directly at this boundary: cluster-wide controller
+exclusivity, source takeover roles, the unique primary runtime marker, standby
+survival, shared-state identity, and a live queue RPC must all pass. It never
+treats the expected target-only `DOWN` response as bridge failure or falls back
+to an unbound controller; any bridge, gate, campaign, role, Pod, or RPC drift
+remains pending.
 For GPU Jail slots, the post-population evidence marker remains the canonical
 proof of the driver version and library hashes. Some target login images still
 gate sshd startup on the older empty `etc/gpu_libs_installed.flag`; after the
@@ -3224,6 +3304,24 @@ same target and accounting Deployment identities, the original accounting
 writer command, source-retirement proof, and a live spec that becomes the prior
 fence exactly when the command fence is reapplied. Normal status-only
 resourceVersion churn is recorded but does not masquerade as spec drift.
+The direct active-slot Jail-boundary path applies that same strict successor
+before it compares the live SlurmCluster with the prepared fence or reconstructs
+a missing boundary intent. Its accounting rebind receipt is durable before the
+recovered intent, alias rebind, or writer pulse. A second generation, foreign
+target or Deployment, altered writer command, incomplete retirement, or any
+unrelated spec change remains pending instead of being adopted as a new fence.
+If the later service replay has already sealed a restored-manager rearm, that
+zero-replica pause supersedes the immutable-child handoff's historical restored
+replica count for this boundary. cxcli revalidates the exact manager UID,
+generation, non-replica spec, target binding, inert controller workload and Pod,
+and source-HA bridge, then checkpoints a borrowed-rearm receipt before touching
+the ConfigMap or SConfig writer. An exact full-target ConfigMap left by the
+immediately preceding manager restore is first classified by its UID, content
+and data hashes, restore generation, and rearm lineage. The bounded pulse then
+runs only SConfig `0 -> 1 -> 0`, returns the active config variant to compatible,
+and leaves the manager and target controller fenced. It never treats an
+arbitrary zero-manager or full-target ConfigMap as authority and never falls
+back to restoring the historical manager replica count.
 When that exact active-resume recovery finds the full-target `slurm.conf`
 already propagated into the login Jail before the later slot-bound writer pulse,
 it can classify the transition without rewriting the file. The recovery must
@@ -3923,6 +4021,15 @@ allocation annotations match, and removing only those keys reproduces the
 frozen protected spec hash. Similarly named, tampered, or customer-owned
 resources remain drift.
 
+Protected-state Node presence changes are also proved one delta at a time. A
+provider-rolled Node must carry the node-group identity of its exact completed
+rolling operation. When the current campaign segment explicitly plans zero
+provider node groups, a temporary controller-bridge Node is accepted only when
+its live snapshot name and node-group label match the bridge journal's exact
+recorded scheduling Node identity and terminal node-group create receipt, and
+that receipt still matches the campaign operation mirror. An empty rolling
+journal by itself never authorizes Node drift.
+
 Final external health treats every `DRAIN` worker as non-serving. After a
 checkpointed controller outage, ordinary `--execute --approve` may journal and
 clear only the exact current Ready Pod registrations that retain the
@@ -3934,11 +4041,20 @@ instance identities before the resulting reason-free serving state is
 accepted. Customer drain reasons, identity changes, allocations, jobs, or new
 drains fail closed.
 
-Use `--approve-remediation` only after a failed run reports an
-unexpected `remediation_required` comparison: the next run can consume only
-that previously checkpointed whole-comparison fingerprint. Any fresh or changed
-drift writes a new plan and fails closed. Blocked data-loss or downtime deltas
-still stop the run and are never overrideable.
+Remediation approval is automatic by default. When a validation or terminal
+comparison first reports an unexpected `remediation_required` delta, cxcli
+persists the approval plan, performs one immediate fresh read-only capture, and
+continues only when the exact checkpointed approval fingerprint is unchanged.
+The approval fingerprint binds the baseline and exact blocked or
+approval-required delta digests; the separate whole-comparison audit
+fingerprint still records every preserve and command-owned delta plus the raw
+after-state hash. Mutable health observations and non-approval audit churn
+therefore cannot invalidate an unchanged plan, while a moving plan writes the
+latest fingerprint and stops after that single recapture. Blocked data-loss or
+downtime deltas always stop and are never overrideable.
+Use `--stop-for-remediation-approval` only when an operator wants cxcli to
+checkpoint the exact plan and stop for review. Rerun without that flag to use
+the normal automatic policy after reviewing the checkpoint/report.
 If an individual pre-upgrade Slurm runtime probe was unavailable but its
 post-upgrade probe succeeds, cxcli records that field as non-comparable audit
 evidence instead of requiring remediation approval. Drift between two
@@ -4483,8 +4599,15 @@ cxcli-owned convergence boundaries continue within that invocation; a reported
 approval gate, drift, unsupported state, other safety failure, explicit stop
 point, or interrupt preserves the exact same command for resume:
 
+Optional: inspect the upgrade plan:
+
 ```bash
 nebius-cxcli ext-soperator upgrade <config.yaml> --target <target-id> --dry-run
+```
+
+Run the upgrade:
+
+```bash
 nebius-cxcli ext-soperator upgrade <config.yaml> --target <target-id> --execute --approve
 ```
 
@@ -4553,6 +4676,60 @@ valid contract fingerprint, and still matches the live UID, replica count,
 non-replica spec, and expected generation. Unknown fields, a malformed
 reserialization chain, an idealized partial shape, or an unrelated paused
 manager remain recovery-required.
+
+At `target-handoff`, cxcli also reconciles the exact checkpoint shape produced
+when rolling still owns the completed passive-slot manager pause while
+`populate-jail-refresh` owns the completed active-slot pause. The active pause
+may retain the passive Deployment generation when the manager spec reapply was
+a Kubernetes no-op, or advance it by exactly one. It is adopted only when both
+bootstrap lifecycles, the campaign,
+target UID, manager UID/spec, original replica count, chart and prerequisite
+renders, generation sequence, chronology, and the live annotated zero-manager
+all match. cxcli moves that pause to the rolling owner and checkpoints sealed
+owner-adoption and continuous-reuse receipts before admission webhooks or Helm
+can run. Incomplete lifecycles, generation decreases or gaps, foreign owners,
+or receipt drift remain `recovery-required`; no manual checkpoint edit is
+supported.
+
+The nested accounting command-fence admission bootstrap first enters after
+that target handoff and its exact Helm apply proof. Before the later populate
+phase produces `post-switch-resume`, it may keep the same rolling active-slot
+pause only after reconstructing the completed target-handoff authority,
+replaying the sealed handoff adoption and reuse receipts, and validating the
+intent-bound Helm proof, compatible semantic drift, exact source and target
+bindings, and lifecycle chronology. If that accounting intent is interrupted
+and re-enters after `post-switch-resume` has completed, cxcli accepts only the
+exact completed post-switch authority and its sealed reuse receipt, with the
+resumed accounting apply and prerequisite-ready markers ordered after that
+completion. cxcli checkpoints one accounting continuous-reuse receipt before
+publishing webhooks or running the accounting operation. An absent post-switch
+uses only the direct handoff route; incomplete, unsealed, reordered, foreign,
+or drifted post-switch lineage stays `recovery-required` without manual
+checkpoint editing.
+
+If `post-switch-resume` begins later without restoring or rewriting the manager
+Deployment, cxcli may retain the same active-slot pause only through the sealed
+handoff lineage. It reconstructs the completed target-handoff pause authority
+and replays both the owner-adoption and target-handoff reuse receipts against
+the completed passive-slot, active-slot, and target-handoff lifecycles. The
+campaign, target UID, manager UID, original replicas, non-replica spec,
+generation, chart, prerequisite identities and render, and chronology must
+remain exact before cxcli checkpoints a post-switch continuous-reuse receipt.
+Missing or drifted lineage fails before admission webhooks or Helm and does not
+require a manual checkpoint edit.
+
+If interruption occurs after the target-handoff apply intent and admission
+prerequisites are checkpointed but before Helm dispatch, resume keeps that
+intent on the guarded admission path. cxcli does not compare the still-deployed
+predecessor release with the unapplied successor intent or synthesize a live
+apply proof. Before provider, cluster, or checkpoint-capable work, the target,
+current selected chart content, current effective values, lifecycle status,
+and absence of a terminal proof must agree with the immutable prepared intent;
+drift remains fail-closed without a Helm replay or manual checkpoint edit. Only
+`helm-applied` and `complete` may continue into historical live proof. The
+canonical empty no-webhook placeholder is treated as no lifecycle, but a
+missing or unknown status in a non-empty lifecycle is rejected first, and an
+already-started accounting-writer gate still blocks a fresh-target Helm path.
 
 When `post-switch-resume` reapplies the manager prerequisite after that manager
 was restored, cxcli does not require the old completed pause generation to
@@ -4787,18 +4964,20 @@ Important external upgrade flags:
   one; neither and both are rejected before config or live discovery is read.
 - `--approve` / `--no-approve`: record customer approval for the accepted
   external upgrade plan. Mutating phases require approval.
-- `--approve-remediation` / `--no-approve-remediation`: record operator
-  approval for the exact previously reported protected-state comparison
-  fingerprint, or adoption of an exact checkpointed Slurm intent-to-held
-  transition. A fresh `--approve-remediation` flag does not approve a new
-  capture, and a changed delta set produces a new fingerprint and stops.
+- `--stop-for-remediation-approval`: opt into an operator review stop for an
+  exact protected-state remediation fingerprint or journaled Slurm
+  intent-to-held transition. Without this flag, cxcli checkpoints the first
+  protected-state plan and performs one fresh exact verification before
+  continuing, or adopts the exact journaled Slurm postcondition without a
+  second hold RPC. A changed approval-required delta set produces a new
+  fingerprint and stops.
   Command-owned chart, topology, and provider changes instead pass under normal
   `--execute --approve` only through exact checkpoint proofs. Hold recovery
   still requires the same lineage,
   reset `SubmitTime`, exactly one additional restart, unchanged control fields,
-  and an unallocated held state; without this flag it remains fail-closed.
+  and an unallocated held state; review mode leaves that transition stopped.
   Deltas classified as `blocked` and unproven Slurm transitions still stop the
-  run and cannot be overridden by this flag.
+  run and cannot be overridden.
 - `--approve-backup-recovery` / `--no-approve-backup-recovery`: approve only
   recovery from the active campaign backup being missing, unsafe, corrupt, or
   unverifiable. This is distinct from campaign approval and remediation
@@ -5531,6 +5710,17 @@ then UID/resourceVersion-precondition-releases the hold. Archived cycles remain
 authoritative only when they bind the exact source Pod UID to either the older
 zero-session journal or the canonical target-ready release authority and
 durable release timestamps; incomplete entries remain inadmissible.
+Protected-login successor selection consumes either exact receipt. The current
+target-ready path intentionally has no zero-session probe, so retirement
+revalidates its durable release authority together with the immutable source
+and target workload UIDs and the live Pod's image, container/restart state, and
+SSH host keys before journaling the successor. A generic released hold or
+identity drift remains blocking.
+Across a later segment, the archived target is reusable only when the prior
+bridge cleanup precedes its final login revalidation, the prior segment then
+completes, and the current segment starts afterward. That exact predecessor
+lineage must still match the current released hold, workload, runtime identity,
+host keys, and final Helm restore proof; out-of-order evidence fails closed.
 The surge is a checkpointed temporary `configured + 1` Helm state. Resume
 accepts only the locked configured or surge replica counts and proves the exact
 target Helm state first. Because bridge authority deliberately keeps the full
@@ -5549,6 +5739,31 @@ connectivity. If an older checkpoint predates the phase-owned pause journal,
 cxcli can rearm it only from the immutable-child handoff's exact manager UID and
 monotonic capture, pause, and restore generations, with a durable authorization
 checkpoint before scaling the manager down again.
+If the rolling phase instead retains the exact verified
+`active-slot-switch` pause from before that restore, the post-switch
+started-gate continuation, both post-Jail in-place completion paths, and later
+service replay use the same authority-aware fence. They may replace it only
+when the restored-manager rearm proves the same campaign, target,
+manager UID, original replicas, non-replica spec, and predecessor pause
+generation. The complete active bridge journal must also match that campaign,
+its stage-specific owner and epoch, and the permanent source-restart fence.
+When that journal still carries the original sealed standard pause, cxcli
+classifies it as historical only if the rolling bootstrap is the canonical
+later owner for the same manager, replicas, linked spec, exact terminal
+generation and reserialization chain, and chronology. It then removes the
+bridge copy and hash-seals both predecessor records beside `rearm-authorized`
+in one checkpoint. Replay requires the same bridge epoch or its exact immediate
+source-to-target successor; a different or reappearing bridge owner remains a
+conflict.
+cxcli checkpoints `rearm-authorized` only after those checks and before
+touching the restored manager or controller command gate. A retry from any
+checkpointed rearm status repeats the bridge and adoption checks and rejects a
+newly conflicting direct-bridge or target-admission pause before a live target
+read.
+An interruption immediately after `rearm-authorized` resumes through this same
+fence rather than being rejected as an ordinary started manager pause.
+Any drift keeps the prior pause intact and still requires an exact bridge-owned
+pause, target-admission successor, or sealed controller-gap binding.
 When immutable-child inventory first encounters the manager already paused by
 the current campaign, it takes the positive original replica count from the
 canonical pause journal rather than the latest bridge-gated Helm manifest,
@@ -5882,7 +6097,23 @@ inventory plus canonical target partitions and every canonical target already
 has a fingerprint-valid `DOWN` record. The proof records that exact checkpoint
 authority and mirrors the target records into both active phase journals;
 conflicting or unclassified partitions remain pending, and live-controller
-paths still revalidate the pause after activation. If the drain journal has
+paths still revalidate the pause after activation. Final Slurm restore also
+consumes this exact mirrored target-partition receipt when the optional
+GPU-smoke scheduling gate was not needed. It verifies the complete pause
+inventory, controller-gap inventory, canonical target names, and owned target
+`DOWN` records before classifying every non-target pause record as retired. A
+later target-only pause successor is accepted only through the exact
+target-singleton worker-runtime reassertion of the complete active journal,
+authority epoch, final config, controller gap, and target name; every source
+record must remain identical. A resume that already checkpointed the older
+all-partition restore plan may
+replace it only after a full live snapshot proves the retired names absent and
+each surviving target still matches cxcli's `DOWN` or saved pre-pause record;
+cxcli never recreates the retired source partitions. After restore removes the
+target record from the active pause journal, cleanup validates the exact stored
+restored plan and its superseded-plan link against the remaining retired-source
+records and target reassertion receipt; it does not rebuild consumed state from
+historical phase journals. If the drain journal has
 not yet been created and this campaign has no provider-rollout predecessor,
 cxcli establishes bridge RPC authority from the exact live release-worker
 Pod/UID/node bindings, verified pre-activation fleet, topology replay, target
@@ -6079,6 +6310,12 @@ distinct Ready successor with the exact target digest is marked verified; an
 initially Ready exact successor still needs no replacement. A digest outside
 the exact checkpointed predecessor/successor pair remains recovery-required
 before any Pod mutation.
+When the selected bridge-client payload is already the canonical compatible
+form, cxcli first seals an exact compatibility-adoption receipt with equal
+predecessor and target digests and zero transforms. That receipt is config and
+target bound and authorizes the same worker rollout; a missing receipt or a
+mixed adoption/transform shape remains fail-closed instead of weakening Pod
+readiness.
 After serial recreation, an intentionally inert target controller never becomes
 a Slurm partition read path. cxcli reuses the exact checkpoint-owned `DOWN`
 records only when the manager pause is a sealed standard, bootstrap, or rearm
@@ -7944,7 +8181,7 @@ Common command flags:
   `--jail-sfs-resize-policy`, `--jail-sfs-resize-to-gib`,
   `--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`,
   `--job-refresh-interval`, `--dry-run`, `--execute`, `--approve/--no-approve`,
-  `--approve-remediation/--no-approve-remediation`,
+  `--stop-for-remediation-approval`,
   `--interactive/--no-interactive`
 - `ext-soperator backup`: `--client-name`, `--tenant-id`, `--project-id`,
   `--target`, `--backup-dir`, `--namespace`, `--release-name`,
@@ -7976,7 +8213,7 @@ Common command flags:
   `--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`,
   `--job-refresh-interval`, `--dry-run/--execute`,
   `--approve/--no-approve`,
-  `--approve-remediation/--no-approve-remediation`,
+  `--stop-for-remediation-approval`,
   `--slurm-scheduling-pause/--no-slurm-scheduling-pause`,
   `--interactive/--no-interactive`
 - `upgrade helm-chart`: `--to-version`, `--dry-run`,

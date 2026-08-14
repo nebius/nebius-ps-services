@@ -4,8 +4,190 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Task Implementer promotion after an adopted selected-lane contract was
+  legitimately reconciled by the one claim-bound final coordinator commit.
+  Resume now recognizes the exact unchanged lane overlay through its immutable
+  adoption ancestry, promotion clears it for fast-forward, and failed promotion
+  restores the original adopted bytes rather than the newer reconciled tip.
+  Cleanup now settles the advanced spec impact before deleting the promoted
+  integration. Recovery and completion recognize a completed promotion journal
+  as historical only when its exact done wave and promoted ancestry precede the
+  active wave. An interrupted post-fast-forward replay may defer stale spec-
+  impact rejection only when the clean selected lane exactly equals the sealed
+  integration target; cleanup still performs exact reconciliation.
+  Unrelated or materially plan-changing drift stays blocked.
+- Fixed Task Implementer lifecycle authorization after worker integration. The
+  coordinator can now validate its documented requirements, design, README,
+  and changelog reconciliation at the sealed `promotion_pending` head, while
+  product edits, untracked or deleted files, symlinks, and head drift remain
+  rejected. A journaled private `coordinator-commit` now stages and creates the
+  single claim-bound direct-child documentation commit, closing the same
+  selected-lifecycle hook boundary without permitting raw Git mutation.
+- Fixed Task Implementer correction recovery for terminal
+  `REPLAN_REQUIRED` results. Resume now accepts and replays the immutable
+  terminal result idempotently; an exact clean no-op failed task can be
+  retained as first-class `superseded` history, have only its proven worker
+  resource cleaned, and be followed by a corrected immutable assignment.
+  Committed or dirty failed partials remain blocked evidence and cannot use
+  this path.
+- Fixed Task Implementer worker-result completion in two related failure
+  boundaries: commands without a `--json` option no longer crash during common
+  output emission after publication, and `changed_paths` are now canonicalized
+  as a sorted unique set so claim-order output cannot be misclassified as a
+  scope expansion. An exact digest-and-commit-bound retry can recover only the
+  prior ordering-only false-rejection state without rewriting private run data.
+- Fixed retained Task Implementer current-v7 workers becoming unreadable when
+  canonical worker guardrail wording grew after successful `task-start`.
+  Unstarted assignments still require current guardrails; already-started
+  assignments remain bound to their exact accepted digest and receive current
+  recovery, commit, and result-publication contexts without private-state
+  rewriting or an older-schema compatibility path.
+- Fixed Task Implementer delegated commits failing when a worker's canonical
+  Python version differed from the lifecycle hook runtime. Hook and adapter
+  trust now accept only the hook interpreter or an exact PATH-canonical
+  `python3`/`python3.N`, while retaining exact helper, digest, action, evidence,
+  repository, and owner checks. `task-start` and base-state `task-recover` now
+  return a transient canonical commit context with exact prepare argv and the
+  raw worker session; the separately named session fingerprint remains
+  persisted evidence and can no longer be mistaken for `--session-id`.
+- Fixed worker-result publication by returning an exact transient private
+  result path and explicit external publication working directory, preventing
+  selected-project lifecycle misclassification.
+- Renamed the worker-facing task-arm and task-rearm deadline output to the
+  canonical `start_lease` consumed by `task-start`, removing the ambiguous
+  internal `dispatched_at` name.
+- Added exact assignment-derived start and recovery contexts with canonical
+  cwd and argv, preventing coordinator path transcription from launching a
+  worker in a visually similar but nonexistent private checkout.
+- Added a claim-bound worker-result publisher that validates the complete draft,
+  computes the canonical final digest, and atomically publishes the immutable
+  result from its private external working directory.
+- Fixed explicit Task Implementer `run` failing after a package-manager Python
+  upgrade removed the resolved interpreter recorded in the generated VS Code
+  workspace. The exact stale-launcher failure now refreshes only that generated
+  file through canonical workspace initialization and revalidates the complete
+  workspace; all other mismatches and non-mutating `workspace reuse` remain
+  fail-closed.
+
 ### Added
 
+- Added authoritative idempotent resume control for long-running Task
+  Implementer runs. Repeating `run` now audits coordinator-v7, every indexed
+  wave/task/immutable artifact, Git and Worktree identity, the exact generation
+  lease, and lifecycle binding before returning one execute, wait,
+  stop-confirmation, blocked, or complete outcome. Private
+  `resume-control-v1` journals one digest-bound transition and fences stale or
+  concurrent execution. It stores canonical transition arguments, binds
+  capacity, task, evidence, stop authority, and final alignment, and completes
+  effect/state/projection phases without repeating an already-applied mutation;
+  the first controlled transition bootstraps the sidecar under both owning
+  locks, every successful transition returns the next authoritative resume
+  plan/token, and current journal-less v7 runs adopt only at validated
+  stable boundaries. Machine state now owns effective execution status after
+  coordinator creation, handoff is a CAS-protected human projection, atomic
+  private writes sync their parent directories, and terminal handoff/queue
+  publication follows proven external generation release and local interop
+  reconciliation. Promotion-review corrections stage immutable,
+  digest-addressed, resume-epoch-bound `pending-plan-v1` bytes before
+  coordinator or wave publication, so retries continue from staged bytes
+  instead of consuming a changed handoff task definition.
+  Handoff projection now keeps unpromoted committed or merged tasks in the
+  accepted `in_progress` vocabulary until promotion. A hidden, caller-digest-
+  bound current-v7 recovery journals and rewrites only the proven historical
+  `committed` projection so an affected retained run can repeat normal resume
+  without accepting a second handoff status or changing machine state.
+  Coordinator-v1 through v6 remain unsupported and no public resume action or
+  flag was added.
+- Raised the Task Implementer lightweight verifier's bounded per-suite default
+  from 300 to 600 seconds so the full disposable linked-worktree interruption
+  suite is not falsely reported as timed out.
+- Added a fail-closed Task Implementer correction transition for blockers found
+  by combined review before wave promotion. An exact clean
+  `promotion_pending` integration can append one independent worker-owned
+  correction round without advancing the persistent lane, rewriting prior
+  tasks, or discarding their commits. New workers branch from the sealed
+  integrated head, historical assignments remain bound to their own task-plane
+  bases, future-work dependencies are rejected, generation claims extend
+  before state, and the whole corrected wave must repeat combined validation
+  and review before one fast-forward promotion. Its rendered project contract
+  carries to the correction base only when the authoritative receipt differs
+  solely by an ancestral Git head and all spec, traceability, project,
+  validator, and instruction identities remain exact.
+- Added owner-validated prompt-revision impact evidence for Task Implementer
+  and Agentic SDLC. Existing exact-byte and normalized-intent digests continue
+  to detect editable prompt changes without a self-hash header; a shared pure
+  validator now requires one bounded disposition for every extracted statement
+  occurrence, reparses current requirements and design mappings, and derives
+  retain versus replan. Both workflows publish append-only private attempts,
+  serialize publication, compare-check ledger replacement, preserve and skip
+  crash-orphaned attempts, gate steering settlement and execution transitions,
+  separate the latest settled revision from the execution plan basis, and
+  require a distinct plan identity for material forward reconciliation. They
+  preserve terminal history without fabricated evidence and expose only a
+  sanitized public impact classification. Matching spec bytes or an
+  unsubstantiated `no_effect` label no longer unlocks progression.
+- Added evidence-preserving recovery for Task Implementer active-wave paths
+  that disappear while their Worktree lease and locked Git registrations
+  remain. A confirmed-stopped internal coordinator action now verifies the
+  exact active generation, resource tuple, branch and registered head,
+  administrative HEAD, clean index, and contract/base ancestry before using
+  Git's locked-worktree rehydration form; it journals and revalidates the
+  checkout, keeps the lease `present`, reports lost filesystem-only state, and
+  leaves task and promotion state unchanged for normal fresh-session
+  `task-recover`. Promotion-pending integration checkouts can now be restored
+  only at the recorded integrated head so combined validation can resume
+  without reconstructing refs or inferring promotion. Staged state, index
+  locks, broken paths, branch drift, and ambiguous registrations fail closed.
+  Worktree anchor discovery now skips
+  unrelated missing registrations before strictly resolving the current
+  managed checkout. The lifecycle bridge also attests exact active worker
+  commit transactions against the worker root when the hook is selected on
+  the outer lane. It now carries the command-derived worker session validated
+  by the Task adapter instead of requiring the nested command to equal the
+  outer lifecycle payload session, without admitting raw Git, future batches,
+  mismatched sessions, or sibling roots.
+- Added a fail-closed Task Implementer lifecycle adapter for the active
+  prepared integration checkout. The Task helper now attests the exact run,
+  wave, clean Git identity, selected project, co-located
+  project-instructions helper, command digest, and run-owned evidence paths;
+  the lifecycle hook independently rebinds that evidence to its selected lane
+  and records a successful first `wave-plan` checkpoint before dispatch.
+  The prepared-wave exception admits only inspect and render during
+  reconciliation; apply and verify retain the ordinary terminal seal path.
+  Exact integration identity permits either a clean checkout or only the
+  selected-project requirements and design staged, while every unstaged,
+  untracked, deleted, symlinked, sibling, or other staged path fails closed.
+  Arbitrary bundles, helpers, projects, flags, stale worktrees, and failed
+  commands remain denied. The bridge is automatic and requires no receipt
+  copying or user-managed lifecycle IDs. Its hook-only authorization command
+  is parsed outside discoverable helper subcommands, so CLI help exposes
+  neither the private action nor its flags.
+- Added `$task-implementer workspace reuse [project-folder]` as an explicit
+  existing-only reopen path. It resolves the same workspace from the primary
+  source project or owning managed lane, validates the generated VS Code
+  workspace, exact caller root, existing source ref, and authoritative live
+  lane identity, tolerates dirty or active live state without claiming
+  readiness, rejects unrelated worktree aliases, and never refreshes, repairs,
+  checkpoints, migrates, queues, runs, integrates, removes, or creates state.
+  Missing, unsafe, removed, or mismatched state fails closed, while editor
+  launch failures remain non-fatal after validation.
+- Added a built-in Task Implementer pre-run checkpoint for resource-free
+  persistent lanes. `run` now compiles planned claims, reserves the exact tree
+  and path digest, pauses dirty candidates for complete review, claims every
+  changed path, and uses a review-token-bound Worktree transaction to run
+  repository-root `git add -A`, normal hooks, and one fixed
+  direct-child checkpoint before opening the generation. Root, selected-project,
+  and sibling-project changes stay coherent; clean lanes remain commit-free;
+  the primary checkout stays untouched; and the resulting head becomes the
+  lane, lease, interop, coordinator, and first-wave baseline. Private journals
+  and compact run receipts recover exact staged or post-commit interruption
+  windows without duplicate history, while conflicts, Git operations,
+  gitlinks, tracked symlinks, hook-modified trees pending explicit review, and
+  dirt after generation open fail closed without reset, stash, clean, amend,
+  or unstage behavior. Hook-modified commits rotate the review token and cannot
+  be adopted by a blind retry.
 - Added a one-command, whole-repository `$commit` transaction for monorepos.
   A leading `$commit` or bounded leading directive such as `run`, `apply`, or
   `execute $commit` now mints a one-shot private authorization, while casual
@@ -48,16 +230,27 @@ All notable changes to the reusable Codex skills are tracked here.
   table cells and `PASS:` detail are validated independently so neighboring
   prose cannot make a placeholder satisfy the gate.
 - Added the internal explicit-only `prompt-session-intake` owner and its
-  capture-only `UserPromptSubmit` hook for sessions explicitly bound to Task
-  Implementer or Agentic SDLC. It secret-scans before private raw capture,
-  records exact session/turn provenance, enforces staged/accepted/consumed
-  causality and one cross-workflow writer, and routes agent-owned lossless
-  refinement through workflow CAS adapters. Conversation, status, and control
-  turns remain nonmaterial; manual prompt edits remain inert until explicit
-  `run`. The shared Stop arbiter now blocks the exact unfinished current event
-  and releases a consumed writer without adding a second registered Stop hook.
-  Its one-shot reason digest excludes the exact generated Stop continuation
-  without relying on an undocumented prompt-origin field.
+  non-blocking `UserPromptSubmit` capture hook for sessions explicitly bound to
+  Task Implementer or Agentic SDLC. Every direct prompt continues to the
+  current agent; safe input records only metadata-only event-v2 session/turn
+  provenance and never the submitted prompt body, while
+  secrets, stale writer provenance, ambiguity, conflicts, unsafe state, and
+  internal capture failures skip persistence without stopping delivery. The
+  staged/accepted/consumed sidecar records merge/no-op/sensitive and routes only
+  an agent-selected durable project-intent projection through prompt-only CAS
+  adapters. Mixed execution/conversation wrappers are excluded, project-contract
+  command examples remain eligible, and every merge marker binds both operation
+  ID and accepted projection digest. Exact retries and byte-identical
+  projections do not append twice; distinct concurrent same-base updates keep
+  one winner without auto-rebase. Event-v1 journals remain inert. Capture never
+  starts or resumes a workflow. Task primary and manifest-proven lane paths
+  share one logical objective; unrelated projects remain capture-ineligible.
+  Captured or manual prompt edits remain inert until explicit `run`.
+  Prompt-session cleanup always passes
+  the shared Stop arbiter and best-effort releases writer provenance without
+  adding a second registered Stop hook. Its one-shot reason digest still
+  excludes an exact peer-generated Stop continuation without relying on an
+  undocumented prompt-origin field.
 - Added the implicit `maintain-project-specs` skill as the single canonical
   requirements/design owner for ordinary projects, Task Implementer, and
   Agentic SDLC. It provides stable-ID managed regions, shared v3 receipts,
@@ -185,6 +378,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Replaced the Task Implementer README's text-only lifecycle map with a
+  polished visual workflow that distinguishes long-lived and temporary Git
+  roles, isolated worker commits, verified wave promotion, repeated dependency
+  waves, run finalization, and explicit public source integration.
 - Project compatibility intent is now semantic and project-scoped. A clear
   statement that existing users depend on safe future code or interface changes
   produces durable rules for supported APIs/imports, CLI behavior,
@@ -217,14 +414,15 @@ All notable changes to the reusable Codex skills are tracked here.
   it through the provenance path, then retries the identical authorized edit
   without alternate writers, redirection, installed-only edits, or guard
   disabling.
-- Added a session-private terminal-report obligation for every explicit
-  `$troubleshoot` invocation, including no-marker success, ordinary blocking,
-  tool or coordination errors, early stop, unresolved work, and exhaustion.
-  The shared Stop arbiter validates the structured report, keeps delivery
-  pending while peer lifecycle continuations remain, carries interruption
-  within the same session, and uses one bounded correction followed by an
-  honest UI fallback instead of an unbounded loop. Remediation authorization
-  remains on its existing independent schema.
+- Refactored the session-private `$troubleshoot` report obligation around one
+  concise outcome, cause/fix, verification, and exact next-action report. The
+  new `DIAGNOSED-FIXED` classification distinguishes a proven, repaired, and
+  source-validated causal owner from complete end-to-end `VERIFIED_FIXED`
+  activation. Ordinary incomplete, malformed, partial, `FAIL`, or `UNKNOWN`
+  reports are advisory and cannot request another turn, deny tools, or emit a
+  generated fallback; sensitive output, invalid trusted state, missing
+  authority, peer Stop policy, and exact remediation-budget exhaustion remain
+  fail-closed. Remediation authorization remains on its independent schema.
 - Corrected `troubleshoot` fresh-state pending guidance to refer to the prior
   terminal marker instead of assuming it was exhausted. A resolved-marker to
   independent-blocker regression now verifies the exact patch-only handoff and
@@ -705,6 +903,61 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed Task Implementer's run-owned project-contract lifecycle adapter after a
+  sealed promotion-review correction advances the retained integration checkout.
+  The adapter now binds the initial prepared wave to its original base and an
+  active correction to its exact recorded contract commit, admitting an adopted
+  contract head only when the owner journal remains authoritative. It retains
+  the existing branch, registered linked-worktree, common-Git-directory, clean
+  or exact staged-spec-pair, selected-project, helper, command-digest, and
+  private-path checks. A real-Git
+  regression now crosses sealed contract adoption and the hidden lifecycle
+  authorization instead of relying only on the mocked dispatch gate, and
+  rejects unrelated descendants, forward or stale journal identity,
+  original-base substitution, and an independent repository substituted at
+  the retained integration path.
+- Fixed retained Task Implementer runs that were blocked when a sealed project-
+  contract reconciliation left only canonical requirements/design and a
+  provenance-only `AGENTS.md` dirty in the persistent lane. A hidden current-v7
+  owner transition now binds the sealed lifecycle, instruction-state, impact,
+  and file digests; journals one coordinator-owned integration commit; and
+  admits the overlay only while lane bytes, integration ancestry, and the lease
+  remain exact. Promotion journals temporary lane cleanup and restores the
+  overlay after interruption or failure. Promotion-review correction graphs now
+  advance one dependency-ready frontier at a time, and a resource-free future
+  task may change only its dependencies when its correction target is indexed.
+  Arbitrary, staged, untracked, partial, symlinked, or unsealed dirt remains
+  blocked.
+- Fixed Task Implementer correction replanning after completed waves. The
+  coordinator now hashes the final combined indexed wave plan instead of only
+  the replacement tail. A private current-v7 owner recovery accepts only the
+  proven historical tail-digest signature, exact caller-bound old and combined
+  digests, a done retained prefix, consistent deterministic replacement state,
+  and no live replacement worker; it journals a plan-basis-first repair and
+  never changes task, Git, Worktree, lease, promotion, or public workflow
+  state. Focused real-Git coverage reproduces the resume blocker, rejects live
+  worker repair, exercises interruption replay, refreshes and binds a validated
+  spec-receipt-only `retain_plan` impact, rejects stale refinement and material
+  impact, and reaches normal resume planning after recovery. Repeating an
+  unchanged retained-prefix replan is now byte-idempotent and never blocks its
+  active replacement wave.
+- Fixed a long-running Task Implementer/project-contract deadlock at the Stop
+  boundary. The initial project lifecycle Stop from `implementation-open` now
+  atomically enters `reconciliation-required`, preserves the implementation
+  write epoch, clears stale planning bindings, and admits canonical spec
+  reconciliation before generating its continuation. It no longer assumes a
+  Stop-generated synthetic turn will emit `UserPromptSubmit`; concurrent
+  material-write accounting retries safely and recursive Stop remains
+  fail-closed.
+- Fixed Task Implementer cross-wave contract refresh while the outer project
+  lifecycle remains implementation-open. The attested run-owned bridge now
+  admits only exact read-only inspect/render at that phase as well as during
+  reconciliation; terminal apply/verify and all existing run, checkout, path,
+  command-digest, helper, and clean-worktree constraints remain unchanged.
+- Fixed Task Implementer prompt-session acceptance from a verified managed
+  worktree lane. The prompt validator now admits either the canonical primary
+  project or the manifest-proven lane project for the same scope while retaining
+  strict prompt-root, source-root, and unrelated-project rejection checks.
 - Fixed prompt-session exactly-once and lifecycle arbitration gaps: new
   objectives now publish their final marker-bearing bytes in one exclusive
   create, reserved operation-marker input is rejected, prompt results are bound

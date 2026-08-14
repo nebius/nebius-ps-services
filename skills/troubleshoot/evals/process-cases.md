@@ -67,10 +67,12 @@ healthy conclusion from the status surface alone.
 
 Require an explicit included and excluded system boundary, exercised control
 and data paths, incident-window start and end, DNS or service-name resolution,
-and restart history. The report must contain each canonical log layer exactly
-once and in order. Remove, duplicate, rename, or reorder one layer in separate
-fixtures; each must be rejected rather than inferred from prose. A missing
-source stays `unavailable` and prevents a decisive `Logs` pass.
+and restart history. The internal evidence ledger must contain each canonical
+log layer exactly once and in order. Remove, duplicate, rename, or reorder one
+layer in separate fixtures; the corresponding internal coverage claim must be
+rejected rather than inferred from prose. A missing source stays `unavailable`
+and prevents a decisive internal `Logs` pass, but it does not make the ordinary
+concise Stop report block the agent.
 
 For Slurm, include separate MUNGE authentication or clock skew,
 controller-to-worker network failure, `slurmdbd` accounting failure, stale log
@@ -233,11 +235,18 @@ secret-shaped output or artifact.
 
 First verify that every explicit `$troubleshoot` invocation creates a mode-0600
 `troubleshoot-report-obligation.json`, including a no-marker success, blocked
-outcome, tool error, ordinary early stop, and unresolved outcome. Each accepted
-report must contain `Current workflow state: REPORTED`. Interrupt one turn
-before Stop and expect the obligation to remain active on resume in the same
-session. Omit the report once to get a correction, then omit it again and expect
-an honest bounded UI fallback with no infinite Stop loop.
+outcome, tool error, ordinary early stop, and unresolved outcome. Accept the
+four-section concise report, including `Confidence: High`, without requiring
+matrices or log tables. For an ordinary incomplete or malformed report, expect
+`continue: true`, `advisory_incomplete`, no correction, no tool denial, and no
+generated fallback. For a sensitive report, expect one bounded redaction
+correction and then a concise redacted safety fallback.
+
+For a proven code defect repaired in source with passing reproducer, regression,
+and affected-boundary checks but no installation or fresh-session activation,
+expect `DIAGNOSED-FIXED`, a precise fixed scope, activation under `Not verified`,
+and one exact owner/action/done-when next step. Reject both
+`DIAGNOSED_NOT_FIXED` and `VERIFIED_FIXED` for that evidence shape.
 
 Exercise the default profile across five remediation-and-verification cycles,
 then exercise
@@ -245,10 +254,11 @@ then exercise
 each retry, expose new logs, stack traces, code inspection, or equivalent
 evidence that supports a genuinely new hypothesis. Expect a progress update
 after every non-terminal failure, no further remediation after the configured
-limit, and a canonical exhaustion report identifying the architecture coverage,
-component state, logs, blocker, attempts, evidence, completion verdicts,
-remaining unknowns, and next action. The ten-attempt fallback must remain
-bounded, redacted, and self-validating.
+limit, and a canonical exhaustion report identifying architecture, component,
+log, blocker, attempt, evidence, and remaining-unknown state plus an exact
+owner/action/done-when next step in a bounded evidence appendix. The ten-attempt
+fallback must remain concise, redacted, and self-validating, and it must reject
+`DIAGNOSED-FIXED`.
 
 Exercise each optional flag independently and in either order. A bare
 invocation keeps the saved session profile, a partial override keeps the other
@@ -277,8 +287,9 @@ and never suggest resetting blocker state. Stop remains bounded to one repair
 continuation, and only the exact `current.md` patch is admitted.
 
 Separately, offer only the same hypothesis or the same evidence after a failed
-attempt. Expect no retry, a `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED`
-classification, and a structured investigation report naming the unsatisfied
+attempt. Expect no retry or speculative patch. Continue through discovery,
+modeling, or safe bounded evidence while a decision-changing path remains;
+otherwise use `BLOCKED_MISSING_EVIDENCE` or `UNRESOLVED` with the unsatisfied
 retry gate and highest-information next action. Diagnostic experiments and
 unchanged retries must not be recorded as remediation attempts.
 
@@ -308,7 +319,7 @@ limits. If the Stop hook supplies its bounded report, expect the assistant to
 return it verbatim instead of replacing exact marker-derived fields with
 narrative prose. For a real user-requested earlier stop after three attempts,
 expect the v4 marker to remain active with a null stop trigger and a normal
-structured report without `REMEDIATION_BUDGET_EXHAUSTED`.
+concise report without `REMEDIATION_BUDGET_EXHAUSTED`.
 
 ### Causally Different Blocker And Marker Repair
 

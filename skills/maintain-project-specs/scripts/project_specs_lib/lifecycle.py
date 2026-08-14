@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import stat
 import subprocess
 import sys
@@ -260,8 +261,41 @@ def _read_private(path: Path, *, required: bool = False) -> dict[str, Any] | Non
     return value
 
 
-def _write_private_bytes(path: Path, data: bytes) -> None:
-    _secure_directory(path.parent)
+def _require_existing_private_directory(path: Path, root: Path) -> None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise ProjectSpecError(
+            "UNSAFE_STATE", "attested private state escaped its managed root"
+        ) from error
+    current = root
+    for part in ("", *relative.parts):
+        if part:
+            current = current / part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError as error:
+            raise ProjectSpecError(
+                "UNSAFE_STATE", "attested private state directory is missing"
+            ) from error
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        ):
+            raise ProjectSpecError(
+                "UNSAFE_STATE", "attested private state directory is unsafe"
+            )
+
+
+def _write_private_bytes(
+    path: Path, data: bytes, *, attested_root: Path | None = None
+) -> None:
+    if attested_root is None:
+        _secure_directory(path.parent)
+    else:
+        _require_existing_private_directory(path.parent, attested_root)
     temporary_name = f".{path.name}.{secrets.token_hex(8)}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
@@ -306,6 +340,9 @@ def write_validation_receipt(
     project_root: Path,
     output: Path,
     session_id: object | None,
+    *,
+    task_implementer_workspace: Path | None = None,
+    task_implementer_run_id: str | None = None,
 ) -> dict[str, Any]:
     receipt = validate_project(project_root)
     if session_id is None:
@@ -314,6 +351,89 @@ def write_validation_receipt(
             "spec receipt output requires the current lifecycle session",
         )
     target = Path(os.path.abspath(output.expanduser()))
+    task_bound = (
+        task_implementer_workspace is not None or task_implementer_run_id is not None
+    )
+    if task_bound and (
+        task_implementer_workspace is None or task_implementer_run_id is None
+    ):
+        raise ProjectSpecError(
+            "UNSAFE_STATE", "Task Implementer receipt binding is incomplete"
+        )
+    if task_bound:
+        workspace = Path(os.path.abspath(task_implementer_workspace.expanduser()))
+        helper = (
+            Path(__file__).resolve().parents[3]
+            / "task-implementer"
+            / "scripts"
+            / "prompt_workspace.py"
+        )
+        command = shlex.join(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "project_specs.py"),
+                "validate",
+                "--project-root",
+                str(Path(project_root).resolve()),
+                "--output",
+                str(target),
+                "--session-id",
+                str(session_id),
+                "--task-implementer-workspace",
+                str(workspace),
+                "--task-implementer-run-id",
+                str(task_implementer_run_id),
+            ]
+        )
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "lifecycle-authorize",
+                    "--workspace",
+                    str(workspace),
+                    "--run-id",
+                    str(task_implementer_run_id),
+                    "--kind",
+                    "project-instructions",
+                    "--json",
+                ],
+                input=command,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=20,
+            )
+            evidence: Any = json.loads(completed.stdout)
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise ProjectSpecError(
+                "UNSAFE_STATE", "Task Implementer receipt binding could not run"
+            ) from error
+        if (
+            completed.returncode != 0
+            or not isinstance(evidence, dict)
+            or evidence.get("status") != "authorized"
+            or evidence.get("action") != "validate"
+            or evidence.get("project_root") != str(Path(project_root).resolve())
+            or evidence.get("command_sha256")
+            != hashlib.sha256(command.encode()).hexdigest()
+        ):
+            raise ProjectSpecError(
+                "UNSAFE_STATE", "Task Implementer receipt binding is invalid"
+            )
+        _write_private_bytes(
+            target,
+            stable_json(receipt),
+            attested_root=codex_home() / "task-implementer",
+        )
+        return receipt
     git_root = Path(str(receipt["git_root"]))
     expected = Path(
         os.path.abspath(lifecycle_dir(git_root, session_id) / "spec-receipt.json")

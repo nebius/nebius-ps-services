@@ -84,6 +84,41 @@ class SdlcStartContractTests(unittest.TestCase):
             ],
         )
 
+    def test_direct_capture_never_invokes_sdlc(self) -> None:
+        self.assert_terms(
+            "sdlc-start/SKILL.md",
+            [
+                "direct prompts may be captured into the canonical prompt",
+                "never invoke this coordinator",
+                "does not invoke either public action",
+                "durable project-intent projection",
+                "shell/tool",
+                "Capture failure never blocks the direct turn",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/README.md",
+            [
+                "runs normally in the current agent",
+                "Capture never starts",
+                "captured prompt updates still require explicit `run`",
+                "never stores the submitted",
+                "operation ID and projection digest",
+                "auto-rebase",
+            ],
+        )
+        self.assert_terms(
+            "sdlc-start/references/prompt-workspace.md",
+            [
+                "current agent handles it normally",
+                "captured updates and manual changes require explicit",
+                "capture failures do not persist or block the direct request",
+                "Staging is event-v2 metadata only",
+                "commands used as project contracts",
+                "never auto-rebase",
+            ],
+        )
+
     def test_project_instructions_route_after_design(self) -> None:
         self.assert_terms(
             "sdlc-start/SKILL.md",
@@ -169,14 +204,17 @@ class SdlcStartContractTests(unittest.TestCase):
             "sdlc-start/SKILL.md",
             [
                 "prompt_workspace.py refinement-verify",
-                "exact current `docs/requirements.md`",
+                "complete private impact claim",
+                "exact current canonical specs",
+                "immutable impact receipt",
             ],
         )
         self.assert_terms(
             "sdlc-create-requirements/SKILL.md",
             [
                 "private `refinement-verify` action owned by `sdlc-start`",
-                "latest accepted prompt identity",
+                "latest\n  accepted prompt identity and intent",
+                "every extracted statement occurrence",
             ],
         )
         self.assert_terms(
@@ -184,6 +222,7 @@ class SdlcStartContractTests(unittest.TestCase):
             [
                 "def verify_requirements_refinement_contract",
                 "REQUIREMENTS_REFINEMENT_REQUIRED",
+                "publish_prompt_impact",
             ],
         )
 

@@ -50,6 +50,41 @@ def _node(*, uid: str = "node-uid-0", resource_version: str = "11") -> dict[str,
     }
 
 
+def _external_bridge_plan() -> migration.BridgePlan:
+    image = "registry.example/slurm@sha256:" + "a" * 64
+    return migration.BridgePlan(
+        campaign_fingerprint="f" * 64,
+        cluster_id="cluster-1",
+        cluster_name="source-cluster",
+        source_kubernetes_version="1.33",
+        source_slurm_image=image,
+        target_slurm_image=image,
+        source_slurm_version="24.11.6",
+        target_slurm_version="25.11.3",
+        state_save_location="/mnt/controller-spool/current",
+        controller_spool_attachment={
+            "mount_tag": "controller-spool",
+            "existing_filesystem": {"id": "filesystem-controller-spool"},
+        },
+        jail_attachment={
+            "mount_tag": "jail",
+            "existing_filesystem": {"id": "filesystem-jail"},
+        },
+        placement_domains=(
+            migration.BridgePlacementDomain.external(
+                name="cxcli-bridge-a",
+                role="external-a",
+                template={},
+            ),
+            migration.BridgePlacementDomain.external(
+                name="cxcli-bridge-b",
+                role="external-b",
+                template={},
+            ),
+        ),
+    )
+
+
 def _process_binding(container_id: str = "a" * 64) -> ControllerProcessBinding:
     return ControllerProcessBinding(
         pod_namespace="soperator",
@@ -123,6 +158,177 @@ def test_inspector_namespace_is_dedicated_privileged_and_network_denied() -> Non
         "podSelector": {},
         "policyTypes": ["Ingress", "Egress"],
     }
+
+
+def test_inspector_admission_resume_reuses_sealed_nodes_while_bridge_node_joins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded_node = {
+        "node_name": "controller-node-0",
+        "node_uid": "node-uid-0",
+        "provider_id": "nebius://compute/controller-node-0",
+        "system_uuid": "system-uuid-controller-node-0",
+    }
+    journal: dict[str, object] = {
+        "security_contract": {
+            "schema": "nebius-cxcli-controller-security/v1",
+            "inspector": {
+                "admission_nodes": [recorded_node],
+                "admission_nodes_sha256": migration._fingerprint(  # noqa: SLF001
+                    [recorded_node]
+                ),
+            },
+        }
+    }
+    inspector_namespace = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {
+            "name": CONTROLLER_INSPECTOR_NAMESPACE,
+            "labels": {"app.kubernetes.io/managed-by": "nebius-cxcli"},
+            "annotations": {},
+        },
+    }
+    live_namespace = copy.deepcopy(inspector_namespace)
+    live_namespace["metadata"]["uid"] = "inspector-namespace-uid"
+    joining_node = {
+        "metadata": {
+            "name": "computeinstance-joining",
+            "uid": "joining-node-uid",
+            "resourceVersion": "12",
+        },
+        "spec": {"providerID": "nebius://compute/computeinstance-joining"},
+        "status": {"nodeInfo": {}},
+    }
+    dry_runs: list[dict[str, object]] = []
+    checkpoints: list[bool] = []
+
+    monkeypatch.setattr(
+        migration,
+        "_inspector_security_objects",
+        lambda **_kwargs: (inspector_namespace,),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_bind_and_preflight_controller_bridge_resource_ownership",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_bridge_security_contract",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_live_resource",
+        lambda **_kwargs: (True, copy.deepcopy(live_namespace)),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {"items": [_node(), joining_node]},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_live_controller_security_network_binding",
+        lambda **_kwargs: {
+            "soperator_namespace": {"name": "soperator", "uid": "soperator-uid"},
+            "kubernetes_api_service": {
+                "namespace": "default",
+                "name": "kubernetes",
+                "uid": "kubernetes-service-uid",
+            },
+            "kubernetes_api_cidrs": ["10.96.0.1/32"],
+        },
+    )
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        **_kwargs: object,
+    ) -> migration.SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        assert "--dry-run=server" in command
+        assert input_text is not None
+        dry_runs.append(json.loads(input_text))
+        return migration.SoperatorMigrationCommandResult(command, 0, "", "")
+
+    lines = migration._preflight_controller_inspector_namespace(  # noqa: SLF001
+        journal=journal,
+        plan=_external_bridge_plan(),
+        kube_context="test-context",
+        command_runner=runner,
+        checkpoint_writer=lambda: checkpoints.append(True),
+    )
+
+    assert lines == [
+        "Controller inspector admission: dedicated privileged namespace, deny-all network "
+        "policy, and server dry-run passed on 1 exact Node(s)."
+    ]
+    assert len(dry_runs) == 1
+    assert [item["spec"]["nodeName"] for item in dry_runs[0]["items"]] == [
+        "controller-node-0"
+    ]
+    assert journal["security_contract"]["inspector"]["admission_nodes"] == [recorded_node]
+    assert checkpoints == [True]
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ("missing", "uid", "provider", "system-uuid", "deleting", "sealed-digest"),
+)
+def test_inspector_admission_resume_rejects_recorded_node_drift(drift: str) -> None:
+    recorded_node = {
+        "node_name": "controller-node-0",
+        "node_uid": "node-uid-0",
+        "provider_id": "nebius://compute/controller-node-0",
+        "system_uuid": "system-uuid-controller-node-0",
+    }
+    live_node = _node()
+    nodes: list[dict[str, object]] = [live_node]
+    if drift == "missing":
+        nodes = []
+    elif drift == "uid":
+        live_node["metadata"]["uid"] = "replacement-node-uid"
+    elif drift == "provider":
+        live_node["spec"]["providerID"] = "nebius://compute/replacement"
+    elif drift == "system-uuid":
+        live_node["status"]["nodeInfo"]["systemUUID"] = "replacement-system-uuid"
+    elif drift == "deleting":
+        live_node["metadata"]["deletionTimestamp"] = "2026-08-13T18:30:53Z"
+    sealed_digest = migration._fingerprint([recorded_node])  # noqa: SLF001
+    if drift == "sealed-digest":
+        sealed_digest = "0" * 64
+
+    with pytest.raises(RuntimeError, match="controller inspector admission"):
+        migration._controller_inspector_admission_node_bindings(  # noqa: SLF001
+            nodes=nodes,
+            existing_contract={
+                "inspector": {
+                    "admission_nodes": [recorded_node],
+                    "admission_nodes_sha256": sealed_digest,
+                }
+            },
+        )
+
+
+def test_initial_inspector_admission_still_rejects_joining_node_without_identity() -> None:
+    joining_node = {
+        "metadata": {
+            "name": "computeinstance-joining",
+            "uid": "joining-node-uid",
+            "resourceVersion": "12",
+        },
+        "spec": {"providerID": "nebius://compute/computeinstance-joining"},
+        "status": {"nodeInfo": {}},
+    }
+
+    with pytest.raises(RuntimeError, match="exact non-deleting Node"):
+        migration._controller_inspector_admission_node_bindings(  # noqa: SLF001
+            nodes=[joining_node],
+            existing_contract={},
+        )
 
 
 @pytest.mark.parametrize(

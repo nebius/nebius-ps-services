@@ -32,19 +32,26 @@ orchestrator, systemd, OS, kernel, network, storage, GPU, and hardware evidence
 is examined when relevant or explicitly recorded as unavailable, unsafe, or not
 applicable.
 
-Each report freezes its included and excluded components and dependencies,
-exercised control and data paths, and incident-window start and end. The
-component matrix explicitly records DNS or service-name resolution and restart
-history. The log ledger contains exactly one ordered row for component,
+The internal evidence freezes its included and excluded components and
+dependencies, exercised control and data paths, and incident-window start and
+end. The component matrix explicitly records DNS or service-name resolution
+and restart history. The log ledger contains exactly one ordered record for component,
 application or job, container or orchestrator, service manager, OS and kernel,
 network and firewall, storage, and GPU or hardware. Primary local log reading is
 baseline evidence gathering; only remote Grafana queries use observability
 admission gates.
 
-The canonical report marks Design, Infrastructure, Connectivity,
-Configuration, Runtime health, Logs, and Relevant code paths as `PASS`, `FAIL`,
-or `UNKNOWN` with evidence. `VERIFIED_FIXED` is accepted only when all seven are
-`PASS`; passing tests alone do not prove code is free of bugs.
+The user-visible report is a concise projection: outcome, root cause and fix,
+verification and unverified scope, then an exact owner/action/done-when next
+step. `FAIL` and `UNKNOWN` remain internal evidence states; they do not stop the
+agent while another safe bounded result can change the decision. Detailed
+matrices and ledgers appear only in an optional evidence appendix.
+
+`DIAGNOSED-FIXED` means the cause and owner are proven, the owner-correct repair
+is applied, and the reproducer, focused regression, and source or affected
+boundary pass for the fixed scope. Installation or live replay may remain
+explicitly unverified. `VERIFIED_FIXED` remains complete end-to-end proof;
+`DIAGNOSED_NOT_FIXED` means no owner-correct repair was applied.
 
 ## Design Handoff
 
@@ -92,8 +99,11 @@ and a null stop trigger.
 Before every retry, the agent must acquire new logs, a new stack trace, new code
 inspection evidence, or an equivalent observation and derive a genuinely new
 falsifiable hypothesis. Rewording the same hypothesis or reusing evidence is
-not sufficient. If the retry gate cannot be satisfied, the agent stops with a
-structured investigation report. It reports each non-terminal failure, then
+not sufficient. If the retry gate cannot be satisfied, the agent does not patch
+again; it returns to discovery, modeling, or safe evidence collection. It
+reports early only when decisive evidence has no safe alternative, authority or
+safety requires user action, the user asks to stop, or the budget is exhausted.
+It reports each non-terminal failure, then
 stops all tools and returns the complete report at the first numeric limit. A
 new user instruction starts fresh state; it never reopens the exhausted tranche.
 A causally independent blocker starts with an empty ledger; its next completed
@@ -114,14 +124,13 @@ session rather than a budget reset.
 Every explicit `$troubleshoot` invocation also creates a terminal report duty
 in session-private `troubleshoot-report-obligation.json`, even when no
 remediation marker exists. Success, blocking, tool or coordination error,
-ordinary stop, unresolved work, and exhaustion all require a user-visible
-report with `Current workflow state: REPORTED`. An undelivered duty survives a
-resumed turn in the same session. The Stop evaluator requests one correction,
-then emits an honest bounded UI fallback rather than looping; a host process
-that dies before Stop can only be reported after same-session resume.
-Normal and budget-exhausted outcomes use the same canonical report envelope.
-The optional Stop hook validates the exact completion matrix and preserves
-marker-derived blocker and attempt evidence inside that envelope.
+ordinary stop, unresolved work, and exhaustion all use the same concise report.
+An ordinary incomplete or malformed report records `advisory_incomplete` and
+continues; it does not request another turn, deny tools, or emit a generated
+fallback. Sensitive output receives one bounded redaction path. Exhaustion
+remains strict and preserves marker-derived blocker and attempt evidence in the
+same concise envelope. A host process that dies before Stop can only be reported
+after same-session resume.
 
 For incidents, stabilization and diagnosis remain separate. A restart,
 rollback, failover, retry, cache clear, or scale change can mitigate impact but

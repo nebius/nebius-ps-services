@@ -249,7 +249,7 @@ class TaskSpecificationTest(unittest.TestCase):
         self.assertIsNone(inspected["project_agent_spec_receipt"])
 
     def test_every_applicable_requirement_must_be_mapped(self) -> None:
-        requirements, _design = self.write_specs()
+        requirements, design = self.write_specs()
         second_record = """### TI-REQ-002: Preserve traceability
 
 - Status: active
@@ -433,6 +433,37 @@ class TaskSpecificationTest(unittest.TestCase):
         self.assertEqual(verified["disposition"], "existing-sufficient")
         self.assertFalse(verified["repository_mutated"])
 
+        (repo_root / "tracked.txt").write_text(
+            "descendant product change\n", encoding="utf-8"
+        )
+        git("add", "tracked.txt", cwd=repo_root)
+        git(
+            "-c",
+            "user.name=Spec Test",
+            "-c",
+            "user.email=spec@example.invalid",
+            "commit",
+            "-qm",
+            "advance unchanged project contract",
+            cwd=repo_root,
+        )
+        descendant = git("rev-parse", "HEAD", cwd=repo_root)
+        carried = specs.verify_project_agent_contract(
+            self.workspace_value, run_dir, self.scope, descendant
+        )
+        self.assertEqual(carried["disposition"], "existing-sufficient")
+        self.assertFalse(carried["repository_mutated"])
+
+        rules_path = private_root / "rules.md"
+        rendered_rules = rules_path.read_bytes()
+        rules_path.write_bytes(rendered_rules + b"tampered\n")
+        with self.assertRaises(pw.PromptWorkspaceError) as caught:
+            specs.verify_project_agent_contract(
+                self.workspace_value, run_dir, self.scope, descendant
+            )
+        self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+        rules_path.write_bytes(rendered_rules)
+
         receipt_path.write_text("{}\n", encoding="utf-8")
         with self.assertRaises(pw.PromptWorkspaceError) as caught:
             specs.verify_project_agent_contract(
@@ -600,7 +631,7 @@ class TaskSpecificationTest(unittest.TestCase):
     def test_requirements_refinement_tracks_material_questions_and_ready_digest(
         self,
     ) -> None:
-        requirements, _design = self.write_specs()
+        requirements, design = self.write_specs()
         created = pw.create_prompt(
             self.workspace,
             "Implement prompt refinement",
@@ -635,6 +666,7 @@ class TaskSpecificationTest(unittest.TestCase):
             "requirements"
         ]["managed_sha256"]
         state["compiled_requirements_sha256"] = requirements_digest
+        state["extracted"]["constraints"] = ["Use the documented canonical contract."]
         state["status"] = "ready"
         refinement_path = run_dir / "requirements-refinement.json"
         valid_bytes = refinement_path.read_bytes()
@@ -655,6 +687,27 @@ class TaskSpecificationTest(unittest.TestCase):
         )
         saved = specs.save_requirements_refinement(run_dir, state)
         self.assertEqual(saved["status"], "ready")
+        impact_claim = {
+            "schema": specs.IMPACT_CLAIM_SCHEMA,
+            "prompt_id": state["prompt_id"],
+            "revision": state["revision"],
+            "intent_sha256": state["intent_sha256"],
+            "dispositions": [
+                {
+                    "statement": "constraints:0001",
+                    "disposition": "existing_contract",
+                    "requirements": ["TI-REQ-001"],
+                    "design": ["TI-DES-001"],
+                    "effects": [],
+                    "reason": None,
+                }
+            ],
+            "declared_effects": [],
+            "declared_plan_action": "retain_plan",
+        }
+        specs.write_atomic(
+            specs.prompt_impact_claim_path(run_dir), specs.stable_json(impact_claim)
+        )
         run_state = pw.verify_run(self.workspace_value, str(snapshot["run_id"]), None)
         verified = specs.verify_requirements_refinement_contract(
             self.workspace_value, run_dir, run_state
@@ -663,6 +716,121 @@ class TaskSpecificationTest(unittest.TestCase):
             verified["refinement"]["compiled_requirements_sha256"],
             requirements_digest,
         )
+        self.assertEqual(verified["impact"]["plan_action"], "retain_plan")
+        self.assertEqual(verified["public_impact"]["requirements"], ["TI-REQ-001"])
+        row = next(
+            item
+            for item in pw.prompt_rows(self.workspace, None, None)
+            if item.get("prompt_ref") == created["prompt_ref"]
+        )
+        self.assertEqual(
+            row["impact"],
+            {
+                "classification": "no_effect",
+                "requirements": ["TI-REQ-001"],
+                "design": ["TI-DES-001"],
+                "reasons": [],
+                "plan_action": "retain_plan",
+            },
+        )
+        serialized_impact = json.dumps(row["impact"], sort_keys=True)
+        for forbidden in ("sha256", "statement", "prompt-", str(run_dir)):
+            self.assertNotIn(forbidden, serialized_impact)
+        impact_sha256 = verified["impact_sha256"]
+        (run_dir / "prompt-impact" / "ledger.json").unlink()
+        recovered = specs.verify_requirements_refinement_contract(
+            self.workspace_value, run_dir, run_state
+        )
+        self.assertEqual(recovered["impact_sha256"], impact_sha256)
+        ledger = run_dir / "prompt-impact" / "ledger.json"
+        ledger_backing = ledger.with_name("ledger.backing")
+        ledger.rename(ledger_backing)
+        os.link(ledger_backing, ledger)
+        self.assert_error(
+            "RUN_STATE_INVALID",
+            specs.verify_requirements_refinement_contract,
+            self.workspace_value,
+            run_dir,
+            run_state,
+        )
+        ledger.unlink()
+        ledger_backing.rename(ledger)
+        impact_claim["dispositions"][0].update(
+            {
+                "disposition": "non_contract",
+                "requirements": [],
+                "design": [],
+                "reason": "clarification_context",
+            }
+        )
+        specs.write_atomic(
+            specs.prompt_impact_claim_path(run_dir), specs.stable_json(impact_claim)
+        )
+        specs.write_atomic(
+            run_dir / "prompt-impact" / "attempt-0002.json",
+            specs.stable_json({"orphan": True}),
+        )
+        verified = specs.verify_requirements_refinement_contract(
+            self.workspace_value, run_dir, run_state
+        )
+        ledger_value = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(ledger_value["current"]["generation"], 3)
+        ledger_bytes = ledger.read_bytes()
+        self.assert_error(
+            "CONCURRENT_MODIFICATION",
+            specs._write_impact_ledger_cas,
+            run_dir,
+            "0" * 64,
+            ledger_value,
+        )
+        self.assertEqual(ledger.read_bytes(), ledger_bytes)
+        coordinator = {
+            "plan_sha256": "f" * 64,
+            "prompt_revision": run_state["latest_revision"],
+            "prompt_intent_sha256": run_state["latest_intent_sha256"],
+        }
+        later_no_effect = {
+            **verified["impact"],
+            "revision": "r0002",
+            "intent_sha256": "e" * 64,
+            "plan_action": "retain_plan",
+            "effects": [],
+        }
+        retained = specs.settle_prompt_impact_plan(
+            run_dir, coordinator, later_no_effect, "d" * 64
+        )
+        self.assertEqual(retained["plan_basis_revision"], "r0001")
+        self.assertEqual(retained["latest_settled_revision"], "r0002")
+        later_material = {
+            **later_no_effect,
+            "plan_action": "replan_required",
+            "effects": ["execution"],
+        }
+        self.assert_error(
+            "REPLAN_REQUIRED",
+            specs.settle_prompt_impact_plan,
+            run_dir,
+            coordinator,
+            later_material,
+            "c" * 64,
+        )
+        specs.settle_prompt_impact_plan(
+            run_dir,
+            coordinator,
+            verified["impact"],
+            verified["impact_sha256"],
+        )
+        specs.verify_prompt_impact_plan(run_dir, coordinator, self.scope)
+        design_bytes = design.read_bytes()
+        design.write_bytes(design_bytes + b"\n")
+        self.assert_error(
+            "REPLAN_REQUIRED",
+            specs.verify_prompt_impact_plan,
+            run_dir,
+            coordinator,
+            self.scope,
+        )
+        design.write_bytes(design_bytes)
         requirements.write_text(
             requirements.read_text(encoding="utf-8").replace(
                 "Apply steering at a safe boundary.",
