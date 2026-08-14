@@ -90,16 +90,17 @@
 
 ### TI-DES-005: Pure fail-closed VM-HA controller
 
-- Status: implemented
+- Status: planned
 - Requirements: TI-REQ-003, TI-REQ-004, TI-REQ-005
-- Selected approach: Implement one deterministic controller over injected clock, persistence, peer, cloud, route, forwarding, and service-health ports, with an unconditional cold-start gate and explicit normal, suspect, fencing, transfer, promotion, active, degraded, and blocked transitions.
-- Boundaries and interfaces: A boot guard disables forwarding and cluster tunnel initiation before strongSwan, FRR, or the gateway agent can consume stale HA state; the controller owns policy and may enable only freshly proven passive or active data-plane modes, while adapters own side effects and typed observations.
-- Validation: Use table-driven traces for healthy operation, cold boot, process restart, automatic Compute recovery, stale passive, generation drift, heartbeat loss, dual suspicion, fencing failure, API outage, allocation races, route failure, and restart at every checkpoint.
+- Selected approach: Implement one deterministic controller over injected clock, persistence, peer, cloud, route, forwarding, and service-health ports, with an unconditional cold-start gate, a separate blocked-mode local-render authority, and explicit normal, suspect, fencing, transfer, promotion, active, degraded, and blocked transitions. Local rendering establishes current-generation readiness but never grants active effects.
+- Boundaries and interfaces: The boot guard blocks forwarding, cluster tunnel initiation, firewall mutation, route reconciliation, allocation transfer, and VPC effects before fresh authority exists. A narrow renderer may materialize and syntactically validate generation-owned strongSwan, FRR, and XFRM configuration while the guard remains blocked; the controller alone may enable a freshly proven passive or active data-plane mode, and adapters own typed observations and gated effects.
+- Validation: Use table-driven traces for healthy operation, clean two-node bootstrap, passive non-forwarding rendering, cold boot, process restart, automatic Compute recovery, stale passive, generation drift, heartbeat loss, dual suspicion, fencing failure, API outage, allocation races, route failure, and restart at every checkpoint. Negative controls must prove blocked rendering cannot enable forwarding or any cloud, firewall, tunnel-initiation, or route effect.
 - Rollback: Remove the controller before CLI and service integration; additive lower-level ports remain inert while VM HA is disabled.
 
 #### Alternatives considered
 
 - Distributing policy across heartbeat, VM, route, and CLI callbacks was rejected because hidden temporal coupling would make recovery and split-brain reasoning unreliable.
+- Requiring active or promotion readiness before materializing the local configuration needed to measure readiness was rejected because it creates a clean-bootstrap dependency cycle.
 - Automatic failback was rejected because it adds an avoidable second ownership transfer during recovery.
 - Allowing promotion with partial readiness was rejected; the safer outcome is a visible outage with an explicit blocked reason.
 
@@ -111,16 +112,17 @@
 
 ### TI-DES-006: Passive-first apply and operator integration
 
-- Status: implemented
+- Status: planned
 - Requirements: TI-REQ-001, TI-REQ-002, TI-REQ-003, TI-REQ-004, TI-REQ-005, TI-REQ-006
-- Selected approach: Select a new cluster-aware apply path only for explicit VM-HA configuration, provision before final runtime-manifest serialization, stage and validate the passive before the active, revalidate remote generation and digests immediately before installation, commit each node locally, recover cross-node partial progress without activation, compare generation acknowledgements, then wire the cold-start guard, controller, status, recovery, manual failback, and least-privilege permissions. Any critical remote failure aborts activation; removing VM HA performs an explicit guarded deactivation before ordinary services resume.
-- Boundaries and interfaces: `cli.py` orchestrates provision-bind-stage-activate; `agent/main.py` constructs the concrete `RecoverableController`, snapshot port, and idempotent effect port; `deploy/ssh_push.py` installs credential bytes separately from secret-free manifests and verifies current-boot guard/controller state; `routing_guard.py`, `fix_routes.py`, the ordinary agent reconciliation path, route timers, and all systemd assets share one controller-ready forwarding gate; `vpngw_sa.py` accepts only a reviewed action-to-role allowlist. `config_loader.py`, `deploy/vm_manager.py`, `deploy/vm_ha_cloud.py`, `agent/vm_ha/transport.py`, `deploy/vm_ha_routes.py`, and `deploy/route_manager.py` own the authoritative lower-level contracts. Non-HA commands remain on the existing canonical path after any stale HA state is safely removed.
-- Validation: Run CLI, critical-SSH-failure, remote-staging replacement, service readiness/failure, guard-bypass, cold-boot, automatic-recovery, HA-to-non-HA deactivation, cloud-init, IAM allowlist, status/recovery/failback, packaging, build, and release tests plus a non-HA golden trace and offline two-node apply/status/recovery trace.
+- Selected approach: Select a new cluster-aware apply path only for explicit VM-HA configuration, validate one pinned SSH host-trust policy before provisioning, provision before final runtime-manifest serialization, stage and validate the passive before the active, revalidate remote generation and digests immediately before installation, commit each node locally, recover cross-node partial progress without activation, compare generation acknowledgements, then wire the cold-start guard, controller, status, recovery, manual failback, and least-privilege permissions. Any trust, identity, or other critical remote failure aborts activation; removing VM HA performs an explicit guarded deactivation before ordinary services resume.
+- Boundaries and interfaces: `cli.py` parses and preflights the configured known-host or SSH-CA input before `ensure_group` or any provisioning effect and passes one immutable validated trust policy to every remote operation. `deploy/ssh_push.py`, operator command execution, OpenSSH subprocesses, and Paramiko sessions consume that same policy, reject host-key mismatch distinctly from reachability failure, and expose no trust-on-first-use or disabled-verification branch. `agent/main.py` constructs the concrete `RecoverableController`, snapshot port, and idempotent effect port; `routing_guard.py`, `fix_routes.py`, the ordinary agent reconciliation path, route timers, and all systemd assets share one controller-ready forwarding gate; `vpngw_sa.py` accepts only a reviewed action-to-role allowlist. `config_loader.py`, `deploy/vm_manager.py`, `deploy/vm_ha_cloud.py`, `agent/vm_ha/transport.py`, `deploy/vm_ha_routes.py`, and `deploy/route_manager.py` own the authoritative lower-level contracts. Non-HA commands remain on the existing canonical path after any stale HA state is safely removed.
+- Validation: Run CLI, missing/malformed/unusable trust preflight, known-host mismatch, SSH-CA, OpenSSH/Paramiko parity, critical-SSH-failure, remote-staging replacement, service readiness/failure, guard-bypass, clean-bootstrap, cold-boot, automatic-recovery, HA-to-non-HA deactivation, cloud-init, IAM allowlist, status/recovery/failback, packaging, build, and release tests plus a non-HA golden trace and offline two-node apply/status/recovery trace.
 - Rollback: Revert the integration layer; the schema remains inert when VM HA is omitted and no migration is required.
 
 #### Alternatives considered
 
 - Active-first apply was rejected because a failed second-node stage would leave the serving node ahead and silently remove failover readiness.
+- Trust-on-first-use, disabled host verification, and separate OpenSSH/Paramiko trust defaults were rejected because they make first deployment vulnerable to host substitution and produce path-dependent identity checks.
 - Replacing existing commands or defaults was rejected because VM HA is additive and current users require supported behavior to remain stable.
 - Unverified broad IAM grants were rejected; exact actions and role mappings must be documented before a live trial.
 
@@ -133,11 +135,11 @@
 
 ### TI-DES-007: Deterministic two-node safety and compatibility proof
 
-- Status: implemented
+- Status: planned
 - Requirements: TI-REQ-001, TI-REQ-002, TI-REQ-003, TI-REQ-004, TI-REQ-005, TI-REQ-006
 - Selected approach: Build composed offline tests with fake time, two agents, peer transport, filesystem faults, Compute, allocations, routes, FRR, XFRM, and forwarding, and retain a golden non-HA execution trace.
 - Boundaries and interfaces: New integration tests own cross-component sequencing evidence; focused unit suites retain adapter and policy coverage; live validation remains a separately authorized product trial.
-- Validation: Assert ordered traces and final state for normal failover, stale passive, cloud ambiguity, crash at every side effect, hold-down, resynchronization, manual failback, and omitted VM-HA behavior.
+- Validation: Assert ordered traces and final state for clean two-node bootstrap, passive blocked rendering, normal failover, stale passive, cloud ambiguity, crash at every side effect, hold-down, resynchronization, manual failback, SSH trust preflight and mismatch handling, and omitted VM-HA behavior. Keep these safety-critical composed cases selected by the ordinary automated CI path.
 - Rollback: Remove only new test fixtures when all dependent implementation is reverted; never weaken negative safety expectations to retain a feature path.
 
 #### Alternatives considered
@@ -154,6 +156,7 @@
 
 ## Task Implementer Design Change Log
 
+- 2026-08-14: Reopened TI-DES-005 through TI-DES-007 after integration review to separate blocked local rendering from active data-plane effects, establish one fail-fast pinned SSH trust policy shared by OpenSSH and Paramiko before provisioning, and select the composed bootstrap/trust proof in ordinary CI.
 - 2026-08-13: Marked TI-DES-001 through TI-DES-006 implemented after the retained correction chain closed authoritative runtime binding, immutable credential installation, exact route targets, strict cloud fencing, current-truth route receipts, cold-start guard closure, production factory composition, guarded operator actions, and default-disabled compatibility. TI-DES-007 remains planned until the final composed acceptance wave completes.
 - 2026-08-12: Reconciled TI-DES-001 through TI-DES-006 after retained integration review: added the post-provision runtime-binding phase, strict shared allocation provisioning, Compute resource revision as ownership epoch, concrete mTLS and route-receipt ownership, complete controller composition, guard closure across all forwarding writers, verified activation/deactivation, and IAM allowlist boundaries.
 - 2026-08-11: Added TI-DES-001 through TI-DES-007 for additive two-node VM-level active/passive HA.

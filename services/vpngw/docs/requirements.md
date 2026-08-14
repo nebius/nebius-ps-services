@@ -84,13 +84,14 @@
 
 - Status: active
 - Requirement: Implement one explicit controller for heartbeat evaluation, readiness, suspicion, fencing, ownership transfer, promotion, degradation, recovery, and manual failback.
-- Constraints: Persist immutable revisions and transition checkpoints atomically; authenticate peer traffic; reject stale boot identities and heartbeat sequences; install a cold-start data-plane guard before strongSwan, FRR, or the gateway agent can use stale HA state; use bounded timers and injected clocks.
+- Constraints: Persist immutable revisions and transition checkpoints atomically; authenticate peer traffic; reject stale boot identities and heartbeat sequences; install a cold-start data-plane guard before strongSwan, FRR, or the gateway agent can use stale HA state; permit only deterministic node-local rendering and validation while that guard is blocked so clean members can establish readiness without enabling forwarding, tunnel initiation, firewall, route, allocation, or VPC effects; use bounded timers and injected clocks.
 - Non-goals: Automatic failback, distributed consensus storage, Object Storage as a correctness dependency, or the append-only journal as ownership authority.
 
 #### Acceptance criteria
 
 - The controller exposes normal, suspect, fencing, ownership-transfer, promoting, active, degraded, and blocked outcomes with explicit prerequisites.
 - On every boot or restart, the controller begins behind the cold-start guard, re-reads Compute and allocation ownership, and enables only the data-plane mode justified by fresh authoritative state.
+- On a clean two-node bootstrap, both members can materialize and validate the current generation behind the blocked guard without depending on promotion readiness; the passive and any node without fresh ownership proof remain non-forwarding and effect-free.
 - Automatic failover requires generation parity plus required static, BGP, XFRM, service-health, and cloud-ownership readiness.
 - Restart at any checkpoint reconstructs the next safe action from committed local state and current cloud truth without enabling forwarding early.
 - Authenticated heartbeats report role, owner observation, generation, policy digests, service health, route readiness, and promotion readiness without carrying secrets.
@@ -104,7 +105,7 @@
 
 - Status: active
 - Requirement: Expose generation parity, observed owner, promotion readiness, fencing progress, degraded reasons, explicit recovery, and manual failback through the existing operator workflow when VM HA is enabled.
-- Constraints: Use least-privilege cloud permissions, keep secrets out of manifests, journals, status, and logs, package all required services, and perform no live cloud mutation without a separately approved non-production trial.
+- Constraints: Use least-privilege cloud permissions, keep secrets out of manifests, journals, status, and logs, package all required services, and perform no live cloud mutation without a separately approved non-production trial. Every operator-command and staging SSH path must use one explicitly configured pinned host-key or SSH-CA trust source that is validated before any cloud mutation; trust-on-first-use, disabled host authentication, and permissive fallback are unsupported.
 - Non-goals: Renaming or silently changing existing non-HA commands, automatic failback, production validation, or claiming live readiness from offline tests alone.
 
 #### Acceptance criteria
@@ -114,8 +115,10 @@
 - VM-HA status explains why a passive is promotable or blocked and names the safe operator recovery action.
 - Manual failback follows the same fencing, ownership-transfer, readiness, and route-reconciliation invariants as automatic failover.
 - HA activation aborts on the first critical remote failure, revalidates the remote generation and digest immediately before installation, and never reports success from stale staging acknowledgements or unverified guard/controller state.
+- Apply rejects an absent, unreadable, empty, malformed, or unusable SSH trust source before provisioning or resource-group creation. OpenSSH and Paramiko consume the same validated policy, and host-key rejection is reported distinctly from transport reachability failure.
 - Manifests, status, journals, and logs contain only absolute credential references; credential material is installed separately with restrictive permissions, and HA IAM grants are selected only from a reviewed action-to-role allowlist.
 - Offline two-node tests prove no forwarding or VPC-route mutation occurs before authoritative fencing and exact allocation ownership.
+- The ordinary automated CI path selects the composed clean-bootstrap, passive non-forwarding, SSH trust preflight, and host-key mismatch regressions rather than leaving them manual-only.
 - A later live-ready claim requires a separately authorized non-production trial with independently observed cloud, allocation, forwarding, and route postconditions.
 
 #### Verification
@@ -128,6 +131,7 @@
 
 ## Task Implementer Requirements Change Log
 
+- 2026-08-14: Clarified TI-REQ-005 and TI-REQ-006 after integration review: clean HA members may render and validate node-local configuration while the data plane remains blocked, and every SSH operator/staging path requires one prevalidated pinned trust source before any cloud mutation. Added automatic CI selection for the composed bootstrap and trust regressions.
 - 2026-08-13: Reconciled TI-REQ-001 through TI-REQ-006 after implementation: the explicit two-node path now has secret-free authoritative bindings, immutable credential bundles, strict stopped-owner fencing, exact target-aware route reconciliation, a production-composed current-boot guard/controller, guarded recovery and failback, and preserved omitted/disabled behavior. Live readiness remains a separately authorized non-production gate.
 - 2026-08-12: Reconciled TI-REQ-001 through TI-REQ-006 with the proven post-provision runtime-binding, authoritative ownership-revision, exact route-receipt, guard-closure, fail-closed deactivation, credential-reference, IAM-allowlist, and activation-verification requirements.
 - 2026-08-11: Added TI-REQ-001 through TI-REQ-006 for additive two-node VM-level active/passive HA.
