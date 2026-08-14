@@ -92,6 +92,7 @@ class VMManager:
         tenant_id: str | None = None,
         region_id: str | None = None,
         ssh_policy: SSHTrustPolicy | None = None,
+        management_key_path: Path | None = None,
     ) -> None:
         self.project_id = project_id
         self.zone = zone
@@ -99,6 +100,7 @@ class VMManager:
         self.tenant_id = tenant_id
         self.region_id = region_id
         self._ssh_policy = ssh_policy
+        self._management_key_path = management_key_path
         self.diff_analyzer = VMDiffAnalyzer()
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
@@ -880,6 +882,7 @@ class VMManager:
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
         ssh_base = build_openssh_base_command(
+            key_path=self._management_key_path,
             connect_timeout=5,
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
@@ -1251,10 +1254,12 @@ class VMManager:
             raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
         for name, public_ip in existing.items():
             ssh_base = build_openssh_base_command(
+                key_path=self._management_key_path,
                 connect_timeout=5,
                 policy=selected_policy,
                 hostname=name,
             )
+            ssh_base.extend(["-o", "BatchMode=yes"])
             try:
                 result = subprocess.run(
                     ssh_base + [f"{username}@{public_ip}", "true"],

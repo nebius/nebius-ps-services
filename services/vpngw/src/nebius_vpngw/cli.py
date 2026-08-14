@@ -1107,6 +1107,9 @@ def apply(
     tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
     proj_id = project_id or (local_cfg.get("project_id") or "").strip() or None
     region_id = (local_cfg.get("region_id") or "").strip() or None
+    vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec", {})
+    raw_management_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+    management_key_path = Path(raw_management_key).expanduser() if raw_management_key else None
 
     ssh_policy: SSHTrustPolicy | None = None
     if plan.vm_ha is not None:
@@ -1125,6 +1128,7 @@ def apply(
                 auth_token=None,
                 tenant_id=tenant_id,
                 region_id=region_id,
+                management_key_path=management_key_path,
             )
             existing_members = discovery_manager.discover_vm_ha_members(plan.gateway_group)
             enrollment_hosts = {
@@ -1146,8 +1150,7 @@ def apply(
                 existing_members,
                 policy=ssh_policy,
                 username=(
-                    (local_cfg.get("gateway_group") or {}).get("vm_spec", {}).get("ssh_username")
-                    or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                    vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                 ),
             )
         except (RuntimeError, ValueError) as error:
@@ -1215,6 +1218,7 @@ def apply(
         tenant_id=tenant_id,
         region_id=region_id,
         ssh_policy=ssh_policy,
+        management_key_path=management_key_path,
     )
     ssh = SSHPush(ssh_policy=ssh_policy)
 
