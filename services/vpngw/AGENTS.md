@@ -1,4 +1,4 @@
-<!-- project-agent-instructions:managed-v3 manifest-sha256=f7fe62d111979d5410d7491809117bcb41415c9460f33a94e35bf55ba9e7137d decision-sha256=7bfa9830f70c7ddb8e072d7ef9ad8d7d3ef848c9182e7c32de436fd16e73ece5 body-sha256=312c7188338308dd0e8fbd7f1849571c660256340ca19159c8bc46c964bc8e52 -->
+<!-- project-agent-instructions:managed-v3 manifest-sha256=2a656e829e1f4351edef9704d28ca353e44fd5f50121f0db63f474e1b5e4f182 decision-sha256=50234aa6ad0658265ca866640e65550bc77fed90cb0d0d79be33b01861e1a0dd body-sha256=312c7188338308dd0e8fbd7f1849571c660256340ca19159c8bc46c964bc8e52 -->
 
 # Project Agent Instructions
 

@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed the VM-HA clean-node bootstrap cycle by allowing deterministic local
+  configuration rendering behind the blocked data-plane guard, and made VM-HA
+  apply reject missing or unusable pinned SSH host trust before cloud mutation.
 - Added explicit, default-disabled two-node VM-level active/passive HA with
   immutable generation and credential staging, authenticated peer state,
   authoritative stopped-owner and shared-allocation fencing, owner-gated static

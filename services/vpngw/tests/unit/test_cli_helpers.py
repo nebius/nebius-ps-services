@@ -598,6 +598,27 @@ def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
     manager.assert_not_called()
 
 
+def test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    plan = SimpleNamespace(vm_ha=object(), validate=lambda: None)
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value={}),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.VMManager") as manager,
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "SSH trust preflight failed before external mutation" in result.stdout
+    manager.assert_not_called()
+
+
 @pytest.mark.parametrize("failing_stage_role", [None, "passive", "active"])
 def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_partial_stage(
     tmp_path: Path,
@@ -688,6 +709,10 @@ def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_part
         patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
         patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
         patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch(
+            "nebius_vpngw.cli.require_explicit_known_hosts_file",
+            return_value=tmp_path / "known_hosts",
+        ),
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
     ):

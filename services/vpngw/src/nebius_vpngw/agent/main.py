@@ -1007,8 +1007,18 @@ class Agent:
                 print(f"[Agent] Config not found: {CONFIG_PATH}")
                 return
             cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+            vm_ha_blocked = False
             if _read_vm_ha_config(CONFIG_PATH) is not None:
-                require_vm_ha_current_boot_readiness()
+                try:
+                    require_vm_ha_current_boot_readiness()
+                except RuntimeError:
+                    vm_ha_blocked = True
+
+            if vm_ha_blocked:
+                self.ss.render_and_apply(cfg, activate=False)
+                self.frr.render_and_apply(cfg, activate=False)
+                print("[Agent] Rendered VM-HA configuration behind the blocked data-plane guard")
+                return
 
             try:
                 update_firewall_from_config(cfg)

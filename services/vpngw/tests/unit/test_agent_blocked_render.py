@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import Mock
+
+import nebius_vpngw.agent.main as agent_main
+import nebius_vpngw.agent.strongswan_renderer as strongswan_module
+from nebius_vpngw.agent.frr_renderer import FRRRenderer
+from nebius_vpngw.agent.strongswan_renderer import StrongSwanRenderer
+
+
+def test_vm_ha_blocked_boot_renders_without_data_plane_effects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    calls: list[tuple[str, bool]] = []
+
+    class Renderer:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def render_and_apply(self, cfg, *, activate=True):
+            calls.append((self.name, activate))
+            return []
+
+    monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
+    agent = agent_main.Agent()
+    agent.ss = Renderer("strongswan")
+    agent.frr = Renderer("frr")
+    monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: None)
+    monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path: {"enabled": True})
+    monkeypatch.setattr(
+        agent_main,
+        "require_vm_ha_current_boot_readiness",
+        lambda: (_ for _ in ()).throw(RuntimeError("current boot remains blocked")),
+    )
+    monkeypatch.setattr(
+        agent_main,
+        "update_firewall_from_config",
+        lambda cfg: (_ for _ in ()).throw(AssertionError("firewall effect escaped guard")),
+    )
+
+    agent.reload()
+
+    assert calls == [("strongswan", False), ("frr", False)]
+
+
+def test_blocked_frr_render_does_not_install_kernel_routes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    renderer = FRRRenderer()
+    ensure_routes = Mock()
+    monkeypatch.setattr(renderer, "ensure_local_prefix_routes", ensure_routes)
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.frr_renderer.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("FRR subprocess effect escaped guard")
+        ),
+    )
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.BGPD_CONF", tmp_path / "bgpd.conf")
+    monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.FRR_CONF", tmp_path / "frr.conf")
+
+    renderer.render_and_apply(
+        {"gateway": {"local_prefixes": ["10.0.0.0/24"]}, "connections": []},
+        activate=False,
+    )
+
+    ensure_routes.assert_not_called()
+
+
+def test_blocked_strongswan_render_is_inert(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(strongswan_module, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d")
+    monkeypatch.setattr(strongswan_module, "IPSEC_CONF", tmp_path / "ipsec.conf")
+    monkeypatch.setattr(strongswan_module, "SWANCTL_CONF", tmp_path / "swanctl.conf")
+    monkeypatch.setattr(strongswan_module, "NETPLAN_DIR", tmp_path / "netplan")
+    monkeypatch.setattr(
+        strongswan_module.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("strongSwan subprocess effect escaped guard")
+        ),
+    )
+
+    StrongSwanRenderer().render_and_apply(
+        {
+            "connections": [
+                {
+                    "name": "peer",
+                    "tunnels": [
+                        {
+                            "name": "tunnel-1",
+                            "remote_public_ip": "192.0.2.10",
+                            "psk": "fixture-secret",
+                        }
+                    ],
+                }
+            ]
+        },
+        activate=False,
+    )
+
+    rendered = (tmp_path / "swanctl.conf").read_text(encoding="utf-8")
+    assert "start_action = none" in rendered
+    assert "close_action = none" in rendered
+    assert "start_action = start" not in rendered

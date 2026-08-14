@@ -24,7 +24,7 @@ from .config_loader import (
 )
 from .config_template import DEFAULT_CONFIG_TEMPLATE
 from .deploy.route_manager import RouteManager
-from .deploy.ssh_policy import build_openssh_base_command
+from .deploy.ssh_policy import build_openssh_base_command, require_explicit_known_hosts_file
 from .deploy.ssh_push import SSHPush
 from .deploy.vm_manager import VMManager
 
@@ -1095,6 +1095,12 @@ def apply(
             for blocker in blockers:
                 print(f"[yellow]  - {blocker}[/yellow]")
             raise typer.Exit(code=1)
+        try:
+            require_explicit_known_hosts_file()
+        except ValueError as error:
+            print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
+            print(f"[yellow]  - {error}[/yellow]")
+            raise typer.Exit(code=1) from error
 
     # Resolve context from CLI args or config
     tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
