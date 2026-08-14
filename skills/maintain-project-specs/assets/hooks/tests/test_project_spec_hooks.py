@@ -1102,6 +1102,90 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             {},
         )
 
+    def test_exact_external_find_delete_cleanup_is_scoped_and_epoch_neutral(
+        self,
+    ) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        external = self.root / "task-owned-cleanup"
+        external.mkdir()
+        command = f"find {external} -depth -delete"
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        before = lifecycle._load(state_path)
+        assert before is not None
+
+        payload = {
+            **self.base,
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        self.assertEqual(
+            lifecycle.evaluate({**payload, "hook_event_name": "PreToolUse"}), {}
+        )
+        lifecycle.evaluate(
+            {
+                **payload,
+                "hook_event_name": "PostToolUse",
+                "tool_response": {"exit_code": 0},
+            }
+        )
+        after = lifecycle._load(state_path)
+        assert after is not None
+        self.assertEqual(after["phase"], before["phase"])
+        self.assertEqual(after["write_epoch"], before["write_epoch"])
+
+        external_link = self.root / "external-project-link"
+        external_link.symlink_to(self.project, target_is_directory=True)
+        external_target = self.root / "external-target"
+        external_target.mkdir()
+        external_only_link = self.root / "external-only-link"
+        external_only_link.symlink_to(external_target, target_is_directory=True)
+        for denied_command in (
+            f"find {self.project} -depth -delete",
+            f"find {external_link} -depth -delete",
+            f"find {external_only_link} -depth -delete",
+            f"find {external} -delete",
+            f"find -L {external} -depth -delete",
+            rf"find {external} -depth -exec rm -r {{}} \;",
+            f"find {external} {self.root / 'second'} -depth -delete",
+            f"find {external}/* -depth -delete",
+            f"find {external}/{{one,two}} -depth -delete",
+            f"find {self.project} -depth -{{delete,print}}",
+            f"find {self.project} -depth -{{d{{elete,ummy}},print}}",
+            f"find {self.project} -depth -{{de,xx}}{{lete,yy}}",
+            f"find {self.project} -depth {{-,x}}delete",
+            f"find {self.project} -depth -del*",
+            f"env find {external} -depth -delete",
+            f"(find {external} -depth -delete)",
+            f"! find {external} -depth -delete",
+            f"! command find {external} -depth -delete",
+            f"time find {external} -depth -delete",
+            f"time -f format find {external} -depth -delete",
+            f"if true; then find {external} -depth -delete; fi",
+            f"{{ find {external} -depth -delete; }}",
+            f"find {external} -depth -delete && true",
+            f"find {external} -depth -delete | head -n 1",
+            "find $TARGET -depth -delete",
+            "find $(pwd) -depth -delete",
+            f"find {state_path.parent} -depth -delete",
+            f"find {Path(tempfile.gettempdir()).resolve()} -depth -delete",
+            "find /tmp -depth -delete",
+            "find /private/tmp -depth -delete",
+            "find / -depth -delete",
+        ):
+            with self.subTest(command=denied_command):
+                denied = lifecycle.evaluate(
+                    {
+                        **self.base,
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "Bash",
+                        "tool_input": {"command": denied_command},
+                    }
+                )
+                self.assertEqual(
+                    denied["hookSpecificOutput"]["permissionDecision"], "deny"
+                )
+
     def test_external_post_tool_does_not_advance_project_epoch(self) -> None:
         lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
         external = self.root / "external"
@@ -1531,6 +1615,7 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             "outer_project_root": str(self.project),
             "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
             "checkpoint_head": "b" * 40,
+            "review_correction": False,
         }
         payload = {
             **self.base,
@@ -1547,6 +1632,61 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
         assert current is not None
         self.assertEqual(current["phase"], "reconciliation-required")
         self.assertEqual(current["write_epoch"], 1)
+
+    def test_task_review_correction_reopens_only_zero_write_promotion_waiver(
+        self,
+    ) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update({"phase": "waived", "waiver": "non-project"})
+        lifecycle._write(state_path, state)
+        command = "python3 /trusted/prompt_workspace.py wave-plan --workspace /private/workspace.json --run-id run-20260811t135023z-caac975f --capacity 1 --json"
+        impact = {
+            "status": "authorized",
+            "action": "wave-plan",
+            "outer_project_root": str(self.project),
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+            "checkpoint_head": "b" * 40,
+            "review_correction": True,
+        }
+        pre_payload = {
+            **self.base,
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        with mock.patch.object(
+            lifecycle, "_task_implementer_impact", return_value=impact
+        ):
+            self.assertEqual(lifecycle.evaluate(pre_payload), {})
+            lifecycle.evaluate(
+                {
+                    **pre_payload,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": {"exit_code": 0},
+                }
+            )
+
+        current = lifecycle._load(state_path)
+        assert current is not None
+        self.assertEqual(current["phase"], "reconciliation-required")
+        self.assertIsNone(current["waiver"])
+        self.assertEqual(current["write_epoch"], 1)
+
+        current.update({"phase": "waived", "waiver": "non-project", "write_epoch": 0})
+        lifecycle._write(state_path, current)
+        with mock.patch.object(
+            lifecycle,
+            "_task_implementer_impact",
+            return_value={**impact, "review_correction": False},
+        ):
+            denied = lifecycle.evaluate(pre_payload)
+        self.assertEqual(
+            denied["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
 
     def test_task_implementer_coordinator_commit_is_bound_during_reconciliation(
         self,
@@ -1762,6 +1902,64 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             }
         )
         self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_failed_project_instruction_apply_reopens_reconciliation(self) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state.update(
+            {
+                "phase": "planned",
+                "receipt_sha256": "a" * 64,
+                "requirements_sha256": "b" * 64,
+                "design_sha256": "c" * 64,
+                "planned_write_epoch": 0,
+            }
+        )
+        self.bind_empty_rules(state_path, state)
+        lifecycle._write(state_path, state)
+        helper = HOOK_DIR.parents[2] / (
+            "project-agent-instructions/scripts/project_agent_instructions.py"
+        )
+        private_root = state_path.parent / "project-instructions"
+        command = (
+            f"python3 {helper} apply --manifest {private_root / 'manifest.json'} "
+            f"--decision {private_root / 'decision.json'} "
+            f"--ownership {private_root / 'ownership.json'} "
+            f"--state {private_root / 'state.json'} --private-root {private_root}"
+        )
+        with (
+            mock.patch.object(
+                lifecycle,
+                "_bound_coordinator_command",
+                return_value=("project-instructions", "apply"),
+            ),
+            mock.patch.object(
+                lifecycle,
+                "_verified_apply_state",
+                side_effect=lifecycle.HookError(
+                    "project-instructions apply did not produce verified state"
+                ),
+            ),
+            self.assertRaisesRegex(
+                lifecycle.HookError, "did not produce verified state"
+            ),
+        ):
+            lifecycle.evaluate(
+                {
+                    **self.base,
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                    "tool_response": {"exit_code": 0},
+                }
+            )
+        reopened = lifecycle._load(state_path)
+        assert reopened is not None
+        self.assertEqual(reopened["phase"], "reconciliation-required")
+        self.assertEqual(reopened["write_epoch"], 1)
 
     def test_documentation_waiver_is_narrow(self) -> None:
         lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})

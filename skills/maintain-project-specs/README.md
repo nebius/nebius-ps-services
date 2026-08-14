@@ -26,6 +26,9 @@ before generating that continuation, so reconciliation never depends on a
 synthetic turn firing `UserPromptSubmit`. Ordinary
 implementation-only or reverted changes may keep both specs byte-identical
 after validation at the latest epoch.
+An apply command that cannot produce independently verified final instruction
+state also invalidates its plan and reopens reconciliation, so a blocked or
+partially applied decision can be corrected without a new user prompt.
 
 The terminal project-instructions step decides whether repository instructions
 are actually needed. A verified `not-needed` outcome is successful and leaves
@@ -51,6 +54,11 @@ An attested delegated command may use either the hook runtime or an exact
 PATH-canonical executable named `python3` or `python3.N`. A different canonical
 Python version is therefore valid, while arbitrary same-name paths, wrappers,
 alternate helpers, and mismatched sessions remain denied.
+The adapter also owns one narrow integration-review recovery: an exact
+completed-follow-up run whose private receipt matches the rejected candidate,
+findings digest, and unchanged lane/source heads may reopen the current
+zero-write `non-project` promotion waiver as `reconciliation-required`.
+Ordinary, written, or unrelated waivers remain terminal.
 Inspection uses one uncomposed canonical command with the active
 Codex home declared explicitly and every receipt, runtime, private-root, and
 output path absolute within the owning bundle.
@@ -72,7 +80,11 @@ state, whose receipts and state remain coordinator-owned. Fixed external
 config, hooks, task state, installed skills, credentials, and other user files
 pass through this selected-project hook to their actual permission and policy
 owners. Receipt persistence is limited to the hook-bound session's canonical
-`spec-receipt.json`.
+`spec-receipt.json`. Exact task-owned temporary-tree cleanup is classified as
+external only for one literal absolute system-temp descendant in the form
+`find /tmp/<task-owned-tree> -depth -delete`; temporary roots, variables,
+globs, multiple roots, symlinks, and alternate `find` actions remain denied by
+this lifecycle, while destructive-action policy still owns deletion approval.
 
 Missing files start from the canonical draft templates under
 `assets/templates/`; the agent replaces every placeholder from focused README,

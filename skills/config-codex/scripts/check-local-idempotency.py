@@ -34,8 +34,9 @@ FORBIDDEN_MANAGED_CONTEXT_SNIPPETS = (
 )
 REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     "Agents may clean up temporary trees they created during the current task",
-    'find "$task_temp_dir" -depth -delete',
-    "never target the temporary root or an unresolved variable",
+    "submit that resolved absolute",
+    "find /tmp/<task-owned-tree> -depth -delete",
+    "temporary root or pass an unresolved variable",
     "Live Product Validation",
     "define and freeze the expected product-owned behavior",
     "Observation is non-intervening only when it cannot alter criterion-relevant state or execution",

@@ -40,7 +40,7 @@ baseline.
 | `reconciliation-required` | Implementation paths and canonical specs | Validate and `plan` |
 | `seal-armed` | None; only project-instructions verification and lifecycle seal | Verified `seal` |
 | `sealed` | None | New user prompt |
-| `waived` | Non-contract Markdown only for `documentation-only`; none for other waivers | New user prompt |
+| `waived` | Non-contract Markdown only for `documentation-only`; none for other waivers | New user prompt, or the exact authenticated Task review-correction transition below |
 
 Validation requires both canonical specs to be tracked. A newly created spec
 may cross that bootstrap boundary only through an exact, uncomposed
@@ -78,6 +78,11 @@ The exact project-instructions `apply` action advances `planned` to
 `AGENTS.md` decision. A previously admitted write that reports success late
 still invalidates that evidence and reopens reconciliation. A new prompt
 carries any unfinished implementation or armed seal instead of discarding it.
+If apply returns without independently verifiable final state, PostToolUse
+conservatively treats the target as potentially changed: it advances the write
+epoch, invalidates the plan, and returns to `reconciliation-required`. This
+keeps the failure closed while allowing the current-session decision input to
+be corrected and replanned.
 Lifecycle-managed project-instructions inspect, render, plan, apply, verify,
 and seal commands must use the exact current-session
 `<session>/project-instructions/` bundle and its canonical filenames. Another
@@ -174,6 +179,13 @@ The first successful authenticated Task Implementer `wave-plan` is explicit
 selected-lane material accounting: after its run-owned checkpoint receipt is
 observable, an open lifecycle advances to reconciliation-required before
 worker dispatch. A failed or unbound command cannot claim that transition.
+If public integration review created a completed-follow-up correction after a
+zero-write `non-project` waiver, the canonical Task adapter must additionally
+prove its owner-only receipt matches the unchanged lane/source heads and is
+bound to that exact run. Only that successful checkpointed `wave-plan` may
+replace the waiver with `reconciliation-required` at write epoch one. A
+documentation waiver, a written waiver, a different run or head, a missing or
+unbound receipt, and caller-authored review evidence all remain terminal.
 The hook is a project-mutation lifecycle guard, not a general executable trust
 policy. Ordinary reads, read-only pipelines, common Git inspection, and
 user-owned package-manager tools remain available. This includes exact
@@ -189,6 +201,14 @@ Materiality and lifecycle relevance are separate. A command with fixed,
 provable targets wholly outside the selected project passes through this hook
 and remains epoch-neutral. Selected-project effects follow the current phase;
 mixed internal/external effects and dynamic or unresolved targets fail closed.
+The one recursive cleanup exception recognizes only
+`find /tmp/<task-owned-tree> -depth -delete` with a single literal absolute
+root strictly below a system temporary root. It reports that root as recursive
+so project ancestors, symlink crossings, and authoritative control-plane
+coverage still fail closed. Variables, globs, multiple roots, temporary roots
+themselves, `-L`, `-exec`, and other `find` shapes remain ambiguous. This
+classification declines only selected-project lifecycle ownership; independent
+destructive-action policy still decides whether the deletion is authorized.
 Command-specific target extraction accounts for multi-destination directory
 creation, explicit target-directory options, hard-link sources, and tree moves.
 Only the lifecycle-owned `${CODEX_HOME}/project-specs` control plane remains

@@ -184,6 +184,13 @@ before that per-lane lock. Removal binds the observed source ref and source
 head into its durable intent, then atomically verifies that source ref while
 deleting the exact lane ref. Public Worktree integration/removal reject
 lane-owned branches.
+An exact review-rejection replay is a bounded exception to the checkpoint-first
+integration rejection only after the lane is already `pending`, its integration
+journal is absent, and the immutable rejection receipt matches the candidate
+and findings digest. It returns the receipt's unchanged source/lane heads even
+when the correction generation has only reserved a pending checkpoint. It
+cannot open or finish that checkpoint, create a candidate, or promote a ref;
+all ordinary integration attempts still fail until the checkpoint finishes.
 Before creating or resuming an outer integration reservation, rebind that
 receipt to the manifest and live outer branch/path/scope/common-directory/head,
 then rescan every recorded private path, symlink, registered worktree, and

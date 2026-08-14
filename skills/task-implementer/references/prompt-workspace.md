@@ -29,6 +29,7 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │   ├── workspace.json
 │   ├── activity.json
 │   ├── prompt-queue.json
+│   ├── integration-review-correction.json
 │   ├── queued-prompts/<prompt-id>/<digest>.md
 │   ├── <scope>-prompts.code-workspace
 │   ├── prompts/00-START-HERE.md
@@ -69,6 +70,14 @@ The private root must be outside Git storage. On POSIX, managed directories are
 `0700` and files are `0600`. Reject symlinks, traversal, foreign paths, unsafe
 permissions, malformed UTF-8/JSON/Markdown, duplicate identities, and state
 whose canonical paths no longer match its manifest.
+
+`integration-review-correction.json` is a replaceable owner-only receipt for
+the latest public integration review rejection. It binds the lane identity,
+source and lane heads, rejected two-parent candidate, and canonical findings
+digest. Only a `completed_follow_up` run at those unchanged heads may bind the
+receipt to its run ID. The exact bound state is the Task adapter evidence for
+the lifecycle's one narrow zero-write promotion-waiver transition; it is not a
+general waiver-reopen token and contains no review text.
 
 Prompts use `task-implementer/prompt-v3`, with a maximum of 256 KiB. Generated
 metadata plus one meaningful `## Ask` is required. Known optional headings may

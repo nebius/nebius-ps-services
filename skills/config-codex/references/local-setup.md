@@ -257,9 +257,10 @@ continuity guidance only and does not define the marker's limits or lifecycle.
 
 The managed section must also permit agents to clean up temporary trees they
 created during the current task. Require the exact task-specific path to be
-resolved and validated under the system temporary directory first, use scoped
-non-forced deletion such as `find "$task_temp_dir" -depth -delete`, and never
-target the temporary root or an unresolved variable.
+resolved and validated under the system temporary directory first, then submit
+that resolved absolute descendant literally in scoped non-forced deletion such
+as `find /tmp/<task-owned-tree> -depth -delete`. Never target the temporary root
+or pass an unresolved variable.
 
 The managed section must include the nested-project instruction contract from
 `assets/AGENTS.md.template`: resolve the selected project, read every

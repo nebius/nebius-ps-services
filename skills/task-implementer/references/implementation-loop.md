@@ -576,7 +576,16 @@ latest lane head. Conflicts remain retained recovery state.
 
 Run nonmutating combined validation, integration `code-review`, and changed-
 surface checks in the exact candidate worktree. Promote only that candidate
-through expected-old compare-and-set. After promotion, fast-forward the same
-lane to the merge head, consume the pending range, release its repository
-claims, and rearm the lane. Never cherry-pick, rebase, squash, force, or call a
-public `$worktree` lifecycle action for a Task Implementer lane.
+through expected-old compare-and-set. A blocking review archives the exact
+candidate, releases only its clean temporary resources, leaves source and lane
+heads unchanged, and records a private correction receipt bound to those heads
+and the findings digest. Its completed-follow-up run binds the receipt during
+the first checkpointed `wave-plan`. That authenticated transition may reopen
+only the current zero-write `non-project` integration waiver into
+`reconciliation-required`; an ordinary or already-written waiver stays
+terminal. Run the correction serially whenever it shares an invariant or
+independence is uncertain, then repeat every candidate validation and review
+gate. After promotion, fast-forward the same lane to the merge head, consume
+the pending range, release its repository claims, and rearm the lane. Never
+cherry-pick, rebase, squash, force, or call a public `$worktree` lifecycle
+action for a Task Implementer lane.

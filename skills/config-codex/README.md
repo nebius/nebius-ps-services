@@ -138,9 +138,10 @@ in `troubleshoot` rather than the global file.
 
 The managed defaults permit cleanup of temporary trees created by the current
 task only after the exact task-specific path is resolved and validated under
-the system temporary directory. Use a scoped non-forced deletion such as
-`find "$task_temp_dir" -depth -delete`; do not target the temporary root or an
-unresolved variable.
+the system temporary directory. Submit that resolved absolute descendant
+literally in a scoped non-forced deletion such as
+`find /tmp/<task-owned-tree> -depth -delete`; do not target the temporary root
+or pass an unresolved variable.
 
 Do not treat `assets/config.toml.template` as desired state for existing
 machines. It is the create-only public-safe recovery baseline for a missing

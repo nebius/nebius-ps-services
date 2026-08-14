@@ -297,8 +297,11 @@ $worktree remove <generated-worktree-name>
 - A Task Implementer candidate rejected by combined review is archived by its
   exact SHA behind a private compare-and-set ref before only its clean temporary
   candidate resources and reservation are released. The source ref stays
-  unchanged and the pending lane becomes correction-ready; ordinary Worktree
-  integration has no review-rejection transition.
+  unchanged and the pending lane becomes correction-ready. An exact replay may
+  re-read that terminal receipt while the correction run has only a pending
+  generation checkpoint; it does not advance integration, finish the
+  checkpoint, or change either head. Ordinary Worktree integration has no
+  review-rejection transition.
 - Source or child movement, malformed state, wrong merge parents, failed
   validation, failed fast-forward, or uncertain cleanup fails closed and
   preserves evidence.

@@ -3084,13 +3084,31 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertEqual(repeated["status"], "correction-required")
         source_dirt.unlink()
-        correction = self.open_lane_generation(
-            cwd=lane_root / "skills",
-            workspace=self.root / "review-correction.json",
-            run_id="run-review-correction",
-            task_scope="skills",
-            expected_head=promoted,
-            claims=[],
+        correction_arguments = {
+            "cwd": lane_root / "skills",
+            "workspace": self.root / "review-correction.json",
+            "run_id": "run-review-correction",
+            "task_scope": "skills",
+            "expected_head": promoted,
+            "claims": [],
+        }
+        correction_preparation = self.prepare_lane_generation(
+            **correction_arguments
+        )
+        checkpoint_replay = wm.task_lane_integrate(
+            cwd=self.repo,
+            lane_id=str(lane["lane_id"]),
+            validated_head=None,
+            restart=False,
+            review_rejected_head=candidate,
+            review_findings_sha256="f" * 64,
+        )
+        self.assertEqual(checkpoint_replay["status"], "correction-required")
+        correction = wm.task_lane_generation_open(
+            **correction_arguments,
+            review_token=str(correction_preparation["review_token"]),
+            reviewed_tree=str(correction_preparation["candidate_tree"]),
+            reviewed_paths_sha256=str(correction_preparation["paths_sha256"]),
         )
         self.assertEqual(correction["generation"], 2)
         (lane_root / "skills" / "skill.txt").write_text(

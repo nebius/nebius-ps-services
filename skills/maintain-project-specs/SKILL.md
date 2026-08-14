@@ -131,7 +131,11 @@ completion.
 - Hooks are guardrails, not an absolute filesystem boundary. Proven material
   effects wholly outside the selected project pass through this lifecycle and
   remain subject to operating-system, Codex, destructive-action, and peer-hook
-  policies. Reject mixed, dynamic, ambiguous, detached, or authoritative
+  policies. The exact non-forced cleanup form
+  `find /tmp/<task-owned-tree> -depth -delete` is external only when its sole
+  submitted root is a literal absolute descendant of a recognized system
+  temporary root; task ownership and deletion safety remain separate policy
+  decisions. Reject mixed, dynamic, ambiguous, detached, or authoritative
   control-plane writes and audit unfinished state on the next session.
 
 ## Process
@@ -146,6 +150,11 @@ the optional committed `.codex/project-specs.json`.
 - If the work is genuinely read-only, documentation-only with no contract
   impact, or outside the selected project, use the `waive` lifecycle command
   with the narrow matching reason.
+- A zero-write `non-project` waiver created for Task Implementer public
+  integration may reopen only when the canonical Task adapter authenticates a
+  review-correction receipt bound to the unchanged source/lane heads and exact
+  completed-follow-up run. That transition enters `reconciliation-required`;
+  never reopen another waiver or accept caller-authored correction evidence.
 - If one command would mutate more than one project scope, stop before mutation
   and split or clarify the scopes.
 
@@ -301,6 +310,10 @@ A successful material tool admitted before a concurrent plan or terminal
 transition may report completion afterward. Its PostToolUse accounting returns
 the lifecycle to `reconciliation-required`, advances the epoch, and invalidates
 the later evidence; reconcile and plan again rather than bypassing that state.
+An apply action that does not produce independently verified final
+project-instructions state follows the same conservative recovery: invalidate
+the plan and return to reconciliation so the decision input can be corrected
+in the same run. Never leave an unverified apply terminally stuck in `planned`.
 An initial Stop from `implementation-open` performs the same owner-controlled
 reconciliation opening without advancing the write epoch, so its generated
 continuation can reconcile the canonical specs immediately even when no new

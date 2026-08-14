@@ -637,11 +637,16 @@ compare-and-set. A `REQUEST CHANGES` review is not treated as a Git conflict:
 Task Implementer binds the findings digest to the exact candidate, archives
 that immutable commit privately, removes only the exact clean candidate
 resources, releases the reservation, and reopens the pending lane for a
-correction generation. The same explicit integration workflow owns that
-correction and repeats validation and review before promotion. Merge conflicts
-and uncertain state are retained. Review rejection may preserve unrelated
-primary dirt because it neither stages nor advances the source; candidate
-creation and promotion still require a completely clean primary. Success consumes all pending generations,
+correction generation. An owner-only receipt binds the rejected candidate,
+findings digest, and unchanged source/lane heads to the first checkpointed
+`wave-plan` of that completed-follow-up run. Only that exact transition may
+reopen the current zero-write `non-project` promotion waiver for normal
+reconciliation; other waived lifecycle state remains terminal. The same
+explicit integration workflow owns that correction and repeats validation and
+review before promotion. Merge conflicts and uncertain state are retained.
+Review rejection may preserve unrelated primary dirt because it neither stages
+nor advances the source; candidate creation and promotion still require a
+completely clean primary. Success consumes all pending generations,
 releases their claims, and rearms the same lane at the merge head.
 
 ## Recommended Post-Run Workflow

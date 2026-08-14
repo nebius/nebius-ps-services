@@ -1833,10 +1833,24 @@ class HookTestCase(unittest.TestCase):
 
     def test_pretool_denies_dangerous_rm(self) -> None:
         self.active_run()
-        result = run_hook(
-            PRE_TOOL, self.pre_payload("Bash", "rm -rf /"), self.codex_home
-        )
-        self.assert_denied(result, "recursive removal")
+        for command, reason in (
+            ("rm -rf /", "recursive removal"),
+            ("find / -depth -delete", "filesystem root"),
+            ("find /./ -depth -delete", "filesystem root"),
+            ("find /tmp/.. -depth -delete", "filesystem root"),
+            ('find "/" -depth -delete', "filesystem root"),
+            ("find // -depth -delete", "filesystem root"),
+            ("find / -depth -{delete,print}", "filesystem root"),
+            ("find / -depth -{d{elete,ummy},print}", "filesystem root"),
+            ("find / -depth -{de,xx}{lete,yy}", "filesystem root"),
+            ("find / -depth {-,x}delete", "filesystem root"),
+            ("find / -depth -del*", "filesystem root"),
+        ):
+            with self.subTest(command=command):
+                result = run_hook(
+                    PRE_TOOL, self.pre_payload("Bash", command), self.codex_home
+                )
+                self.assert_denied(result, reason)
 
     def test_pretool_denies_recursive_ownership_shell_command(self) -> None:
         self.active_run()

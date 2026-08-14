@@ -6,6 +6,19 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed the project-contract lifecycle false-positive on validated task-owned
+  temporary cleanup. The exact literal
+  `find /tmp/<task-owned-tree> -depth -delete` form now reports its sole
+  system-temp descendant as a recursive external target, while temporary roots,
+  project or control-plane coverage, symlinks, dynamic paths, globs, multiple
+  roots, and alternate `find` actions remain fail-closed. Managed instructions
+  now require submitting the resolved literal so they match the hook parser;
+  independent destructive-action policy still owns deletion approval.
+- Fixed project-contract terminal decision recovery so an apply command that
+  returns without independently verified final state conservatively invalidates
+  the plan, advances the write epoch, and reopens reconciliation. The
+  current-session decision can then be corrected and replanned instead of
+  remaining irrecoverably stuck in `planned`.
 - Fixed Task Implementer promotion-pending resource recovery so a missing
   registered integration checkout can be safely rehydrated when immutable task
   history contains both merged corrections and superseded no-op predecessors.
@@ -33,6 +46,15 @@ All notable changes to the reusable Codex skills are tracked here.
   Atomic normal launches now pin medium reasoning effort and recovery-only
   launches pin low effort so a single worker turn cannot consume the hard
   heartbeat-staleness lease and cause a false recovery loop.
+  Review rejection now also records an owner-only receipt for the exact
+  rejected candidate, findings digest, and unchanged source/lane heads. Its
+  completed-follow-up checkpoint may reopen only the current zero-write
+  `non-project` promotion waiver for normal reconciliation, preventing the
+  documented same-invocation correction from deadlocking in terminal waived
+  lifecycle state. The Worktree owner can idempotently re-read an already
+  terminal rejection while that correction has only a pending generation
+  checkpoint, allowing interrupted receipt publication to recover without
+  advancing integration or changing either head.
   A sequential child exit now succeeds only when the assignment's exact
   immutable result exists, preventing a start-only or recovery-only exit from
   being misreported as completed work.

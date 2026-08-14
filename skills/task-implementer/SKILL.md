@@ -381,9 +381,15 @@ and private result record.
    rejection transition. That transition archives the candidate behind an
    expected-old internal ref, removes only its clean temporary worktree and
    branch, releases the integration reservation, leaves the source unchanged,
-   and returns the lane to `pending`. The same explicit `integrate` invocation
-   then appends a correction generation and repeats this workflow; do not make
-   the user manually repair private state or invoke another public action.
+   and returns the lane to `pending`. Task Implementer also records one
+   owner-only correction receipt bound to the exact lane head, source head,
+   rejected candidate, and findings digest. The first `wave-plan` for the
+   completed-follow-up run binds that receipt to its exact run and may reopen
+   only the same turn's zero-write `non-project` promotion waiver as
+   `reconciliation-required`; no other waived lifecycle can reopen. The same
+   explicit `integrate` invocation then appends a correction generation and
+   repeats this workflow; do not make the user manually repair private state
+   or invoke another public action.
    Because review rejection never advances or stages the source checkout, it
    may preserve unrelated primary dirt; candidate creation and promotion still
    require a completely clean source.

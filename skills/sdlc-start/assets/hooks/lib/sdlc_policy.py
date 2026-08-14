@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+from fnmatch import fnmatchcase
+import os
 import re
 import shlex
 from datetime import datetime, timezone
@@ -122,8 +124,70 @@ def contains_secret(text: str) -> bool:
     return False
 
 
+def _literal_path_is_filesystem_root(value: str) -> bool:
+    if not value.startswith("/") or any(
+        marker in value for marker in ("$", "`", "*", "?", "[", "]", "{", "}")
+    ):
+        return False
+    try:
+        canonical = f"/{value.lstrip('/')}" if value.startswith("//") else value
+        return Path(os.path.normpath(canonical)) == Path("/")
+    except (OSError, ValueError):
+        return False
+
+
+def _token_may_expand_to_find_delete(token: str) -> bool:
+    return fnmatchcase("-delete", token) or (
+        token != "{}" and any(marker in token for marker in "{}")
+    )
+
+
+def _find_deletes_filesystem_root(command: str) -> bool:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+
+    for find_index, token in enumerate(tokens):
+        if Path(token).name != "find":
+            continue
+        arguments = tokens[find_index + 1 :]
+        boundary = next(
+            (
+                index
+                for index, argument in enumerate(arguments)
+                if argument and all(character in ";&|(){}" for character in argument)
+            ),
+            len(arguments),
+        )
+        arguments = arguments[:boundary]
+        if not any(_token_may_expand_to_find_delete(arg) for arg in arguments):
+            continue
+        index = 0
+        while index < len(arguments):
+            argument = arguments[index]
+            if argument in {"-H", "-L", "-P"} or argument.startswith("-O"):
+                index += 1
+                continue
+            if argument == "-D":
+                index += 2
+                continue
+            if argument == "--":
+                index += 1
+            break
+        while index < len(arguments) and not arguments[index].startswith("-"):
+            if _literal_path_is_filesystem_root(arguments[index]):
+                return True
+            index += 1
+    return False
+
+
 def dangerous_shell_reason(command: str) -> str | None:
     normalized = re.sub(r"\s+", " ", command.strip())
+    if _find_deletes_filesystem_root(command):
+        return "Blocked: deleting from filesystem root is unsafe."
     patterns = [
         (
             r"\b(curl|wget)\b.+\|\s*(sh|bash|zsh)\b",
@@ -135,10 +199,6 @@ def dangerous_shell_reason(command: str) -> str | None:
         (
             r"\brm\s+-[^\n;]*r[^\n;]*f[^\n;]*(?:/\s*$|/\s|~(?:/|\s|$)|\.\.(?:/|\s|$))",
             "Blocked: destructive recursive removal outside a known temp path.",
-        ),
-        (
-            r"\bfind\s+/\s+.*-delete\b",
-            "Blocked: deleting from filesystem root is unsafe.",
         ),
         (r"\bdd\s+if=", "Blocked: dd is outside the SDLC hook policy."),
         (r"\bmkfs(\.|\s|$)", "Blocked: filesystem formatting is unsafe."),

@@ -407,6 +407,59 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             ],
         )
 
+    def test_integration_review_correction_receipt_binds_one_follow_up(self) -> None:
+        workspace = json.loads(self.workspace.read_text(encoding="utf-8"))
+        result = {
+            "status": "correction-required",
+            "lane_id": self.lane_id,
+            "source_head": self.initial,
+            "lane_head": self.initial,
+            "review_rejected_head": "a" * 40,
+        }
+        recorded = task_lanes.record_integration_review_correction(
+            workspace, result, "b" * 64
+        )
+        receipt_path = Path(str(workspace["runs_root"])).parent / (
+            "integration-review-correction.json"
+        )
+        self.assertEqual(recorded["bound_run_id"], None)
+        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+
+        follow_up = self.run_dir.parent / "run-follow-up"
+        follow_up.mkdir(mode=0o700)
+        (follow_up / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run-follow-up",
+                    "revisions": [{"kind": "completed_follow_up"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertTrue(
+            task_lanes.bind_integration_review_correction(
+                workspace,
+                run_id="run-follow-up",
+                run_dir=follow_up,
+                lane_head=self.initial,
+                source_head=self.initial,
+            )
+        )
+        bound = task_lanes.load_integration_review_correction(
+            workspace, required=True
+        )
+        assert bound is not None
+        self.assertEqual(bound["bound_run_id"], "run-follow-up")
+        self.assertFalse(
+            task_lanes.integration_review_correction_matches(
+                workspace,
+                run_id="run-other",
+                run_dir=follow_up,
+                lane_head=self.initial,
+                source_head=self.initial,
+            )
+        )
+
     def test_non_run_adapters_never_checkpoint_an_idle_dirty_lane(self) -> None:
         before = git("rev-parse", "HEAD", cwd=self.outer)
         dirty = self.outer / "ordinary-idle-dirt.txt"

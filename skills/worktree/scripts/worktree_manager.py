@@ -5495,6 +5495,20 @@ def task_lane_integrate(
             lane = load_lane(primary, lane_id)
             assert lane is not None
             manifest, managed = _task_lane_live(primary, lane)
+            if (
+                review_rejected_head is not None
+                and lane["state"] == "pending"
+                and lane["integration"] is None
+            ):
+                assert review_findings_sha256 is not None
+                return _task_lane_reject_candidate_review(
+                    primary,
+                    lane,
+                    manifest,
+                    managed,
+                    candidate_head=review_rejected_head,
+                    findings_sha256=review_findings_sha256,
+                )
             if load_checkpoint(primary, lane_id, required=False) is not None:
                 raise WorktreeError(
                     "Task Implementer generation checkpoint must finish before "

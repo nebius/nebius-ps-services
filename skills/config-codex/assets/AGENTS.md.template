@@ -43,9 +43,10 @@
   verify with the narrowest relevant checks before broadening.
 - Agents may clean up temporary trees they created during the current task.
   Resolve and validate the exact task-specific path under the system temporary
-  directory first, use a scoped non-forced deletion such as
-  `find "$task_temp_dir" -depth -delete`, and never target the temporary root or
-  an unresolved variable.
+  directory first, then submit that resolved absolute descendant literally in
+  a scoped non-forced deletion such as
+  `find /tmp/<task-owned-tree> -depth -delete`. Never target the temporary root
+  or pass an unresolved variable.
 
 ## Live Product Validation
 

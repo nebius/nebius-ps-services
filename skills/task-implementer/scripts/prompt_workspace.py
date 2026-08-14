@@ -36,7 +36,11 @@ from prompt_workspace_core import (  # noqa: E402
     verify_workspace_for_removal,
 )
 from prompt_workspace_contract_delta import adopt_contract_delta  # noqa: E402
-from prompt_workspace_lanes import integrate_lane, remove_lane  # noqa: E402
+from prompt_workspace_lanes import (  # noqa: E402
+    integrate_lane,
+    record_integration_review_correction,
+    remove_lane,
+)
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
 from prompt_workspace_interop import verify_workspace_anchor  # noqa: E402
 from prompt_workspace_recovery import (  # noqa: E402
@@ -912,13 +916,21 @@ def main(argv: list[str]) -> int:
                 args.project_path, args.codex_home
             )
             workspace = verify_workspace(workspace_path)
-            result = integrate_lane(
-                workspace,
-                validated_head=args.validated_head,
-                restart=args.restart,
-                review_rejected_head=args.review_rejected_head,
-                review_findings_sha256=args.review_findings_sha256,
+            runs_root = Path(
+                required_string(workspace, "runs_root", "workspace manifest")
             )
+            with scope_lock(runs_root.parent):
+                result = integrate_lane(
+                    workspace,
+                    validated_head=args.validated_head,
+                    restart=args.restart,
+                    review_rejected_head=args.review_rejected_head,
+                    review_findings_sha256=args.review_findings_sha256,
+                )
+                if result.get("status") == "correction-required":
+                    record_integration_review_correction(
+                        workspace, result, args.review_findings_sha256
+                    )
         elif args.command == "remove":
             workspace_path = project_workspace_manifest(
                 args.project_path, args.codex_home

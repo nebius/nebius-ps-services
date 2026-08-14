@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import fcntl
+from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any, NamedTuple
 
 
@@ -655,6 +657,44 @@ def _record_material_write(path: Path) -> None:
             continue
         return
     raise HookError("project spec lifecycle write contention did not converge")
+
+
+def _record_task_review_correction(path: Path) -> None:
+    """Reopen one exact non-project integration waiver for a bound correction."""
+
+    for _attempt in range(128):
+        state = _load(path)
+        if (
+            state is None
+            or state.get("phase") != "waived"
+            or state.get("waiver") != "non-project"
+            or int(state.get("write_epoch", 0)) != 0
+        ):
+            raise HookError(
+                "Task Implementer review correction has no eligible integration waiver"
+            )
+        state["phase"] = "reconciliation-required"
+        state["waiver"] = None
+        state["write_epoch"] = 1
+        for field in (
+            "receipt_sha256",
+            "requirements_sha256",
+            "design_sha256",
+            "rules_path",
+            "rules_sha256",
+            "planned_write_epoch",
+        ):
+            state[field] = None
+        try:
+            _write(path, state)
+        except HookError as error:
+            if str(error) != "project spec lifecycle changed before transition":
+                raise
+            continue
+        return
+    raise HookError(
+        "Task Implementer review correction lifecycle transition did not converge"
+    )
 
 
 def _open_stop_reconciliation(path: Path) -> dict[str, Any] | None:
@@ -1516,6 +1556,7 @@ def _task_implementer_impact(command: str, project: Path) -> dict[str, Any] | No
         "outer_project_root",
         "command_sha256",
         "checkpoint_head",
+        "review_correction",
     }
     outer = evidence.get("outer_project_root")
     if (
@@ -1523,6 +1564,7 @@ def _task_implementer_impact(command: str, project: Path) -> dict[str, Any] | No
         or evidence.get("action") != "wave-plan"
         or not isinstance(outer, str)
         or Path(outer).resolve(strict=False) != project
+        or type(evidence.get("review_correction")) is not bool
         or (
             evidence.get("checkpoint_head") is not None
             and (
@@ -1980,6 +2022,67 @@ def _find_is_read_only(command: list[str]) -> bool:
     return True
 
 
+def _token_may_expand_to_find_delete(token: str) -> bool:
+    return fnmatchcase("-delete", token) or (
+        token != "{}" and any(marker in token for marker in "{}")
+    )
+
+
+def _segment_contains_material_find(tokens: list[str]) -> bool:
+    """Fail closed for a mutating find token hidden by shell grammar."""
+
+    for index, token in enumerate(tokens):
+        executable = token.lstrip("({").rstrip(")}")
+        if Path(executable).name != "find":
+            continue
+        raw_arguments = tokens[index + 1 :]
+        if any(_token_may_expand_to_find_delete(arg) for arg in raw_arguments):
+            return True
+        command = [
+            "find",
+            *(argument.rstrip(")}") for argument in raw_arguments),
+        ]
+        if not _find_is_read_only(command):
+            return True
+    return False
+
+
+def _exact_find_delete_root(arguments: list[str]) -> str | None:
+    """Return the sole literal system-temp descendant for exact safe cleanup."""
+
+    if len(arguments) != 3 or arguments[1:] != ["-depth", "-delete"]:
+        return None
+    root_text = arguments[0]
+    if any(character in root_text for character in "*?[]{}"):
+        return None
+    root = Path(root_text)
+    if not root.is_absolute() or ".." in root.parts:
+        return None
+    lexical_root = Path(os.path.abspath(root))
+    resolved_root = root.resolve(strict=False)
+    for temporary_root in (
+        Path(tempfile.gettempdir()),
+        Path("/tmp"),
+        Path("/private/tmp"),
+    ):
+        if not temporary_root.is_dir():
+            continue
+        lexical_temporary_root = Path(os.path.abspath(temporary_root))
+        resolved_temporary_root = temporary_root.resolve(strict=False)
+        for accepted_root in {
+            lexical_temporary_root,
+            resolved_temporary_root,
+        }:
+            try:
+                relative = lexical_root.relative_to(accepted_root)
+            except ValueError:
+                continue
+            expected_resolved = resolved_temporary_root / relative
+            if relative.parts and resolved_root == expected_resolved:
+                return root_text
+    return None
+
+
 def _shell_segment_is_material(tokens: list[str]) -> bool:
     executable, command = _segment_executable(tokens)
     if not executable:
@@ -2043,7 +2146,11 @@ def _potential_write(tool: str, tool_input: Any) -> bool:
         return True
     if not parsed.segments:
         return False
-    return any(_shell_segment_is_material(list(segment)) for segment in parsed.segments)
+    return any(
+        _shell_segment_is_material(list(segment))
+        or _segment_contains_material_find(list(segment))
+        for segment in parsed.segments
+    )
 
 
 def _effective_cwd(tool_input: Any, project: Path) -> Path:
@@ -2250,6 +2357,15 @@ def _segment_effect_targets(
         values, has_values = _simple_operands(arguments)
         operands = values if len(values) >= 2 else []
         complete = has_values and bool(operands)
+    elif executable == "find":
+        find_root = (
+            _exact_find_delete_root(arguments)
+            if command_tokens and Path(command_tokens[0]).name == "find"
+            else None
+        )
+        operands = [find_root] if find_root is not None else []
+        complete = find_root is not None
+        recursive = complete
     elif executable == "sort":
         for index, argument in enumerate(arguments):
             if argument == "-o" and index + 1 < len(arguments):
@@ -2281,6 +2397,12 @@ def _effect_targets(
     if tool == "Bash":
         parsed = _parse_shell(_command(tool_input))
         if parsed is None:
+            return [], False, False
+        if len(parsed.segments) != 1 and any(
+            _segment_executable(list(segment))[0] == "find"
+            and _shell_segment_is_material(list(segment))
+            for segment in parsed.segments
+        ):
             return [], False, False
         targets: list[Path] = []
         complete = True
@@ -2848,6 +2970,13 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
             )
         if phase in {"implementation-open", "reconciliation-required"}:
             return {}
+        if (
+            phase == "waived"
+            and state.get("waiver") == "non-project"
+            and int(state.get("write_epoch", 0)) == 0
+            and task_impact.get("review_correction") is True
+        ):
+            return {}
         return _deny(f"Task Implementer wave-plan is not valid in phase {phase}.")
     if _canonical_spec_intent_to_add(tool, tool_input, project):
         if phase in {"planning-required", "reconciliation-required"}:
@@ -3033,7 +3162,14 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
         )
     if coordinator is not None:
         if coordinator == ("project-instructions", "apply") and not failed:
-            _verified_apply_state(_command(tool_input), project, state_path)
+            try:
+                _verified_apply_state(_command(tool_input), project, state_path)
+            except HookError:
+                # Apply may have changed the selected target before final state
+                # verification failed. Conservatively invalidate the plan and
+                # make its decision input authorable again in reconciliation.
+                _record_material_write(state_path)
+                raise
             state = _load(state_path)
             if state is None or state.get("phase") != "planned":
                 raise HookError(
@@ -3091,6 +3227,16 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
             )
         if state.get("phase") == "reconciliation-required":
             return {}
+        if (
+            state.get("phase") == "waived"
+            and state.get("waiver") == "non-project"
+            and task_impact.get("review_correction") is True
+        ):
+            _record_task_review_correction(state_path)
+            return _context(
+                "PostToolUse",
+                "Task Implementer integration review correction opened; reconcile the selected lane contract before dispatch.",
+            )
         raise HookError(
             "Task Implementer wave-plan completed outside an implementation lifecycle"
         )

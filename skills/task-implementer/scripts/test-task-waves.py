@@ -1764,6 +1764,7 @@ class WorktreeWaveTest(unittest.TestCase):
 
         before = pw.authorize_lifecycle_impact(self.workspace, self.run_id, command)
         self.assertIsNone(before["checkpoint_head"])
+        self.assertFalse(before["review_correction"])
         pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
         after = pw.authorize_lifecycle_impact(self.workspace, self.run_id, command)
 
@@ -1771,6 +1772,7 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(after["action"], "wave-plan")
         self.assertEqual(after["outer_project_root"], str(self.scope))
         self.assertRegex(str(after["checkpoint_head"]), r"^[0-9a-f]{40,64}$")
+        self.assertFalse(after["review_correction"])
         self.assertEqual(before["command_sha256"], after["command_sha256"])
 
         self._write_resume_intent("wave-plan", {"capacity": 1})

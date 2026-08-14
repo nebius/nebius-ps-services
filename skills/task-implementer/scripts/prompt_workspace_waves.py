@@ -85,7 +85,11 @@ from prompt_workspace_interop import (
     record_resource,
     release_interop,
 )
-from prompt_workspace_lanes import claim_generation
+from prompt_workspace_lanes import (
+    bind_integration_review_correction,
+    claim_generation,
+    integration_review_correction_matches,
+)
 from prompt_workspace_runs import (
     _activate_next_queued_prompt_unlocked,
     read_handoff_text,
@@ -1649,6 +1653,25 @@ def plan_waves(
             _existing_run_interop(manifest_path, workspace, run_dir, existing)
             return existing
         base, tasks, claims = _run_checkpoint_inputs(workspace, run_dir)
+        primary = Path(
+            required_string(workspace, "primary_root", "workspace manifest")
+        )
+        source_head = _git_text(
+            primary,
+            [
+                "rev-parse",
+                "--verify",
+                required_string(workspace, "source_ref", "workspace manifest"),
+            ],
+            "read the integration source ref",
+        )
+        bind_integration_review_correction(
+            workspace,
+            run_id=run_id,
+            run_dir=run_dir,
+            lane_head=base,
+            source_head=source_head,
+        )
         anchor = inspect_anchor(workspace)
         if anchor.get("status") == "task-lane":
             promotion: dict[str, object] = {
@@ -2930,6 +2953,7 @@ def authorize_lifecycle_impact(
 
     workspace = verify_workspace(manifest_path)
     run_dir = _run_dir(workspace, run_id)
+    verify_run(workspace, run_id, None)
     try:
         tokens = shlex.split(command)
     except ValueError as error:
@@ -3018,6 +3042,29 @@ def authorize_lifecycle_impact(
                 "resume-controlled wave-plan binding is invalid",
             )
     checkpoint = load_checkpoint_receipt(run_dir, required=False)
+    _base, _tasks, claims = _run_checkpoint_inputs(workspace, run_dir)
+    preparation = load_checkpoint_preparation(
+        run_dir, claims=claims, required=False
+    )
+    lane_head = (
+        str(checkpoint["initial_head"])
+        if checkpoint is not None
+        else (
+            str(preparation["before_head"])
+            if preparation is not None
+            else ""
+        )
+    )
+    primary = Path(required_string(workspace, "primary_root", "workspace manifest"))
+    source_head = _git_text(
+        primary,
+        [
+            "rev-parse",
+            "--verify",
+            required_string(workspace, "source_ref", "workspace manifest"),
+        ],
+        "read the integration source ref",
+    )
     return {
         "status": "authorized",
         "action": "wave-plan",
@@ -3029,6 +3076,14 @@ def authorize_lifecycle_impact(
         "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
         "checkpoint_head": (
             str(checkpoint["initial_head"]) if checkpoint is not None else None
+        ),
+        "review_correction": bool(lane_head)
+        and integration_review_correction_matches(
+            workspace,
+            run_id=run_id,
+            run_dir=run_dir,
+            lane_head=lane_head,
+            source_head=source_head,
         ),
     }
 
