@@ -5,6 +5,62 @@ multiple unfamiliar technologies, unclear architecture choices, non-trivial
 `system-design-rules` decision review, or any design that will become a
 committed artifact.
 
+## AI Application Control-Flow Rule
+
+For each AI-enabled capability, use the least-agentic sufficient level:
+
+1. **Direct model call**: one model request can solve the task.
+2. **Deterministic workflow containing model calls**: application code knows
+   the sequence rules and owns every transition and continuation condition;
+   model calls are explicit steps inside that workflow.
+3. **Agent**: the model must choose an action, continuation, or next step from
+   observations, including an unknown step count controlled by the model, or
+   the task needs a model-driven observe-act-observe loop.
+
+Use this decision table:
+
+| Question | If yes | If no |
+| --- | --- | --- |
+| Can one model request solve the task? | Direct model call | Continue |
+| Does application code own the operation and continuation rules? | Deterministic workflow | Continue |
+| Must the model choose which application tool or action to use? | Agent candidate | Normal workflow |
+| Must the model decide the next step from previous results? | Agent | Workflow |
+| Must the model decide whether an unknown-count loop continues? | Agent | Workflow |
+| Does the task need a model-driven observe-act-observe loop? | Agent | Direct call or workflow |
+| Does it require delegation between specialists? | An agent runtime may help | Probably unnecessary |
+| Does it require persistent agent sessions? | An agent runtime may help | Direct API may suffice |
+| Is latency or cost predictability critical? | Prefer direct call or workflow | Agent may be acceptable |
+
+Apply this tree in order:
+
+```text
+New task
+  -> Can one model call solve it?
+       yes -> direct model API
+       no  -> Do we know the steps?
+                yes -> deterministic workflow, with model calls where needed
+                no  -> Does the model need to choose actions or next steps?
+                         yes -> agent
+                         no  -> deterministic workflow
+```
+
+The application architecture can use all three levels at once:
+
+```text
+Application
+  -> deterministic logic and known workflows
+  -> direct model tasks
+  -> agentic tasks
+```
+
+Keep APIs, PostgreSQL or other authoritative state, RBAC, approvals, tool
+authorization, and known business transitions outside model discretion.
+Delegation and persistent sessions help choose an agent runtime only after the
+work requires agentic control flow. Tool use or several model calls alone do
+not require an agent. Classify orchestration and durability separately: a graph
+or durable workflow may wrap a direct call, deterministic workflow, agent, or
+mixture, and does not itself create model autonomy.
+
 ## Phase Checklist
 
 ### 1. Understand Requirements
@@ -101,9 +157,11 @@ reconsider them, state that the design follows the fixed stack and skip
 
 Use `ai-stack` for undecided or reconsidered AI-specific model access, training,
 inference, agent, durability, interoperability, retrieval, evaluation, safety,
-or operations choices. Pass workload contracts, data and model constraints,
-quality and safety gates, target environment, scale, cost, and owners. Preserve
-its component status and evidence classifications.
+or operations choices. First pass the direct-call, deterministic-workflow, or
+agent classification for every AI-enabled capability. Then pass workload
+contracts, data and model constraints, quality and safety gates, target
+environment, scale, cost, and owners. Preserve its component status and
+evidence classifications.
 
 When both scopes are open, `app-stack` owns the surrounding product stack and
 `ai-stack` owns the AI layers. Keep both handoffs scoped and let `design`
@@ -206,6 +264,7 @@ Design Review:
 - `research` used/skipped: ...
 - `app-stack` used/skipped: ...
 - `ai-stack` used/skipped: ...
+- AI behavior classification: direct call / deterministic workflow / agent ...
 - selected stack or fixed-stack boundary: ...
 - `system-design-rules` used/skipped: ...
 - Checklist findings that changed the design: ...

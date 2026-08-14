@@ -1935,6 +1935,37 @@ def _archive_failed_worker_dirt(
     return archive_commit
 
 
+def _blocked_replan_failed_ids(wave: dict[str, object]) -> list[str]:
+    task_states = wave.get("task_states")
+    batches = wave.get("batches")
+    active_batch_index = wave.get("active_batch_index")
+    if not isinstance(task_states, dict) or not isinstance(batches, list):
+        raise PromptWorkspaceError(
+            "STEERING_QUEUED_AFTER_WAVE",
+            "blocked correction replanning requires one exact failed batch",
+        )
+    failed_ids = [
+        str(task_id) for task_id, state in task_states.items() if state == "failed"
+    ]
+    if (
+        not failed_ids
+        or not isinstance(active_batch_index, int)
+        or active_batch_index < 0
+        or active_batch_index >= len(batches)
+        or not isinstance(batches[active_batch_index], list)
+        or set(batches[active_batch_index]) != set(failed_ids)
+        or any(
+            state not in {"merged", "failed", "superseded"}
+            for state in task_states.values()
+        )
+    ):
+        raise PromptWorkspaceError(
+            "STEERING_QUEUED_AFTER_WAVE",
+            "blocked correction replanning requires one exact failed batch",
+        )
+    return failed_ids
+
+
 def replan_waves(
     manifest_path: Path,
     run_id: str,
@@ -1980,25 +2011,9 @@ def replan_waves(
         interop = _existing_run_interop(manifest_path, workspace, run_dir, coordinator)
         _validate_wave_git_identity(manifest_path, workspace, run_id, active)
         if active["status"] == "blocked":
-            failed_ids = [
-                str(task_id)
-                for task_id, state in active["task_states"].items()
-                if state == "failed"
-            ]
-            active_batch_index = active.get("active_batch_index")
-            if (
-                not failed_ids
-                or not isinstance(active_batch_index, int)
-                or set(active["batches"][active_batch_index]) != set(failed_ids)
-                or any(
-                    state not in {"merged", "failed"}
-                    for state in active["task_states"].values()
-                )
-            ):
-                raise PromptWorkspaceError(
-                    "STEERING_QUEUED_AFTER_WAVE",
-                    "blocked correction replanning requires one exact failed batch",
-                )
+            failed_ids = _blocked_replan_failed_ids(active)
+            active_batch_index = active["active_batch_index"]
+            assert isinstance(active_batch_index, int)
             repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
             for task_id in failed_ids:
                 assignment = _validated_assignment(
@@ -2450,14 +2465,57 @@ def _nul_git_paths(repo: Path, arguments: list[str], label: str) -> set[str]:
 
 
 def _prepared_contract_delta_is_safe(integration: Path, project: Path) -> bool:
+    allowed = _prepared_contract_paths(integration, project)
+    if allowed is None:
+        return False
+    staged, unstaged, untracked, deleted = _prepared_contract_status(integration)
+    return (
+        not unstaged
+        and not untracked
+        and not deleted
+        and (not staged or staged == allowed)
+        and all(
+            not (integration / relative).is_symlink()
+            for relative in allowed
+        )
+    )
+
+
+def _prepared_contract_stage_delta_is_safe(
+    integration: Path, project: Path
+) -> bool:
+    allowed = _prepared_contract_paths(integration, project)
+    if allowed is None:
+        return False
+    staged, unstaged, untracked, deleted = _prepared_contract_status(integration)
+    return (
+        not untracked
+        and not deleted
+        and not (staged & unstaged)
+        and staged | unstaged == allowed
+        and all(
+            not (integration / relative).is_symlink()
+            for relative in allowed
+        )
+    )
+
+
+def _prepared_contract_paths(
+    integration: Path, project: Path
+) -> set[str] | None:
     try:
         relative_project = project.resolve().relative_to(integration.resolve())
     except ValueError:
-        return False
-    allowed = {
+        return None
+    return {
         (relative_project / "docs" / "requirements.md").as_posix(),
         (relative_project / "docs" / "design.md").as_posix(),
     }
+
+
+def _prepared_contract_status(
+    integration: Path,
+) -> tuple[set[str], set[str], set[str], set[str]]:
     staged = _nul_git_paths(
         integration,
         ["diff", "--cached", "--no-renames", "--name-only", "-z", "--"],
@@ -2486,17 +2544,33 @@ def _prepared_contract_delta_is_safe(integration: Path, project: Path) -> bool:
         ],
         "inspect deleted contract paths",
     )
+    return staged, unstaged, untracked, deleted
+
+
+def _prepared_contract_commit_is_safe(
+    integration: Path,
+    project: Path,
+    base_commit: str,
+    contract_commit: str,
+) -> bool:
+    allowed = _prepared_contract_paths(integration, project)
     return (
-        not unstaged
-        and not untracked
-        and not deleted
-        and (not staged or staged == allowed)
-        and all(
-            not (integration / relative).is_symlink()
-            for relative in allowed
-            if (integration / relative).exists()
-            or (integration / relative).is_symlink()
+        allowed is not None
+        and _clean(integration)
+        and set(_changed_paths(integration, base_commit, contract_commit)) == allowed
+        and _git_text(
+            integration,
+            ["rev-list", "--count", f"{base_commit}..{contract_commit}"],
+            "count prepared contract commits",
         )
+        == "1"
+        and _git_text(
+            integration,
+            ["rev-parse", f"{contract_commit}^"],
+            "inspect prepared contract parent",
+        )
+        == base_commit
+        and all(not (integration / relative).is_symlink() for relative in allowed)
     )
 
 
@@ -2598,7 +2672,11 @@ def _promotion_coordinator_commit_is_safe(
 
 
 def _active_integration_project(
-    manifest_path: Path, workspace: dict[str, object], run_id: str
+    manifest_path: Path,
+    workspace: dict[str, object],
+    run_id: str,
+    *,
+    allow_unstaged_contract: bool = False,
 ) -> tuple[Path, Path, dict[str, object]]:
     run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
     _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
@@ -2633,8 +2711,22 @@ def _active_integration_project(
             )
         )
     elif integrated_head is None:
-        expected_head = wave["base_commit"]
-        delta_is_safe = _prepared_contract_delta_is_safe(integration, project)
+        prepared_contract = wave.get("contract_commit")
+        if isinstance(prepared_contract, str):
+            expected_head = prepared_contract
+            delta_is_safe = _prepared_contract_commit_is_safe(
+                integration,
+                project,
+                str(wave["base_commit"]),
+                prepared_contract,
+            )
+        else:
+            expected_head = wave["base_commit"]
+            delta_is_safe = (
+                _prepared_contract_stage_delta_is_safe(integration, project)
+                if allow_unstaged_contract
+                else _prepared_contract_delta_is_safe(integration, project)
+            )
     else:
         adopted_contract_head = active_contract_delta_head(
             workspace, run_dir, coordinator, wave
@@ -2681,9 +2773,6 @@ def authorize_project_agent_lifecycle(
             "EXECUTION_STATE_INVALID", "project-agent command is not canonical"
         )
     workspace = verify_workspace(manifest_path)
-    run_dir, project, _wave = _active_integration_project(
-        manifest_path, workspace, run_id
-    )
     try:
         tokens = shlex.split(command)
     except ValueError as error:
@@ -2691,9 +2780,19 @@ def authorize_project_agent_lifecycle(
             "EXECUTION_STATE_INVALID", "project-agent command is malformed"
         ) from error
     task_helper = Path(__file__).resolve().with_name("prompt_workspace.py")
+    coordinator_stage = (
+        _trusted_python_command(tokens, task_helper)
+        and tokens[2] == "coordinator-stage"
+    )
+    run_dir, project, _wave = _active_integration_project(
+        manifest_path,
+        workspace,
+        run_id,
+        allow_unstaged_contract=coordinator_stage,
+    )
     if (
         _trusted_python_command(tokens, task_helper)
-        and tokens[2] == "coordinator-commit"
+        and tokens[2] in {"coordinator-stage", "coordinator-commit"}
     ):
         flags = _exact_command_flags(tokens, boolean_flags={"--json"})
         if (
@@ -2708,14 +2807,14 @@ def authorize_project_agent_lifecycle(
         ):
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID",
-                "coordinator commit command flags are invalid",
+                "coordinator contract command flags are invalid",
             )
         outer_project = Path(
             required_string(workspace, "source_root", "workspace manifest")
         ).resolve()
         return {
             "status": "authorized",
-            "action": "coordinator-commit",
+            "action": tokens[2],
             "outer_project_root": str(outer_project),
             "project_root": str(project.resolve()),
             "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
@@ -2816,19 +2915,179 @@ def authorize_project_agent_lifecycle(
     }
 
 
+def stage_coordinator_contract(
+    manifest_path: Path,
+    run_id: str,
+    *,
+    clock: Callable[[], datetime] = now_utc,
+) -> dict[str, object]:
+    """Stage only the complete canonical spec pair for one prepared wave."""
+
+    workspace = verify_workspace(manifest_path)
+    runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
+    with scope_lock(runs_root.parent):
+        run_dir, _coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
+        if (
+            wave["status"] != "preparing"
+            or wave.get("integrated_head") is not None
+            or wave.get("contract_commit") is not None
+        ):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "coordinator staging requires an uncommitted prepared wave",
+            )
+        integration = Path(str(wave["integration_worktree"]))
+        project = integration / required_string(
+            workspace, "scope", "workspace manifest"
+        )
+        base = required_string(wave, "base_commit", "prepared wave")
+        _verify_linked_worktree(
+            Path(required_string(workspace, "repo_root", "workspace manifest")),
+            integration,
+            str(wave["integration_branch"]),
+            expected_head=base,
+        )
+        allowed = _prepared_contract_paths(integration, project)
+        if allowed is None:
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID", "prepared contract scope is invalid"
+            )
+        staged, unstaged, untracked, deleted = _prepared_contract_status(integration)
+        if staged == allowed and not unstaged and not untracked and not deleted:
+            return {"status": "reused", "staged_paths": sorted(allowed)}
+        if not _prepared_contract_stage_delta_is_safe(integration, project):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT",
+                "prepared contract staging is not the exact canonical spec pair",
+            )
+        contract_workspace = dict(workspace)
+        contract_workspace["repo_root"] = str(integration.resolve())
+        contract_workspace["source_root"] = str(project.resolve())
+        inspect_spec_documents(contract_workspace)
+        staged_result = _journaled_git(
+            _journal_path(run_dir, str(wave["wave_id"])),
+            integration,
+            ["add", "--", *sorted(allowed)],
+            "stage prepared coordinator contract",
+            clock,
+            check=False,
+        )
+        if staged_result.returncode != 0:
+            raise PromptWorkspaceError(
+                "GIT_OPERATION_FAILED", "Git could not stage the coordinator contract"
+            )
+        staged, unstaged, untracked, deleted = _prepared_contract_status(integration)
+        if (
+            staged != allowed
+            or unstaged
+            or untracked
+            or deleted
+            or not _prepared_contract_delta_is_safe(integration, project)
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "coordinator contract staging changed unexpectedly"
+            )
+        return {"status": "staged", "staged_paths": sorted(allowed)}
+
+
+def _commit_prepared_coordinator_contract(
+    workspace: dict[str, object],
+    run_dir: Path,
+    wave: dict[str, object],
+    *,
+    clock: Callable[[], datetime],
+) -> dict[str, object]:
+    integration = Path(str(wave["integration_worktree"]))
+    project = integration / required_string(workspace, "scope", "workspace manifest")
+    base = required_string(wave, "base_commit", "prepared wave")
+    current = _head(integration)
+    repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
+    _verify_linked_worktree(
+        repo,
+        integration,
+        str(wave["integration_branch"]),
+        expected_head=current,
+    )
+    recorded = wave.get("contract_commit")
+    if isinstance(recorded, str):
+        if current != recorded or not _prepared_contract_commit_is_safe(
+            integration, project, base, recorded
+        ):
+            raise PromptWorkspaceError(
+                "WORKTREE_CONFLICT", "prepared coordinator contract commit changed"
+            )
+        verify_project_agent_contract(workspace, run_dir, project, recorded)
+        return {
+            "status": "reused",
+            "commit": recorded,
+            "changed_paths": sorted(
+                _changed_paths(integration, base, recorded)
+            ),
+        }
+    allowed = _prepared_contract_paths(integration, project)
+    if allowed is None:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "prepared contract scope is invalid"
+        )
+    staged, unstaged, untracked, deleted = _prepared_contract_status(integration)
+    if (
+        current != base
+        or staged != allowed
+        or unstaged
+        or untracked
+        or deleted
+        or not _prepared_contract_delta_is_safe(integration, project)
+    ):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT",
+            "prepared coordinator contract is not the exact staged spec pair",
+        )
+    committed = _journaled_git(
+        _journal_path(run_dir, str(wave["wave_id"])),
+        integration,
+        ["commit", "-m", "Lock Task Implementer correction contract"],
+        "commit prepared coordinator contract",
+        clock,
+        check=False,
+    )
+    if committed.returncode != 0:
+        raise PromptWorkspaceError(
+            "GIT_OPERATION_FAILED", "Git could not commit the coordinator contract"
+        )
+    contract = _head(integration)
+    if not _prepared_contract_commit_is_safe(integration, project, base, contract):
+        raise PromptWorkspaceError(
+            "WORKTREE_CONFLICT", "prepared coordinator contract commit is invalid"
+        )
+    wave["contract_commit"] = contract
+    wave["updated_at"] = _utc(clock)
+    _save_wave(run_dir, wave)
+    verify_project_agent_contract(workspace, run_dir, project, contract)
+    return {
+        "status": "committed",
+        "commit": contract,
+        "changed_paths": sorted(allowed),
+    }
+
+
 def commit_coordinator_delta(
     manifest_path: Path,
     run_id: str,
     *,
     clock: Callable[[], datetime] = now_utc,
 ) -> dict[str, object]:
-    """Commit the single exact coordinator-owned post-integration delta."""
+    """Commit one exact prepared contract or post-integration documentation delta."""
 
     workspace = verify_workspace(manifest_path)
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     with scope_lock(runs_root.parent):
         run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
         _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
+        if wave["status"] == "preparing" and wave.get("integrated_head") is None:
+            return _commit_prepared_coordinator_contract(
+                workspace, run_dir, wave, clock=clock
+            )
         if wave["status"] != "promotion_pending":
             raise PromptWorkspaceError(
                 "EXECUTION_STATE_INVALID",
@@ -6107,7 +6366,10 @@ def _reconcile_promoted_spec_impact(
         if (
             error.code != "REPLAN_REQUIRED"
             or error.message
-            != "canonical project specs drifted after impact settlement"
+            not in {
+                "canonical project specs drifted after impact settlement",
+                "prompt impact plan basis is stale",
+            }
         ):
             raise
     else:
@@ -6123,6 +6385,19 @@ def _reconcile_promoted_spec_impact(
     integration = Path(str(wave.get("integration_worktree")))
     scope = required_string(workspace, "scope", "workspace manifest")
     integration_project = integration if scope == "." else integration / scope
+    terminal_reconciliation = terminal_lifecycle_seal_promoted(
+        workspace, run_dir, coordinator, wave
+    )
+    exact_promoted_reconciliation = (
+        isinstance(promoted, str)
+        and isinstance(integrated_head, str)
+        and (
+            _promotion_coordinator_commit_is_safe(
+                integration, integration_project, integrated_head, promoted
+            )
+            or terminal_reconciliation
+        )
+    )
     if (
         not isinstance(promoted, str)
         or not isinstance(integrated_head, str)
@@ -6132,9 +6407,7 @@ def _reconcile_promoted_spec_impact(
         or integration.is_symlink()
         or not integration.is_dir()
         or _head(integration) != promoted
-        or not _promotion_coordinator_commit_is_safe(
-            integration, integration_project, integrated_head, promoted
-        )
+        or not exact_promoted_reconciliation
     ):
         raise PromptWorkspaceError(
             "REPLAN_REQUIRED",
@@ -6165,7 +6438,9 @@ def _reconcile_promoted_spec_impact(
         save_requirements_refinement(run_dir, refinement)
     settled = verify_requirements_refinement_contract(workspace, run_dir, run_state)
     impact = dict(settled["impact"])
-    if impact.get("plan_action") != "retain_plan":
+    if impact.get("plan_action") != "retain_plan" and not (
+        terminal_reconciliation and _final_wave(coordinator, wave)
+    ):
         raise PromptWorkspaceError(
             "REPLAN_REQUIRED",
             "promoted specification reconciliation materially changed the remaining plan",

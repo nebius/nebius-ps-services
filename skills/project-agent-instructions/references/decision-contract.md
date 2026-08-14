@@ -192,6 +192,9 @@ Transitions are:
   receipt;
 - unreceipted intact v3 region plus exact `adopt` approval -> `adopted`, or guarded
   `refreshed` when rules changed;
+- active receipt with marker-only drift plus exact `adopt` approval for the
+  current target -> guarded `adopted` or `refreshed`, but only when project,
+  Git root, scope, target path, and managed-body digest remain identical;
 - intact v3 region plus `not-needed` and exact `retire` approval -> guarded
   `retired`, restoring the exact human prefix or removing the file when no
   prefix exists, and recording a retired receipt;

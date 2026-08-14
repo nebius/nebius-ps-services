@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, route missing due diligence through `research`, undecided application layers through `app-stack`, undecided AI layers through `ai-stack`, apply `system-design-rules`, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture docs, ADR-like decisions, new applications, and proven remediations that change topology, boundaries, public interfaces, data ownership, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned artifacts, or immediate implementation."
+description: "Use for non-SDLC software design before implementation, including evidence-backed `troubleshoot` handoffs for proven system-contract changes: understand requirements and existing or greenfield systems, classify AI behavior as direct model calls, deterministic workflows, or agents, route missing due diligence through `research`, undecided application layers through `app-stack`, undecided AI layers through `ai-stack`, apply `system-design-rules`, design vertical slices, compare alternatives, and create a `/plan` handoff. Use for new features, major changes, architecture docs, ADR-like decisions, new applications, and proven remediations that change topology, boundaries, public interfaces, data ownership, migrations, or cross-component workflows. Do not use for brainstorming, unknown failure diagnosis, complex repairs inside one private boundary, stack-only selection, checklist-only review, Agentic SDLC-owned artifacts, or immediate implementation."
 ---
 
 # Design
@@ -186,6 +186,25 @@ data, model, environment, quality, safety, performance, cost, and ownership
 constraints. Bring its scoped decision back into `design` for cross-layer
 interfaces and `/plan`.
 
+Before that handoff, classify each AI-enabled capability at the architecture
+level:
+
+1. Direct model call when one model request can solve the task.
+2. Deterministic workflow containing model calls when application code knows
+   the operation sequence and next-step rules.
+3. Agent when the model must choose actions, continuation, or the next step
+   from prior results, including an unknown step count controlled by the
+   model, or execution needs a model-driven observe-act-observe loop.
+
+`design` owns this control-flow classification. `ai-stack` owns the SDK,
+framework, provider, model, durability, and operations choices for the selected
+level. Tool use, multiple model calls, delegation, or persistent sessions do
+not by themselves make the complete application agentic. Neither do an unknown
+iteration count with a code-owned continuation rule, a graph, checkpoints,
+timers, approvals, or compensation. Prefer direct calls and deterministic
+workflows when they satisfy the requirement, especially when latency or cost
+predictability matters.
+
 When both product and AI layers are undecided, keep the two adviser handoffs
 scoped: `app-stack` owns the surrounding application and `ai-stack` owns the AI
 layers. `design` owns their integration. Skip either skill when its technologies
@@ -204,6 +223,14 @@ existing system. Define:
 - security, privacy, permissions, and secret handling
 - observability, operations, rollout, rollback, and supportability
 - tests, validation, and acceptance checks
+
+For an AI application, apply the principle **deterministic where possible,
+agentic where necessary** per capability rather than once for the whole
+product. Keep ordinary application logic, APIs, data stores, RBAC, approvals,
+tool authorization, and known transitions deterministic. It is normal for one
+application to contain all three levels: deterministic logic, direct model
+calls at explicit steps, and a bounded agent for genuinely dynamic work. Read
+`references/design-workflow.md` for the full decision table and tree.
 
 For applications whose layers are connected in a serial flow such as
 frontend -> API -> database, default to a vertical-slice design. Describe the
@@ -244,6 +271,8 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - assumptions and unresolved questions
 - `app-stack` decision or fixed-stack/skipped rationale
 - `ai-stack` decision or fixed-AI-stack/skipped rationale
+- AI behavior classification for each capability: direct call, deterministic
+  workflow containing model calls, or agent
 - `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
 - vertical slice order and any prerequisite foundation steps
@@ -312,6 +341,8 @@ short answer is explicitly requested:
   fixed-stack/skipped rationale.
 - `ai-stack` decision for undecided or reconsidered AI-specific choices, or the
   fixed-AI-stack/skipped rationale.
+- Direct-call, deterministic-workflow, or agent classification for every
+  AI-enabled capability, including the reason an agent is necessary.
 - `system-design-rules` findings for non-trivial designs, or why that review
   was not needed.
 - Recommended design with components, technologies, boundaries, data/control

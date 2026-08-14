@@ -450,8 +450,9 @@ For each wave:
    intent, create and lock an integration worktree/branch from that exact
    commit, then re-observe Git state.
 3. In the integration checkout, preallocate and validate coordinator-owned
-   requirement/design records, then stage both complete spec files so the owner
-   validator can issue a Git-bound receipt. Every non-superseded requirement
+   requirement/design records, then use the hidden journaled
+   `coordinator-stage` owner transition to stage both complete spec files so the
+   owner validator can issue a Git-bound receipt. Every non-superseded requirement
    must be covered by a current design record.
    Explicitly invoke `$project-agent-instructions` with spec owner
    `maintain-project-specs`. Persist the exact receipt emitted for that integration
@@ -462,8 +463,10 @@ For each wave:
    Commit-mode `spec-inspect` is historical blob metadata only and returns no
    authoritative project-agent receipt; only the shared current-checkout
    validator may issue that receipt.
-4. Require the shared v3 spec receipt plus the exact rendered-rule digest
-   before dispatch. After final promoted implementation reconciliation, apply
+4. Require the shared v3 spec receipt plus the exact rendered-rule digest,
+   then use the hidden `coordinator-commit` owner transition when the prepared
+   spec pair changed. Require its clean exact direct-child commit before
+   dispatch. After final promoted implementation reconciliation, apply
    and verify the project-instruction decision once as the terminal seal
    mutation. If it reports `reload_required: true`, require a fresh session
    before later managed work.
@@ -646,7 +649,14 @@ For each wave:
     persistent lane remains clean on its recorded branch at its recorded base.
     A common-Git-directory lock covers identity precheck,
     `git merge --ff-only <verified-integration-SHA>`, and postcheck. Mark tasks
-    done only after promotion. Then `wave-cleanup` removes the integration
+    done only after promotion. A journal-bound terminal lifecycle commit is an
+    exact promoted spec reconciliation when its sealed contract and file
+    digests remain current. On the final wave, cleanup may settle its unchanged
+    prompt revision even when the original request required the now-completed
+    plan. If receipt publication completed before an interrupted settlement,
+    replay may rebind only that exact stale plan basis. Non-final material
+    impact still requires replanning. Then
+    `wave-cleanup` removes the integration
     worktree first with `git worktree remove <exact-integration-path>` and its
     branch second with an exact expected-old SHA. Never
     run broad prune or gc. Internal branches are never pushed or published.

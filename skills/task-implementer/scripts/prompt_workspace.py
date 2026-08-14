@@ -77,6 +77,7 @@ from prompt_workspace_waves import (  # noqa: E402
     recover_task,
     recover_wave_resources,
     replan_waves,
+    stage_coordinator_contract,
     start_task,
     watch_task,
 )
@@ -150,6 +151,7 @@ __all__ = [
     "route_project_prompt",
     "resume_run",
     "snapshot_prompt",
+    "stage_coordinator_contract",
     "verify_command",
     "verify_run",
     "verify_workspace",
@@ -703,10 +705,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     coordinator_commit = subparsers.add_parser(
         "coordinator-commit",
-        help="Internal: commit the exact post-integration documentation delta.",
+        help="Internal: commit the exact prepared or post-integration contract delta.",
     )
     add_common_workspace(coordinator_commit)
     coordinator_commit.add_argument("--run-id", required=True)
+
+    coordinator_stage = subparsers.add_parser(
+        "coordinator-stage",
+        help="Internal: stage the exact prepared canonical spec pair.",
+    )
+    add_common_workspace(coordinator_stage)
+    coordinator_stage.add_argument("--run-id", required=True)
 
     wave_promote = subparsers.add_parser(
         "wave-promote", help="Internal: fast-forward the primary branch."
@@ -1055,6 +1064,8 @@ def main(argv: list[str]) -> int:
             result = accept_task_result(args.workspace, args.run_id, args.task_id)
         elif args.command == "wave-integrate":
             result = integrate_wave(args.workspace, args.run_id)
+        elif args.command == "coordinator-stage":
+            result = stage_coordinator_contract(args.workspace, args.run_id)
         elif args.command == "coordinator-commit":
             result = commit_coordinator_delta(args.workspace, args.run_id)
         elif args.command == "wave-promote":

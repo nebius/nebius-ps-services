@@ -6,7 +6,9 @@ context, routes topic, requirement, and technology due diligence through
 `research` when available, routes undecided application-stack and layer
 technology choices through `app-stack`, routes undecided AI-specific model,
 training, inference, agent, interoperability, retrieval, and evaluation choices
-through `ai-stack`, applies `system-design-rules` to
+through `ai-stack`, classifies each AI-enabled capability as a direct model
+call, deterministic workflow containing model calls, or agent, and applies
+`system-design-rules` to
 non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
@@ -50,6 +52,11 @@ that scaffold and the scaffold workflow does not call back into design.
   than a complete design and `/plan` handoff.
 - Use `ai-stack` for an undecided AI-specific stack or layer. Use it directly
   when that decision does not need a complete design and `/plan` handoff.
+- For AI applications, keep known logic and transitions deterministic, use a
+  direct model call when one request is sufficient, and introduce an agent only
+  when the model must choose actions or observation-driven next steps. One
+  application may contain all three levels. Treat graph and durable execution
+  as an independent orchestration choice that may wrap any level.
 - Use `system-design-rules` inside `design` for standard, deep,
   architecture-heavy, ADR-like, or hard-to-reverse solution decisions before
   finalizing the `/plan`.

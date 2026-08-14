@@ -89,10 +89,12 @@ Possible results are:
 The selected-project `AGENTS.md` is committed project truth. Manifests,
 decisions, ownership receipts, runtime declarations, approvals, and final state
 remain private outside Git. Adoption and retirement require exact target
-approval. Human prefix edits remain outside automation ownership; marker or
-managed-body edits transfer the region out of automation ownership. Recovery
-artifacts block every transition until resolved instead of being removed or
-bypassed automatically.
+approval. An active receipt may be explicitly re-adopted after marker-only
+drift from another authorized lifecycle only when its project, target, and
+managed-body bindings are unchanged. Human prefix edits remain outside
+automation ownership; managed-body edits transfer the region out of automation
+ownership. Recovery artifacts block every transition until resolved instead of
+being removed or bypassed automatically.
 
 Lifecycle-owned inspection is one uncomposed canonical command. It declares
 the active Codex home explicitly and uses absolute receipt, runtime,

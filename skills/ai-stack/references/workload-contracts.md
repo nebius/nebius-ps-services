@@ -132,13 +132,23 @@ validation, rollback, and deletion behavior.
 
 Capture:
 
-- Task boundaries and whether a normal function or deterministic workflow is
-  sufficient.
+- Task boundaries and the selected behavior level: direct model call,
+  deterministic workflow containing model calls, or agent.
+- Whether one request is sufficient, application code knows the exact
+  sequence and continuation rules, or the model must choose tools, continuation,
+  or next steps from prior results and run a model-driven
+  observe-act-observe loop.
+- Whether an unknown iteration count has a deterministic code-owned condition
+  or model-controlled continuation.
+- Why normal code, a direct call, or a deterministic workflow is insufficient
+  before accepting agentic control flow.
 - Maximum autonomy, steps, duration, model calls, token use, cost, and retries.
 - Tool inventory, side effects, trust level, identity, scopes, input validation,
   output validation, idempotency, and approval requirements.
 - Required durability, pause and resume, checkpointing, replay, concurrency,
   cancellation, and human intervention.
+- Whether graph and durability semantics wrap a direct call, deterministic
+  workflow, agent, or mixture; do not infer agent autonomy from those semantics.
 - Session state, durable workflow state, long-term memory, external knowledge,
   audit history, and retention as separate stores.
 - MCP or direct integration requirement, transport, authentication, discovery,

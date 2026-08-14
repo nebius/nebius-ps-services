@@ -119,9 +119,12 @@ state must never be committed.
    provide structured rules; the helper renders all Markdown deterministically.
    For the other dispositions, provide no rules.
 5. Use exact-digest `adopt` approval before taking ownership of an unreceipted
-   intact v3 region. Use exact-digest `retire` approval before removing an
-   intact managed region that is no longer needed. Never migrate v1 or v2
-   markers automatically.
+   intact v3 region. The same approval may re-adopt an intact region when the
+   active receipt still binds the exact project, target, and body but another
+   authorized lifecycle refreshed only its portable marker projection. Any
+   subject or body mismatch remains an ownership conflict. Use exact-digest
+   `retire` approval before removing an intact managed region that is no longer
+   needed. Never migrate v1 or v2 markers automatically.
 6. Before implementation, run `render` and pass its exact private rules file
    to `maintain-project-specs plan`. Do not mutate the repository yet.
 7. After final requirements/design reconciliation, run `apply`, then `verify`

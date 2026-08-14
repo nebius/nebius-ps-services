@@ -6,6 +6,7 @@ rung that satisfies the workload contract and acceptance gates.
 ## Contents
 
 - Eight-plane model
+- AI behavior decision
 - Customization ladder
 - Agent complexity ladder
 - Interoperability ladder
@@ -33,7 +34,9 @@ Owned by `ai-stack` when present:
 
 - Prompt and policy assembly, typed agent kernel, model request construction,
   tool selection, structured output, run budgets, and agent-local context.
-- Current Python-first default: Pydantic AI for bounded provider-neutral agents.
+- Current Python defaults: OpenAI Agents SDK for intentionally OpenAI-native
+  agents; Pydantic AI for bounded agents using non-OpenAI providers or a typed
+  provider-neutral boundary.
 - May be absent for direct inference or deterministic application logic.
 
 ### Workflow And Durability Plane
@@ -102,6 +105,46 @@ Define data, control, trust, identity, protocol, state, and telemetry interfaces
 between planes. Avoid a product that silently owns several planes unless that
 integrated ownership is intentional, evaluated, and reversible.
 
+## AI Behavior Decision
+
+Apply this per capability before choosing an SDK or framework:
+
+```text
+Can one model request solve the task?
+  yes -> direct model call
+  no  -> Does application code know the exact steps?
+           yes -> deterministic workflow containing model calls where needed
+           no  -> Must the model choose actions or next steps from results?
+                    yes -> agent
+                    no  -> deterministic workflow
+```
+
+Choose an agent only when the model must select tools or actions, determine
+continuation or the next step from observations, control an unknown number of
+steps, or run a model-driven observe-act-observe loop. A deterministic loop may
+run an unknown number of times when code owns a condition such as cursor
+exhaustion. Delegation and persistent sessions can justify agent-runtime
+features after this classification, but they do not make known application
+control flow agentic. Prefer direct calls and workflows when latency or cost
+predictability is critical.
+
+It is normal for one application to combine:
+
+```text
+deterministic application logic and workflows
+  + direct model calls at explicit steps
+  + bounded agents for genuinely dynamic tasks
+  + Codex for coding-focused engineering tasks
+```
+
+Keep APIs, authoritative data, RBAC, approvals, tool authorization, and known
+business transitions outside model discretion.
+
+Classify graph and durability semantics on a separate axis. Explicit branches,
+checkpoints, interrupts, timers, long waits, retries, and compensation may wrap
+a direct call, deterministic workflow, agent, or mixture; none independently
+requires model autonomy.
+
 ## Customization Ladder
 
 Escalate only when a lower rung fails a representative quality gate:
@@ -118,29 +161,38 @@ Diagnose the failure class first. Retrieval does not repair missing task
 behavior, and fine-tuning does not provide current private knowledge without a
 data path.
 
-## Agent Complexity Ladder
+## Control-Flow And Execution Ladders
 
-Use this as a decision tree rather than assuming every rung is required:
+Classify model autonomy first:
 
 1. Normal function or deterministic application code.
 2. Single model call with validated structured output.
-3. Bounded typed single-agent tool loop.
-4. Explicit deterministic workflow containing model or tool steps.
-5. Durable graph with checkpointing, pause, resume, replay, and human approval.
-6. Durable cross-service workflow for timers, external side effects, and
-   compensation.
-7. Open-ended coding or research harness with planning, files, sandbox, and
+3. Explicit deterministic workflow containing model or tool steps.
+4. Bounded typed single-agent tool loop.
+5. Open-ended coding or research harness with planning, files, sandbox, and
    context compaction.
-8. Independently deployed remote agent with an A2A or ordinary service boundary.
-9. Multi-agent coordination with distinct context, authority, or parallel work.
+6. Independently deployed remote agent with an A2A or ordinary service boundary.
+7. Multi-agent coordination with distinct context, authority, or parallel work.
+
+Classify execution semantics independently:
+
+1. Direct execution.
+2. Explicit graph with checkpoints, pause, resume, replay, or human approval.
+3. Durable cross-service workflow for timers, external side effects, and
+   compensation.
+
+Any execution rung may host a direct call, deterministic workflow, agent, or
+mixture. Do not traverse the agent ladder merely to obtain graph or durability
+semantics.
 
 Use multi-agent only when decomposition, independent context, specialization,
 parallelism, or authority separation produces measured benefit that exceeds
 coordination cost and new failure modes.
 
-Prefer explicit workflow edges for known business processes. Reserve model-led
-planning and routing for decisions that cannot be encoded reliably and cheaply.
-Use agents-as-tools before peer-to-peer agent conversations.
+Prefer explicit workflow edges for known business processes, even when several
+steps call a model. Reserve model-led planning and routing for decisions that
+cannot be encoded reliably and cheaply. Use agents-as-tools before peer-to-peer
+agent conversations.
 
 ## Interoperability Ladder
 

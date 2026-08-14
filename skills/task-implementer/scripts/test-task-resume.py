@@ -246,6 +246,19 @@ class ResumeDecisionTest(unittest.TestCase):
             ("execute", "wave-prepare"),
         )
 
+    def test_planned_wave_with_newer_prompt_impact_routes_to_replan(self) -> None:
+        value = observation()
+        value["prompt_impact_replan_required"] = True
+        decision = resume._choose_transition(
+            Path("/tmp/run"),
+            value,
+            clock=lambda: NOW,
+            requested_arguments={"capacity": 3},
+        )
+        self.assertEqual(decision["next_transition"], "wave-replan")
+        self.assertEqual(decision["arguments"], {"capacity": 3})
+        self.assertIn("prompt impact", decision["reason"])
+
     def test_planned_wave_handoff_contract_drift_routes_to_replan(self) -> None:
         value = observation()
         value["coordinator"]["plan_sha256"] = "0" * 64
@@ -686,6 +699,109 @@ class ResumeControlTest(unittest.TestCase):
             clock=lambda: NOW,
         )
         self.assertEqual(replayed["epoch"], begun["epoch"])
+
+    def test_active_resource_free_prepare_intent_retires_for_replan(self) -> None:
+        token = "4" * 64
+        control = {
+            "schema": resume.RESUME_CONTROL_SCHEMA,
+            "run_id": "run-test",
+            "epoch": 3,
+            "adopted": True,
+            "phase": "intent",
+            "pre_state_sha256": "1" * 64,
+            "transition": "wave-prepare",
+            "arguments": {},
+            "arguments_sha256": hashlib.sha256(stable_json({})).hexdigest(),
+            "resume_token": token,
+            "terminal_state_sha256": None,
+            "projection_sha256": None,
+            "updated_at": NOW.isoformat(),
+        }
+        core.write_atomic(
+            self.run_dir / "orchestration" / "resume-control.json",
+            stable_json(control),
+        )
+        changed = observation()
+        changed["state_sha256"] = "5" * 64
+        changed["handoff_sha256"] = "6" * 64
+        changed["prompt_impact_replan_required"] = True
+        changed["git"]["resources"][0]["present"] = False
+        with (
+            mock.patch.object(resume, "_machine_observation", return_value=changed),
+            self.assertRaises(PromptWorkspaceError) as raised,
+        ):
+            resume.begin_resume_transition(
+                self.workspace,
+                "run-test",
+                "wave-prepare",
+                token,
+                clock=lambda: NOW,
+            )
+        self.assertEqual(raised.exception.code, "REPLAN_REQUIRED")
+        retired = resume.load_resume_control(self.run_dir, required=True)
+        self.assertEqual(retired["phase"], "idle")
+        self.assertIsNone(retired["transition"])
+        self.assertEqual(retired["terminal_state_sha256"], "5" * 64)
+
+    def test_failed_prepare_abort_accepts_only_resource_free_replan(self) -> None:
+        token = "4" * 64
+        control = {
+            "schema": resume.RESUME_CONTROL_SCHEMA,
+            "run_id": "run-test",
+            "epoch": 3,
+            "adopted": True,
+            "phase": "intent",
+            "pre_state_sha256": "1" * 64,
+            "transition": "wave-prepare",
+            "arguments": {},
+            "arguments_sha256": hashlib.sha256(stable_json({})).hexdigest(),
+            "resume_token": token,
+            "terminal_state_sha256": None,
+            "projection_sha256": None,
+            "updated_at": NOW.isoformat(),
+        }
+        control_path = self.run_dir / "orchestration" / "resume-control.json"
+        changed = observation()
+        changed["state_sha256"] = "5" * 64
+        changed["handoff_sha256"] = "6" * 64
+        changed["prompt_impact_replan_required"] = True
+        changed["git"]["resources"][0]["present"] = False
+
+        core.write_atomic(control_path, stable_json(control))
+        with mock.patch.object(
+            resume, "_machine_observation", return_value=changed
+        ):
+            resume.abort_resume_transition_if_unchanged(
+                self.workspace,
+                "run-test",
+                "wave-prepare",
+                token,
+                clock=lambda: NOW,
+            )
+        retired = resume.load_resume_control(self.run_dir, required=True)
+        self.assertEqual(retired["phase"], "idle")
+
+        blocked = dict(changed)
+        blocked["git"] = {
+            **changed["git"],
+            "resources": [
+                {"path": "/tmp/integration", "present": True, "head": "a" * 40}
+            ],
+        }
+        core.write_atomic(control_path, stable_json(control))
+        with mock.patch.object(
+            resume, "_machine_observation", return_value=blocked
+        ):
+            resume.abort_resume_transition_if_unchanged(
+                self.workspace,
+                "run-test",
+                "wave-prepare",
+                token,
+                clock=lambda: NOW,
+            )
+        retained = resume.load_resume_control(self.run_dir, required=True)
+        self.assertEqual(retained["phase"], "intent")
+        self.assertEqual(retained["resume_token"], token)
 
     def test_first_controlled_transition_bootstraps_resume_state(self) -> None:
         plan = {

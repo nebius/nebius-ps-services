@@ -79,11 +79,11 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `ai-stack` | Implicit allowed | Select or review an effective, efficient AI stack that satisfies workload requirements across model access, training, inference, agents, interoperability, retrieval, evaluation, safety, and operations with explicit component and evidence classifications. |
+| `ai-stack` | Implicit allowed | Classify AI work as direct model calls, deterministic workflows, or agents, then select the smallest sufficient model, SDK, agent, Codex, interoperability, retrieval, evaluation, safety, and operations stack with explicit component and evidence states. |
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, using `research`, `app-stack`, `ai-stack`, and `system-design-rules` before `/plan`. |
+| `design` | Implicit allowed | Design software features, APIs, vertical slices, AI control flow, and proven remediation handoffs before implementation, using `research`, `app-stack`, `ai-stack`, and `system-design-rules` before `/plan`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -416,6 +416,13 @@ boundary, public interface, data owner, migration, or cross-component workflow.
 Unknown causes and complex repairs inside one existing private boundary remain
 in `troubleshoot`.
 
+For AI applications, `design` classifies each capability independently: use a
+direct model call when one request is sufficient, a deterministic workflow when
+application code knows the steps, and an agent only when the model must choose
+actions or observation-driven next steps. It keeps known logic, APIs, data,
+RBAC, approvals, and tool authorization deterministic. One application may
+contain all three levels.
+
 ### `app-stack`
 
 `app-stack` selects, reviews, simplifies, modernizes, and coordinates
@@ -456,12 +463,24 @@ scoring candidates, and assigns every component `Required`, `Conditional`,
 `Deferred`, or `Rejected` plus every material claim `Measured`, `Officially
 documented`, or `Assumed`.
 
-The skill keeps its dated Python-first baseline replaceable: Pydantic AI for a
-bounded typed agent, LangGraph only for explicit graph semantics, Temporal for
-durable cross-service execution, an internal capability-aware provider contract
-only when semantic portability is real, official Tier 1 MCP SDKs as conformance
-authority, and benchmark-gated PyTorch, serving, retrieval, MLflow, and
-OpenTelemetry layers. Use `app-stack` for the surrounding product stack,
+Before selecting products, it classifies each capability as a direct model
+call, deterministic workflow containing model calls, or agent. Direct OpenAI
+text or reasoning generation supported by Responses uses an official OpenAI
+SDK plus the Responses API; other direct workloads use the official
+task-specific API. Intentionally OpenAI-native agents use the OpenAI Agents
+SDK. Python agents using Anthropic, Gemini, another non-OpenAI provider, or a
+provider-neutral typed boundary use Pydantic AI by default. Coding-focused
+engineering specialists use the Codex SDK; Codex app-server is added only for
+deep product clients that need its authentication, conversation-history,
+approval, and streamed-event protocol. Graph and durable orchestration are an
+independent axis and may wrap deterministic or agentic control flow.
+
+The skill keeps its dated baseline replaceable: LangGraph only for explicit
+graph semantics, Temporal for durable cross-service execution, an internal
+capability-aware provider contract only when semantic portability is real,
+official Tier 1 MCP SDKs as conformance authority, and benchmark-gated PyTorch,
+serving, retrieval, MLflow, and OpenTelemetry layers. Use `app-stack` for the
+surrounding product stack,
 `research` for deep due diligence on one choice, and `design` for cross-layer
 synthesis and `/plan`. Its optional implementation handoff is logical-only and
 does not assign repository paths, runtime units, candidate manifests, or file

@@ -16,19 +16,32 @@ separate.
 The selection order is:
 
 1. Freeze materially different workloads and acceptance thresholds.
-2. Choose the simplest sufficient architecture before naming products.
-3. Reject candidates that fail legal, data, safety, compatibility, quality,
+2. Classify each AI capability as a direct model call, deterministic workflow
+   containing model calls, or agent.
+3. Choose the simplest sufficient architecture before naming products.
+4. Reject candidates that fail legal, data, safety, compatibility, quality,
    recovery, ownership, performance, or cost gates.
-4. Verify volatile claims with official sources and target-specific claims with
+5. Verify volatile claims with official sources and target-specific claims with
    controlled measurement.
-5. Record compatibility edges, failure modes, owners, switch conditions, and
+6. Record compatibility edges, failure modes, owners, switch conditions, and
    immutable release identity.
 
-The dated baseline is opinionated but conditional. For example, Pydantic AI is
-the Python-first bounded-agent default, LangGraph is for explicit graph
-semantics, Temporal owns durable cross-service execution, and a full internal
-model-provider abstraction is justified only when semantic portability is a
-real requirement.
+Use **deterministic where possible, agentic where necessary**. Direct OpenAI
+text or reasoning generation supported by Responses uses an official OpenAI
+SDK plus the Responses API; embeddings, transcription, realtime speech, and
+other direct workloads use their official task-specific APIs. Known sequences
+and code-owned continuation conditions remain ordinary application workflows
+with explicit model calls. Intentionally OpenAI-native agents use the OpenAI
+Agents SDK; Python agents using Anthropic, Gemini, another non-OpenAI provider,
+or a provider-neutral typed boundary use Pydantic AI by default.
+
+Engineering work is a separate specialist lane: use the Codex SDK for
+coding-focused threads and add Codex app-server only for a deep embedded client
+that needs authentication, conversation history, approvals, or streamed agent
+events. LangGraph remains conditional on explicit graph semantics and Temporal
+owns durable cross-service execution, but either may wrap deterministic or
+agentic work. A full internal model-provider abstraction is justified only
+when semantic portability is real.
 
 ## Files
 
@@ -56,6 +69,8 @@ real requirement.
 - Use `research` for deep due diligence on one technology or claim.
 - Use `system-design-rules` for checklist review of an existing design.
 - Use specialist implementation skills when the stack is already fixed.
+- Use Codex for coding-focused engineering tasks; do not turn deterministic
+  application logic, APIs, data, RBAC, or approvals into agent decisions.
 - Keep scaffold handoffs logical-only. Repository topology, paths, runtime
   units, candidate manifests, file ownership, and apply authority belong to the
   scaffold or implementation workflow.

@@ -944,6 +944,47 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
             self.apply(current, self.decision(current, "needed"))
         self.assertEqual(caught.exception.code, "OWNERSHIP_CONFLICT")
 
+    def test_marker_only_receipt_drift_requires_exact_readoption(self) -> None:
+        first = self.inspect()
+        self.apply(first, self.decision(first, "needed"))
+        target = self.repo / "AGENTS.md"
+        content = target.read_bytes()
+        parsed = contracts._parse_generated(content)
+        assert parsed is not None
+        marker = contracts.GENERATED_MARKER_RE.match(content)
+        assert marker is not None
+        body = content[marker.end() :]
+        target.write_bytes(target_io._generated_content(body, "1" * 64, "2" * 64))
+
+        current = self.inspect()
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, self.decision(current, "needed"))
+        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
+
+        wrong = self.decision(
+            current,
+            "needed",
+            approval={"action": "adopt", "target_sha256": "0" * 64},
+        )
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            self.apply(current, wrong)
+        self.assertEqual(caught.exception.code, "ADOPTION_APPROVAL_REQUIRED")
+
+        approved = self.decision(
+            current,
+            "needed",
+            approval={
+                "action": "adopt",
+                "target_sha256": str(current["target"]["sha256"]),
+            },
+        )
+        state = self.apply(current, approved)
+        self.assertEqual(state["outcome"], "refreshed")
+        self.assertEqual(
+            workflow.verify_state(self.private / "state.json", self.private)["outcome"],
+            "refreshed",
+        )
+
     def test_config_change_after_inspect_blocks_apply(self) -> None:
         (self.codex_home / "config.toml").write_text(
             "project_doc_max_bytes = 9000\n", encoding="utf-8"

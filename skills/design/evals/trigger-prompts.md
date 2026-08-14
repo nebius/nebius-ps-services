@@ -52,6 +52,28 @@ decisions and create the /plan handoff.
 ```
 
 ```text
+Design an AI operations application with three capability types: one-request
+classification, a known ingest -> summarize -> approve workflow, and an
+investigation loop whose next tool depends on the previous result. Keep the
+first two direct or deterministic and use an agent only for the dynamic loop.
+Then create the /plan handoff.
+```
+
+```text
+Design a report pipeline that fetches pages until next_cursor is absent,
+summarizes each page, and publishes once complete. The number of pages is
+unknown, but code owns the continuation rule. Keep it deterministic and create
+the /plan handoff.
+```
+
+```text
+Design a fixed ingest -> validate -> request approval -> execute -> verify
+workflow with month-long waits and compensation. Use durable orchestration,
+but do not add an agent unless the model actually chooses an action or
+continuation. Then create the /plan handoff.
+```
+
+```text
 Design a feature for this established application using its approved React,
 FastAPI, and PostgreSQL stack. Do not reconsider the stack.
 ```
@@ -151,6 +173,10 @@ where the source skill is installed or discoverable:
   follows its design workflow, routes substantial due diligence through
   `research`, routes undecided application-stack or layer technology choices
   through `app-stack`, routes undecided AI-specific choices through `ai-stack`,
+  classifies each AI-enabled capability as a direct model call, deterministic
+  workflow containing model calls, or agent and requires a dynamic-control-flow
+  reason for every agent, keeps unknown-count code-owned loops deterministic,
+  and treats graph and durability requirements as an independent axis,
   applies `system-design-rules` for non-trivial solution decisions, and ends
   with a `/plan` handoff.
 - Fixed-stack design prompts should remain in `design` without reopening the

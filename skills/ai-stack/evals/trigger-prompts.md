@@ -31,6 +31,40 @@ LangGraph, Temporal, MCP, and A2A without installing all of them.
 ```
 
 ```text
+Classify these AI capabilities before selecting frameworks: one-call entity
+extraction, a known retrieve -> summarize -> validate workflow, and a tool loop
+whose next action depends on the prior result. Use direct OpenAI Responses,
+deterministic application code, or an agent only where each is necessary.
+```
+
+```text
+Fetch API pages until next_cursor is absent, summarize each page with a model,
+then publish the combined report. The page count is unknown, but application
+code owns pagination and every transition. Select the least-agentic stack.
+```
+
+```text
+Choose orchestration for a fixed ingest -> validate -> request approval ->
+execute -> verify process with month-long waits, retries, and compensation. No
+model chooses actions or continuation. Decide whether Temporal requires an
+agent kernel.
+```
+
+```text
+Choose the official OpenAI integration for three independent direct tasks: one
+text reasoning request, one embedding request, and live speech transcription.
+Do not route specialized workloads through Responses unless the official API
+supports that exact capability.
+```
+
+```text
+Choose the AI integration for an application that uses Anthropic and Gemini
+for general agent tasks and Codex for engineering tasks. Compare Pydantic AI,
+the Codex SDK, and Codex app-server, and keep PostgreSQL, APIs, RBAC, and
+approvals deterministic.
+```
+
+```text
 We need MCP tools, one embedded MCP App, and a long-running export. Define the
 core, SDK, transport, host, App, Task, authorization, and conformance profile.
 ```
@@ -114,6 +148,17 @@ For should-trigger prompts, verify that the result:
 - freezes workloads, the current baseline, acceptance gates, and decision-
   changing unknowns before recommending products;
 - begins with no new component and applies explicit escalation triggers;
+- classifies every AI-enabled capability as a direct model call,
+  deterministic workflow containing model calls, or agent before selecting a
+  framework, and rejects agents when code owns every transition or
+  continuation condition even if the iteration count is unknown;
+- maps direct OpenAI text or reasoning generation supported by Responses to an
+  official OpenAI SDK plus Responses API, task-specific direct workloads to
+  their official APIs, intentionally OpenAI-native agents to the OpenAI Agents
+  SDK, and Anthropic, Gemini, or provider-neutral Python agents to Pydantic AI
+  by default;
+- maps coding-focused engineering tasks to the Codex SDK and adds Codex
+  app-server only for deep client integration;
 - marks every component `Required`, `Conditional`, `Deferred`, or `Rejected`;
 - marks material claims `Measured`, `Officially documented`, or `Assumed`;
 - does not treat documentation or vendor benchmarks as target measurement;
@@ -121,8 +166,9 @@ For should-trigger prompts, verify that the result:
   observability, cost, and ownership in the decision;
 - uses a full model-provider contract only when semantic portability requires
   it;
-- chooses one primary agent kernel and separates graph state from durable
-  business-process execution;
+- chooses one primary agent kernel only for genuinely agentic capabilities and
+  treats graph state and durable business-process execution as an independent
+  axis that may wrap deterministic or agentic work;
 - uses typed functions or APIs before MCP, and MCP or agents-as-tools before
   A2A;
 - records exact MCP revisions, SDK/framework versions, transport, extensions,

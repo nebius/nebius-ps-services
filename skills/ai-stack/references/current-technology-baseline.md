@@ -4,7 +4,7 @@ Use this dated profile as a shortlist for a Python-first production AI system.
 It is not a universal stack and does not replace workload contracts, official
 source verification, compatibility tests, target evaluation, or owner review.
 
-Baseline date: 2026-08-07
+Baseline date: 2026-08-14
 
 ## Contents
 
@@ -75,7 +75,8 @@ Read `pytorch-training-stack.md` for the complete decision tree.
 | --- | --- | --- | --- |
 | One intentionally selected provider | Narrow application-local seam around the native SDK | Conditional | An online or batch model workload selects one provider; multiple providers or platform policy creates semantic portability needs. |
 | Multiple providers or self-hosting | Internal capability-aware `ModelProvider` contract | Conditional | The application must route, fall back, self-host, satisfy regional policy, or share a model platform. |
-| OpenAI | Native adapter using the required native protocol | Conditional | OpenAI is an approved target. |
+| OpenAI direct text or reasoning generation | Official OpenAI SDK plus Responses API | Conditional | OpenAI is approved and Responses supports the requested generation workload. |
+| OpenAI direct task-specific workload | Official OpenAI SDK plus the documented embeddings, audio, realtime, image, moderation, or other task API | Conditional | The workload is direct but not served by the selected Responses capability. |
 | Anthropic | Native adapter using the Messages API semantics | Conditional | Anthropic is an approved target. |
 | Nebius Token Factory | Verified OpenAI-compatible adapter and exact capability profile | Conditional | The selected model, endpoint, and adapter pass the same conformance suite. |
 | Self-hosted runtime | Verified adapter for the selected inference endpoint | Conditional | Open weights, data boundary, custom kernels, capacity, or economics justify ownership. |
@@ -95,24 +96,34 @@ met.
 
 ## Agent Applications And Durability
 
+Do not select an agent component until the workload rejects a direct model call
+and a deterministic workflow. A known sequence remains application code even
+when several steps call a model or tool.
+
 | Capability | Baseline | Starting status | Switch condition |
 | --- | --- | --- | --- |
-| Python agent kernel | Pydantic AI | Conditional | A bounded typed provider-neutral agent is required. |
+| OpenAI-native agent kernel | OpenAI Agents SDK | Conditional | The model must choose actions or observation-driven next steps and the system is intentionally OpenAI-first. |
+| Non-OpenAI or provider-neutral Python agent kernel | Pydantic AI | Conditional | A bounded typed agent using Anthropic, Gemini, another non-OpenAI provider, or a provider-neutral boundary is required. |
+| Coding-focused engineering specialist | Codex SDK | Conditional | Engineering work needs coding-focused threads, repository operations, or programmatic Codex automation. |
+| Deep Codex product client | Codex app-server | Conditional | Product integration needs Codex authentication, conversation history, approvals, or streamed events; ordinary CI or jobs remain on the SDK path. |
 | Integration components | Selected LangChain packages | Conditional | Their maintained integrations remove more code than they add. |
-| Conventional model-tool loop | LangChain `create_agent` | Conditional | A straightforward bounded loop and middleware are sufficient. |
+| Conventional model-tool loop | Selected OpenAI Agents SDK or Pydantic AI kernel | Conditional | The workload is genuinely agentic; switch to LangChain `create_agent` only when required maintained integrations measurably reduce total complexity. |
 | Explicit state graph | LangGraph | Conditional | Nodes, edges, typed state, branches, bounded cycles, checkpoints, interrupts, replay, or graph recovery must be first-class. |
-| Durable cross-service workflow | Temporal outside the agent kernel | Conditional | Timers, long approvals, external side effects, compensation, or process/infrastructure recovery are required. |
-| OpenAI-native agent profile | OpenAI Agents SDK | Conditional | The system is intentionally OpenAI-first and its native handoffs, guardrails, MCP, sessions, intervention, and tracing reduce total complexity. |
+| Durable cross-service workflow | Temporal around the selected deterministic, agentic, or mixed control flow | Conditional | Timers, long approvals, external side effects, compensation, or process/infrastructure recovery are required. |
 | Claude-native coding or sandbox profile | Claude Agent SDK | Conditional | Claude-native filesystem, shell, sandbox, hooks, subagents, MCP, Skills, permissions, or resumable sessions define the workload. |
 
-Choose one primary agent kernel. LangChain and LangGraph are not competing
-whole-stack choices: current `create_agent` uses the LangGraph runtime, while
-direct LangGraph use is justified only when the application owns explicit graph
-semantics.
+Choose one primary agent kernel for each genuinely agentic capability.
+LangChain and LangGraph are not competing whole-stack choices: current
+`create_agent` uses the LangGraph runtime, while direct LangGraph use is
+justified only when the application owns explicit graph semantics. Codex is a
+separate engineering specialist rather than the default kernel for general AI
+tasks.
 
-LangGraph may checkpoint agent execution state. Temporal owns durable business-
-process state and side effects. Assign each retry, timeout, idempotency, and
-recovery responsibility to one layer.
+LangGraph may checkpoint deterministic or agent execution state. Temporal owns
+durable business-process state and side effects around direct calls,
+deterministic workflows, agents, or mixtures. Assign each retry, timeout,
+idempotency, and recovery responsibility to one layer; graph or durability
+requirements do not independently justify an agent.
 
 ## Capabilities And Interoperability
 

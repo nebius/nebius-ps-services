@@ -73,7 +73,9 @@ integration branch and full-repository worktree from the exact project base,
 then lock it. Never include prompt text or secrets in branch names.
 
 The coordinator preallocates and validates managed requirement/design IDs and
-records in the integration checkout, then stages both complete spec files. The
+records in the integration checkout, then invokes the hidden
+`coordinator-stage` owner command to journal and stage both complete spec files.
+Direct `git add` is not the lifecycle boundary for this shared-index worktree. The
 private validator emits a `project-agent-instructions.spec-validation.v3`
 receipt only after both tracked managed regions validate and every
 non-superseded requirement is covered by a current design record. Persist that
@@ -111,7 +113,15 @@ with that exact sealed lifecycle state. It records a terminal receipt even for
 a clean no-change seal. If the lifecycle produced only tracked canonical specs
 or provenance-owned `AGENTS.md`, it commits those exact bytes in the retained
 integration and journals a second fast-forward before cleanup. Final cleanup
-and generation release both fail closed without the exact promoted receipt.
+accepts that exact journal-bound direct child as the promoted spec
+reconciliation and settles its prompt impact. Final cleanup and generation
+release both fail closed without the exact promoted receipt.
+Because the final wave has no remaining work, the immutable impact may still
+describe the original request as `replan_required`; settlement requires the
+same prompt revision and intent. Non-final material impact remains blocked.
+If interruption occurs after the new impact receipt is published but before
+its plan basis is settled, cleanup recognizes that exact stale-basis phase and
+replays the same validation and settlement.
 If a historical run was released before this terminal boundary existed, do not
 amend it or ignore later lifecycle dirt. The hidden owner may validate the
 exact sealed canonical overlay and absent resources, then use the ordinary
@@ -138,9 +148,12 @@ active project instruction file before locking the contract. Missing distinct
 rules is `not-needed`, not a generic file.
 
 Shared specifications, the selected-project `AGENTS.md`, README/design
-documentation, and changelog are coordinator-owned commit paths. If this
-changes tracked files, create one locked contract commit in the integration
-worktree. Dispatch replays the receipt against that commit's spec blobs and
+documentation, and changelog are coordinator-owned commit paths. If initial
+contract compilation changes the canonical spec pair, invoke the hidden
+`coordinator-commit` owner command after validation and rendering to create one
+locked direct-child contract commit in the integration worktree. The command
+replays idempotently from its recorded wave identity; direct `git commit` is not
+the owner transition. Dispatch replays the receipt against that commit's spec blobs and
 requires its active and ancestor project instruction bytes to belong to the
 same clean exact commit. Every worker branch starts at that exact commit. Human-owned project
 instructions remain byte-for-byte unchanged; a material gap or conflict blocks
@@ -487,8 +500,11 @@ those paths to lane `HEAD`; an interrupted or failed fast-forward restores the
 original adopted bytes from their immutable commit before returning.
 Cleanup refreshes the ready requirements refinement and prompt-impact plan
 before deleting that integration, but only when the exact final coordinator
-commit explains the spec advance and impact analysis retains the remaining
-plan. Promotion recovery and completion treat an older adoption journal as
+commit or exact promoted terminal lifecycle commit explains the spec advance
+and impact analysis retains the remaining plan. The final exact terminal seal
+may instead retain the original request's `replan_required` classification
+after that plan is fully completed. Promotion recovery and completion treat an
+older adoption journal as
 historical evidence only when its exact done wave, promoted head, and ancestry
 into the active wave base are all proven. Any unrelated, ambiguous, or material
 drift remains blocked.

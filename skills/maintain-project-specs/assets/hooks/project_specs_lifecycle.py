@@ -1331,7 +1331,10 @@ def _coordinator_command_shape(command: str) -> bool:
     ):
         return False
     script = Path(os.path.abspath(Path(tokens[1]).expanduser()))
-    if script.name == "prompt_workspace.py" and tokens[2] == "coordinator-commit":
+    if script.name == "prompt_workspace.py" and tokens[2] in {
+        "coordinator-stage",
+        "coordinator-commit",
+    }:
         return True
     owner = _known_coordinator_paths(require_safe=False).get(script)
     if owner is None:
@@ -1441,11 +1444,12 @@ def _task_implementer_coordinator(command: str, project: Path) -> dict[str, Any]
         "validate",
         "inspect",
         "render",
+        "coordinator-stage",
         "coordinator-commit",
     }:
         return None
     script = Path(os.path.abspath(Path(tokens[1]).expanduser()))
-    if tokens[2] == "coordinator-commit":
+    if tokens[2] in {"coordinator-stage", "coordinator-commit"}:
         workspace_value = _argument(tokens, "--workspace")
         run_id = _argument(tokens, "--run-id")
         if workspace_value is None or run_id is None:
@@ -1467,7 +1471,7 @@ def _task_implementer_coordinator(command: str, project: Path) -> dict[str, Any]
         inner = evidence.get("project_root")
         if (
             set(evidence) != expected_keys
-            or evidence.get("action") != "coordinator-commit"
+            or evidence.get("action") != tokens[2]
             or not isinstance(outer, str)
             or Path(outer).resolve(strict=False) != project
             or not isinstance(inner, str)
@@ -2904,13 +2908,17 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
             "validate",
             "inspect",
             "render",
+            "coordinator-stage",
             "coordinator-commit",
         }:
             return _deny(
                 "Task Implementer terminal project-instructions actions remain "
                 "owned by the normal lifecycle seal transition."
             )
-        if task_coordinator.get("action") == "coordinator-commit":
+        if task_coordinator.get("action") in {
+            "coordinator-stage",
+            "coordinator-commit",
+        }:
             if phase == "reconciliation-required":
                 return {}
             return _deny(
@@ -3187,6 +3195,7 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
             "validate",
             "inspect",
             "render",
+            "coordinator-stage",
             "coordinator-commit",
         }:
             return {}

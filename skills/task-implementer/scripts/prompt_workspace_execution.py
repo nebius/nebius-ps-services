@@ -248,6 +248,11 @@ def parse_write_claims(section: str) -> tuple[tuple[WriteClaim, ...], bool]:
             item = item[2:].strip()
         if item.startswith("`") and item.endswith("`"):
             item = item[1:-1]
+        if re.search(r";\s*(?:exact|prefix):", item):
+            raise PromptWorkspaceError(
+                "EXECUTION_STATE_INVALID",
+                "each write claim must appear on its own line",
+            )
         match = re.fullmatch(r"(exact|prefix):\s*(.+)", item)
         if match is None:
             raise PromptWorkspaceError(

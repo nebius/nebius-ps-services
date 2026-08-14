@@ -1,6 +1,6 @@
 ---
 name: ai-stack
-description: "Use for selecting, reviewing, simplifying, or modernizing an effective, efficient AI technology stack when AI-specific layers are undecided or under review, including model access, training and fine-tuning, inference and serving, agents and durable execution, MCP and A2A interoperability, retrieval and RAG, evaluation, safety, and operations. Freeze workload contracts, choose the simplest sufficient architecture, classify every component and evidence claim, and verify volatile choices with official sources. Do not use for a generic application stack, isolated one-technology research, a complete solution design or `/plan`, or implementation when the AI stack is already fixed."
+description: "Use for selecting, reviewing, simplifying, or modernizing an effective, efficient AI technology stack when AI-specific layers are undecided or under review. Classify capabilities as direct model calls, deterministic workflows containing model calls, or agents; then select model access, SDKs, Codex engineering specialists, training, inference, agent and durable execution, MCP/A2A, retrieval/RAG, evaluation, safety, and operations. Freeze workload contracts, choose the least-agentic sufficient architecture, classify every component and evidence claim, and verify volatile choices with official sources. Do not use for a generic application stack, isolated one-technology research, a complete solution design or `/plan`, or implementation when the AI stack is already fixed."
 ---
 
 # AI Stack
@@ -118,6 +118,41 @@ Read only the references that match the request:
 
 ## Core Decision Rules
 
+### AI Behavior Level
+
+Classify every AI-enabled capability before selecting products:
+
+- `Direct model call`: one model request can solve the task.
+- `Deterministic workflow`: application code knows the steps and owns the
+  transitions and continuation conditions; model calls occur only at explicit
+  steps.
+- `Agent`: the model must choose tools or actions, decide continuation or the
+  next step from prior results, control an unknown number of steps, or run a
+  model-driven observe-act-observe loop.
+
+Use the principle **deterministic where possible, agentic where necessary**.
+Multiple calls, tool availability, delegation, or persistent sessions do not
+alone justify agentic control flow. Neither does an unknown-count loop when
+application code owns its continuation condition. When latency or cost
+predictability is a hard requirement, prefer a direct call or deterministic
+workflow unless it fails a representative acceptance gate. One application
+may contain all three levels.
+
+Map the selected level to the smallest supported runtime:
+
+- Direct OpenAI text or reasoning generation supported by Responses: official
+  OpenAI SDK plus Responses API. For embeddings, transcription, realtime
+  speech, and other direct workloads, use the official task-specific API.
+- Intentionally OpenAI-native agent: OpenAI Agents SDK.
+- Python agent using Anthropic, Gemini, another non-OpenAI provider, or a
+  provider-neutral typed boundary: Pydantic AI by default.
+- Coding-focused engineering specialist: Codex SDK. Add Codex app-server only
+  for deep product integration that needs authentication, conversation
+  history, approvals, or streamed agent events; SDK-based CI and job
+  automation do not require that extra client protocol.
+
+Verify these volatile mappings through `references/official-source-map.md`.
+
 ### Component Status
 
 Assign exactly one status to every evaluated component:
@@ -142,8 +177,11 @@ of quality, scale, recovery, or production readiness.
 
 - Capabilities: typed function -> ordinary internal API -> MCP ->
   agents-as-tools -> A2A across independently owned agent boundaries.
-- Agents: deterministic code -> one bounded agent loop -> explicit graph ->
-  durable cross-service workflow -> independently deployed remote agent.
+- AI behavior: deterministic code -> direct model call -> deterministic
+  workflow containing model calls -> one bounded agent loop.
+- Orchestration and durability, independently of AI behavior: direct execution
+  -> explicit graph -> durable cross-service workflow. Any rung may wrap direct
+  calls, deterministic workflows, agents, or a mixture.
 - Retrieval: deterministic access -> source-native search -> PostgreSQL full
   text -> pgvector -> dedicated vector, search, or graph system after a named
   switch condition.
@@ -179,7 +217,9 @@ Do not combine workloads merely because they use the same model.
 Map only the required planes: experience, agent application, durability,
 capability/interoperability, model access, model execution, data/state, and
 trust/operations. Start with the current system or no-new-component baseline.
-Apply the escalation ladders and name the trigger for every added layer.
+Apply the AI behavior classification and escalation ladders, and name the
+trigger for every added layer. Do not select an agent framework until direct
+and deterministic paths have been rejected by the workload contract.
 
 ### 4. Select And Verify Candidates
 
@@ -207,12 +247,22 @@ capability combination.
 
 ### 6. Resolve Agent And Interoperability Boundaries
 
-Choose one primary agent kernel. For Python-first typed provider-neutral bounded
-agents, start with Pydantic AI. Use selected LangChain integrations or
-`create_agent` for a conventional bounded tool loop when its integrations
-reduce total code. Use LangGraph directly only for explicit graph semantics.
-Place Temporal outside the agent kernel when durable timers, long approvals,
-external side effects, compensation, or cross-service recovery are required.
+Choose one primary agent kernel only for capabilities already classified as
+agents. For intentionally OpenAI-native agents, start with the OpenAI Agents
+SDK. For Python-first typed agents using Anthropic, Gemini, another non-OpenAI
+provider, or a provider-neutral boundary, start with Pydantic AI. Only switch
+to selected LangChain integrations or `create_agent` for a conventional bounded
+tool loop when required maintained integrations measurably reduce total
+complexity. Use LangGraph directly only for explicit graph semantics.
+Use Temporal around the selected direct, deterministic, agentic, or mixed
+control flow when durable timers, long approvals, external side effects,
+compensation, or cross-service recovery are required.
+
+Route coding-focused engineering work to Codex instead of treating it as a
+general service agent. Use the Codex SDK for coding threads and programmatic
+automation. Add Codex app-server only for a deep embedded client; if Codex is
+one specialist inside a broader agent workflow, define one explicit tool or
+MCP boundary rather than sharing all application tools and authority.
 
 Use MCP for independently deployed reusable capabilities, not every function.
 Record MCP core revision, exact SDK and framework versions, transport,
@@ -285,6 +335,8 @@ URLs, customer data, raw logs, or one-off local state.
 Return:
 
 - decision scope, workload contracts, assumptions, and blocking unknowns;
+- direct-call, deterministic-workflow, or agent classification for every
+  AI-enabled capability;
 - simplest sufficient baseline and architecture planes;
 - component table with technology, status, evidence, requirement, owner,
   acceptance gate, and revisit trigger;

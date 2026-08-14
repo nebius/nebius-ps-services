@@ -1480,5 +1480,95 @@ closed without changing evidence. Confirm an unchanged completed objective
 returns `ALREADY_COMPLETE` and a changed prompt creates a linked new revision.
 
 <!-- /REQUIREMENT: REQ-018 -->
+
+<!-- REQUIREMENT: REQ-019 status=active priority=P0 type=feature -->
+### REQ-019: Select the least-agentic sufficient AI application architecture
+
+#### User Story
+
+AI application designers need a consistent way to separate direct model calls,
+deterministic workflows containing model calls, and genuine agents so systems
+remain predictable without excluding agentic behavior where it is necessary.
+
+#### Acceptance Criteria
+
+- AC-001: `design` classifies every AI-enabled capability as a direct model
+  call, a deterministic workflow containing model calls, or an agent before it
+  finalizes component boundaries and control flow.
+- AC-002: A direct call is preferred when one model request can solve the task;
+  a deterministic workflow is preferred when the application knows the
+  operation sequence; an agent is selected only when the model must choose an
+  action, continuation, or next step from prior observations, including an
+  unknown step count whose continuation is model-controlled, or the workload
+  requires a model-driven observe-act-observe loop. An unknown iteration count
+  remains deterministic when application code owns the continuation rule.
+- AC-003: Delegation, persistent sessions, and specialist coordination are
+  supporting agent-runtime triggers rather than sufficient reasons to make the
+  whole application agentic. Latency and cost predictability bias the decision
+  toward direct calls and deterministic workflows.
+- AC-004: One application may use all three levels concurrently, with ordinary
+  application logic, databases, APIs, RBAC, approvals, and other deterministic
+  controls remaining outside model discretion.
+- AC-005: `ai-stack` prefers the official OpenAI SDK with the Responses API for
+  direct OpenAI text or reasoning generation supported by Responses, and the
+  official task-specific API for other direct workloads such as embeddings,
+  transcription, or realtime speech. It prefers the OpenAI Agents SDK for
+  intentionally OpenAI-native agent loops and Pydantic AI for Python agent
+  workloads that require non-OpenAI providers such as Anthropic or Gemini or
+  require provider-neutral typed boundaries.
+- AC-006: Engineering tasks are evaluated separately from general AI tasks.
+  A coding-agent specialist uses the Codex SDK for coding-focused threads and
+  adds the Codex app-server protocol only when deep product integration needs
+  authentication, conversation history, approvals, or streamed agent events.
+- AC-007: The decision rule, provider/runtime choices, Codex specialist
+  boundary, source links, skill metadata, trigger evaluations, READMEs, root
+  catalog, and changelog remain aligned.
+- AC-008: Control-flow autonomy is classified independently from orchestration
+  and durability. An explicit graph or durable workflow may wrap direct calls,
+  deterministic workflows, agents, or a mixture; graph, checkpoint, timer,
+  approval, or compensation requirements do not by themselves require an
+  agent.
+
+#### Negative Criteria
+
+- NC-001: A design must not route every AI-enabled behavior through one agent
+  or let a model decide deterministic business logic, authorization, approval,
+  data ownership, or known workflow transitions.
+- NC-002: Tool use, multiple model calls, or a long task must not by itself
+  classify a workflow as agentic when application code can determine the next
+  operation or whether a deterministic loop should continue.
+- NC-003: OpenAI-compatible wire shape must not be treated as proof of OpenAI
+  Responses API, tool, session, or agent-runtime semantic compatibility.
+- NC-004: Codex app-server must not be required for ordinary CI or background
+  automation when the Codex SDK supplies the needed coding-thread interface.
+- NC-005: LangGraph, Temporal, or another orchestration runtime must not be
+  placed downstream of an agent as though agentic autonomy were a prerequisite
+  for graph or durability semantics.
+
+#### Validation Method
+
+Run skill-structure, Markdown, traceability, changed-scope review, and static
+trigger-evaluation checks over `design`, `ai-stack`, the root catalog, project
+specs, and changelog. Recheck product-specific claims against current official
+OpenAI and Pydantic documentation.
+
+#### Test Method
+
+Use should-trigger and quality scenarios for one-call text generation,
+task-specific non-text APIs, known multi-step workflows, deterministic
+unknown-count loops, deterministic durable approvals, dynamic tool choice,
+observation-driven loops, provider-specific agents, and a Codex engineering
+specialist. Confirm each scenario selects the lowest sufficient level and the
+matching SDK and orchestration boundary.
+
+#### Evaluation Method
+
+Review a representative AI application containing deterministic logic, general
+AI work, and engineering work. Confirm direct calls and known workflows remain
+explicit, only genuinely dynamic control flow becomes agentic, and every
+selected runtime has a requirement, evidence state, owner, acceptance gate,
+and revisit trigger.
+
+<!-- /REQUIREMENT: REQ-019 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

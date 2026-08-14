@@ -6,6 +6,35 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed project-instruction terminal sealing after another authorized workflow
+  refreshed only the portable marker projection. A stale active receipt may be
+  re-adopted only with explicit approval of the exact current target digest and
+  unchanged project, Git root, scope, target path, and managed-body identity;
+  subject drift, body drift, and missing or stale approval remain blocked.
+- Fixed final Task Implementer cleanup after a sealed terminal lifecycle commit
+  carries the validated requirements, design, or project-instruction overlay.
+  Prompt-impact settlement now accepts that exact journal-bound direct child in
+  addition to the ordinary coordinator documentation commit; unrelated or
+  unsealed promoted spec drift remains blocked. The final-wave settlement also
+  accepts the same revision and intent when its immutable impact still records
+  the original request as `replan_required`, because no remaining wave exists;
+  non-final material impact continues to require replanning. Replay also
+  recognizes the exact partially published state where the new impact receipt
+  is current but its plan-basis binding is stale.
+- Fixed Task Implementer correction-contract preparation under an active
+  project lifecycle. A new hidden, journaled `coordinator-stage` transition
+  admits only the complete canonical requirements/design pair in the exact
+  registered integration worktree, and the existing coordinator commit owner
+  now creates or replays one clean direct-child prepared-contract commit after
+  current spec validation and project-instruction rendering. The lifecycle
+  hook authenticates both transitions during reconciliation while continuing
+  to deny direct staging, direct commits, partial specs, extra paths, stale
+  worktrees, and lookalike helpers.
+- Fixed Task Implementer resume deadlock when a resource-free `wave-prepare`
+  publishes newer prompt-impact evidence that invalidates its plan. Resume now
+  detects the exact stale impact, retires only a no-effect prepare intent with
+  no worktree, assignment, or pending Git journal, and routes to a fresh
+  digest-bound `wave-replan`; partial-resource states remain retained.
 - Fixed the project-contract lifecycle false-positive on validated task-owned
   temporary cleanup. The exact literal
   `find /tmp/<task-owned-tree> -depth -delete` form now reports its sole
@@ -442,6 +471,17 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Refined `design` and `ai-stack` around the least-agentic sufficient
+  architecture: direct model calls for one-request tasks, deterministic
+  workflows for known sequences, and agents only for model-selected actions or
+  observation-driven next steps. Unknown-count loops remain deterministic when
+  code owns continuation, while graphs and durable workflows may wrap any
+  control-flow level. OpenAI direct text or reasoning generation supported by
+  Responses routes to an official OpenAI SDK plus Responses API; other direct
+  workloads use their official task-specific APIs. OpenAI-native agents route
+  to the OpenAI Agents SDK, Anthropic/Gemini or provider-neutral Python agents
+  to Pydantic AI, and coding-focused engineering specialists to the Codex SDK
+  with app-server reserved for deep embedded clients.
 - Replaced the Task Implementer README's text-only lifecycle map with a
   polished visual workflow that distinguishes long-lived and temporary Git
   roles, isolated worker commits, verified wave promotion, repeated dependency

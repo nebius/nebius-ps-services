@@ -93,8 +93,8 @@ requires an explicit active Codex home and absolute current-session receipt,
 runtime, private-root, and output paths in one uncomposed command.
 The sole alternate evidence namespace is Task Implementer's active run-owned
 bundle for inspect and render against its exact prepared integration checkout.
-The hook invokes the canonical installed or exact sibling-source Task helper
-as a read-only adapter; that helper revalidates
+For inspect and render, the hook invokes the canonical installed or exact
+sibling-source Task helper as a read-only authorization adapter; that helper revalidates
 the workspace, run, wave, clean Git identity, selected integration project,
 canonical project-instructions helper, and every private path. The hook then
 rechecks the submitted command digest and selected outer project before
@@ -121,6 +121,15 @@ The prepared integration Git identity remains on its recorded branch and base
 head. It may be clean or contain only staged selected-project requirements and
 design, which are the canonical Task contract-compilation inputs. Unstaged,
 untracked, deleted, symlinked, sibling, or other staged paths fail closed.
+Task Implementer's exact `coordinator-stage` owner command is the only bridge
+that may convert the complete unstaged canonical pair into that staged state;
+it journals the Git index mutation and rejects partial or additional paths. Its
+exact `coordinator-commit` owner command may then create or replay one clean
+direct-child prepared-contract commit only after the run-owned spec validation
+and instruction render are current. Both commands are authenticated to the
+registered run, wave, linked worktree, source scope, and outer lifecycle during
+reconciliation; arbitrary `git add`, `git commit`, paths, or lookalike helpers
+remain denied.
 For nonempty effective root markers, project-instructions discovery starts at
 the nearest matching directory from the selected project through its Git root
 and then scans down to the selected project. Empty markers use the selected

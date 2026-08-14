@@ -2662,5 +2662,142 @@ completed identity or external effect is duplicated, and unsupported legacy
 coordinators remain rejected.
 
 <!-- /FEATURE: FEAT-017 -->
+
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready priority=P0 version=1 -->
+### FEAT-018: Three-level AI application control-flow selection
+
+#### Requirements Covered
+
+- REQ-019: Select direct model calls, deterministic model workflows, and agents by required control-flow semantics, then bind the choice to the appropriate provider or Codex integration.
+
+#### Context Evidence
+
+`design/SKILL.md` owns cross-layer architecture synthesis and already routes
+undecided AI layers to `ai-stack`. `ai-stack/SKILL.md` and its architecture and
+agent references already use escalation ladders, but their current ordering
+does not make the direct-call, known-workflow, and dynamic-agent test the
+primary decision. The existing coding-agent pattern also omits Codex.
+
+Current official OpenAI documentation uses the Responses API through an
+official OpenAI SDK for direct text and reasoning generation supported by
+Responses, while embeddings, audio, realtime, and other direct workloads use
+their documented task-specific APIs. It describes the Agents SDK as the
+higher-level runtime for managed turns, tools, handoffs, guardrails, and
+sessions, recommends the Codex SDK for coding-focused threads, and reserves
+Codex app-server for deep embedded clients. Current Pydantic AI documentation
+describes a typed Python agent framework with Anthropic, Gemini, OpenAI, and
+other provider integrations.
+
+#### Design Details
+
+`design` applies one architecture rule before assigning AI components:
+deterministic where possible, agentic where necessary. It asks whether one
+model call is sufficient, then whether application code knows the steps, and
+only then whether the model must choose actions or the next step from observed
+results. This classification applies per capability, so one application can
+combine deterministic code, direct model calls, deterministic workflows with
+model steps, and bounded agents without making the application itself one
+unconstrained agent. Unknown iteration count is not an agent signal when code
+owns a deterministic continuation condition such as cursor exhaustion.
+
+`ai-stack` owns the detailed matrix and runtime mapping. Direct OpenAI text or
+reasoning generation supported by Responses uses an official OpenAI SDK and
+the Responses API; other direct workloads use the official task-specific API.
+Intentionally OpenAI-native agent loops use the OpenAI Agents SDK. Python
+agents using Anthropic, Gemini, or a provider-neutral typed boundary use
+Pydantic AI by default. Known sequences remain ordinary application workflows
+and call models only at explicit steps; an agent runtime is not introduced
+merely because the workflow contains tools or several model calls.
+
+Control-flow autonomy is orthogonal to orchestration and durability. LangGraph,
+Temporal, or another explicit orchestration layer may wrap a direct call,
+deterministic workflow, bounded agent, or mixed workflow. Fixed branches,
+checkpoints, timers, approvals, retries, and compensation remain deterministic
+unless the model chooses actions, continuation, or next steps.
+
+Engineering work is a separate specialist lane. Use the Codex SDK for local
+coding-focused threads and add Codex app-server when a product needs its deeper
+client protocol for authentication, conversation history, approvals, and
+streamed events. Keep PostgreSQL, APIs, RBAC, approval state, tool
+authorization, and other business controls outside model discretion.
+
+#### Selected Option
+
+Make the three-level decision rule mandatory in `design`, keep its detailed
+table and vendor choices in `ai-stack`, and update focused runtime references,
+trigger evaluations, metadata, READMEs, official source links, root catalog,
+and changelog together.
+
+#### Alternatives Considered
+
+Putting every rule only in `design` would duplicate AI framework selection and
+vendor evidence outside `ai-stack`. Putting everything only in `ai-stack`
+would let complete solution designs omit the architecture classification.
+Treating every AI feature as an agent is rejected because it obscures known
+control flow and weakens latency, cost, testing, authorization, and recovery
+predictability.
+
+#### Implementation Boundaries
+
+Owned surfaces are `design/SKILL.md`, its focused workflow reference, README,
+metadata, and evals; `ai-stack/SKILL.md`, its architecture, agent, baseline,
+workload-contract, source-map, README, metadata, and evals; the root README,
+canonical specs, and the `[Unreleased]` changelog. No runtime installation or
+external product mutation is part of this source change.
+
+#### Test-First Success Criteria
+
+- TDD-001: A single-request prompt selects a direct model call and OpenAI
+  examples map to an official SDK plus the Responses API.
+- TDD-002: A known multi-step process remains a deterministic workflow even
+  when several steps call a model or tools.
+- TDD-003: Dynamic tool choice, observation-driven next-step choice,
+  model-controlled continuation for an unknown step count, or a model-driven
+  observe-act-observe loop selects an agent candidate.
+- TDD-004: OpenAI-native agents map to the OpenAI Agents SDK; Anthropic,
+  Gemini, or provider-neutral Python agents map to Pydantic AI by default.
+- TDD-005: A coding specialist maps to the Codex SDK and adds app-server only
+  for the documented deep-client integration needs.
+- TDD-006: Cursor-driven pagination and fixed durable approval workflows remain
+  deterministic even when their iteration count or elapsed duration is not
+  known beforehand; graph and durability runtimes do not force an agent.
+- TDD-007: A direct non-text OpenAI workload selects its official task-specific
+  API instead of inheriting the Responses default for text and reasoning.
+
+#### Validation Plan
+
+Run focused skill structure validation, project-spec validation, Markdown lint,
+static trigger and metadata inspection, changed-scope code review, security
+review, and final cross-surface alignment. Verify volatile vendor claims from
+current official OpenAI and Pydantic sources.
+
+#### Test Plan
+
+Add representative decision scenarios to both skills' trigger/evaluation
+references. Check the source for contradictory unconditional agent defaults,
+stale coding-agent framework lists, missing source-map links, and drift between
+runtime instructions and human-facing READMEs.
+
+#### Evaluation Plan
+
+Walk a mixed application through the decision tree and confirm deterministic
+logic, general AI tasks, and engineering tasks route to explicit owners while
+sharing ordinary APIs, data, authorization, approval, and operational controls.
+
+#### Rollout And Rollback
+
+Land source documentation, metadata, evals, specs, catalog, and changelog in
+one reviewable change. Roll back the complete aligned change if static
+validation or official-source review finds a contradiction; do not retain a
+partial vendor mapping.
+
+#### Done Definition
+
+Both skills select the least-agentic sufficient architecture consistently,
+their detailed and summary surfaces agree, provider and Codex choices match
+current official documentation, and validation distinguishes source readiness
+from installed or fresh-runtime behavior.
+
+<!-- /FEATURE: FEAT-018 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

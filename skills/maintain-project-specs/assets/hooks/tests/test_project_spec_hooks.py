@@ -1688,7 +1688,7 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             denied["hookSpecificOutput"]["permissionDecision"], "deny"
         )
 
-    def test_task_implementer_coordinator_commit_is_bound_during_reconciliation(
+    def test_task_implementer_coordinator_contract_is_bound_during_reconciliation(
         self,
     ) -> None:
         lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
@@ -1699,37 +1699,39 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
         state["phase"] = "reconciliation-required"
         self.bind_empty_rules(state_path, state)
         lifecycle._write(state_path, state)
-        command = (
-            "python3 /trusted/prompt_workspace.py coordinator-commit "
-            "--workspace /private/workspace.json "
-            "--run-id run-20260811t135023z-caac975f --json"
-        )
-        evidence = {
-            "status": "authorized",
-            "action": "coordinator-commit",
-            "outer_project_root": str(self.project),
-            "project_root": str(self.root / "integration"),
-            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
-        }
-        payload = {
-            **self.base,
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-        }
-        with mock.patch.object(
-            lifecycle, "_task_implementer_coordinator", return_value=evidence
-        ):
-            allowed = lifecycle.evaluate({**payload, "hook_event_name": "PreToolUse"})
-            completed = lifecycle.evaluate(
-                {
-                    **payload,
-                    "hook_event_name": "PostToolUse",
-                    "tool_response": {"exit_code": 0},
-                }
+        for action in ("coordinator-stage", "coordinator-commit"):
+            command = (
+                f"python3 /trusted/prompt_workspace.py {action} "
+                "--workspace /private/workspace.json "
+                "--run-id run-20260811t135023z-caac975f --json"
             )
-
-        self.assertNotIn("hookSpecificOutput", allowed)
-        self.assertNotIn("hookSpecificOutput", completed)
+            evidence = {
+                "status": "authorized",
+                "action": action,
+                "outer_project_root": str(self.project),
+                "project_root": str(self.root / "integration"),
+                "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+            }
+            payload = {
+                **self.base,
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            }
+            with self.subTest(action=action), mock.patch.object(
+                lifecycle, "_task_implementer_coordinator", return_value=evidence
+            ):
+                allowed = lifecycle.evaluate(
+                    {**payload, "hook_event_name": "PreToolUse"}
+                )
+                completed = lifecycle.evaluate(
+                    {
+                        **payload,
+                        "hook_event_name": "PostToolUse",
+                        "tool_response": {"exit_code": 0},
+                    }
+                )
+                self.assertNotIn("hookSpecificOutput", allowed)
+                self.assertNotIn("hookSpecificOutput", completed)
         current = lifecycle._load(state_path)
         assert current is not None
         self.assertEqual(current["phase"], "reconciliation-required")

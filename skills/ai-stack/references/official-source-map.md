@@ -5,7 +5,7 @@ technologies. This map is a starting point, not proof that a feature, release,
 model, region, extension, or integration is suitable for the target workload.
 Verify the exact version and behavior before selecting it.
 
-Baseline date: 2026-08-07
+Baseline date: 2026-08-14
 
 Prefer evidence in this order:
 
@@ -96,6 +96,8 @@ agentgateway release. Neutral governance is not a conformance result.
 - Pydantic AI model overview: <https://ai.pydantic.dev/models/overview/>
 - Pydantic AI providers: <https://ai.pydantic.dev/models/providers/>
 - Pydantic AI model profiles: <https://ai.pydantic.dev/models/profiles/>
+- Pydantic AI Anthropic models: <https://ai.pydantic.dev/models/anthropic/>
+- Pydantic AI Google and Gemini models: <https://ai.pydantic.dev/models/google/>
 
 Verify model profiles, provider adapters, feature flags, error behavior, and
 per-user MCP identity. Do not assume OpenAI-compatible providers implement the
@@ -132,6 +134,17 @@ part of the product requirement. Put them behind application boundaries when
 provider portability remains a requirement. Review tracing export defaults and
 data policy before production use.
 
+### Codex Engineering Specialists
+
+- Codex SDK: <https://developers.openai.com/codex/sdk/>
+- Codex app-server: <https://developers.openai.com/codex/app-server/>
+
+Use the Codex SDK for coding-focused threads, CI, programmatic jobs, and
+application integration. Add app-server as a separately owned protocol surface
+only for deep clients that need Codex authentication, conversation history,
+approvals, or streamed agent events. The Python Codex SDK already controls a
+local app-server, so SDK use does not imply a second direct app-server client.
+
 ### Other Framework Families
 
 - Microsoft Agent Framework: <https://learn.microsoft.com/en-us/agent-framework/>
@@ -159,7 +172,11 @@ frameworks.
 
 - OpenAI API overview: <https://developers.openai.com/api/>
 - OpenAI model catalog: <https://developers.openai.com/api/docs/models>
-- OpenAI Responses API: <https://developers.openai.com/api/docs/guides/responses>
+- OpenAI Responses API migration and capability guide: <https://developers.openai.com/api/docs/guides/migrate-to-responses>
+- OpenAI direct text generation: <https://developers.openai.com/api/docs/guides/text>
+- OpenAI embeddings: <https://developers.openai.com/api/docs/guides/embeddings>
+- OpenAI audio and speech: <https://developers.openai.com/api/docs/guides/audio>
+- OpenAI Realtime API: <https://developers.openai.com/api/docs/guides/realtime>
 - OpenAI function calling: <https://developers.openai.com/api/docs/guides/function-calling>
 - OpenAI structured outputs: <https://developers.openai.com/api/docs/guides/structured-outputs>
 - OpenAI SDKs: <https://developers.openai.com/api/docs/libraries>

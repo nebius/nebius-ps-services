@@ -37,6 +37,7 @@ from prompt_workspace_execution import (
     WORKER_STALL_SECONDS,
     WORKER_STANDARD_READ_ONLY_SECONDS,
     WORKER_STANDARD_WARNING_SECONDS,
+    parse_task_plans,
     sha256_json,
     task_sections,
     task_statuses,
@@ -299,6 +300,42 @@ class WorktreeWaveTest(unittest.TestCase):
         else:
             os.environ["CODEX_HOME"] = self.previous_codex_home
         self.temporary.cleanup()
+
+    def test_write_claims_reject_inline_multiple_claims(self) -> None:
+        handoff = """# Handoff
+
+## Task Queue
+
+### task-1
+
+- Status: pending
+- Depends on: none
+- Write claims: exact: services/example/one.txt; exact: services/example/two.txt
+- Conflict domains: files:one
+- Implementation steps: update the claimed files
+- Validation: inspect the exact paths
+- End-to-end validation: verify the correction
+- Done criteria: both files contain the correction
+"""
+
+        with self.assertRaisesRegex(
+            PromptWorkspaceError, "each write claim must appear on its own line"
+        ):
+            parse_task_plans(handoff)
+
+    def test_blocked_replan_accepts_prior_superseded_task(self) -> None:
+        wave = {
+            "active_batch_index": 3,
+            "batches": [["task-1"], ["task-2"], ["task-3"], ["task-4"]],
+            "task_states": {
+                "task-1": "merged",
+                "task-2": "superseded",
+                "task-3": "merged",
+                "task-4": "failed",
+            },
+        }
+
+        self.assertEqual(waves._blocked_replan_failed_ids(wave), ["task-4"])
 
     def _write_handoff(self) -> None:
         manifest_path = self.run_dir / "manifest.json"
@@ -1958,6 +1995,80 @@ class WorktreeWaveTest(unittest.TestCase):
         with self.assertRaises(pw.PromptWorkspaceError) as caught:
             pw.authorize_project_agent_lifecycle(self.workspace, self.run_id, command)
         self.assertEqual(caught.exception.code, "EXECUTION_STATE_INVALID")
+
+    def test_prepared_contract_stage_and_commit_are_owner_bound(self) -> None:
+        integration, project, _inspect_command = self._prepare_lifecycle_inspect()
+        for name in ("requirements.md", "design.md"):
+            path = project / "docs" / name
+            path.write_bytes(path.read_bytes() + b"\n<!-- correction contract -->\n")
+        helper = Path(pw.__file__).resolve()
+        stage_command = shlex.join(
+            [
+                sys.executable,
+                str(helper),
+                "coordinator-stage",
+                "--workspace",
+                str(self.workspace),
+                "--run-id",
+                self.run_id,
+                "--json",
+            ]
+        )
+        authorized_stage = pw.authorize_project_agent_lifecycle(
+            self.workspace, self.run_id, stage_command
+        )
+        self.assertEqual(authorized_stage["action"], "coordinator-stage")
+        staged = pw.stage_coordinator_contract(
+            self.workspace, self.run_id, clock=lambda: FIXED
+        )
+        expected = [
+            "services/example/docs/design.md",
+            "services/example/docs/requirements.md",
+        ]
+        self.assertEqual(staged, {"status": "staged", "staged_paths": expected})
+        self.assertEqual(
+            sorted(
+                git(
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    cwd=integration,
+                ).splitlines()
+            ),
+            expected,
+        )
+        commit_command = stage_command.replace(
+            "coordinator-stage", "coordinator-commit", 1
+        )
+        authorized_commit = pw.authorize_project_agent_lifecycle(
+            self.workspace, self.run_id, commit_command
+        )
+        self.assertEqual(authorized_commit["action"], "coordinator-commit")
+        committed = pw.commit_coordinator_delta(
+            self.workspace, self.run_id, clock=lambda: FIXED
+        )
+        self.assertEqual(committed["status"], "committed")
+        self.assertEqual(committed["changed_paths"], expected)
+        self.assertEqual(
+            git("rev-parse", f"{committed['commit']}^", cwd=integration),
+            self.initial,
+        )
+        self.assertEqual(git("status", "--short", cwd=integration), "")
+        replayed = pw.commit_coordinator_delta(
+            self.workspace, self.run_id, clock=lambda: FIXED
+        )
+        self.assertEqual(replayed["status"], "reused")
+        self.assertEqual(replayed["commit"], committed["commit"])
+
+    def test_prepared_contract_stage_rejects_partial_spec_delta(self) -> None:
+        _integration, project, _inspect_command = self._prepare_lifecycle_inspect()
+        requirements = project / "docs" / "requirements.md"
+        requirements.write_bytes(requirements.read_bytes() + b"\npartial\n")
+        with self.assertRaises(pw.PromptWorkspaceError) as caught:
+            pw.stage_coordinator_contract(
+                self.workspace, self.run_id, clock=lambda: FIXED
+            )
+        self.assertEqual(caught.exception.code, "WORKTREE_CONFLICT")
 
     def test_lifecycle_bridge_rejects_partial_staged_contract(self) -> None:
         integration, project, command = self._prepare_lifecycle_inspect()
@@ -3720,6 +3831,79 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertIn(
             "refreshed terminal provenance", agents.read_text(encoding="utf-8")
         )
+
+    def test_terminal_seal_spec_reconciliation_is_settled_before_cleanup(self) -> None:
+        handoff = self.run_dir / "handoff.md"
+        handoff.write_text(
+            handoff.read_text(encoding="utf-8").replace(
+                "### task-3\n\n- Status: pending",
+                "### task-3\n\n- Status: done",
+            ),
+            encoding="utf-8",
+        )
+        handoff.chmod(0o600)
+        _, _, evidence = self._integrated_first_wave()
+        promoted = pw.promote_wave(
+            self.workspace, self.run_id, evidence, clock=lambda: FIXED
+        )
+        design = self.scope / "docs" / "design.md"
+        design.write_text(
+            design.read_text(encoding="utf-8")
+            + "\nTerminal implementation status reconciliation.\n",
+            encoding="utf-8",
+        )
+        sealed = self._seal_terminal_lifecycle()
+        self.assertEqual(sealed["paths"], ["services/example/docs/design.md"])
+        self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
+
+        current_impact = specs.load_current_prompt_impact(
+            self.run_dir, required=True
+        )
+        assert current_impact is not None
+        terminal_impact = dict(current_impact[0])
+        terminal_impact["plan_action"] = "replan_required"
+        terminal_impact_sha256 = hashlib.sha256(
+            specs.stable_json(terminal_impact)
+        ).hexdigest()
+        drift = PromptWorkspaceError(
+            "REPLAN_REQUIRED",
+            "prompt impact plan basis is stale",
+        )
+        with (
+            mock.patch.object(
+                waves,
+                "verify_prompt_impact_plan",
+                side_effect=[
+                    drift,
+                    {"status": "settled"},
+                    {"status": "settled"},
+                ],
+            ),
+            mock.patch.object(
+                waves,
+                "verify_requirements_refinement_contract",
+                return_value={
+                    "impact": terminal_impact,
+                    "impact_sha256": terminal_impact_sha256,
+                },
+            ),
+        ):
+            cleaned = pw.cleanup_wave(
+                self.workspace,
+                self.run_id,
+                clock=lambda: FIXED + timedelta(seconds=21),
+            )
+        self.assertEqual(cleaned["status"], "done")
+        self.assertEqual(git("status", "--short", cwd=self.repo), "")
+        self.assertEqual(
+            git("rev-parse", "HEAD", cwd=self.repo), sealed["contract_head"]
+        )
+        plan_basis = json.loads(
+            (self.run_dir / "prompt-impact" / "plan-basis.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(plan_basis["plan_action"], "replan_required")
 
     def test_digest_recovery_binds_receipt_only_impact_refresh(self) -> None:
         handoff = self.run_dir / "handoff.md"

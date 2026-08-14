@@ -4,7 +4,7 @@ Use this reference to design and select frameworks for production agentic
 applications. Keep the agent kernel, workflow durability, model providers,
 tools, open protocols, state, security, and evaluation independently replaceable.
 
-Baseline date: 2026-08-07
+Baseline date: 2026-08-14
 
 ## Contents
 
@@ -25,8 +25,19 @@ Baseline date: 2026-08-07
 Use this as the greenfield default for a Python-first organization:
 
 ```text
-Agent kernel:
-  Pydantic AI for typed, provider-neutral bounded agents
+AI control flow:
+  Direct model call when one request is sufficient
+  Deterministic application workflow when the operation sequence is known
+  Agent only for model-selected actions or observation-driven next steps
+
+Model and agent runtime:
+  Official OpenAI SDK plus Responses API for supported direct text or reasoning
+  Official task-specific API for embeddings, audio, realtime, and other direct work
+  OpenAI Agents SDK for intentionally OpenAI-native agents
+  Pydantic AI for typed agents using Anthropic, Gemini, another non-OpenAI
+  provider, or a provider-neutral Python boundary
+  Codex SDK for coding-focused engineering specialists
+  Codex app-server only for deep embedded client integration
 
 Explicit graph orchestration:
   LangGraph only when branches, checkpoints, interrupts, replay, or recovery
@@ -74,8 +85,10 @@ Security and operations:
   existing organizational authority
 ```
 
-Do not install every layer for every application. A bounded read-only assistant
-can use Pydantic AI, one narrow provider seam, direct functions, and PostgreSQL
+Do not install every layer for every application. A one-request task can use a
+provider SDK without an agent kernel. A known multi-step task can use ordinary
+application code with explicit model calls. A bounded non-OpenAI assistant can
+use Pydantic AI, one narrow provider seam, direct functions, and PostgreSQL
 without LangGraph, Temporal, MCP, A2A, a gateway, or a new telemetry platform.
 
 ## Architectural Planes
@@ -98,7 +111,10 @@ verified principal context into downstream policy boundaries.
 Own prompt assembly, typed dependencies, model calls, bounded tool loops,
 structured output, agent-local policies, and run context.
 
-Current default: Pydantic AI for Python provider-neutral agents.
+Current defaults: OpenAI Agents SDK for intentionally OpenAI-native agents;
+Pydantic AI for Python agents using non-OpenAI providers or requiring a typed
+provider-neutral boundary. This plane is absent for direct calls and
+deterministic workflows that own model requests directly.
 
 Keep the kernel small. Do not let it become the authoritative store, workflow
 scheduler, secret manager, or provider gateway.
@@ -156,35 +172,47 @@ cost, rollout, rollback, incident response, and version identity.
 
 ## Framework Decision Model
 
-Select the simplest sufficient framework that implements required semantics:
+Classify model autonomy first:
 
 ```text
 deterministic function
   -> one structured model call
-  -> bounded typed agent
-  -> explicit graph
-  -> durable cross-service workflow
+  -> deterministic workflow containing model calls
+  -> bounded agent loop
   -> agent harness for open-ended coding or research
   -> independently deployed remote agent
   -> multi-agent network
 ```
 
-Require a measured reason to move upward.
+Then classify execution semantics independently:
+
+```text
+direct execution
+  -> explicit graph
+  -> durable cross-service workflow
+```
+
+Any execution rung may wrap a direct call, deterministic workflow, agent, or
+mixture. Require a measured reason to move upward on either axis.
 
 ### Decision Table
 
 | Requirement | Preferred choice | Add or switch when |
 | --- | --- | --- |
-| Python, provider-neutral, typed bounded agent | Pydantic AI | A provider-native SDK or another ecosystem offers required semantics with lower total complexity |
-| Simple high-level agent with broad integrations | LangChain `create_agent` | Explicit graph state, replay, or recovery requires LangGraph directly |
-| Explicit state graph, checkpoints, interrupts, time travel | LangGraph | Cross-service timers and irreversible side effects require Temporal outside the graph |
-| Long-running business process and durable side effects | Temporal | Work is short-lived, read-only, and safely replayable inside the agent runtime |
+| One direct OpenAI text or reasoning request supported by Responses | Official OpenAI SDK plus Responses API | The task needs a different official task API, an application-owned deterministic sequence, or an agent loop |
+| One direct OpenAI embedding, transcription, realtime, or other specialized request | Official OpenAI SDK plus the task-specific API | The workload becomes a multi-step workflow or model-directed loop |
+| Known sequence with model steps | Ordinary application workflow plus direct provider calls | The model must choose actions or observation-driven next steps |
 | OpenAI-native agent | OpenAI Agents SDK | Provider portability or custom graph semantics become required |
+| Python, non-OpenAI or provider-neutral typed agent | Pydantic AI | A provider-native SDK or another ecosystem offers required semantics with lower total complexity |
+| Coding-focused engineering specialist | Codex SDK | A deep embedded client also requires Codex app-server; a broader orchestrator may instead expose Codex through one explicit MCP boundary |
+| Simple high-level agent with broad integrations | Selected default kernel plus only the required integrations | Switch to LangChain `create_agent` only when its maintained integrations measurably reduce total complexity |
+| Explicit state graph, checkpoints, interrupts, time travel | LangGraph around the selected deterministic or agent control flow | Cross-service timers and irreversible side effects require Temporal outside the graph |
+| Long-running business process and durable side effects | Temporal around direct calls, deterministic workflows, agents, or mixtures | Work is short-lived, read-only, and safely replayable without durable orchestration |
 | Claude-native coding, file, sandbox, or Skill agent | Claude Agent SDK | A provider-neutral service agent is the actual requirement |
 | Anthropic-hosted durable agent session | Claude Managed Agents | Provider neutrality, lifecycle control, or non-beta stability is required |
 | Microsoft or .NET enterprise agent stack | Microsoft Agent Framework | Exact language, package, feature lifecycle, non-Microsoft ecosystem fit, or portability fails the gate |
-| Google and A2A-oriented agent | Google ADK | Cross-provider behavior or non-Google operations favor the default kernel |
-| AWS and Bedrock-oriented agent | Strands Agents | AWS alignment does not outweigh ecosystem coupling |
+| Named Google ADK semantic requirement after Pydantic AI fails a gate | Google ADK | Provider-neutral behavior or ordinary A2A integration remains sufficient in the default kernel |
+| Named Strands or AWS-native agent semantic requirement after Pydantic AI fails a gate | Strands Agents | Bedrock model access alone remains sufficient in the default kernel |
 | Retrieval-centric agent or index workflow | LlamaIndex components | Retrieval is not the dominant abstraction |
 | Local model-agnostic developer agent | goose | A product service or custom application framework is required |
 | Role-based agent team library | CrewAI, Conditional | Explicit control, durability, and evaluation pass against simpler agents-as-tools |
@@ -198,7 +226,9 @@ observability, deployment, lifecycle, and exit cost.
 
 ### Pydantic AI
 
-Use as the current default agent kernel for Python when these are important:
+Use as the current default agent kernel for Python agents that use Anthropic,
+Gemini, another non-OpenAI provider, or require provider-neutral typed
+boundaries, when these are important:
 
 - typed inputs, outputs, dependencies, tools, and validation;
 - model and provider separation;
@@ -209,8 +239,10 @@ Use as the current default agent kernel for Python when these are important:
 - testability through model and tool substitution;
 - optional durable execution integrations.
 
-Use it for bounded single-agent applications, structured workflows controlled by
-application code, and agents invoked as steps inside another workflow.
+Use it for bounded single-agent applications, structured workflows controlled
+by application code, and agents invoked as steps inside another workflow. Do
+not wrap a one-request task or a fully known sequence in an agent merely to use
+the framework.
 
 Do not treat Pydantic validation as authorization. Do not share one MCP client
 or toolset across users when that object carries one identity or credential.
@@ -244,9 +276,9 @@ migration, concurrency, replay, and operational ownership.
 
 ### Temporal
 
-Use Temporal outside the agent kernel when work spans services or must survive
-process failure, long waits, human approvals, provider outages, timers, or
-irreversible side effects.
+Use Temporal around the selected direct, deterministic, agentic, or mixed
+control flow when work spans services or must survive process failure, long
+waits, human approvals, provider outages, timers, or irreversible side effects.
 
 Keep workflow code deterministic. Execute model calls, MCP calls, and external
 side effects in activities. Persist version identities and idempotency keys.
@@ -258,7 +290,8 @@ Store references or bounded summaries instead.
 
 ### OpenAI Agents SDK
 
-Use for an intentionally OpenAI-first profile when agents, agents-as-tools,
+Use only after a capability is classified as agentic. Select it for an
+intentionally OpenAI-first profile when agents, agents-as-tools,
 handoffs, tools, sessions, guardrails, human approval, tracing, and MCP match the
 product.
 
@@ -268,6 +301,20 @@ same Responses or tool behavior. Run provider conformance tests.
 
 Review tracing export policy. Disable or replace the default processor where
 organizational data policy requires another telemetry path.
+
+### Codex SDK And App Server
+
+Use the Codex SDK for coding-focused threads, engineering agents embedded in
+internal tools, CI, and programmatic job automation. Keep repository scope,
+sandbox, approvals, skills, MCP access, credentials, and write authority
+explicit.
+
+Add Codex app-server when building a deep product client that needs the Codex
+protocol for authentication, conversation history, approvals, and streamed
+agent events. The Python Codex SDK already controls a local app-server; do not
+add a second direct protocol client unless the product needs that lower-level
+surface. For ordinary CI or background automation, use the SDK without making
+app-server a separately owned application component.
 
 ### Claude Agent SDK
 
@@ -343,11 +390,14 @@ without measurable task success, isolation, parallelism, or authority benefits.
 
 ### Bounded Service Agent
 
-Use:
+First decide whether the task needs an agent. Prefer:
 
 ```text
 FastAPI or existing application service
-  -> Pydantic AI agent
+  -> direct provider SDK call for one-request tasks
+  -> deterministic application workflow for known sequences
+  -> OpenAI Agents SDK for an OpenAI-native dynamic loop
+  -> Pydantic AI for a non-OpenAI or provider-neutral typed dynamic loop
   -> narrow application-local seam around the selected native provider SDK
   -> direct typed tools
   -> existing authoritative store when durable records or audit are required
@@ -358,7 +408,7 @@ Add the full capability-aware `ModelProvider` contract only when multiple
 providers, routing, evaluated fallback, self-hosting, regional/data policy, or
 shared platform ownership creates semantic portability requirements. Add MCP
 only for independently reusable tools. Add LangGraph only when explicit graph
-semantics appear.
+semantics appear, independently of whether any node is agentic.
 
 ### Durable Approval Workflow
 
@@ -367,13 +417,15 @@ Use:
 ```text
 application API
   -> Temporal workflow
-  -> Pydantic AI or LangGraph activity
+  -> deterministic validation and model-call activities where required
   -> authorization and approval service
   -> idempotent tool or MCP activity
   -> verification activity
+  -> optional selected agent-kernel activity only for model-directed work
 ```
 
-Keep business truth and approval records in the authoritative database.
+Keep business truth and approval records in the authoritative database. Fixed
+branches, long waits, retries, and compensation do not require an agent.
 
 ### Explicit Research Or Operations Graph
 
@@ -383,7 +435,8 @@ Use:
 LangGraph
   nodes: plan, retrieve, analyze, request approval, execute, verify
   checkpointer: execution state only
-  agent nodes: Pydantic AI or LangChain components
+  agent nodes: optional; use the selected OpenAI Agents SDK or Pydantic AI kernel
+    only where the model chooses actions or continuation
   external side effects: Temporal activity or idempotent service call
 ```
 
@@ -394,16 +447,36 @@ Do not use an unconstrained supervisor when the transitions are known.
 Use:
 
 ```text
-AGENTS.md
+application or engineering workflow
+  + Codex SDK for coding-focused threads
+  + Codex app-server only for a deep embedded client
+  + AGENTS.md
   + reviewed Agent Skills
-  + Claude Agent SDK, goose, Microsoft harness, or another coding harness
   + MCP for approved reusable developer tools
-  + ACP when integrating with an editor client
+  + explicit MCP orchestration when Codex is one specialist in a broader agent
   + sandbox and repository-scoped credentials
 ```
 
 Keep repository instructions and Skills versioned with source or an approved
 catalog. Make write, command, network, and deployment actions approval-aware.
+Use another provider-native coding harness only when the workload explicitly
+requires that provider's semantics and it passes the same security, sandbox,
+evaluation, and operations gates.
+
+### Mixed AI Application
+
+Use explicit ownership rather than one global agent:
+
+```text
+Application
+  -> deterministic logic, APIs, PostgreSQL, RBAC, and approvals
+  -> general AI tasks
+       -> direct provider call or deterministic workflow where sufficient
+       -> OpenAI Agents SDK or Pydantic AI only for dynamic agent tasks
+  -> engineering tasks
+       -> Codex SDK
+       -> Codex app-server only for deep client integration
+```
 
 ### Remote Agent Service
 
@@ -549,10 +622,15 @@ complete compatible identity, not only the model name.
 ## Official Sources
 
 - Pydantic AI: <https://ai.pydantic.dev/>
+- Pydantic AI Anthropic models: <https://ai.pydantic.dev/models/anthropic/>
+- Pydantic AI Google models: <https://ai.pydantic.dev/models/google/>
 - LangChain agents: <https://docs.langchain.com/oss/python/langchain/agents>
 - LangGraph: <https://docs.langchain.com/oss/python/langgraph/overview>
 - Temporal: <https://docs.temporal.io/>
 - OpenAI Agents SDK: <https://openai.github.io/openai-agents-python/>
+- OpenAI direct text generation: <https://developers.openai.com/api/docs/guides/text>
+- Codex SDK: <https://developers.openai.com/codex/sdk/>
+- Codex app-server: <https://developers.openai.com/codex/app-server/>
 - Claude Agent SDK: <https://platform.claude.com/docs/en/agent-sdk/overview>
 - Claude Managed Agents: <https://platform.claude.com/docs/en/agents-and-tools/managed-agents/overview>
 - Microsoft Agent Framework: <https://learn.microsoft.com/agent-framework/overview/>

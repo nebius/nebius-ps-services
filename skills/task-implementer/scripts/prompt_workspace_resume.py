@@ -44,6 +44,7 @@ from prompt_workspace_execution import (
 )
 from prompt_workspace_interop import load_interop, managed, observe_managed_state
 from prompt_workspace_runs import read_handoff_text, scope_lock
+from prompt_workspace_specs import verify_prompt_impact_plan
 from prompt_workspace_waves import (
     _assignment_path,
     _incoming_handoff_path,
@@ -524,6 +525,31 @@ def _machine_observation(
         if coordinator is not None
         else []
     )
+    prompt_impact_replan_required = False
+    resource_observation = {
+        "coordinator": coordinator,
+        "waves": waves,
+        "tasks": tasks,
+        "git": git,
+        "journals": journals,
+    }
+    if coordinator is not None and _active_planned_wave_is_resource_free(
+        resource_observation
+    ):
+        try:
+            verify_prompt_impact_plan(
+                run_dir,
+                coordinator,
+                Path(
+                    required_string(
+                        workspace, "source_root", "workspace manifest"
+                    )
+                ),
+            )
+        except PromptWorkspaceError as error:
+            if error.code not in {"PROMPT_IMPACT_REQUIRED", "REPLAN_REQUIRED"}:
+                raise
+            prompt_impact_replan_required = True
     authoritative = {
         "files": _file_digests(run_dir),
         "coordinator": coordinator,
@@ -540,6 +566,7 @@ def _machine_observation(
         "git": git,
         "journals": journals,
         "pending_unindexed_tasks": pending_unindexed_tasks,
+        "prompt_impact_replan_required": prompt_impact_replan_required,
     }
     return {
         **authoritative,
@@ -628,6 +655,85 @@ def _planned_tail_drifted(
         if isinstance(wave, dict) and isinstance(wave.get("tasks"), list)
     ]
     return sha256_json([*completed_prefix, *current_tail]) != plan_sha256
+
+
+def _active_planned_wave_is_resource_free(
+    observation: dict[str, object],
+) -> bool:
+    """Prove that the active planned wave owns no material execution state."""
+
+    coordinator = observation.get("coordinator")
+    if not isinstance(coordinator, dict) or coordinator.get("status") != "running":
+        return False
+    active_wave = coordinator.get("active_wave")
+    if not isinstance(active_wave, str):
+        return False
+    waves = observation.get("waves")
+    tasks = observation.get("tasks")
+    git = observation.get("git")
+    journals = observation.get("journals")
+    if (
+        not isinstance(waves, list)
+        or not isinstance(tasks, list)
+        or not isinstance(git, dict)
+        or not isinstance(journals, list)
+        or any(
+            isinstance(entry, dict) and bool(entry.get("pending"))
+            for entry in journals
+        )
+    ):
+        return False
+    wave = next(
+        (
+            item
+            for item in waves
+            if isinstance(item, dict) and item.get("wave_id") == active_wave
+        ),
+        None,
+    )
+    if not isinstance(wave, dict) or wave.get("status") != "planned":
+        return False
+    integration_worktree = wave.get("integration_worktree")
+    resources = git.get("resources")
+    if not isinstance(integration_worktree, str) or not isinstance(resources, list):
+        return False
+    integration = next(
+        (
+            item
+            for item in resources
+            if isinstance(item, dict) and item.get("path") == integration_worktree
+        ),
+        None,
+    )
+    if not isinstance(integration, dict) or integration.get("present") is not False:
+        return False
+    active_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and task.get("wave_id") == active_wave
+    ]
+    task_ids = wave.get("task_ids")
+    return (
+        isinstance(task_ids, list)
+        and len(active_tasks) == len(task_ids)
+        and {task.get("task_id") for task in active_tasks} == set(task_ids)
+        and all(
+            isinstance(task.get("plane"), dict)
+            and task["plane"].get("state") == "planned"
+            and "assignment" not in task
+            for task in active_tasks
+        )
+    )
+
+
+def _resource_free_prepare_requires_replan(
+    observation: dict[str, object], decision: dict[str, object]
+) -> bool:
+    return (
+        decision.get("outcome") == "execute"
+        and decision.get("next_transition") == "wave-replan"
+        and _active_planned_wave_is_resource_free(observation)
+    )
 
 
 def _resume_capacity(
@@ -820,6 +926,18 @@ def _choose_transition(
             reason="the active wave is blocked and its evidence is retained",
         )
     if status == "planned":
+        if observation.get("prompt_impact_replan_required") is True:
+            return _transition(
+                "execute",
+                next_transition="wave-replan",
+                reason=(
+                    "the resource-free plan has newer prompt impact evidence "
+                    "that requires replanning"
+                ),
+                arguments={
+                    "capacity": _resume_capacity(coordinator, requested_arguments)
+                },
+            )
         if _planned_tail_drifted(run_dir, observation):
             return _transition(
                 "execute",
@@ -1328,6 +1446,16 @@ def begin_resume_transition(
                 decision = _choose_transition(run_dir, observation, clock=clock)
             except PromptWorkspaceError:
                 return result
+            if (
+                transition == "wave-prepare"
+                and _resource_free_prepare_requires_replan(observation, decision)
+            ):
+                _retire_resume_intent(control, observation, clock=clock)
+                write_atomic(_control_path(run_dir), stable_json(control))
+                raise PromptWorkspaceError(
+                    "REPLAN_REQUIRED",
+                    "the resource-free prepare intent was superseded by newer plan evidence",
+                )
             if observation["state_sha256"] != control["pre_state_sha256"] and (
                 decision["outcome"] not in {"execute", "requires_confirmation"}
                 or decision["next_transition"] != transition
@@ -1733,20 +1861,39 @@ def abort_resume_transition_if_unchanged(
             return
         current = _machine_observation(workspace, run_dir, observe_external=True)
         if current["state_sha256"] != control["pre_state_sha256"]:
-            return
-        control.update(
-            {
-                "phase": "idle",
-                "transition": None,
-                "arguments": None,
-                "arguments_sha256": None,
-                "resume_token": None,
-                "terminal_state_sha256": current["state_sha256"],
-                "projection_sha256": current["handoff_sha256"],
-                "updated_at": iso_seconds(clock()),
-            }
-        )
+            try:
+                decision = _choose_transition(run_dir, current, clock=clock)
+            except PromptWorkspaceError:
+                return
+            if transition != "wave-prepare" or not (
+                _resource_free_prepare_requires_replan(current, decision)
+            ):
+                return
+        _retire_resume_intent(control, current, clock=clock)
         write_atomic(_control_path(run_dir), stable_json(control))
+
+
+def _retire_resume_intent(
+    control: dict[str, object],
+    observation: dict[str, object],
+    *,
+    clock: Callable[[], datetime],
+) -> None:
+    """Retire one proven no-effect intent at its current authoritative state."""
+
+    control.update(
+        {
+            "phase": "idle",
+            "pre_state_sha256": observation["state_sha256"],
+            "transition": None,
+            "arguments": None,
+            "arguments_sha256": None,
+            "resume_token": None,
+            "terminal_state_sha256": observation["state_sha256"],
+            "projection_sha256": observation["handoff_sha256"],
+            "updated_at": iso_seconds(clock()),
+        }
+    )
 
 
 def effective_run_status(run_dir: Path, handoff_status: str) -> str:

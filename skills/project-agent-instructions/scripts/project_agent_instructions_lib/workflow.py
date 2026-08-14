@@ -294,6 +294,22 @@ def _ownership_matches(
     )
 
 
+def _ownership_same_subject_and_body(
+    receipt: dict[str, object],
+    manifest: dict[str, object],
+    target: dict[str, object],
+) -> bool:
+    """Return whether an active receipt can be explicitly re-adopted safely."""
+    return (
+        receipt.get("status") == "active"
+        and receipt.get("project_root") == manifest.get("project_root")
+        and receipt.get("git_root") == manifest.get("git_root")
+        and receipt.get("project_scope") == manifest.get("project_scope")
+        and receipt.get("target_path") == target.get("path")
+        and receipt.get("body_sha256") == target.get("body_sha256")
+    )
+
+
 def _ownership_record(
     status: str,
     manifest: dict[str, object],
@@ -402,7 +418,12 @@ def _select_outcome(
     has_receipt = ownership is not None and _ownership_matches(
         ownership, manifest, target, status="active"
     )
-    if ownership is not None and not has_receipt:
+    marker_only_receipt_drift = (
+        ownership is not None
+        and not has_receipt
+        and _ownership_same_subject_and_body(ownership, manifest, target)
+    )
+    if ownership is not None and not has_receipt and not marker_only_receipt_drift:
         raise ProjectInstructionsError(
             "OWNERSHIP_CONFLICT", "ownership receipt is stale"
         )

@@ -329,9 +329,11 @@ operation deadline and retry budget.
 
 ### OpenAI
 
-Use the official OpenAI SDK and Responses API when building an OpenAI-native
-profile. Preserve native tool, structured output, multimodal, reasoning, usage,
-and tracing semantics required by the application.
+Use the official OpenAI SDK and Responses API for OpenAI text or reasoning
+generation supported by Responses. Use the documented task-specific API for
+embeddings, transcription, realtime speech, and other direct workloads outside
+that capability. Preserve native tool, structured output, multimodal,
+reasoning, usage, and tracing semantics required by the application.
 
 Use the OpenAI Agents SDK when the whole agent architecture is intentionally
 OpenAI-first and its abstractions fit. Do not make its model classes the
