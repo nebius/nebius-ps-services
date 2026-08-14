@@ -520,8 +520,10 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
         clock=lambda: clock[0],
         boot_id=lambda: "boot-a",
     )
-    active.step()
-    active.close()
+    try:
+        active.step()
+    finally:
+        active.close()
 
     passive_state = tmp_path / f"passive-{crash_after.value}"
 
@@ -535,40 +537,44 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
 
     passive = build_passive()
     crashed = False
-    for _attempt in range(30):
-        trace = shared["trace"]
-        assert isinstance(trace, list)
-        previous = len(trace)
-        status = passive.step()
-        clock[0] += 10.0
-        if not crashed and crash_after in trace[previous:]:
-            passive.close()
-            passive = build_passive()
-            crashed = True
-        elif status.get("promotion_ready") is True:
-            break
-    else:
-        pytest.fail(f"default VM-HA runtime did not converge after crash replay: {status}")
+    try:
+        for _attempt in range(30):
+            trace = shared["trace"]
+            assert isinstance(trace, list)
+            previous = len(trace)
+            status = passive.step()
+            clock[0] += 10.0
+            if not crashed and crash_after in trace[previous:]:
+                passive.close()
+                passive = build_passive()
+                crashed = True
+            elif status.get("promotion_ready") is True:
+                break
+        else:
+            pytest.fail(f"default VM-HA runtime did not converge after crash replay: {status}")
 
-    trace = shared["trace"]
-    modes = shared["modes"]
-    assert isinstance(trace, list) and isinstance(modes, dict)
-    effects = [item for item in trace if isinstance(item, ActionKind)]
-    expected = [
-        ActionKind.STOP_FORMER_OWNER,
-        ActionKind.DETACH_FORMER_ATTACHMENT,
-        ActionKind.ATTACH_CANDIDATE,
-        ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
-        ActionKind.RECONCILE_ROUTES,
-        ActionKind.ENABLE_ACTIVE,
-    ]
-    positions = [effects.index(kind) for kind in expected]
-    assert positions == sorted(positions)
-    assert trace[0] == "guard"
-    assert shared["former_state"] is ComputeState.STOPPED
-    assert shared["owner"] == "node-b"
-    assert modes["node-b"] is DataPlaneMode.ACTIVE
-    assert crashed is True
+        trace = shared["trace"]
+        modes = shared["modes"]
+        assert isinstance(trace, list) and isinstance(modes, dict)
+        effects = [item for item in trace if isinstance(item, ActionKind)]
+        expected = [
+            ActionKind.STOP_FORMER_OWNER,
+            ActionKind.DETACH_FORMER_ATTACHMENT,
+            ActionKind.ATTACH_CANDIDATE,
+            ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+            ActionKind.RECONCILE_ROUTES,
+            ActionKind.ENABLE_ACTIVE,
+        ]
+        positions = [effects.index(kind) for kind in expected]
+        assert positions == sorted(positions)
+        assert trace[0] == "guard"
+        assert shared["former_state"] is ComputeState.STOPPED
+        assert shared["owner"] == "node-b"
+        assert modes["node-b"] is DataPlaneMode.ACTIVE
+        assert crashed is True
+    finally:
+        # This may be the replacement runtime created after the simulated crash.
+        passive.close()
 
 
 def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_path: Path) -> None:
