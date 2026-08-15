@@ -1332,7 +1332,7 @@ def apply(
             print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
-    elif needs_operator_removal or (lifecycle_state is None and sa is None):
+    elif needs_operator_removal or lifecycle_state is None:
         try:
             discovery_manager = VMManager(
                 project_id=proj_id,
@@ -1344,7 +1344,8 @@ def apply(
             )
             if lifecycle_state is None:
                 former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
-                    plan.gateway_group
+                    plan.gateway_group,
+                    allow_unmarked_runtime_probe=True,
                 )
             else:
                 former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
@@ -1364,11 +1365,14 @@ def apply(
                         vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                     ),
                 )
-                if discovery_manager.former_vm_ha_candidate_provenance in {
-                    FormerVMHAProvenance.LEGACY_RUNTIME,
-                    FormerVMHAProvenance.LIFECYCLE_STATE,
-                } and (
-                    lifecycle_state is None or lifecycle_state.status is VMHALifecycleStatus.ACTIVE
+                candidate_provenance = discovery_manager.former_vm_ha_candidate_provenance
+                if (
+                    lifecycle_state is None
+                    and candidate_provenance is not FormerVMHAProvenance.CURRENT_MARKER
+                ) or (
+                    candidate_provenance is FormerVMHAProvenance.LIFECYCLE_STATE
+                    and lifecycle_state is not None
+                    and lifecycle_state.status is VMHALifecycleStatus.ACTIVE
                 ):
                     inspector = SSHPush(ssh_policy=ssh_policy)
                     legacy_vm_ha_identities = {
@@ -1388,31 +1392,38 @@ def apply(
                     )
                 if former_vm_ha_members and lifecycle_state is None:
                     adopter = getattr(discovery_manager, "former_vm_ha_lifecycle_state", None)
-                    if callable(adopter):
-                        lifecycle_state = adopter(plan.gateway_group)
-                        if legacy_vm_ha_identities is None:
-                            inspector = SSHPush(ssh_policy=ssh_policy)
-                            legacy_vm_ha_identities = {
-                                name: inspector.inspect_legacy_vm_ha_identity(
-                                    target, name, local_cfg
-                                )
-                                for name, target in sorted(former_vm_ha_members.items())
-                            }
-                        adopted_candidates = (
-                            discovery_manager.discover_former_vm_ha_candidate_members(
-                                plan.gateway_group,
-                                lifecycle_state=lifecycle_state,
-                            )
+                    if not callable(adopter):
+                        raise RuntimeError(
+                            "Former VM-HA lifecycle adoption is unavailable for proven members"
                         )
-                        if adopted_candidates != former_vm_ha_members:
-                            raise RuntimeError(
-                                "Former VM-HA lifecycle adoption changed the member set"
-                            )
-                        former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
-                            plan.gateway_group,
-                            legacy_identities=legacy_vm_ha_identities,
-                            lifecycle_state=lifecycle_state,
-                        )
+                    lifecycle_state = adopter(plan.gateway_group)
+                    lifecycle_store.write_verified(lifecycle_state)
+                    lifecycle_state = lifecycle_store.read(
+                        expected_project_id=proj_id,
+                        expected_gateway_name=gateway_name,
+                    )
+                    if (
+                        lifecycle_state is None
+                        or lifecycle_state.status is not VMHALifecycleStatus.ACTIVE
+                    ):
+                        raise RuntimeError("Former VM-HA lifecycle adoption did not persist")
+                    if legacy_vm_ha_identities is None:
+                        inspector = SSHPush(ssh_policy=ssh_policy)
+                        legacy_vm_ha_identities = {
+                            name: inspector.inspect_legacy_vm_ha_identity(target, name, local_cfg)
+                            for name, target in sorted(former_vm_ha_members.items())
+                        }
+                    adopted_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
+                        plan.gateway_group,
+                        lifecycle_state=lifecycle_state,
+                    )
+                    if adopted_candidates != former_vm_ha_members:
+                        raise RuntimeError("Former VM-HA lifecycle adoption changed the member set")
+                    former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                        plan.gateway_group,
+                        legacy_identities=legacy_vm_ha_identities,
+                        lifecycle_state=lifecycle_state,
+                    )
         except (RuntimeError, ValueError) as error:
             print("[red]Former VM-HA discovery failed before ordinary provisioning:[/red]")
             print(f"[yellow]  - {error}[/yellow]")

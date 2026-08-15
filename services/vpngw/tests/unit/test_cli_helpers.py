@@ -197,7 +197,9 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_candidate_members(self, spec):
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False
+        ):
             return {}
 
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
@@ -244,6 +246,7 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
     }
     requests: list[object] = []
     sa_calls: list[str] = []
+    trace: list[str] = []
 
     class AllocationService:
         def __init__(self, client) -> None:
@@ -277,7 +280,7 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
         ),
         patch(
             "nebius_vpngw.deploy.vm_manager.VMManager._get_vm_by_name_for_vm_ha_preflight",
-            side_effect=PermissionError("Compute read denied"),
+            side_effect=lambda _, name: trace.append(f"compute:{name}"),
         ) as compute_read,
         patch(
             "nebius_vpngw.deploy.vm_manager.VMManager.check_changes",
@@ -289,7 +292,11 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
         ),
         patch(
             "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
-            side_effect=lambda **kwargs: sa_calls.append(kwargs["sa_name"]) or "sa-token",
+            side_effect=lambda **kwargs: (
+                sa_calls.append(kwargs["sa_name"]),
+                trace.append("sa-token"),
+                "sa-token",
+            )[-1],
         ),
         patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
     ):
@@ -301,10 +308,150 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
     assert result.exit_code == 0, result.stdout
     check_changes.assert_called_once()
     operator_auth.assert_not_called()
-    compute_read.assert_not_called()
+    assert compute_read.call_count == 2
     assert requests == []
     assert sa_calls == ["test-sa"]
+    assert trace == [
+        "sa-token",
+        "compute:nebius-vpn-gw-0",
+        "compute:nebius-vpn-gw-1",
+    ]
     assert "Analyzing configuration changes" in result.stdout
+
+
+@pytest.mark.parametrize("sa_name", [None, "test-sa"], ids=("operator", "service-account"))
+def test_unmarked_retained_ha_is_adopted_after_selected_auth_and_removed(
+    tmp_path: Path,
+    sa_name: str | None,
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+    identities = {name: f"identity-{name}" for name in former}
+    trace: list[str] = []
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            trace.append(f"manager:{kwargs.get('auth_token')}")
+            self.provenance = None
+
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is None:
+                assert allow_unmarked_runtime_probe
+                trace.append("candidate:unmarked")
+            else:
+                assert lifecycle_state.status is VMHALifecycleStatus.ACTIVE
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
+                trace.append("candidate:persisted-active")
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return self.provenance
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            assert existing == former
+            trace.append("ssh-pins")
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            assert legacy_identities == identities
+            trace.append(
+                "classify:persisted" if lifecycle_state is not None else "classify:runtime"
+            )
+            return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            trace.append("adopt")
+            return _lifecycle_state()
+
+        def verify_former_vm_ha_member_snapshot(self, spec, expected, **kwargs) -> None:
+            assert expected == former
+            assert kwargs.get("lifecycle_state") is not None
+            trace.append(f"recheck:{kwargs['lifecycle_state'].status.value}")
+
+        def check_changes(self, spec):
+            trace.append("check-changes")
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            trace.append("ensure-group")
+            return {"nebius-vpn-gw-0": former["nebius-vpn-gw-0"]}
+
+        def wait_for_vm_network(self, *args, **kwargs) -> bool:
+            return False
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            trace.append(f"runtime:{name}")
+            return identities[name]
+
+        def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
+            trace.append(f"deactivate:{target}")
+            return True
+
+        def verify_vm_ha_deactivated(self, target, cfg, *, retire_member=False) -> None:
+            trace.append(f"terminal:{target}")
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            return None
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=_static_route_plan()),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication",
+            side_effect=lambda **kwargs: trace.append("operator-auth") or "operator-token",
+        ) as operator_auth,
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: trace.append("sa-auth") or "sa-token",
+        ),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        args = ["apply", "--local-config-file", str(config_path)]
+        if sa_name is not None:
+            args.extend(["--sa", sa_name])
+        result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 0, result.stdout
+    auth_event = "sa-auth" if sa_name is not None else "operator-auth"
+    token = "sa-token" if sa_name is not None else "operator-token"
+    assert (
+        trace.index(auth_event)
+        < trace.index(f"manager:{token}")
+        < trace.index("candidate:unmarked")
+    )
+    if sa_name is not None:
+        operator_auth.assert_not_called()
+    assert trace.index("classify:runtime") < trace.index("adopt")
+    assert trace.index("adopt") < trace.index("candidate:persisted-active")
+    assert trace.index("candidate:persisted-active") < trace.index("check-changes")
+    assert trace.index("recheck:active") < trace.index("deactivate:203.0.113.10")
+    assert trace.index("terminal:203.0.113.11") < trace.index("recheck:removal-in-progress")
+    assert trace.index("recheck:removal-in-progress") < trace.index("ensure-group")
+    removed = VMHALifecycleStore(config_path).read(
+        expected_project_id="project-test",
+        expected_gateway_name="nebius-vpn-gw",
+    )
+    assert removed is not None and removed.status is VMHALifecycleStatus.REMOVED
 
 
 def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure_group(
@@ -359,7 +506,7 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
             self, spec, expected, *, legacy_identities=None, lifecycle_state=None
         ) -> None:
             assert lifecycle_state is not None
-            assert lifecycle_state.identity_sha256 == _lifecycle_state().identity_sha256
+            assert lifecycle_state.has_same_identity(_lifecycle_state())
             if lifecycle_state.status is VMHALifecycleStatus.ACTIVE:
                 assert legacy_identities == {
                     "nebius-vpn-gw-0": "identity-nebius-vpn-gw-0",
@@ -564,23 +711,32 @@ def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
 
     class FakeVMManager:
         def __init__(self, *args, **kwargs) -> None:
-            pass
+            self.provenance = FormerVMHAProvenance.CURRENT_MARKER
 
-        def discover_former_vm_ha_candidate_members(self, spec):
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is not None:
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
             return former
 
         @property
         def former_vm_ha_candidate_provenance(self):
-            return FormerVMHAProvenance.CURRENT_MARKER
+            return self.provenance
 
-        def discover_former_vm_ha_members(self, spec, *, legacy_identities=None):
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
             return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            return _lifecycle_state()
 
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
             return None
 
         def verify_former_vm_ha_member_snapshot(
-            self, spec, expected, *, legacy_identities=None
+            self, spec, expected, *, legacy_identities=None, lifecycle_state=None
         ) -> None:
             if failure_stage == "recheck":
                 raise RuntimeError("identity changed")
@@ -593,6 +749,9 @@ def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
             return {}
 
     class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            return f"identity-{name}"
+
         def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
             if failure_stage == "deactivate":
                 raise RuntimeError("remote command failed")
@@ -646,17 +805,26 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
 
     class FakeVMManager:
         def __init__(self, *args, **kwargs) -> None:
-            pass
+            self.provenance = FormerVMHAProvenance.CURRENT_MARKER
 
-        def discover_former_vm_ha_candidate_members(self, spec):
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is not None:
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
             return former
 
         @property
         def former_vm_ha_candidate_provenance(self):
-            return FormerVMHAProvenance.CURRENT_MARKER
+            return self.provenance
 
-        def discover_former_vm_ha_members(self, spec, *, legacy_identities=None):
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
             return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            return _lifecycle_state()
 
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
             return None
@@ -665,6 +833,9 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
             return [("nebius-vpn-gw-0", destructive)]
 
     class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            return f"identity-{name}"
+
         def deactivate_vm_ha(self, *args, **kwargs) -> bool:
             teardown.append("deactivate")
             return True
@@ -727,7 +898,9 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_candidate_members(self, spec):
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False
+        ):
             return {}
 
         def discover_vm_ha_members(self, spec):

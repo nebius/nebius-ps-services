@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-LIFECYCLE_SCHEMA = "nebius-vpngw/vm-ha-lifecycle-v1"
+LIFECYCLE_SCHEMA = "nebius-vpngw/vm-ha-lifecycle-v2"
 
 
 class VMHALifecycleStatus(str, Enum):
@@ -148,14 +148,25 @@ class VMHALifecycleState:
         }
 
     @property
-    def identity_sha256(self) -> str:
+    def record_sha256(self) -> str:
+        """Bind the schema, lifecycle status, and exact identity in one digest."""
+
         encoded = json.dumps(
-            self._identity_payload(),
+            {
+                "identity": self._identity_payload(),
+                "schema": LIFECYCLE_SCHEMA,
+                "status": self.status.value,
+            },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    def has_same_identity(self, other: VMHALifecycleState) -> bool:
+        """Compare exact identity while lifecycle writers advance the status."""
+
+        return self._identity_payload() == other._identity_payload()
 
     def with_status(self, status: VMHALifecycleStatus) -> VMHALifecycleState:
         return VMHALifecycleState(
@@ -171,7 +182,7 @@ class VMHALifecycleState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "identity": self._identity_payload(),
-            "identity_sha256": self.identity_sha256,
+            "record_sha256": self.record_sha256,
             "schema": LIFECYCLE_SCHEMA,
             "status": self.status.value,
         }
@@ -180,7 +191,7 @@ class VMHALifecycleState:
     def from_dict(cls, value: Any) -> VMHALifecycleState:
         if not isinstance(value, dict) or set(value) != {
             "identity",
-            "identity_sha256",
+            "record_sha256",
             "schema",
             "status",
         }:
@@ -222,9 +233,9 @@ class VMHALifecycleState:
             allocation_name=identity["allocation_name"],
             members=tuple(VMHALifecycleMember.from_dict(member) for member in raw_members),  # type: ignore[arg-type]
         )
-        digest = value.get("identity_sha256")
-        if not isinstance(digest, str) or digest != state.identity_sha256:
-            raise ValueError("VM-HA lifecycle identity digest does not match")
+        digest = value.get("record_sha256")
+        if not isinstance(digest, str) or digest != state.record_sha256:
+            raise ValueError("VM-HA lifecycle record digest does not match")
         return state
 
 

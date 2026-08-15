@@ -44,11 +44,12 @@ def test_lifecycle_transitions_preserve_identity_and_verify_terminal_tombstone(
 
     observed = store.read(expected_project_id="project-1", expected_gateway_name="gateway")
     assert observed == removed
-    assert observed.identity_sha256 == active.identity_sha256
+    assert observed.has_same_identity(active)
+    assert active.record_sha256 != removing.record_sha256 != removed.record_sha256
     assert store.path.stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("field", ["status", "identity_sha256"])
+@pytest.mark.parametrize("field", ["status", "record_sha256"])
 def test_lifecycle_tamper_fails_closed(tmp_path: Path, field: str) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -59,6 +60,32 @@ def test_lifecycle_tamper_fails_closed(tmp_path: Path, field: str) -> None:
     store.path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="lifecycle"):
+        store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+
+
+@pytest.mark.parametrize(
+    ("initial", "substituted"),
+    [
+        (VMHALifecycleStatus.ACTIVE, VMHALifecycleStatus.REMOVAL_IN_PROGRESS),
+        (VMHALifecycleStatus.ACTIVE, VMHALifecycleStatus.REMOVED),
+        (VMHALifecycleStatus.REMOVAL_IN_PROGRESS, VMHALifecycleStatus.ACTIVE),
+        (VMHALifecycleStatus.REMOVAL_IN_PROGRESS, VMHALifecycleStatus.REMOVED),
+    ],
+)
+def test_valid_lifecycle_status_substitution_breaks_whole_record_digest(
+    tmp_path: Path,
+    initial: VMHALifecycleStatus,
+    substituted: VMHALifecycleStatus,
+) -> None:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    store.write_verified(_state(initial))
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    payload["status"] = substituted.value
+    store.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="record digest"):
         store.read(expected_project_id="project-1", expected_gateway_name="gateway")
 
 
