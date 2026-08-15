@@ -144,8 +144,11 @@ This is useful for planned maintenance, peer changes, or operational testing.
 
 For advanced setup, continue with [Configuration](#configuration), [Commands](#commands), and [Routing Modes](#routing-modes).
 
-> **Note:** Route synchronization would need to be implemented by the Nebius VPC control plane. However, because the VPN gateway operates outside of the control plane, automatic route propagation to VPC routing tables is not supported by design.
-> Therefore, whenever a new route is added, the customer must manually update the VPC routing table using the `nebius-vpngw add-routes-local` command.
+> **Note:** In ordinary non-HA deployments, the customer must still update VPC
+> route tables with `nebius-vpngw add-routes-local` when routes change. An
+> explicitly enabled two-node VM-HA cluster instead reconciles its declared
+> static routes and locally learned BGP routes only from the controller-verified
+> owner, after authoritative fencing and exact shared-allocation ownership.
 
 ## Security Notice
 
@@ -155,6 +158,27 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 - **Required:** Ensure `.gitignore` includes your config file patterns
 - **Best practice:** Use environment variables for secrets with `${VAR}` syntax
 
+VM-HA apply also requires an operator-enrolled SSH identity before any cloud
+resource is created or changed. Set `VPNGW_SSH_KNOWN_HOSTS_FILE` to an absolute,
+readable, non-empty OpenSSH known-hosts file containing the pinned identities of
+both members. Apply copies that public trust into a protected immutable
+snapshot shared by OpenSSH and Paramiko, then verifies every existing member's
+remote identity before service-account or infrastructure mutation. Set
+`VPNGW_SSH_HOST_KEYS_DIR` to an absolute directory containing one unencrypted
+private host key named `<gateway-hostname>.key` for every fresh or recreated
+member; retained members do not require their server private keys on the
+operator host. Apply validates each required private key against its exact pin
+and proves the cloud-init enrollment anchors before deletion, allocation, disk,
+or instance work. Public-only, encrypted, malformed, mismatched, unreachable,
+or identity-rejected members fail closed. Trust-on-first-use and disabled host
+verification are not supported. During clean bootstrap, each member first
+renders inert deterministic local strongSwan and FRR files behind the cold-start
+guard. After the controller grants current-boot passive authority, the member
+may establish only its local tunnel, XFRM, and BGP materialization needed to
+measure promotion readiness. Forwarding, firewall changes, allocation transfer,
+VPC route effects, and owner-only reconciliation remain fenced until exact
+active authority is proven.
+
 ## Features
 
 - **IPsec:** IKEv2 (default) + IKEv1 fallback, PSK auth, modern crypto (AES-256, SHA-256/384/512)
@@ -162,9 +186,13 @@ For advanced setup, continue with [Configuration](#configuration), [Commands](#c
 - **Idempotent:** Declarative YAML config, no manual state management
 - **Peer support:** GCP HA VPN, AWS Site-to-Site, Azure VPN Gateway, Cisco IOS
 - **Validation:** Strict Pydantic schema catches typos and invalid values
-- **HA options:** Tunnel-level active/passive HA on a single gateway VM
-- **Gateway groups:** Multiple independent gateway VMs with per-tunnel pinning; `gateway_group` is orchestration, not a clustered gateway service
-- **Current limit:** Multi-VM HA for one routed prefix is not supported today
+- **HA options:** Tunnel-level active/passive on one VM, plus explicit and
+  default-disabled two-node VM-level active/passive HA
+- **Gateway groups:** Multiple independent gateway VMs by default; adding an
+  explicit `gateway_group.vm_ha` block creates one coordinated two-node cluster
+- **Split-brain safety:** VM promotion requires an authoritatively stopped former
+  Compute owner and exact shared-allocation confirmation on the candidate before
+  forwarding or route reconciliation
 
 ## Installation (Detailed)
 
@@ -246,15 +274,47 @@ pip install -e ".[dev]"
 **Deployment modes:**
 
 - Single VM: Multiple tunnels, VM is single point of failure
-- Gateway group: Multiple independent VMs with per-tunnel pinning
+- Gateway group without `vm_ha`: Multiple independent VMs with per-tunnel pinning
+- Gateway group with explicit `vm_ha.enabled: true`: Exactly two stable members
+  sharing one controller-owned private allocation
 
 **Current HA Boundary:**
 
-- Active/passive HA is supported only at the tunnel level inside a single gateway VM
-- Each gateway VM must keep exactly one active tunnel per connection
-- If the same site/prefixes are made active on more than one gateway VM, you create multiple active paths for the same prefix and reintroduce the ECMP/asymmetric-routing problem described later in this document
-- `gateway_group` is an orchestration grouping for provisioning and config distribution, not a clustered gateway service with shared control plane or shared dataplane ownership
-- Multi-VM HA for one prefix is not supported in current releases
+- Tunnel `ha_role` remains per connection and per VM; it is not VM ownership.
+- VM-level HA is enabled only by the explicit `gateway_group.vm_ha` contract and
+  supports exactly two members, one configured active and one configured passive.
+- Omitting or disabling `vm_ha` preserves independent gateway-VM behavior and
+  does not infer clustering from `instance_count`, tunnel roles, or public IPs.
+- Active-active forwarding, ECMP, and clusters larger than two members remain
+  unsupported.
+
+### Two-node VM-level HA
+
+Start from [`examples/vm-ha-bgp-example.yaml`](examples/vm-ha-bgp-example.yaml).
+Each member supplies operator-local source paths for a peer CA, certificate,
+private key, and renewable Nebius credentials file. `apply` installs the bytes
+separately into immutable, restricted node-local bundles; runtime manifests,
+status, journals, and logs contain only absolute references.
+
+The HA service starts behind a forwarding and tunnel-initiation guard. A
+candidate can promote only after fresh cloud reads prove the former Compute
+owner is `Stopped`, the former attachment is absent, and the shared allocation
+is attached exactly to the candidate. Route reconciliation remains owner-only.
+Ambiguous cloud state, credential or policy drift, stale peer state, and partial
+transitions fail closed.
+
+```bash
+nebius-vpngw apply --local-config-file vm-ha.config.yaml
+nebius-vpngw status --local-config-file vm-ha.config.yaml
+nebius-vpngw vm-ha-recover --local-config-file vm-ha.config.yaml
+nebius-vpngw vm-ha-failback --local-config-file vm-ha.config.yaml
+```
+
+`vm-ha-recover` validates durable recovery state without bypassing fencing.
+`vm-ha-failback` requests the normal fenced ownership-transfer path; it does not
+rewrite configured roles or force forwarding. Offline tests cover the safety
+contract, but a live-ready claim still requires a separately authorized
+non-production trial with independently observed cloud and data-plane state.
 
 **Networking:**
 
@@ -262,7 +322,7 @@ pip install -e ".[dev]"
 - One NIC per VM (platform constraint), future-ready for multi-NIC
 - Public IP allocations preserved across VM recreation
 
-For detailed architecture, see [design document](doc/design.md).
+For detailed architecture, see [design document](docs/design.md).
 
 ## Configuration
 
@@ -866,7 +926,12 @@ The gateway operates in **Active/Passive mode** to ensure symmetric routing with
 
 **Important:** If you omit `ha_role` on multiple tunnels, they will all default to `"active"`, creating ECMP load balancing that may cause asymmetric routing and packet loss. Always explicitly set one tunnel to `"passive"` in multi-tunnel configurations.
 
-**Scope boundary:** This active/passive model is enforced per connection per gateway VM. If you create two gateway VMs and make the same site's prefixes active on both of them, each VM still has its own active tunnel and you end up with two active paths for the same prefix. That is outside the supported design and can reintroduce the ECMP/asymmetric-routing problem. `gateway_group` does not make those VMs a clustered gateway service; it only groups them for orchestration. Multi-VM HA for one prefix is not supported today.
+**Scope boundary:** Tunnel active/passive is enforced per connection per gateway
+VM. Two independent gateway VMs can still create conflicting active paths;
+`gateway_group` alone does not coordinate them. Use the explicit
+`gateway_group.vm_ha` two-member contract when one routed service needs VM-level
+ownership fencing. VM HA remains independent from tunnel `ha_role`, and
+active-active or ECMP behavior is not supported.
 
 Multiple `connections` on the same gateway are supported for multi-site designs. Keep the Active/Passive rule inside each connection, and prefer distinct site prefixes per connection. If different active connections learn the same prefix, FRR can install multipath for that prefix and `status` will warn with the overlapping prefix and active tunnel names.
 
@@ -1984,4 +2049,4 @@ Notes:
 
 ---
 
-For detailed design, workflows, and troubleshooting, see [doc/design.md](doc/design.md).
+For detailed design, workflows, and troubleshooting, see [docs/design.md](docs/design.md).

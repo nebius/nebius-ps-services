@@ -186,7 +186,9 @@ class StrongSwanRenderer:
         _, _, interface_endpoints = self._collect_tunnel_state(cfg)
         return interface_endpoints
 
-    def render_and_apply(self, cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    def render_and_apply(
+        self, cfg: dict[str, Any], *, activate: bool = True
+    ) -> list[dict[str, Any]]:
         """Render strongSwan config based on resolved per-VM YAML.
 
         Uses swanctl (VICI) to load per-tunnel connections with if_id_in/out for deterministic
@@ -260,18 +262,19 @@ network:
         use-routes: true
       link-local: [ ipv6 ]
 """
-        netplan_dir = Path("/etc/netplan")
+        netplan_dir = NETPLAN_DIR
         netplan_dir.mkdir(parents=True, exist_ok=True)
         netplan_override = netplan_dir / "99-nebius-vpngw.yaml"
         netplan_override.write_text(netplan_override_text, encoding="utf-8")
         print(f"[StrongSwan] Wrote {netplan_override} (disabled IPv4 link-local)")
 
         # Apply netplan configuration
-        result = subprocess.run(["netplan", "apply"], capture_output=True, text=True)
-        if result.returncode == 0:
-            print("[StrongSwan] ✓ Applied netplan configuration")
-        else:
-            print(f"[StrongSwan] ⚠ netplan apply failed: {result.stderr}")
+        if activate:
+            result = subprocess.run(["netplan", "apply"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print("[StrongSwan] ✓ Applied netplan configuration")
+            else:
+                print(f"[StrongSwan] ⚠ netplan apply failed: {result.stderr}")
 
         # Write minimal ipsec.conf so strongswan-starter can launch charon without parsing tunnels.
         ipsec_text = [
@@ -317,8 +320,8 @@ network:
                 swanctl_lines.append(f"        esp_proposals = {','.join(tun['esp_props'])}")
             swanctl_lines.append(f"        rekey_time = {int(tun['esp_life'])}s")
             swanctl_lines.append("        mode = tunnel")
-            swanctl_lines.append("        start_action = start")
-            swanctl_lines.append("        close_action = restart")
+            swanctl_lines.append(f"        start_action = {'start' if activate else 'none'}")
+            swanctl_lines.append(f"        close_action = {'restart' if activate else 'none'}")
             swanctl_lines.append(f"        if_id_in = {tun['if_id']}")
             swanctl_lines.append(f"        if_id_out = {tun['if_id']}")
             swanctl_lines.append("      }")
@@ -351,6 +354,9 @@ vici {
         print(f"[StrongSwan] Wrote {vici_conf_path} (enabled vici plugin)")
 
         # Reload strongSwan to pick up new configs
+        if not activate:
+            return interface_endpoints
+
         try:
             subprocess.run(
                 ["systemctl", "restart", "strongswan-starter"],
@@ -405,3 +411,4 @@ vici {
         # Return interface configuration for external management (XFRM device creation, routing)
         # XFRM interfaces must be created externally before/after strongSwan starts
         return interface_endpoints
+NETPLAN_DIR = Path("/etc/netplan")

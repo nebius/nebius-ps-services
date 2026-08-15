@@ -56,6 +56,7 @@ building strongSwan customer gateways in cloud environments.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
 import subprocess
@@ -92,6 +93,48 @@ METADATA_APIPA_WHITELIST = [
 ]
 
 LOCK_PATH = Path("/run/nebius-vpngw/fix-routes.lock")
+VM_HA_STATUS_PATH = Path("/var/lib/nebius-vpngw/vm-ha/status.json")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+
+
+def require_vm_ha_current_boot_ready(
+    cfg: dict[str, Any],
+    *,
+    status_path: Path = VM_HA_STATUS_PATH,
+    boot_id_path: Path = BOOT_ID_PATH,
+    guard_path: Path | None = None,
+) -> None:
+    """Refuse every forwarding writer until this boot's controller is ready.
+
+    Omitted VM HA remains on the established path.  An enabled node manifest,
+    however, may not use process liveness or an old status file as forwarding
+    authority.
+    """
+
+    vm_ha = cfg.get("vm_ha")
+    if not isinstance(vm_ha, dict):
+        return
+    try:
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        guard = json.loads(
+            (guard_path or status_path.with_name("guard.json")).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("VM-HA current-boot readiness is unavailable") from error
+    if not boot_id or not isinstance(status, dict) or not isinstance(guard, dict):
+        raise RuntimeError("VM-HA current-boot readiness is unavailable")
+    if not (
+        status.get("schema") == "nebius-vpngw/vm-ha-status-v1"
+        and status.get("controller_ready_boot_id") == boot_id
+        and status.get("guard_boot_id") == boot_id
+        and status.get("promotion_ready") is True
+        and status.get("data_plane_mode") == "active"
+        and status.get("state") in {"active", "degraded"}
+        and guard.get("guard_boot_id") == boot_id
+        and guard.get("data_plane_mode") == "active"
+    ):
+        raise RuntimeError("VM-HA controller is not ready for forwarding on the current boot")
 
 
 def acquire_routing_lock(blocking: bool = True) -> int | None:
@@ -196,6 +239,7 @@ def enforce_routing_invariants(cfg: dict[str, Any]) -> None:
         This function is idempotent and safe to call multiple times.
         It will only make changes if invariants are violated.
     """
+    require_vm_ha_current_boot_ready(cfg)
     lock_fd = acquire_routing_lock(blocking=False)
     if lock_fd is None:
         print("[RoutingGuard] Lock held; skipping")
@@ -210,6 +254,7 @@ def enforce_routing_invariants(cfg: dict[str, Any]) -> None:
 
 
 def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
+    require_vm_ha_current_boot_ready(cfg)
     print("[RoutingGuard] Enforcing routing table invariants...")
 
     # Track metrics for structured logging

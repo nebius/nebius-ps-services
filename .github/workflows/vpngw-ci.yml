@@ -87,7 +87,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Unit tests
-        run: python -m pytest -n auto tests/unit
+        run: |
+          python -m pytest -n auto tests/unit \
+            --deselect=tests/unit/test_cli_helpers.py::test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager \
+            --deselect=tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment \
+            --deselect=tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key \
+            --deselect=tests/unit/test_ssh_push.py::test_vm_ha_stage_classifies_missing_pinned_host_identity \
+            --deselect=tests/unit/test_ssh_push.py::test_vm_ha_activation_classifies_host_identity_rejection
+      - name: VM-HA safety regressions
+        run: |
+          python -m pytest -n auto \
+            tests/integration/test_vm_ha_runtime_composed.py::test_clean_owner_bootstrap_materializes_passive_before_promotion \
+            tests/integration/test_vm_ha_failover.py::test_healthy_nodes_keep_one_exact_owner_and_one_passive \
+            tests/unit/test_cli_helpers.py::test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager \
+            tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment \
+            tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key \
+            tests/unit/test_ssh_push.py::test_vm_ha_stage_classifies_missing_pinned_host_identity \
+            tests/unit/test_ssh_push.py::test_vm_ha_activation_classifies_host_identity_rejection
       - name: CLI integration smoke tests
         run: python -m pytest -n auto tests/integration/test_cli_commands.py
       - name: Release helper regressions

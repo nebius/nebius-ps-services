@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 import yaml
 from typer.main import get_command
 from typer.testing import CliRunner
 
+from nebius_vpngw import vpngw_sa
 from nebius_vpngw.cli import (
     _detect_connection_role_overrides,
     _detect_cross_connection_ecmp_warnings,
@@ -16,9 +19,12 @@ from nebius_vpngw.cli import (
     _format_role_override_lines,
     _format_traffic_state,
     _registered_command_name,
+    _run_vm_ha_operator_command,
     _select_carrying_tunnel_for_connection,
     _should_prompt_add_routes_after_apply,
     _update_external_ips_in_yaml,
+    _vm_ha_activation_blockers,
+    _vm_ha_apply_order,
     app,
 )
 from nebius_vpngw.config_loader import (
@@ -28,9 +34,49 @@ from nebius_vpngw.config_loader import (
     load_local_config,
 )
 from nebius_vpngw.deploy.vm_diff import ChangeType, VMDiff
+from nebius_vpngw.deploy.vm_ha_identity import FormerVMHAProvenance
+from nebius_vpngw.deploy.vm_ha_lifecycle import (
+    VMHALifecycleMember,
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    VMHALifecycleStore,
+)
 from nebius_vpngw.schema import HARole, RoutingMode
 
 HELP_ENV = {"COLUMNS": "120"}
+
+
+def _lifecycle_state(
+    *, status: VMHALifecycleStatus = VMHALifecycleStatus.ACTIVE
+) -> VMHALifecycleState:
+    return VMHALifecycleState(
+        status=status,
+        project_id="project-test",
+        gateway_name="nebius-vpn-gw",
+        cluster_id="cluster",
+        allocation_id="shared-private",
+        allocation_name="nebius-vpn-gw-cluster-shared-private-ip",
+        members=(
+            VMHALifecycleMember(
+                instance_index=0,
+                instance_name="nebius-vpn-gw-0",
+                node_id="node-active",
+                role="active",
+                compute_id="compute-0",
+                network_interface_name="eth0",
+                public_ip="203.0.113.10",
+            ),
+            VMHALifecycleMember(
+                instance_index=1,
+                instance_name="nebius-vpn-gw-1",
+                node_id="node-passive",
+                role="passive",
+                compute_id="compute-1",
+                network_interface_name="eth0",
+                public_ip="203.0.113.11",
+            ),
+        ),
+    )
 
 
 def test_load_local_config_drops_unset_gateway_group_network_id_placeholder(
@@ -151,6 +197,11 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
         def __init__(self, *args, **kwargs) -> None:
             pass
 
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False
+        ):
+            return {}
+
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
             return changes
 
@@ -158,7 +209,10 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
             return {}
 
     class FakeSSHPush:
-        def push_config_and_reload(self, target, inst_cfg, cfg) -> None:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, target, inst_cfg, cfg, *, fail_closed=False) -> None:
             return None
 
     with (
@@ -175,6 +229,632 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
     assert "IMPORTANT: For static routing, run:" in result.stdout
     assert "add-routes-local --local-config-file" in result.stdout
     assert "<your-config.yaml>" not in result.stdout
+
+
+def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vpc_read(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    requests: list[object] = []
+    sa_calls: list[str] = []
+    trace: list[str] = []
+
+    class AllocationService:
+        def __init__(self, client) -> None:
+            assert client is not None
+
+        def list(self, request):
+            requests.append(request)
+            raise PermissionError("allocation list denied")
+
+    class FakeSSHPush:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            return None
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=_static_route_plan()),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication",
+            side_effect=PermissionError("operator authentication is unavailable"),
+        ) as operator_auth,
+        patch(
+            "nebius.api.nebius.vpc.v1.AllocationServiceClient",
+            AllocationService,
+        ),
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager._build_sdk_client",
+            return_value=object(),
+        ),
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager._get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: trace.append(f"compute:{name}"),
+        ) as compute_read,
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager.check_changes",
+            return_value=[],
+        ) as check_changes,
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager.ensure_group",
+            return_value={},
+        ),
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: (
+                sa_calls.append(kwargs["sa_name"]),
+                trace.append("sa-token"),
+                "sa-token",
+            )[-1],
+        ),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"],
+        )
+
+    assert result.exit_code == 0, result.stdout
+    check_changes.assert_called_once()
+    operator_auth.assert_not_called()
+    assert compute_read.call_count == 2
+    assert requests == []
+    assert sa_calls == ["test-sa"]
+    assert trace == [
+        "sa-token",
+        "compute:nebius-vpn-gw-0",
+        "compute:nebius-vpn-gw-1",
+    ]
+    assert "Analyzing configuration changes" in result.stdout
+
+
+@pytest.mark.parametrize("sa_name", [None, "test-sa"], ids=("operator", "service-account"))
+def test_unmarked_retained_ha_is_adopted_after_selected_auth_and_removed(
+    tmp_path: Path,
+    sa_name: str | None,
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+    identities = {name: f"identity-{name}" for name in former}
+    trace: list[str] = []
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            trace.append(f"manager:{kwargs.get('auth_token')}")
+            self.provenance = None
+
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is None:
+                assert allow_unmarked_runtime_probe
+                trace.append("candidate:unmarked")
+            else:
+                assert lifecycle_state.status is VMHALifecycleStatus.ACTIVE
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
+                trace.append("candidate:persisted-active")
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return self.provenance
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            assert existing == former
+            trace.append("ssh-pins")
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            assert legacy_identities == identities
+            trace.append(
+                "classify:persisted" if lifecycle_state is not None else "classify:runtime"
+            )
+            return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            trace.append("adopt")
+            return _lifecycle_state()
+
+        def verify_former_vm_ha_member_snapshot(self, spec, expected, **kwargs) -> None:
+            assert expected == former
+            assert kwargs.get("lifecycle_state") is not None
+            trace.append(f"recheck:{kwargs['lifecycle_state'].status.value}")
+
+        def check_changes(self, spec):
+            trace.append("check-changes")
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            trace.append("ensure-group")
+            return {"nebius-vpn-gw-0": former["nebius-vpn-gw-0"]}
+
+        def wait_for_vm_network(self, *args, **kwargs) -> bool:
+            return False
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            trace.append(f"runtime:{name}")
+            return identities[name]
+
+        def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
+            trace.append(f"deactivate:{target}")
+            return True
+
+        def verify_vm_ha_deactivated(self, target, cfg, *, retire_member=False) -> None:
+            trace.append(f"terminal:{target}")
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            return None
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=_static_route_plan()),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication",
+            side_effect=lambda **kwargs: trace.append("operator-auth") or "operator-token",
+        ) as operator_auth,
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: trace.append("sa-auth") or "sa-token",
+        ),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        args = ["apply", "--local-config-file", str(config_path)]
+        if sa_name is not None:
+            args.extend(["--sa", sa_name])
+        result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 0, result.stdout
+    auth_event = "sa-auth" if sa_name is not None else "operator-auth"
+    token = "sa-token" if sa_name is not None else "operator-token"
+    assert (
+        trace.index(auth_event)
+        < trace.index(f"manager:{token}")
+        < trace.index("candidate:unmarked")
+    )
+    if sa_name is not None:
+        operator_auth.assert_not_called()
+    assert trace.index("classify:runtime") < trace.index("adopt")
+    assert trace.index("adopt") < trace.index("candidate:persisted-active")
+    assert trace.index("candidate:persisted-active") < trace.index("check-changes")
+    assert trace.index("recheck:active") < trace.index("deactivate:203.0.113.10")
+    assert trace.index("terminal:203.0.113.11") < trace.index("recheck:removal-in-progress")
+    assert trace.index("recheck:removal-in-progress") < trace.index("ensure-group")
+    removed = VMHALifecycleStore(config_path).read(
+        expected_project_id="project-test",
+        expected_gateway_name="nebius-vpn-gw",
+    )
+    assert removed is not None and removed.status is VMHALifecycleStatus.REMOVED
+
+
+def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure_group(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    VMHALifecycleStore(config_path).write_verified(_lifecycle_state())
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    trace: list[tuple[object, ...]] = []
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+    manager_tokens: list[str | None] = []
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            manager_tokens.append(kwargs.get("auth_token"))
+
+        def discover_former_vm_ha_candidate_members(self, spec, *, lifecycle_state=None):
+            assert lifecycle_state == _lifecycle_state()
+            trace.append(("discover", spec.instance_count))
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return FormerVMHAProvenance.LIFECYCLE_STATE
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            assert lifecycle_state == _lifecycle_state()
+            assert legacy_identities == {
+                "nebius-vpn-gw-0": "identity-nebius-vpn-gw-0",
+                "nebius-vpn-gw-1": "identity-nebius-vpn-gw-1",
+            }
+            return former
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            trace.append(("authenticate", tuple(existing)))
+
+        def verify_former_vm_ha_member_snapshot(
+            self, spec, expected, *, legacy_identities=None, lifecycle_state=None
+        ) -> None:
+            assert lifecycle_state is not None
+            assert lifecycle_state.has_same_identity(_lifecycle_state())
+            if lifecycle_state.status is VMHALifecycleStatus.ACTIVE:
+                assert legacy_identities == {
+                    "nebius-vpn-gw-0": "identity-nebius-vpn-gw-0",
+                    "nebius-vpn-gw-1": "identity-nebius-vpn-gw-1",
+                }
+            trace.append(("recheck", tuple(expected)))
+
+        def check_changes(self, spec):
+            trace.append(("check_changes",))
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            trace.append(("ensure_group", spec.instance_count))
+            return {"nebius-vpn-gw-0": former["nebius-vpn-gw-0"]}
+
+        def wait_for_vm_network(self, *args, **kwargs) -> bool:
+            return False
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            trace.append(("inspect", name, target))
+            return f"identity-{name}"
+
+        def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
+            trace.append(("deactivate", target, retire_member))
+            return True
+
+        def verify_vm_ha_deactivated(self, target, cfg, *, retire_member=False) -> None:
+            trace.append(("verify", target, retire_member))
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            trace.append(("ordinary-push", args[0]))
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication",
+            side_effect=lambda **kwargs: trace.append(("discovery-auth",)) or "token",
+        ),
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: trace.append(("sa-auth",)) or "sa-token",
+        ),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(
+            app, ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"]
+        )
+
+    assert result.exit_code == 0, result.stdout
+    ensure_index = trace.index(("ensure_group", 1))
+    assert trace[:ensure_index] == [
+        ("discovery-auth",),
+        ("discover", 1),
+        ("authenticate", ("nebius-vpn-gw-0", "nebius-vpn-gw-1")),
+        ("inspect", "nebius-vpn-gw-0", "203.0.113.10"),
+        ("inspect", "nebius-vpn-gw-1", "203.0.113.11"),
+        ("check_changes",),
+        ("inspect", "nebius-vpn-gw-0", "203.0.113.10"),
+        ("inspect", "nebius-vpn-gw-1", "203.0.113.11"),
+        ("recheck", ("nebius-vpn-gw-0", "nebius-vpn-gw-1")),
+        ("deactivate", "203.0.113.10", False),
+        ("deactivate", "203.0.113.11", True),
+        ("verify", "203.0.113.10", False),
+        ("verify", "203.0.113.11", True),
+        ("recheck", ("nebius-vpn-gw-0", "nebius-vpn-gw-1")),
+        ("sa-auth",),
+    ]
+    assert manager_tokens == ["token", "sa-token"]
+
+
+def test_removed_tombstone_makes_consecutive_ordinary_sa_apply_teardown_free(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    VMHALifecycleStore(config_path).write_verified(_lifecycle_state())
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+    trace: list[str] = []
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            trace.append(f"manager:{kwargs.get('auth_token')}")
+
+        def discover_former_vm_ha_candidate_members(self, spec, *, lifecycle_state=None):
+            trace.append("discover")
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return FormerVMHAProvenance.LIFECYCLE_STATE
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            return former
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            return None
+
+        def verify_former_vm_ha_member_snapshot(self, spec, expected, **kwargs) -> None:
+            trace.append("recheck")
+
+        def check_changes(self, spec):
+            trace.append("analyze")
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            return {"nebius-vpn-gw-0": "203.0.113.10"}
+
+        def wait_for_vm_network(self, *args, **kwargs) -> bool:
+            return False
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            return f"identity-{name}"
+
+        def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
+            trace.append(f"deactivate:{target}")
+            return True
+
+        def verify_vm_ha_deactivated(self, target, cfg, *, retire_member=False) -> None:
+            trace.append(f"verify:{target}")
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            trace.append("ordinary-push")
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch(
+            "nebius_vpngw.cli._ensure_authentication",
+            side_effect=lambda **kwargs: trace.append("operator-auth") or "operator-token",
+        ),
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: trace.append("sa-auth") or "sa-token",
+        ),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        first = CliRunner().invoke(
+            app, ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"]
+        )
+        second = CliRunner().invoke(
+            app, ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"]
+        )
+
+    assert first.exit_code == second.exit_code == 0
+    assert trace.count("operator-auth") == 1
+    assert trace.count("discover") == 1
+    assert trace.count("analyze") == 2
+    assert [item for item in trace if item.startswith("deactivate:")] == [
+        "deactivate:203.0.113.10",
+        "deactivate:203.0.113.11",
+    ]
+    assert trace.count("ordinary-push") == 2
+    removed = VMHALifecycleStore(config_path).read(
+        expected_project_id="project-test", expected_gateway_name="nebius-vpn-gw"
+    )
+    assert removed is not None and removed.status is VMHALifecycleStatus.REMOVED
+
+
+@pytest.mark.parametrize("failure_stage", ["recheck", "deactivate", "verify"])
+def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
+    tmp_path: Path, failure_stage: str
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    ordinary_effects: list[str] = []
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            self.provenance = FormerVMHAProvenance.CURRENT_MARKER
+
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is not None:
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return self.provenance
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            return _lifecycle_state()
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            return None
+
+        def verify_former_vm_ha_member_snapshot(
+            self, spec, expected, *, legacy_identities=None, lifecycle_state=None
+        ) -> None:
+            if failure_stage == "recheck":
+                raise RuntimeError("identity changed")
+
+        def check_changes(self, spec):
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            ordinary_effects.append("ensure_group")
+            return {}
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            return f"identity-{name}"
+
+        def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
+            if failure_stage == "deactivate":
+                raise RuntimeError("remote command failed")
+            return True
+
+        def verify_vm_ha_deactivated(self, target, cfg, *, retire_member=False) -> None:
+            if failure_stage == "verify":
+                raise RuntimeError("teardown incomplete")
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="discovery-token"),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "Former VM-HA teardown failed before ordinary provisioning" in result.stdout
+    assert ordinary_effects == []
+
+
+@pytest.mark.parametrize("recreate_gw", [False, True])
+def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
+    tmp_path: Path, recreate_gw: bool
+) -> None:
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    teardown: list[str] = []
+    former = {
+        "nebius-vpn-gw-0": "203.0.113.10",
+        "nebius-vpn-gw-1": "203.0.113.11",
+    }
+    destructive = VMDiff(
+        change_type=ChangeType.DESTRUCTIVE,
+        differences=["boot disk shape changed"],
+        destructive_fields=["boot_disk"],
+    )
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            self.provenance = FormerVMHAProvenance.CURRENT_MARKER
+
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False, lifecycle_state=None
+        ):
+            if lifecycle_state is not None:
+                self.provenance = FormerVMHAProvenance.LIFECYCLE_STATE
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return self.provenance
+
+        def discover_former_vm_ha_members(
+            self, spec, *, legacy_identities=None, lifecycle_state=None
+        ):
+            return former
+
+        def former_vm_ha_lifecycle_state(self, spec):
+            return _lifecycle_state()
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            return None
+
+        def check_changes(self, spec):
+            return [("nebius-vpn-gw-0", destructive)]
+
+    class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            return f"identity-{name}"
+
+        def deactivate_vm_ha(self, *args, **kwargs) -> bool:
+            teardown.append("deactivate")
+            return True
+
+    args = ["apply", "--local-config-file", str(config_path)]
+    if recreate_gw:
+        args.append("--recreate-gw")
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(app, args, input="n\n")
+
+    assert result.exit_code == (0 if recreate_gw else 1)
+    assert teardown == []
 
 
 def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
@@ -218,6 +898,19 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
+        def discover_former_vm_ha_candidate_members(
+            self, spec, *, allow_unmarked_runtime_probe=False
+        ):
+            return {}
+
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(
+            self, existing, *, policy=None, username="ubuntu"
+        ) -> None:
+            assert existing == {}
+
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
             return []
 
@@ -231,7 +924,10 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
             return health_results.pop(0)
 
     class FakeSSHPush:
-        def push_config_and_reload(self, target, inst_cfg, cfg) -> None:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, target, inst_cfg, cfg, *, fail_closed=False) -> None:
             pushed_targets.append(target)
 
     with (
@@ -532,12 +1228,14 @@ def test_format_ecmp_warning_lines_groups_prefix_and_tunnels() -> None:
 def test_cli_help_command_order() -> None:
     command_names = [_registered_command_name(command) for command in app.registered_commands]
 
-    assert command_names[:13] == [
+    assert command_names[:15] == [
         "create-config",
         "prep-network",
         "validate-config",
         "apply",
         "status",
+        "vm-ha-recover",
+        "vm-ha-failback",
         "add-routes-local",
         "list-routes-local",
         "list-routes-remote",
@@ -547,6 +1245,384 @@ def test_cli_help_command_order() -> None:
         "create-from-peer-config",
         "destroy",
     ]
+
+
+def test_vm_ha_apply_order_is_passive_first_and_non_ha_order_is_unchanged() -> None:
+    active = SimpleNamespace(vm_ha_node=SimpleNamespace(role=SimpleNamespace(value="active")))
+    passive = SimpleNamespace(vm_ha_node=SimpleNamespace(role=SimpleNamespace(value="passive")))
+    ha_plan = SimpleNamespace(vm_ha=object(), iter_instance_configs=lambda: iter([active, passive]))
+    ordinary_plan = SimpleNamespace(
+        vm_ha=None, iter_instance_configs=lambda: iter([active, passive])
+    )
+
+    assert _vm_ha_apply_order(ha_plan) == [passive, active]
+    assert _vm_ha_apply_order(ordinary_plan) == [active, passive]
+
+
+def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "vm-ha-blocked.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    plan = SimpleNamespace(
+        vm_ha=object(), validate=lambda: None, iter_instance_configs=lambda: iter(())
+    )
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value={}),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch(
+            "nebius_vpngw.cli._vm_ha_activation_blockers",
+            return_value=("authoritative-runtime-unavailable",),
+        ),
+        patch("nebius_vpngw.cli.VMManager") as manager,
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "BLOCKED before external mutation" in result.stdout
+    manager.assert_not_called()
+
+
+def test_vm_ha_apply_rejects_missing_host_trust_before_vm_manager(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    plan = SimpleNamespace(
+        vm_ha=object(), validate=lambda: None, iter_instance_configs=lambda: iter(())
+    )
+    monkeypatch.delenv("VPNGW_SSH_KNOWN_HOSTS_FILE", raising=False)
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value={}),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.VMManager") as manager,
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "SSH trust preflight failed before external mutation" in result.stdout
+    manager.assert_not_called()
+
+
+@pytest.mark.parametrize("failing_stage_role", [None, "passive", "active"])
+def test_vm_ha_apply_delivers_credentials_passive_first_and_never_activates_partial_stage(
+    tmp_path: Path,
+    failing_stage_role: str | None,
+) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    binding = SimpleNamespace(
+        cluster_id="cluster-a",
+        shared_allocation_id="shared-private",
+        nodes=(
+            SimpleNamespace(
+                node_id="node-a",
+                role=SimpleNamespace(value="active"),
+                compute_id="compute-0",
+                network_interface_name="eth0",
+            ),
+            SimpleNamespace(
+                node_id="node-b",
+                role=SimpleNamespace(value="passive"),
+                compute_id="compute-1",
+                network_interface_name="eth0",
+            ),
+        ),
+    )
+    generation = SimpleNamespace(generation_id="a" * 64)
+    active = SimpleNamespace(
+        instance_index=0,
+        hostname="gateway-0",
+        external_ip="",
+        vm_ha_node=SimpleNamespace(
+            node_id="node-a", role=SimpleNamespace(value="active"), credential_sources=object()
+        ),
+        vm_ha_generation=generation,
+    )
+    passive = SimpleNamespace(
+        instance_index=1,
+        hostname="gateway-1",
+        external_ip="",
+        vm_ha_node=SimpleNamespace(
+            node_id="node-b", role=SimpleNamespace(value="passive"), credential_sources=object()
+        ),
+        vm_ha_generation=generation,
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster-a"),
+        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway={},
+        manage_routes=False,
+        should_manage_routes=lambda: False,
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter([active, passive]),
+    )
+    local_cfg = {"project_id": "project-test", "gateway_group": {"vm_spec": {}}}
+    observed: list[tuple[str, str, object]] = []
+    source_bundles: list[object] = []
+
+    class BoundResult(dict):
+        vm_ha_runtime_binding = binding
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(
+            self, existing, *, policy=None, username="ubuntu"
+        ) -> None:
+            assert existing == {}
+
+        def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            return BoundResult({"gateway-0": "203.0.113.10", "gateway-1": "203.0.113.11"})
+
+        def wait_for_vm_network(self, vm_name, vm_ip, timeout=180) -> bool:
+            return True
+
+        def check_vm_health(self, vm_name, vm_ip) -> dict[str, object]:
+            return {
+                "reachable": True,
+                "cloud_init_complete": True,
+                "strongswan_installed": True,
+                "frr_installed": True,
+                "agent_installed": True,
+                "esp4_ready": True,
+                "esp4_reboot_pending": False,
+                "message": "ready",
+            }
+
+    class FakeSSHPush:
+        def stage_vm_ha_config(self, target, inst_cfg, cfg, *, runtime_binding, credential_sources):
+            observed.append(("stage", inst_cfg.vm_ha_node.role.value, runtime_binding))
+            source_bundles.append(credential_sources)
+            if inst_cfg.vm_ha_node.role.value == failing_stage_role:
+                raise RuntimeError("injected credential staging failure")
+            return SimpleNamespace(
+                node_id=inst_cfg.vm_ha_node.node_id,
+                generation_id="a" * 64,
+                configuration_digest="a" * 64,
+                static_routes_digest="b" * 64,
+                bgp_policy_digest="c" * 64,
+            )
+
+        def push_config_and_reload(
+            self, target, inst_cfg, cfg, *, staged_receipt, runtime_binding
+        ) -> None:
+            observed.append(("activate", inst_cfg.vm_ha_node.role.value, runtime_binding))
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file", return_value=tmp_path),
+        patch(
+            "nebius_vpngw.cli.require_vm_ha_ssh_policy",
+            return_value=object(),
+        ),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    if failing_stage_role is None:
+        assert result.exit_code == 0, result.stdout
+        assert [(phase, role) for phase, role, _ in observed] == [
+            ("stage", "passive"),
+            ("stage", "active"),
+            ("activate", "passive"),
+            ("activate", "active"),
+        ]
+        state = VMHALifecycleStore(config_path).read(
+            expected_project_id="project-test", expected_gateway_name="gateway"
+        )
+        assert state is not None
+        assert state.status is VMHALifecycleStatus.ACTIVE
+        assert [member.compute_id for member in state.members] == ["compute-0", "compute-1"]
+    else:
+        assert result.exit_code == 1
+        assert all(phase != "activate" for phase, _, _ in observed)
+        assert not VMHALifecycleStore(config_path).path.exists()
+    expected_sources = [passive.vm_ha_node.credential_sources]
+    if failing_stage_role != "passive":
+        expected_sources.append(active.vm_ha_node.credential_sources)
+    assert source_bundles == expected_sources
+    assert all(item is binding for _, _, item in observed)
+
+
+@pytest.mark.parametrize(
+    ("configured_key", "environment_key", "expected_key"),
+    [
+        ("~/configured-key", "/tmp/environment-key", Path("~/configured-key").expanduser()),
+        (None, "~/environment-key", Path("~/environment-key").expanduser()),
+        (None, None, None),
+    ],
+)
+def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_key: str | None,
+    environment_key: str | None,
+    expected_key: Path | None,
+) -> None:
+    config_path = tmp_path / "vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    vm_spec = {"ssh_private_key_path": configured_key} if configured_key else {}
+    local_cfg = {"gateway_group": {"vm_spec": vm_spec}}
+    plan = SimpleNamespace(
+        vm_ha=object(),
+        gateway_group=SimpleNamespace(region="eu-west1"),
+        gateway={},
+        manage_routes=False,
+        should_manage_routes=lambda: False,
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter(()),
+    )
+    manager_keys: list[Path | None] = []
+
+    class BoundResult(dict):
+        vm_ha_runtime_binding = object()
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            manager_keys.append(kwargs.get("management_key_path"))
+
+        def discover_vm_ha_members(self, spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
+            return None
+
+        def check_changes(self, spec):
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None):
+            return BoundResult()
+
+    if environment_key is None:
+        monkeypatch.delenv("VPNGW_SSH_KEY", raising=False)
+    else:
+        monkeypatch.setenv("VPNGW_SSH_KEY", environment_key)
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.require_explicit_known_hosts_file"),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.cli._vm_ha_apply_order", return_value=[]),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush"),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "staged acknowledgements do not have exact generation parity" in result.stdout
+    assert manager_keys == [expected_key, expected_key]
+
+
+def test_vm_ha_activation_has_no_static_runtime_blockers_after_complete_wiring() -> None:
+    assert _vm_ha_activation_blockers() == ()
+
+
+def test_vm_ha_service_account_requires_verified_non_broad_roles(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_ensure(*args, **kwargs):
+        observed["roles"] = kwargs["role_ids"]
+        observed["strict"] = kwargs["strict_role_grants"]
+        return "token"
+
+    monkeypatch.setattr(vpngw_sa, "ensure_service_account_and_token", fake_ensure)
+
+    assert (
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("compute.editor", "vpc.editor"),
+        )
+        == "token"
+    )
+    assert observed["roles"] == (
+        "compute.editor",
+        "vpc.editor",
+    )
+    assert observed["strict"] is True
+
+    with pytest.raises(ValueError, match="reviewed allowlist"):
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("roles/editor",),
+        )
+
+    with pytest.raises(ValueError, match="requires every reviewed"):
+        vpngw_sa.ensure_vm_ha_service_account_and_token(
+            "gateway-ha",
+            "tenant",
+            "project",
+            "region",
+            verified_role_ids=("compute.editor",),
+        )
+
+
+def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> None:
+    generation = SimpleNamespace(generation_id="a" * 64)
+    active = SimpleNamespace(
+        hostname="gateway-0",
+        external_ip="203.0.113.10",
+        vm_ha_node=SimpleNamespace(node_id="node-a", role=SimpleNamespace(value="active")),
+        vm_ha_generation=generation,
+    )
+    passive = SimpleNamespace(
+        hostname="gateway-1",
+        external_ip="203.0.113.11",
+        vm_ha_node=SimpleNamespace(node_id="node-b", role=SimpleNamespace(value="passive")),
+        vm_ha_generation=generation,
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster-a"),
+        iter_instance_configs=lambda: iter([active, passive]),
+    )
+    local_cfg = {"gateway_group": {"vm_spec": {}}}
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: local_cfg)
+    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_: plan)
+    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_, **__: None)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "schema": "nebius-vpngw/vm-ha-status-v1",
+                    "cluster_id": "cluster-a",
+                    "node_id": "another-node",
+                    "configured_role": "passive",
+                    "generation_id": "a" * 64,
+                }
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="stale node identity"):
+        _run_vm_ha_operator_command(
+            local_config_file=Path("config.yaml"),
+            agent_flag="--vm-ha-recover",
+        )
 
 
 def test_each_cli_command_help_renders() -> None:
@@ -583,7 +1659,9 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     assert "only the owning gateway VM" in restart_help
 
 
-def test_add_routes_local_swap_route_table_requires_confirmation(tmp_path: Path, monkeypatch) -> None:
+def test_add_routes_local_swap_route_table_requires_confirmation(
+    tmp_path: Path, monkeypatch
+) -> None:
     runner = CliRunner()
     config_path = tmp_path / "swap.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -685,12 +1763,50 @@ def test_add_routes_local_swap_route_table_passes_mode_and_rollback_dir(
     assert captured["ensured_bgp"] == (plan, local_cfg)
 
 
-def test_build_ssh_base_cmd_suppresses_host_key_noise(tmp_path: Path) -> None:
+def test_build_ssh_base_cmd_enforces_host_verification(tmp_path: Path) -> None:
     from nebius_vpngw.cli import _build_ssh_base_cmd
 
     ssh_cmd = _build_ssh_base_cmd(tmp_path / "id_ed25519")
 
     assert "LogLevel=ERROR" in ssh_cmd
+    assert "StrictHostKeyChecking=yes" in ssh_cmd
+    assert "StrictHostKeyChecking=no" not in ssh_cmd
+    assert not any(option.startswith("UserKnownHostsFile=") for option in ssh_cmd)
+
+
+def test_build_ssh_base_cmd_uses_exact_explicit_known_hosts(tmp_path: Path, monkeypatch) -> None:
+    from nebius_vpngw.cli import _build_ssh_base_cmd
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("host ssh-ed25519 AAAAfixture\n", encoding="utf-8")
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(known_hosts))
+
+    ssh_cmd = _build_ssh_base_cmd(None)
+
+    assert f"UserKnownHostsFile={known_hosts}" in ssh_cmd
+    assert "GlobalKnownHostsFile=none" in ssh_cmd
+    assert "KnownHostsCommand=none" in ssh_cmd
+
+
+def test_build_ssh_base_cmd_rejects_missing_explicit_known_hosts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from nebius_vpngw.cli import _build_ssh_base_cmd
+
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(tmp_path / "missing"))
+
+    with pytest.raises(ValueError, match="non-empty readable regular file"):
+        _build_ssh_base_cmd(None)
+
+
+def test_ssh_policy_honors_an_explicit_empty_environment(tmp_path: Path, monkeypatch) -> None:
+    from nebius_vpngw.deploy.ssh_policy import build_openssh_base_command
+
+    monkeypatch.setenv("VPNGW_SSH_KNOWN_HOSTS_FILE", str(tmp_path / "missing"))
+
+    ssh_cmd = build_openssh_base_command(environment={})
+
+    assert not any(option.startswith("UserKnownHostsFile=") for option in ssh_cmd)
 
 
 def test_restart_tunnel_uses_inline_remote_python_and_shows_real_failure_output(

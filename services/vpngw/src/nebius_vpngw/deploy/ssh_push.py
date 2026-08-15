@@ -1,17 +1,104 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname, urlopen
 
+import yaml
+
 from ..config_loader import InstanceResolvedConfig
+from ..schema import (
+    VMHACredentialReferences,
+    VMHACredentialSourceReferences,
+    VMHARuntimeBinding,
+)
+from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
+from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
+
+_LEGACY_VM_HA_IDENTITY_SCRIPT = r"""
+import json
+import sys
+
+import yaml
+
+path = "/etc/nebius-vpngw/config-resolved.yaml"
+try:
+    with open(path, encoding="utf-8") as stream:
+        payload = yaml.safe_load(stream)
+except FileNotFoundError:
+    print(json.dumps({"status": "ordinary"}, sort_keys=True))
+    raise SystemExit(0)
+except Exception:
+    raise SystemExit(2)
+vm_ha = payload.get("vm_ha") if isinstance(payload, dict) else None
+if vm_ha is None:
+    print(json.dumps({"status": "ordinary"}, sort_keys=True))
+    raise SystemExit(0)
+if not isinstance(vm_ha, dict):
+    raise SystemExit(2)
+node = vm_ha.get("node")
+binding = vm_ha.get("runtime_binding")
+nodes = binding.get("nodes") if isinstance(binding, dict) else None
+if not isinstance(node, dict) or not isinstance(nodes, list):
+    raise SystemExit(2)
+result = {
+    "status": "vm-ha",
+    "cluster_id": vm_ha.get("cluster_id"),
+    "allocation_id": binding.get("shared_allocation_id"),
+    "instance_index": node.get("instance_index"),
+    "node_id": node.get("node_id"),
+    "role": node.get("role"),
+    "nodes": [
+        {
+            "node_id": item.get("node_id"),
+            "role": item.get("role"),
+            "compute_id": item.get("compute_id"),
+            "network_interface_name": item.get("network_interface_name"),
+        }
+        for item in nodes
+        if isinstance(item, dict)
+    ],
+}
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+"""
+
+
+def _host_identity_failure(error: Exception, paramiko: Any, ssh_target: str) -> RuntimeError | None:
+    bad_host_key = getattr(paramiko, "BadHostKeyException", ())
+    if isinstance(error, bad_host_key):
+        return RuntimeError(f"SSH host identity verification failed for {ssh_target}")
+    ssh_exception = getattr(paramiko, "SSHException", ())
+    message = str(error).lower()
+    if isinstance(error, ssh_exception) and (
+        "known_hosts" in message or "host key" in message or "known host" in message
+    ):
+        return RuntimeError(f"SSH host identity verification failed for {ssh_target}")
+    return None
+
+
+@dataclass(frozen=True)
+class VMHAStageReceipt:
+    """Secret-free acknowledgement for one exact staged node generation."""
+
+    node_id: str
+    generation_id: str
+    configuration_digest: str
+    static_routes_digest: str
+    bgp_policy_digest: str
+    staged_file_sha256: str
+    credential_sha256: tuple[tuple[str, str], ...]
 
 
 class SSHPush:
@@ -23,11 +110,12 @@ class SSHPush:
       - ssh_private_key_path (if omitted, relies on SSH agent/known defaults)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, ssh_policy: SSHTrustPolicy | None = None) -> None:
         # Lazy import to avoid hard dependency when running dry-run
         self._paramiko = None
         self._wheel_path: Path | None = None
         self._temp_wheel_dir: Path | None = None
+        self._ssh_policy = ssh_policy
 
     def _ensure_paramiko(self):
         if self._paramiko is None:
@@ -35,6 +123,560 @@ class SSHPush:
 
             self._paramiko = paramiko
         return self._paramiko
+
+    @staticmethod
+    def _render_vm_ha_config(
+        inst_cfg: InstanceResolvedConfig,
+        runtime_binding: VMHARuntimeBinding,
+    ) -> str:
+        """Bind authoritative post-provision identities into one node manifest."""
+
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        readiness = inst_cfg.vm_ha_readiness
+        if node is None or generation is None or readiness is None:
+            raise ValueError("VM-HA staging requires a complete resolved node manifest")
+        bound_nodes = [item for item in runtime_binding.nodes if item.node_id == node.node_id]
+        if len(bound_nodes) != 1 or bound_nodes[0].role.value != node.role.value:
+            raise ValueError("VM-HA runtime binding does not match the staged node")
+        payload = yaml.safe_load(inst_cfg.config_yaml)
+        if not isinstance(payload, dict) or not isinstance(payload.get("vm_ha"), dict):
+            raise ValueError("VM-HA resolved YAML has no node manifest")
+        if not (
+            runtime_binding.cluster_id == payload["vm_ha"].get("cluster_id")
+            and runtime_binding.generation_id == generation.generation_id
+            and runtime_binding.configuration_digest == generation.digests.configuration
+            and runtime_binding.static_routes_digest == generation.digests.static_routes
+            and runtime_binding.bgp_policy_digest == generation.digests.bgp_policy
+        ):
+            raise ValueError("VM-HA runtime binding does not match the staged generation")
+        manifests = (payload["vm_ha"].get("generation") or {}).get("logical_manifests")
+        expected_manifests = generation.logical_manifests
+        if manifests != {
+            "static_routes_json": expected_manifests.static_routes_json,
+            "bgp_policy_json": expected_manifests.bgp_policy_json,
+        }:
+            raise ValueError("VM-HA staged logical manifests differ from the committed generation")
+        if (
+            hashlib.sha256(manifests["static_routes_json"].encode()).hexdigest()
+            != runtime_binding.static_routes_digest
+            or hashlib.sha256(manifests["bgp_policy_json"].encode()).hexdigest()
+            != runtime_binding.bgp_policy_digest
+        ):
+            raise ValueError("VM-HA staged logical manifest digest mismatch")
+
+        payload["vm_ha"]["runtime_binding"] = runtime_binding.model_dump(mode="json")
+        return yaml.safe_dump(payload, sort_keys=False)
+
+    @staticmethod
+    def _credential_targets(
+        node_id: str,
+        generation_id: str,
+        bundle_digest: str,
+        references: VMHACredentialReferences,
+    ) -> tuple[tuple[str, str], ...]:
+        base = f"/etc/nebius-vpngw/vm-ha-credentials/{generation_id}/{node_id}/{bundle_digest}"
+        expected = (
+            ("certificate_authority", f"{base}/ca.crt"),
+            ("certificate", f"{base}/{node_id}.crt"),
+            ("private_key", f"{base}/{node_id}.key"),
+            ("nebius_credentials", f"{base}/nebius-credentials.json"),
+        )
+        actual = tuple((name, str(getattr(references, name))) for name, _ in expected)
+        if actual != expected:
+            raise ValueError("VM-HA runtime binding has non-canonical credential targets")
+        return actual
+
+    @staticmethod
+    def _read_credential_file(path_text: str, *, label: str, node_id: str) -> bytes:
+        try:
+            descriptor = os.open(path_text, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError
+                chunks: list[bytes] = []
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    chunks.append(chunk)
+            finally:
+                os.close(descriptor)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"VM-HA credential source {label} for {node_id} is not a readable regular file"
+            ) from exc
+        return b"".join(chunks)
+
+    @classmethod
+    def _credential_source_payloads(
+        cls,
+        *,
+        node_id: str,
+        sources: VMHACredentialSourceReferences,
+    ) -> tuple[tuple[str, bytes, str], ...]:
+        payloads: list[tuple[str, bytes, str]] = []
+        for label in (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        ):
+            content = cls._read_credential_file(
+                str(getattr(sources, label)), label=label, node_id=node_id
+            )
+            payloads.append((label, content, hashlib.sha256(content).hexdigest()))
+        return tuple(payloads)
+
+    @staticmethod
+    def _credential_bundle_digest(payloads: tuple[tuple[str, bytes, str], ...]) -> str:
+        identity = "\n".join(f"{label}:{digest}" for label, _, digest in payloads)
+        return hashlib.sha256(identity.encode("ascii")).hexdigest()
+
+    @classmethod
+    def _runtime_binding_for_credential_bundle(
+        cls,
+        *,
+        inst_cfg: InstanceResolvedConfig,
+        runtime_binding: VMHARuntimeBinding,
+        credential_digests: tuple[tuple[str, str], ...],
+    ) -> VMHARuntimeBinding:
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        if node is None or generation is None or len(credential_digests) != 4:
+            raise ValueError("VM-HA credential bundle identity is incomplete")
+        labels = (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        )
+        payload_identity = tuple(
+            (label, b"", digest)
+            for label, (_target, digest) in zip(labels, credential_digests, strict=True)
+        )
+        bundle_digest = cls._credential_bundle_digest(payload_identity)
+        base = (
+            f"/etc/nebius-vpngw/vm-ha-credentials/{generation.generation_id}/"
+            f"{node.node_id}/{bundle_digest}"
+        )
+        references = VMHACredentialReferences(
+            certificate_authority=f"{base}/ca.crt",
+            certificate=f"{base}/{node.node_id}.crt",
+            private_key=f"{base}/{node.node_id}.key",
+            nebius_credentials=f"{base}/nebius-credentials.json",
+        )
+        expected_targets = cls._credential_targets(
+            node.node_id,
+            generation.generation_id,
+            bundle_digest,
+            references,
+        )
+        if tuple(target for target, _ in credential_digests) != tuple(
+            target for _, target in expected_targets
+        ):
+            raise ValueError("VM-HA credential receipt has non-canonical target paths")
+        nodes = tuple(
+            item.model_copy(update={"credentials": references})
+            if item.node_id == node.node_id
+            else item
+            for item in runtime_binding.nodes
+        )
+        return runtime_binding.model_copy(update={"nodes": nodes})
+
+    @staticmethod
+    def _vm_ha_receipt(
+        inst_cfg: InstanceResolvedConfig,
+        rendered_config: str,
+        credential_sha256: tuple[tuple[str, str], ...] = (),
+    ) -> VMHAStageReceipt:
+        node = inst_cfg.vm_ha_node
+        generation = inst_cfg.vm_ha_generation
+        readiness = inst_cfg.vm_ha_readiness
+        if node is None or generation is None or readiness is None:
+            raise ValueError("VM-HA staging requires a complete resolved node manifest")
+        if generation.generation_id != readiness.generation_id:
+            raise ValueError("VM-HA generation and readiness identities do not match")
+        if generation.digests != readiness.digests:
+            raise ValueError("VM-HA generation and readiness digests do not match")
+        return VMHAStageReceipt(
+            node_id=node.node_id,
+            generation_id=generation.generation_id,
+            configuration_digest=generation.digests.configuration,
+            static_routes_digest=generation.digests.static_routes,
+            bgp_policy_digest=generation.digests.bgp_policy,
+            staged_file_sha256=hashlib.sha256(rendered_config.encode("utf-8")).hexdigest(),
+            credential_sha256=credential_sha256,
+        )
+
+    @staticmethod
+    def _vm_ha_staged_verify_command(receipt: VMHAStageReceipt) -> str:
+        path = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
+        checks = [f"echo '{receipt.staged_file_sha256}  {path}' | sudo sha256sum --check --status"]
+        for target, digest in receipt.credential_sha256:
+            checks.append(
+                f"sudo test \"$(sudo stat -c '%U:%G:%a' {target})\" = root:root:600 && "
+                f"echo '{digest}  {target}' | sudo sha256sum --check --status"
+            )
+        return " && ".join(checks)
+
+    @staticmethod
+    def _credential_install_commands(
+        *,
+        base: str,
+        temporary: str,
+        target: str,
+        digest: str,
+    ) -> tuple[str, ...]:
+        pending = f"{target}.new"
+        return (
+            f"sudo install -d -o root -g root -m 0700 {base}",
+            f"sudo install -o root -g root -m 0600 {temporary} {pending}",
+            f"sudo test \"$(sudo stat -c '%U:%G:%a' {pending})\" = root:root:600",
+            f"echo '{digest}  {pending}' | sudo sha256sum --check --status",
+            f"sudo mv {pending} {target}",
+            f"sudo test \"$(sudo stat -c '%U:%G:%a' {target})\" = root:root:600",
+            f"echo '{digest}  {target}' | sudo sha256sum --check --status",
+        )
+
+    def stage_vm_ha_config(
+        self,
+        ssh_target: str,
+        inst_cfg: InstanceResolvedConfig,
+        local_cfg: dict,
+        *,
+        runtime_binding: VMHARuntimeBinding,
+        credential_sources: VMHACredentialSourceReferences,
+    ) -> VMHAStageReceipt:
+        """Stage and verify one node without activating it or reloading services."""
+
+        node = inst_cfg.vm_ha_node
+        assert node is not None
+        if credential_sources != node.credential_sources:
+            raise ValueError("VM-HA credential source bundle does not match the staged node")
+        source_payloads = self._credential_source_payloads(
+            node_id=node.node_id,
+            sources=credential_sources,
+        )
+        generation = inst_cfg.vm_ha_generation
+        assert generation is not None
+        bundle_digest = self._credential_bundle_digest(source_payloads)
+        base = (
+            f"/etc/nebius-vpngw/vm-ha-credentials/{generation.generation_id}/"
+            f"{node.node_id}/{bundle_digest}"
+        )
+        references = VMHACredentialReferences(
+            certificate_authority=f"{base}/ca.crt",
+            certificate=f"{base}/{node.node_id}.crt",
+            private_key=f"{base}/{node.node_id}.key",
+            nebius_credentials=f"{base}/nebius-credentials.json",
+        )
+        targets = self._credential_targets(
+            node.node_id, generation.generation_id, bundle_digest, references
+        )
+        credentials = tuple(
+            (label, target, content, digest)
+            for (label, content, digest), (_, target) in zip(source_payloads, targets, strict=True)
+        )
+        credential_digests = tuple((target, digest) for _, target, _, digest in credentials)
+        staged_binding = self._runtime_binding_for_credential_bundle(
+            inst_cfg=inst_cfg,
+            runtime_binding=runtime_binding,
+            credential_digests=credential_digests,
+        )
+        rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
+        receipt = self._vm_ha_receipt(
+            inst_cfg,
+            rendered_config,
+            credential_digests,
+        )
+        paramiko = self._ensure_paramiko()
+        gg = local_cfg.get("gateway_group") or {}
+        vm_spec = gg.get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        client = paramiko.SSHClient()
+        upload_directory: str | None = None
+        try:
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
+                transport_host=ssh_target if self._ssh_policy is not None else None,
+            )
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            temporary = f"/tmp/nebius-vpngw-vm-ha-stage-{inst_cfg.instance_index}.yaml"
+            destination = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
+            with client.open_sftp() as sftp, sftp.file(temporary, "w") as stream:
+                stream.write(rendered_config)
+            upload_directory = f"/tmp/nebius-vpngw-vm-ha-upload-{inst_cfg.instance_index}"
+            stdin, stdout, stderr = client.exec_command(
+                f"install -d -m 0700 {upload_directory}", timeout=30
+            )
+            if stdout.channel.recv_exit_status() != 0:
+                raise RuntimeError(
+                    f"VM-HA credential upload preparation failed for {receipt.node_id}"
+                )
+            for label, target, content, digest in credentials:
+                credential_temporary = f"{upload_directory}/{label}"
+                with client.open_sftp() as sftp, sftp.file(credential_temporary, "wb") as stream:
+                    stream.write(content)
+                    sftp.chmod(credential_temporary, 0o600)
+                for command in self._credential_install_commands(
+                    base=base,
+                    temporary=credential_temporary,
+                    target=target,
+                    digest=digest,
+                ):
+                    stdin, stdout, stderr = client.exec_command(command, timeout=30)
+                    if stdout.channel.recv_exit_status() != 0:
+                        raise RuntimeError(
+                            f"VM-HA credential installation failed for {receipt.node_id}:{label}"
+                        )
+            command = (
+                "sudo install -d -m 0700 /etc/nebius-vpngw/vm-ha-staged && "
+                f"sudo install -o root -g root -m 0600 {temporary} {destination} && "
+                f"sudo sha256sum {destination}"
+            )
+            stdin, stdout, stderr = client.exec_command(command, timeout=30)
+            return_code = stdout.channel.recv_exit_status()
+            observed = stdout.read().decode().strip().split(maxsplit=1)[0]
+            if return_code != 0 or observed != receipt.staged_file_sha256:
+                raise RuntimeError(f"VM-HA stage verification failed for {receipt.node_id}")
+            return receipt
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            if upload_directory is not None:
+                try:
+                    client.exec_command(f"find {upload_directory} -depth -delete", timeout=30)
+                except Exception:
+                    pass
+            client.close()
+
+    def deactivate_vm_ha(
+        self,
+        ssh_target: str,
+        local_cfg: dict,
+        *,
+        retire_member: bool = False,
+    ) -> bool:
+        """Remove stale HA activation state before an ordinary agent restart."""
+
+        if not ssh_target:
+            raise ValueError("VM-HA deactivation requires an SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        client = paramiko.SSHClient()
+        retire_commands = (
+            """
+for unit in nebius-vpngw-agent.service nebius-vpngw-health-monitor.service nebius-vpngw-fix-routes.timer nebius-vpngw-fix-routes.service strongswan-starter.service strongswan.service strongswan-swanctl.service frr.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    systemctl disable --now "$unit"
+  fi
+done
+rm -f /etc/nebius-vpngw/config-resolved.yaml
+"""
+            if retire_member
+            else ""
+        )
+        initial_stale = 1 if retire_member else 0
+        command = f"""sudo /bin/bash -lc '
+set -eu
+stale={initial_stale}
+for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  if [ -e "$path" ]; then stale=1; fi
+done
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    stale=1
+  fi
+done
+if [ "$stale" -eq 0 ]; then
+  printf "VM_HA_DEACTIVATED=0\\n"
+  exit 0
+fi
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then
+    systemctl disable --now "$unit"
+  fi
+done
+rm -f /etc/nebius-vpngw/vm-ha-enabled
+rm -f /etc/systemd/system/nebius-vpngw-vm-ha.service
+rm -f /etc/systemd/system/nebius-vpngw-vm-ha-guard.service
+rm -f /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/strongswan.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/frr.service.d/30-vm-ha.conf
+rm -f /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf
+for path in /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  if [ -d "$path" ]; then find "$path" -depth -delete; fi
+done
+{retire_commands}
+systemctl daemon-reload
+printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
+'"""
+        try:
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=60)
+            return_code = stdout.channel.recv_exit_status()
+            if return_code != 0:
+                detail = stderr.read().decode().strip()
+                raise RuntimeError(f"VM-HA deactivation failed: {detail or return_code}")
+            return "VM_HA_DEACTIVATED=1" in stdout.read().decode().splitlines()
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
+
+    def inspect_legacy_vm_ha_identity(
+        self,
+        ssh_target: str,
+        instance_name: str,
+        local_cfg: dict,
+    ) -> LegacyVMHAIdentity | None:
+        """Read only the secret-free legacy runtime identity through an exact SSH pin."""
+
+        if not ssh_target or self._ssh_policy is None:
+            raise ValueError("Legacy VM-HA inspection requires an exact-pinned SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        encoded = base64.b64encode(_LEGACY_VM_HA_IDENTITY_SCRIPT.encode("utf-8")).decode("ascii")
+        command = f"printf %s {encoded} | base64 -d | sudo python3"
+        client = paramiko.SSHClient()
+        try:
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=instance_name,
+                transport_host=ssh_target,
+            )
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, timeout=30)
+            return_code = stdout.channel.recv_exit_status()
+            output = stdout.read().decode().strip()
+            if return_code != 0:
+                raise RuntimeError("Former VM-HA runtime identity could not be read")
+            try:
+                payload = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise RuntimeError("Former VM-HA runtime identity is malformed") from error
+            return parse_legacy_vm_ha_identity(payload, instance_name=instance_name)
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
+
+    def verify_vm_ha_deactivated(
+        self,
+        ssh_target: str,
+        local_cfg: dict,
+        *,
+        retire_member: bool = False,
+    ) -> None:
+        """Independently prove one former member has no remaining HA authority."""
+
+        if not ssh_target:
+            raise ValueError("VM-HA deactivation verification requires an SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        retire_checks = (
+            """
+test ! -e /etc/nebius-vpngw/config-resolved.yaml
+for unit in nebius-vpngw-agent.service nebius-vpngw-health-monitor.service nebius-vpngw-fix-routes.timer nebius-vpngw-fix-routes.service strongswan-starter.service strongswan.service strongswan-swanctl.service frr.service; do
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then exit 1; fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then exit 1; fi
+done
+"""
+            if retire_member
+            else ""
+        )
+        command = f"""sudo /bin/bash -lc '
+set -eu
+for path in /etc/nebius-vpngw/vm-ha-enabled /etc/systemd/system/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf /etc/nebius-vpngw/vm-ha-staged /etc/nebius-vpngw/vm-ha-credentials /etc/nebius-vpngw/vm-ha /var/lib/nebius-vpngw/vm-ha; do
+  test ! -e "$path"
+done
+for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then exit 1; fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then exit 1; fi
+done
+{retire_checks}
+printf "VM_HA_TERMINAL_NON_HA=1\\n"
+'"""
+        client = paramiko.SSHClient()
+        try:
+            configure_paramiko_host_verification(client, paramiko, policy=self._ssh_policy)
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=60)
+            return_code = stdout.channel.recv_exit_status()
+            output = stdout.read().decode().splitlines()
+            if return_code != 0 or "VM_HA_TERMINAL_NON_HA=1" not in output:
+                detail = stderr.read().decode().strip()
+                raise RuntimeError(
+                    f"VM-HA terminal deactivation verification failed: {detail or return_code}"
+                )
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
 
     def _find_project_root(self) -> Path | None:
         """Locate repo root based on the installed module path."""
@@ -230,8 +872,24 @@ class SSHPush:
         return None
 
     def push_config_and_reload(
-        self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
+        self,
+        ssh_target: str,
+        inst_cfg: InstanceResolvedConfig,
+        local_cfg: dict,
+        *,
+        staged_receipt: VMHAStageReceipt | None = None,
+        runtime_binding: VMHARuntimeBinding | None = None,
+        fail_closed: bool = False,
     ) -> None:
+        required_remote = staged_receipt is not None or fail_closed
+        if staged_receipt is not None:
+            if runtime_binding is None:
+                raise ValueError("VM-HA activation requires its authoritative runtime binding")
+            from ..agent.main import vm_ha_runtime_blockers
+
+            blockers = vm_ha_runtime_blockers()
+            if blockers:
+                raise RuntimeError(f"VM-HA activation BLOCKED: {', '.join(blockers)}")
         if not ssh_target:
             print(f"[SSHPush] No SSH target for instance {inst_cfg.instance_index}; skipping")
             return
@@ -247,9 +905,14 @@ class SSHPush:
 
         print(f"[SSHPush] Connecting to {ssh_target} as {username} ...")
         client = paramiko.SSHClient()
-        # codeql[py/unsafe-ssh-host-key-policy] - VMs are created on demand; auto-add avoids breaking apply while still using SSH key auth.
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=inst_cfg.hostname if self._ssh_policy is not None else None,
+                transport_host=ssh_target if self._ssh_policy is not None else None,
+            )
             client.connect(
                 hostname=ssh_target,
                 username=username,
@@ -261,6 +924,10 @@ class SSHPush:
         except Exception as e:
             error_msg = str(e).lower()
             print(f"[SSHPush] SSH connect failed to {ssh_target}: {e}")
+
+            identity_failure = _host_identity_failure(e, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from e
 
             # Provide helpful guidance for common network issues
             if "timed out" in error_msg or "timeout" in error_msg:
@@ -277,6 +944,11 @@ class SSHPush:
                 print("  • If the issue persists, restart the VM from the console and retry")
                 print("  • As a last resort, run: nebius-vpngw destroy -y && nebius-vpngw apply")
                 print("=" * 80 + "\n")
+            if required_remote:
+                raise RuntimeError(
+                    f"{'VM-HA activation' if staged_receipt is not None else 'required'} "
+                    f"SSH connection failed for {ssh_target}"
+                ) from e
             return
 
         restart_agent = False
@@ -318,6 +990,8 @@ class SSHPush:
                     re_out = stdout_re.read().decode().strip()
                     re_err = stderr_re.read().decode().strip()
                     if rc_re != 0:
+                        if required_remote:
+                            raise RuntimeError("VM-HA package reinstall verification failed")
                         print("[SSHPush] WARNING: Forced reinstall failed; continuing anyway")
                         if re_out:
                             print(
@@ -368,6 +1042,8 @@ class SSHPush:
                         else:
                             print("[SSHPush] WARNING: Could not read installed package version")
                     else:
+                        if required_remote:
+                            raise RuntimeError("VM-HA installed package import check failed")
                         print(
                             "[SSHPush] WARNING: pip install succeeded but package import check failed"
                         )
@@ -448,16 +1124,25 @@ WantedBy=multi-user.target
                                     f.write(firewall_script.read_text())
                                 print("[SSHPush] Staged firewall setup script")
 
-                            esp4_preflight_script = (
-                                systemd_dir / "nebius-vpngw-esp4-preflight.sh"
-                            )
+                            esp4_preflight_script = systemd_dir / "nebius-vpngw-esp4-preflight.sh"
                             if esp4_preflight_script.exists():
-                                with sftp.file(
-                                    "/tmp/nebius-vpngw-esp4-preflight.sh", "w"
-                                ) as f:
+                                with sftp.file("/tmp/nebius-vpngw-esp4-preflight.sh", "w") as f:
                                     f.write(esp4_preflight_script.read_text())
                                 print("[SSHPush] Staged ESP4 preflight helper")
+
+                            for asset_name in (
+                                "nebius-vpngw-vm-ha-guard.service",
+                                "nebius-vpngw-vm-ha.service",
+                                "nebius-vpngw-vm-ha-ordering.conf",
+                            ):
+                                asset = systemd_dir / asset_name
+                                if asset.exists():
+                                    with sftp.file(f"/tmp/{asset_name}", "w") as f:
+                                        f.write(asset.read_text())
+                                    print(f"[SSHPush] Staged {asset_name}")
                     except Exception as e:
+                        if required_remote:
+                            raise RuntimeError("VM-HA systemd asset staging failed") from e
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
                     print(f"[SSHPush] Package installation failed (rc={rc})")
@@ -473,36 +1158,69 @@ WantedBy=multi-user.target
                             if len(err) > 500
                             else f"[SSHPush] stderr: {err}"
                         )
+                    if required_remote:
+                        raise RuntimeError("VM-HA package installation failed")
                     print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
             except Exception as e:
+                if required_remote:
+                    raise RuntimeError("VM-HA package deployment failed") from e
                 print(f"[SSHPush] Failed to deploy package: {e}")
                 print("[SSHPush] WARNING: Continuing with config push, but agent may not work")
         else:
+            if required_remote:
+                raise RuntimeError("VM-HA activation requires a deployable agent wheel")
             print("[SSHPush] WARNING: Could not build wheel, skipping package deployment")
 
         # Upload to /tmp then move with sudo
-        tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
-        try:
-            with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
-                f.write(inst_cfg.config_yaml)
-            print(f"[SSHPush] Uploaded temp config to {tmp_path}")
-        except Exception as e:
-            print(f"[SSHPush] SFTP upload failed: {e}")
-            client.close()
-            return
+        if staged_receipt is not None:
+            assert runtime_binding is not None
+            staged_binding = self._runtime_binding_for_credential_bundle(
+                inst_cfg=inst_cfg,
+                runtime_binding=runtime_binding,
+                credential_digests=staged_receipt.credential_sha256,
+            )
+            rendered_config = self._render_vm_ha_config(inst_cfg, staged_binding)
+            expected = self._vm_ha_receipt(
+                inst_cfg, rendered_config, staged_receipt.credential_sha256
+            )
+            if staged_receipt != expected:
+                client.close()
+                raise ValueError("VM-HA activation receipt does not match the node manifest")
+            tmp_path = f"/etc/nebius-vpngw/vm-ha-staged/{staged_receipt.generation_id}.yaml"
+        else:
+            tmp_path = f"/tmp/nebius-config-{inst_cfg.instance_index}.yaml"
+            try:
+                with client.open_sftp() as sftp, sftp.file(tmp_path, "w") as f:
+                    f.write(inst_cfg.config_yaml)
+                print(f"[SSHPush] Uploaded temp config to {tmp_path}")
+            except Exception as e:
+                print(f"[SSHPush] SFTP upload failed: {e}")
+                client.close()
+                return
 
         agent_cmd = (
             "sudo systemctl restart nebius-vpngw-agent"
             if restart_agent
             else "sudo systemctl is-active --quiet nebius-vpngw-agent && sudo systemctl reload nebius-vpngw-agent || sudo systemctl start nebius-vpngw-agent"
         )
+        config_install_cmd = (
+            f"sudo install -o root -g root -m 0600 {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+            if staged_receipt is not None
+            else f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml"
+        )
+        config_mode = "0600" if staged_receipt is not None else "0644"
 
         # Move into place and trigger reload
         cmds = [
             "sudo mkdir -p /etc/nebius-vpngw",
-            f"sudo mv {tmp_path} /etc/nebius-vpngw/config-resolved.yaml",
+            *(
+                [self._vm_ha_staged_verify_command(staged_receipt)]
+                if staged_receipt is not None
+                else []
+            ),
+            config_install_cmd,
             "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
-            "sudo chmod 0644 /etc/nebius-vpngw/config-resolved.yaml",
+            f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
             # Install route fix service and timer if staged
             "if [ -f /tmp/nebius-vpngw-fix-routes.service ]; then sudo mv /tmp/nebius-vpngw-fix-routes.service /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
             "if [ -f /tmp/nebius-vpngw-fix-routes.timer ]; then sudo mv /tmp/nebius-vpngw-fix-routes.timer /etc/systemd/system/nebius-vpngw-fix-routes.timer; fi",
@@ -515,20 +1233,49 @@ WantedBy=multi-user.target
             "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
             "if [ -f /tmp/nebius-vpngw-esp4-preflight.sh ]; then sudo mv /tmp/nebius-vpngw-esp4-preflight.sh /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
             "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha-guard.service ]; then sudo mv /tmp/nebius-vpngw-vm-ha-guard.service /etc/systemd/system/nebius-vpngw-vm-ha-guard.service; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha.service ]; then sudo mv /tmp/nebius-vpngw-vm-ha.service /etc/systemd/system/nebius-vpngw-vm-ha.service; fi",
+            "if [ -f /tmp/nebius-vpngw-vm-ha-ordering.conf ]; then sudo install -d -m 0755 /etc/systemd/system/strongswan-starter.service.d /etc/systemd/system/strongswan.service.d /etc/systemd/system/frr.service.d /etc/systemd/system/nebius-vpngw-agent.service.d; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/strongswan.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/frr.service.d/30-vm-ha.conf; sudo install -m 0644 /tmp/nebius-vpngw-vm-ha-ordering.conf /etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf; fi",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
             "sudo systemctl daemon-reload",
+            *(
+                [
+                    "sudo install -o root -g root -m 0600 /dev/null /etc/nebius-vpngw/vm-ha-enabled",
+                    "sudo systemctl enable nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service",
+                    "sudo systemctl restart nebius-vpngw-vm-ha-guard.service",
+                    "sudo systemctl restart nebius-vpngw-vm-ha.service",
+                ]
+                if staged_receipt is not None
+                else []
+            ),
             # Enable and start route fix timer (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
             # Enable and start health monitoring service (only if service file exists)
             "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
-            # Run route fix immediately before starting agent (non-fatal if unavailable)
-            'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
-            # Apply firewall rules (including MSS clamp and ICMP allowances)
-            "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+            *(
+                [
+                    # Ordinary non-HA setup retains the established eager
+                    # route/firewall path. VM-HA defers both until the
+                    # controller has granted active authority.
+                    'if python3 -c "import nebius_vpngw" >/dev/null 2>&1; then sudo /usr/bin/python3 -m nebius_vpngw.agent.fix_routes > /var/log/vpngw-fix-routes.log 2>&1 || true; fi',
+                    "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo /usr/local/bin/setup-vpngw-firewall.sh > /var/log/vpngw-firewall-setup.log 2>&1 || true; fi",
+                ]
+                if staged_receipt is None
+                else []
+            ),
             # Start or reload agent
             agent_cmd,
+            *(
+                [
+                    "sudo systemctl is-active --quiet nebius-vpngw-vm-ha-guard.service",
+                    "sudo systemctl is-active --quiet nebius-vpngw-vm-ha.service",
+                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-materialized",
+                ]
+                if staged_receipt is not None
+                else []
+            ),
         ]
         had_failures = False
         for cmd in cmds:
@@ -538,11 +1285,15 @@ WantedBy=multi-user.target
                 if rc != 0:
                     err = stderr.read().decode().strip()
                     print(f"[SSHPush] Command failed (rc={rc}): {cmd}\n{err}")
+                    if required_remote:
+                        raise RuntimeError(f"VM-HA activation command failed: {cmd}: {err or rc}")
                     had_failures = True
                 else:
                     # Suppress noisy per-command logs on success
                     pass
             except Exception as e:
+                if required_remote:
+                    raise RuntimeError(f"VM-HA activation command failed: {cmd}") from e
                 print(f"[SSHPush] Exec failed for: {cmd} -> {e}")
                 had_failures = True
 

@@ -11,6 +11,278 @@ from pathlib import Path
 from rich import print
 
 from ..config_loader import ResolvedDeploymentPlan
+from ..schema import VMHARouteTarget
+from .ssh_policy import build_openssh_base_command
+from .vm_ha_routes import (
+    ManagedRouteOwnership,
+    RouteApplyResult,
+    RouteMutation,
+    RouteMutationKind,
+    RouteReconciliationContext,
+    RouteReconciliationPlan,
+    VerifiedAllocationOwnership,
+    execute_route_plan,
+    owned_route_snapshots,
+    route_observation_snapshots,
+)
+
+
+class _RouteReceiptStore(t.Protocol):
+    def save_route_reconciliation_receipt(self, receipt: t.Mapping[str, object]) -> None: ...
+
+    def load_route_reconciliation_receipt(self) -> t.Mapping[str, object] | None: ...
+
+
+class NebiusSDKRouteBackend:
+    """Exact target-bound synchronous SDK adapter for on-node HA route effects."""
+
+    _REQUEST_TIMEOUT_SECONDS = 30.0
+
+    def __init__(self, sdk: t.Any) -> None:
+        self.sdk = sdk
+
+    @staticmethod
+    def _client_types():
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.vpc.v1 import (
+            AllocationNextHop,
+            CreateRouteRequest,
+            DeleteRouteRequest,
+            DestinationMatch,
+            ListRoutesRequest,
+            NextHop,
+            RouteServiceClient,
+            RouteSpec,
+        )
+
+        return (
+            RouteServiceClient,
+            ListRoutesRequest,
+            CreateRouteRequest,
+            DeleteRouteRequest,
+            ResourceMetadata,
+            RouteSpec,
+            DestinationMatch,
+            NextHop,
+            AllocationNextHop,
+        )
+
+    def _raw_routes(self, route_table_id: str) -> tuple[object, ...]:
+        client_type, list_request, *_rest = self._client_types()
+        client = client_type(self.sdk)
+        routes: list[object] = []
+        page_token = ""
+        seen_tokens: set[str] = set()
+        for _page in range(1000):
+            response = client.list(
+                list_request(parent_id=route_table_id, page_token=page_token),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            ).wait()
+            routes.extend(tuple(getattr(response, "items", ()) or ()))
+            next_token = str(getattr(response, "next_page_token", "") or "")
+            if not next_token:
+                return tuple(routes)
+            if next_token == page_token or next_token in seen_tokens:
+                raise RuntimeError("VM-HA route listing returned a cyclic page token")
+            seen_tokens.add(next_token)
+            page_token = next_token
+        raise RuntimeError("VM-HA route listing exceeded the bounded page limit")
+
+    def verify_target(self, target: VMHARouteTarget) -> None:
+        """Freshly prove the full declared parent chain before route authority is used."""
+
+        from nebius.api.nebius.vpc.v1 import (
+            GetRouteTableRequest,
+            GetSubnetRequest,
+            RouteTableServiceClient,
+            SubnetServiceClient,
+        )
+
+        subnet = (
+            SubnetServiceClient(self.sdk)
+            .get(
+                GetSubnetRequest(id=target.workload_subnet_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
+        route_table = (
+            RouteTableServiceClient(self.sdk)
+            .get(
+                GetRouteTableRequest(id=target.route_table_id),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
+        subnet_metadata = getattr(subnet, "metadata", None)
+        subnet_spec = getattr(subnet, "spec", None)
+        table_metadata = getattr(route_table, "metadata", None)
+        table_spec = getattr(route_table, "spec", None)
+        observed = VMHARouteTarget(
+            project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
+            network_id=str(getattr(subnet_spec, "network_id", "") or ""),
+            workload_subnet_id=str(getattr(subnet_metadata, "id", "") or ""),
+            route_table_id=str(getattr(table_metadata, "id", "") or ""),
+        )
+        if (
+            observed != target
+            or str(getattr(subnet_spec, "route_table_id", "") or "") != target.route_table_id
+            or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
+            or str(getattr(table_spec, "network_id", "") or "") != target.network_id
+        ):
+            raise RuntimeError("VM-HA route target membership changed")
+
+    def list_routes(
+        self,
+        target: VMHARouteTarget,
+        ownership: t.Mapping[str, ManagedRouteOwnership],
+    ):
+        return RouteManager(None)._vm_ha_route_snapshots(
+            self._raw_routes(target.route_table_id),
+            ownership_by_route_id=ownership,
+            route_target=target,
+        )
+
+    @staticmethod
+    def _name(mutation: RouteMutation) -> str:
+        import hashlib
+
+        identity = (
+            f"{mutation.cluster_id}:{mutation.route_target.route_table_id}:"
+            f"{mutation.prefix}:{mutation.route_kind.value}:{mutation.allocation_id}"
+        )
+        return f"vpngw-ha-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
+
+    def _create(self, mutation: RouteMutation) -> str:
+        (
+            client_type,
+            _list_request,
+            create_request,
+            _delete_request,
+            metadata_type,
+            route_spec,
+            destination_match,
+            next_hop,
+            allocation_next_hop,
+        ) = self._client_types()
+        operation = (
+            client_type(self.sdk)
+            .create(
+                create_request(
+                    metadata=metadata_type(
+                        parent_id=mutation.route_target.route_table_id,
+                        name=self._name(mutation),
+                    ),
+                    spec=route_spec(
+                        destination=destination_match(cidr=mutation.prefix),
+                        next_hop=next_hop(
+                            allocation=allocation_next_hop(id=mutation.allocation_id)
+                        ),
+                    ),
+                ),
+                timeout=self._REQUEST_TIMEOUT_SECONDS,
+                auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+            )
+            .wait()
+        )
+        operation.sync_wait(
+            timeout=self._REQUEST_TIMEOUT_SECONDS,
+            poll_iteration_timeout=self._REQUEST_TIMEOUT_SECONDS,
+        )
+        if not operation.successful():
+            raise RuntimeError("VM-HA route creation operation failed")
+        route_id = str(operation.resource_id or "")
+        if not route_id:
+            route_id = self.recover_created_route(mutation) or ""
+        if not route_id:
+            raise RuntimeError("created VM-HA route has no authoritative identity")
+        return route_id
+
+    def apply_mutation(self, mutation: RouteMutation) -> str | None:
+        client_type, _list, _create, delete_request, *_rest = self._client_types()
+        created_route_id = None
+        if mutation.kind in {RouteMutationKind.CREATE, RouteMutationKind.REPLACE}:
+            created_route_id = self.recover_created_route(mutation)
+        if mutation.kind in {RouteMutationKind.DELETE, RouteMutationKind.REPLACE}:
+            if not mutation.route_id:
+                raise ValueError("VM-HA route deletion requires an exact route identity")
+            observed = [
+                route
+                for route in self._raw_routes(mutation.route_target.route_table_id)
+                if RouteManager._metadata_id(route) == mutation.route_id
+            ]
+            if len(observed) > 1:
+                raise RuntimeError("VM-HA route deletion resolved to duplicate identities")
+            if observed:
+                current_prefix = RouteManager._route_destination_network(observed[0])
+                if current_prefix is None or str(current_prefix) != mutation.prefix:
+                    raise RuntimeError("VM-HA route identity changed before deletion")
+                if mutation.kind is RouteMutationKind.DELETE and (
+                    RouteManager._route_next_hop_allocation_id(observed[0])
+                    != mutation.allocation_id
+                ):
+                    raise RuntimeError("VM-HA route next hop changed before deletion")
+                operation = (
+                    client_type(self.sdk)
+                    .delete(
+                        delete_request(id=mutation.route_id),
+                        timeout=self._REQUEST_TIMEOUT_SECONDS,
+                        auth_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                    )
+                    .wait()
+                )
+                operation.sync_wait(
+                    timeout=self._REQUEST_TIMEOUT_SECONDS,
+                    poll_iteration_timeout=self._REQUEST_TIMEOUT_SECONDS,
+                )
+                if not operation.successful():
+                    raise RuntimeError("VM-HA route deletion operation failed")
+                if any(
+                    RouteManager._metadata_id(route) == mutation.route_id
+                    for route in self._raw_routes(mutation.route_target.route_table_id)
+                ):
+                    raise RuntimeError("VM-HA route deletion postcondition was not observed")
+        if mutation.kind in {RouteMutationKind.CREATE, RouteMutationKind.REPLACE}:
+            return created_route_id or self._create(mutation)
+        return None
+
+    def recover_created_route(self, mutation: RouteMutation) -> str | None:
+        expected_name = self._name(mutation)
+        matches = []
+        for route in self._raw_routes(mutation.route_target.route_table_id):
+            if RouteManager._metadata_name(route) != expected_name:
+                continue
+            if (
+                str(RouteManager._route_destination_network(route)) == mutation.prefix
+                and RouteManager._route_next_hop_allocation_id(route) == mutation.allocation_id
+            ):
+                matches.append(RouteManager._metadata_id(route))
+        matches = [route_id for route_id in matches if route_id]
+        if len(matches) > 1:
+            raise RuntimeError("VM-HA route operation resolved to duplicate route identities")
+        return matches[0] if matches else None
+
+    @staticmethod
+    def execute_verified_plan(
+        plan: RouteReconciliationPlan,
+        *,
+        context: RouteReconciliationContext,
+        apply_mutation: t.Callable[[RouteMutation], None],
+        reobserve_ownership: t.Callable[[], VerifiedAllocationOwnership],
+        reobserve_plan: t.Callable[[], RouteReconciliationPlan],
+        receipt_store: _RouteReceiptStore,
+    ) -> RouteApplyResult:
+        return RouteManager.execute_vm_ha_route_plan(
+            plan,
+            context=context,
+            apply_mutation=apply_mutation,
+            reobserve_ownership=reobserve_ownership,
+            reobserve_plan=reobserve_plan,
+            receipt_store=receipt_store,
+        )
 
 
 class RouteManager:
@@ -356,16 +628,11 @@ class RouteManager:
         vm_spec = gateway_group.get("vm_spec", {}) or {}
         ssh_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
 
-        cmd = [
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            f"ConnectTimeout={connect_timeout}",
-        ]
-        if ssh_key:
-            cmd.extend(["-i", str(Path(str(ssh_key)).expanduser())])
-        return cmd
+        key_path = Path(str(ssh_key)).expanduser() if ssh_key else None
+        return build_openssh_base_command(
+            key_path=key_path,
+            connect_timeout=connect_timeout,
+        )
 
     @staticmethod
     def _ssh_target(local_cfg: dict, external_ip: str) -> str:
@@ -613,9 +880,7 @@ class RouteManager:
                 None,
             )
             if overlapping_pool is not None:
-                skipped_network_pool_prefixes.append(
-                    (str(prefix_network), str(overlapping_pool))
-                )
+                skipped_network_pool_prefixes.append((str(prefix_network), str(overlapping_pool)))
                 continue
 
             filtered_prefix_targets[str(prefix_network)] = alloc_id
@@ -690,6 +955,91 @@ class RouteManager:
     def _route_is_managed(route) -> bool:
         return RouteManager._route_name(route).startswith("vpngw-")
 
+    def _vm_ha_owned_route_snapshots(
+        self,
+        routes,
+        *,
+        ownership_by_route_id: t.Mapping[str, ManagedRouteOwnership],
+    ):
+        """Adapt VPC route objects using an explicit HA management ledger.
+
+        A ``vpngw-`` metadata-name prefix remains a legacy non-HA convention;
+        it is deliberately insufficient to establish VM-HA route ownership.
+        """
+
+        return owned_route_snapshots(
+            routes,
+            ownership_by_route_id=ownership_by_route_id,
+            route_id=self._metadata_id,
+            route_prefix=lambda route: (
+                str(network)
+                if (network := self._route_destination_network(route)) is not None
+                else None
+            ),
+            route_allocation_id=self._route_next_hop_allocation_id,
+        )
+
+    @classmethod
+    def _vm_ha_route_next_hop(cls, route) -> str:
+        spec = getattr(route, "spec", None)
+        next_hop = getattr(spec, "next_hop", None) if spec else None
+        allocation_id = cls._route_next_hop_allocation_id(route)
+        default_egress = bool(
+            getattr(next_hop, "default_egress_gateway", False) if next_hop else False
+        )
+        if allocation_id and default_egress:
+            raise ValueError("Observed route has an ambiguous next hop")
+        if allocation_id:
+            return f"allocation:{allocation_id}"
+        if default_egress:
+            return "default-egress-gateway"
+        raise ValueError("Observed route has no supported next hop")
+
+    def _vm_ha_route_snapshots(
+        self,
+        routes,
+        *,
+        ownership_by_route_id: t.Mapping[str, ManagedRouteOwnership],
+        route_target: VMHARouteTarget,
+    ):
+        """Adapt all VPC routes without granting unledgered routes mutation authority."""
+
+        return route_observation_snapshots(
+            routes,
+            ownership_by_route_id=ownership_by_route_id,
+            route_id=self._metadata_id,
+            route_prefix=lambda route: (
+                str(network)
+                if (network := self._route_destination_network(route)) is not None
+                else None
+            ),
+            route_allocation_id=self._route_next_hop_allocation_id,
+            route_next_hop=self._vm_ha_route_next_hop,
+            route_target=route_target,
+        )
+
+    @staticmethod
+    def execute_vm_ha_route_plan(
+        plan: RouteReconciliationPlan,
+        *,
+        context: RouteReconciliationContext,
+        apply_mutation: t.Callable[[RouteMutation], None],
+        reobserve_ownership: t.Callable[[], VerifiedAllocationOwnership],
+        reobserve_plan: t.Callable[[], RouteReconciliationPlan],
+        receipt_store: _RouteReceiptStore,
+    ) -> RouteApplyResult:
+        """Execute and receipt one owner-verified HA plan through the durable store."""
+
+        return execute_route_plan(
+            plan,
+            apply_mutation,
+            context=context,
+            reobserve_ownership=reobserve_ownership,
+            reobserve_plan=reobserve_plan,
+            persist_receipt=receipt_store.save_route_reconciliation_receipt,
+            observe_receipt=receipt_store.load_route_reconciliation_receipt,
+        )
+
     def _routes_with_destination(
         self,
         routes,
@@ -725,8 +1075,7 @@ class RouteManager:
         for prefix, alloc_id in desired_prefix_targets.items():
             matching_routes = self._routes_with_destination(existing_routes, prefix)
             if any(
-                self._route_next_hop_allocation_id(route) == alloc_id
-                for route in matching_routes
+                self._route_next_hop_allocation_id(route) == alloc_id for route in matching_routes
             ):
                 installed[prefix] = alloc_id
         return installed
@@ -984,7 +1333,11 @@ class RouteManager:
             destination = self._route_destination_network(route)
             destination_label = str(destination) if destination else "unknown"
             route_name = self._route_name(route)
-            metadata_name = route_name[:63] if route_name else f"copied-{destination_label.replace('/', '-')}"[:63]
+            metadata_name = (
+                route_name[:63]
+                if route_name
+                else f"copied-{destination_label.replace('/', '-')}"[:63]
+            )
             try:
                 rstub.Create(
                     route_service_pb2.CreateRouteRequest(
@@ -1024,8 +1377,7 @@ class RouteManager:
         for pfx, alloc_id in prefix_targets.items():
             matching_routes = self._routes_with_destination(existing_routes, pfx)
             if matching_routes and any(
-                self._route_next_hop_allocation_id(route) == alloc_id
-                for route in matching_routes
+                self._route_next_hop_allocation_id(route) == alloc_id for route in matching_routes
             ):
                 print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
                 continue
@@ -1073,11 +1425,18 @@ class RouteManager:
                         self._route_next_hop_allocation_id(route) == alloc_id
                         for route in matching_routes
                     ):
-                        print(f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]")
+                        print(
+                            f"[blue]Route {pfx} already exists on {route_table_id}; skipping[/blue]"
+                        )
                     else:
-                        existing_next_hops = ", ".join(
-                            sorted({self._route_next_hop_label(route) for route in matching_routes})
-                        ) or "unknown next-hop"
+                        existing_next_hops = (
+                            ", ".join(
+                                sorted(
+                                    {self._route_next_hop_label(route) for route in matching_routes}
+                                )
+                            )
+                            or "unknown next-hop"
+                        )
                         print(
                             f"[yellow]Route {pfx} already exists on {route_table_id} with "
                             f"{existing_next_hops}; expected allocation {alloc_id}. "
@@ -1089,7 +1448,9 @@ class RouteManager:
                         {pfx: alloc_id},
                     )
                     if not redundant_routes:
-                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        print(
+                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
+                        )
                         continue
 
                     print(
@@ -1103,7 +1464,9 @@ class RouteManager:
                         route_table_id=route_table_id,
                     )
                     if not deleted:
-                        print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
+                        print(
+                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
+                        )
                         continue
 
                     existing_routes = [
@@ -1574,6 +1937,66 @@ class RouteManager:
 
         return selected, diagnostics
 
+    def resolve_vm_ha_route_targets(
+        self,
+        subnets: t.Iterable[object],
+        local_prefixes: t.Iterable[str],
+        *,
+        project_id: str,
+        target_network_id: str,
+        gateway_subnet_name: str,
+    ) -> tuple[VMHARouteTarget, ...]:
+        """Resolve the exact immutable workload route-table target set for VM-HA."""
+
+        prefixes = [
+            network
+            for prefix in local_prefixes
+            if (network := self._parse_ipv4_network(str(prefix))) is not None
+        ]
+        if not project_id or not target_network_id or not prefixes:
+            raise ValueError("VM-HA route target selection requires project, network, and prefixes")
+        selected, _ = self._select_local_prefix_subnets(
+            tuple(subnets),
+            prefixes,
+            target_network_id=target_network_id,
+            gateway_subnet_name=gateway_subnet_name,
+        )
+        if not selected:
+            raise ValueError("VM-HA route target selection matched no workload subnet")
+        targets: list[VMHARouteTarget] = []
+        for subnet, _ in selected:
+            subnet_id = self._metadata_id(subnet)
+            network_id = self._subnet_network_id(subnet)
+            route_table_id = str(getattr(self._subnet_route_table(subnet), "id", "") or "")
+            if not subnet_id or not route_table_id:
+                raise ValueError("VM-HA workload subnet has no exact attached route-table ID")
+            if network_id != target_network_id:
+                raise ValueError("VM-HA route target crossed the selected network")
+            targets.append(
+                VMHARouteTarget(
+                    project_id=project_id,
+                    network_id=network_id,
+                    workload_subnet_id=subnet_id,
+                    route_table_id=route_table_id,
+                )
+            )
+        canonical = tuple(
+            sorted(
+                targets,
+                key=lambda target: (
+                    target.project_id,
+                    target.network_id,
+                    target.workload_subnet_id,
+                    target.route_table_id,
+                ),
+            )
+        )
+        if len({target.workload_subnet_id for target in canonical}) != len(canonical) or len(
+            {target.route_table_id for target in canonical}
+        ) != len(canonical):
+            raise ValueError("VM-HA route target selection is duplicate or ambiguous")
+        return canonical
+
     def list_routes(self, plan: ResolvedDeploymentPlan, local_cfg: dict) -> None:
         """List route tables attached to subnets matching gateway.local_prefixes."""
         try:
@@ -1639,9 +2062,7 @@ class RouteManager:
             rt_id = str(getattr(rt_info, "id", "") or "")
             rt_default = bool(getattr(rt_info, "default", False))
 
-            print(
-                f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})"
-            )
+            print(f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})")
 
             if not rt_id:
                 print("[yellow]  No route table attached[/yellow]")
@@ -2131,9 +2552,7 @@ class RouteManager:
                     existing_routes,
                     prefix_targets,
                 )
-                missing_prefix_targets = sorted(
-                    set(prefix_targets) - set(installed_prefix_targets)
-                )
+                missing_prefix_targets = sorted(set(prefix_targets) - set(installed_prefix_targets))
 
                 if missing_preserved_routes or missing_prefix_targets:
                     print(

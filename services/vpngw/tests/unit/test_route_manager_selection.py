@@ -14,6 +14,8 @@ from nebius_vpngw.config_loader import (
     ResolvedDeploymentPlan,
 )
 from nebius_vpngw.deploy.route_manager import RouteManager
+from nebius_vpngw.deploy.vm_ha_routes import ManagedRouteKind, ManagedRouteOwnership
+from nebius_vpngw.schema import VMHARouteTarget
 
 _LocalConfig = dict[str, t.Any]
 
@@ -68,6 +70,42 @@ def _metadata_id(resource: object) -> str:
     return str(vars(vars(resource)["metadata"])["id"])
 
 
+def test_vm_ha_route_selection_requires_explicit_route_id_ownership() -> None:
+    route_manager = RouteManager(project_id="project-test")
+    ledger_route = _fake_route(
+        route_id="route-owned",
+        name="ordinary-name",
+        cidr="10.10.0.0/16",
+        allocation_id="shared-allocation",
+    )
+    name_only_route = _fake_route(
+        route_id="route-unowned",
+        name="vpngw-name-is-not-authority",
+        cidr="10.20.0.0/16",
+        allocation_id="shared-allocation",
+    )
+
+    snapshots = route_manager._vm_ha_owned_route_snapshots(
+        (ledger_route, name_only_route),
+        ownership_by_route_id={
+            "route-owned": ManagedRouteOwnership(
+                cluster_id="cluster-a",
+                kind=ManagedRouteKind.STATIC,
+                route_target=VMHARouteTarget(
+                    project_id="project-test",
+                    network_id="network-test",
+                    workload_subnet_id="subnet-test",
+                    route_table_id="route-table-test",
+                ),
+            )
+        },
+    )
+
+    assert [(snapshot.route_id, snapshot.prefix) for snapshot in snapshots] == [
+        ("route-owned", "10.10.0.0/16")
+    ]
+
+
 def _three_vm_plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
@@ -101,7 +139,9 @@ def _three_vm_plan() -> ResolvedDeploymentPlan:
     )
 
 
-def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_other_subnets() -> None:
+def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_other_subnets() -> (
+    None
+):
     route_manager = RouteManager(project_id="project-test")
     subnets = [
         _fake_subnet(
@@ -152,7 +192,9 @@ def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_ot
     ]
 
 
-def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizing_explicit_ones() -> None:
+def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizing_explicit_ones() -> (
+    None
+):
     route_manager = RouteManager(project_id="project-test")
     subnets = [
         _fake_subnet(
@@ -377,7 +419,9 @@ def test_installed_prefix_targets_require_matching_next_hop() -> None:
     assert installed == {"10.20.0.0/23": "alloc-a"}
 
 
-def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_exact_routes_exist() -> None:
+def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_exact_routes_exist() -> (
+    None
+):
     route_manager = RouteManager(project_id="project-test")
     existing_routes = [
         _fake_route(
@@ -417,7 +461,9 @@ def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_e
     assert [_metadata_id(route) for route in redundant] == ["route-1"]
 
 
-def test_find_redundant_managed_covering_routes_keeps_summary_until_all_exact_routes_exist() -> None:
+def test_find_redundant_managed_covering_routes_keeps_summary_until_all_exact_routes_exist() -> (
+    None
+):
     route_manager = RouteManager(project_id="project-test")
     existing_routes = [
         _fake_route(
@@ -501,7 +547,7 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     calls: list[str] = []
 
     def fake_run(cmd, capture_output, text, timeout, input=None):
-        calls.append(cmd[5].removeprefix("ubuntu@"))
+        calls.append(cmd[-2].removeprefix("ubuntu@"))
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -580,12 +626,14 @@ def test_get_bgp_learned_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ]
@@ -638,12 +686,14 @@ def test_get_bgp_learned_routes_honors_env_ssh_fallback(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             "/tmp/env-key",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "env-user@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ]
@@ -946,23 +996,27 @@ def test_list_bgp_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "sudo vtysh -c 'show bgp ipv4 unicast json'",
         ],
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=5",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "ip route get 169.254.20.2",
         ],
@@ -1007,12 +1061,14 @@ def test_list_static_routes_honors_custom_ssh_config(
     assert calls == [
         [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
             "-i",
             str(ssh_key),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "LogLevel=ERROR",
             "operator@203.0.113.20",
             "ip route show",
         ]

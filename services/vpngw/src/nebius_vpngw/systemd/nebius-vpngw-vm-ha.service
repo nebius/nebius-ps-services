@@ -1,0 +1,28 @@
+[Unit]
+Description=Nebius VPNGW VM-HA controller
+After=network-online.target nebius-vpngw-vm-ha-guard.service
+Requires=nebius-vpngw-vm-ha-guard.service
+Before=strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service
+ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
+
+[Service]
+Type=notify
+NotifyAccess=all
+Environment="PYTHONUNBUFFERED=1"
+ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard
+ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-preflight
+ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-controller
+ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard
+TimeoutStartSec=60
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /proc/sys/net/ipv4/ip_forward
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

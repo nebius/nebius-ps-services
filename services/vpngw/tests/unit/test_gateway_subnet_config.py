@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
+from nebius_vpngw.agent.main import (
+    VMHACheckpointFileStore,
+    controller_checkpoint_from_dict,
+    controller_checkpoint_to_dict,
+    install_vm_ha_cold_start_guard,
+    require_vm_ha_runtime_prerequisites,
+    vm_ha_status,
+)
+from nebius_vpngw.agent.vm_ha.models import DigestSet
+from nebius_vpngw.agent.vm_ha_controller import (
+    ActionKind,
+    ControllerAction,
+    ControllerCheckpoint,
+    HAState,
+    OwnershipContext,
+)
 from nebius_vpngw.config_loader import GatewayGroupSpec
 from nebius_vpngw.deploy.vm_manager import VMManager
 from nebius_vpngw.schema import validate_config
@@ -136,3 +155,105 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     assert "  - [ systemctl, start, strongswan-starter ]" not in rendered
     assert "net.ipv4.ip_forward = 1" in rendered
     assert yaml.safe_load(rendered)["package_upgrade"] is True
+
+
+def test_vm_ha_controller_checkpoint_round_trip_preserves_complete_action_identity(
+    tmp_path: Path,
+) -> None:
+    digests = DigestSet(configuration="a" * 64, static_routes="b" * 64, bgp_policy="c" * 64)
+    action = ControllerAction(
+        kind=ActionKind.RECONCILE_ROUTES,
+        operation_id="boot-a:9:reconcile-routes:node-a",
+        boot_id="boot-a",
+        target_node_id="node-a",
+        allocation_id="allocation-a",
+        ownership_epoch="epoch-a",
+        generation_id="generation-a",
+        digests=digests,
+        ownership_incarnation=4,
+    )
+    checkpoint = ControllerCheckpoint(
+        sequence=9,
+        state=HAState.PROMOTING,
+        suspect_since=12.5,
+        pending_action=action,
+        established_ownership_context=OwnershipContext(
+            owner_node_id="node-a",
+            allocation_id="allocation-a",
+            ownership_epoch="epoch-a",
+        ),
+        ownership_incarnation=4,
+    )
+
+    payload = controller_checkpoint_to_dict(checkpoint)
+    assert controller_checkpoint_from_dict(payload) == checkpoint
+
+    store = VMHACheckpointFileStore(tmp_path / "checkpoint.json")
+    store.save(checkpoint)
+    assert store.load() == checkpoint
+    assert (tmp_path / "checkpoint.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_vm_ha_checkpoint_rejects_partial_pending_action() -> None:
+    payload = controller_checkpoint_to_dict(ControllerCheckpoint())
+    payload["pending_action"] = {"operation_id": "incomplete"}
+
+    with pytest.raises(ValueError, match="invalid shape"):
+        controller_checkpoint_from_dict(payload)
+
+
+def test_vm_ha_guard_and_default_status_are_fail_closed(tmp_path: Path, monkeypatch) -> None:
+    completed = SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr("nebius_vpngw.agent.main.subprocess.run", lambda *a, **k: completed)
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.main.acquire_routing_lock",
+        lambda blocking=True: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
+    )
+
+    guard = install_vm_ha_cold_start_guard(state_dir=tmp_path, boot_id="boot-a")
+    status = vm_ha_status(state_dir=tmp_path)
+
+    assert guard["guard_boot_id"] == "boot-a"
+    assert status["guard_boot_id"] == "boot-a"
+    assert status["data_plane_mode"] == "blocked"
+    assert status["promotion_ready"] is False
+    assert status["observed_owner_node_id"] is None
+    assert status["state"] == "blocked"
+    assert status["reasons"] == ["authoritative-cloud-observation-not-yet-recorded"]
+    assert "vm-ha-recover" in status["recovery_action"]
+    assert json.loads((tmp_path / "guard.json").read_text())["data_plane_mode"] == "blocked"
+
+    require_vm_ha_runtime_prerequisites(state_dir=tmp_path)
+    persisted = status
+
+    persisted.update(state="active", data_plane_mode="active", promotion_ready=True)
+    (tmp_path / "status.json").write_text(json.dumps(persisted), encoding="utf-8")
+    stale_status = vm_ha_status(state_dir=tmp_path)
+    assert stale_status["state"] == "blocked"
+    assert stale_status["data_plane_mode"] == "blocked"
+    assert stale_status["promotion_ready"] is False
+
+
+def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
+    systemd = Path(__file__).parents[2] / "src" / "nebius_vpngw" / "systemd"
+    guard = (systemd / "nebius-vpngw-vm-ha-guard.service").read_text(encoding="utf-8")
+    controller = (systemd / "nebius-vpngw-vm-ha.service").read_text(encoding="utf-8")
+    ordering = (systemd / "nebius-vpngw-vm-ha-ordering.conf").read_text(encoding="utf-8")
+    fix_routes = (systemd / "nebius-vpngw-fix-routes.service").read_text(encoding="utf-8")
+
+    assert "Before=network-online.target strongswan-starter.service" in guard
+    assert "ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in guard
+    assert "Requires=nebius-vpngw-vm-ha-guard.service" in controller
+    assert (
+        "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-preflight" in controller
+    )
+    assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
+    assert "Type=notify" in controller
+    assert "After=network-online.target nebius-vpngw-vm-ha-guard.service" in controller
+    assert "Before=strongswan-starter.service strongswan.service frr.service" in controller
+    assert "After=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
+    assert "Requires=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
+    assert "ExecStartPre=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-ready" in fix_routes
+    assert "ExecStopPost=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in controller
+    assert "Restart=on-failure" in controller
+    assert "TimeoutStopSec=30" in controller

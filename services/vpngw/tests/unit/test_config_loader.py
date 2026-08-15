@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,9 +11,13 @@ import yaml
 from nebius_vpngw.config_loader import (
     _detect_vendor,
     _validate_tunnel_inner_ips,
+    _validate_vm_ha_credential_sources,
     load_local_config,
     merge_peer_configs_into_local_config,
+    merge_with_peer_configs,
 )
+from nebius_vpngw.config_template import DEFAULT_CONFIG_TEMPLATE
+from nebius_vpngw.schema import validate_config
 
 
 def test_load_local_config_reads_ssh_public_key_from_path(
@@ -35,6 +41,167 @@ def test_load_local_config_reads_ssh_public_key_from_path(
     assert loaded["gateway_group"]["vm_spec"]["ssh_public_key"] == public_key_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_omitted_vm_ha_preserves_single_node_resolved_plan(
+    tmp_path: Path,
+    sample_config: dict,
+) -> None:
+    config_path = tmp_path / "single-node.config.yaml"
+    config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
+
+    loaded = load_local_config(config_path)
+    plan = merge_with_peer_configs(loaded, [])
+
+    assert "vm_ha" not in loaded["gateway_group"]
+    assert plan.vm_ha is None
+    assert [(node.instance_index, node.hostname) for node in plan.per_instance] == [
+        (0, "nebius-vpn-gw-0")
+    ]
+    assert "vm_ha" not in yaml.safe_load(plan.per_instance[0].config_yaml)
+
+
+def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) -> None:
+    cfg = deepcopy(sample_config)
+    cfg["gateway_group"].update(
+        {
+            "instance_count": 2,
+            "external_ips": [["203.0.113.10"], ["203.0.113.20"]],
+            "vm_ha": {
+                "enabled": True,
+                "cluster_id": "gateway-cluster",
+                "members": [
+                    {
+                        "node_id": "gateway-a",
+                        "instance_index": 0,
+                        "role": "active",
+                        "credential_sources": _credential_sources("gateway-a"),
+                    },
+                    {
+                        "node_id": "gateway-b",
+                        "instance_index": 1,
+                        "role": "passive",
+                        "credential_sources": _credential_sources("gateway-b"),
+                    },
+                ],
+            },
+        }
+    )
+    second_tunnel = deepcopy(cfg["connections"][0]["tunnels"][0])
+    second_tunnel.update(
+        {
+            "name": "tunnel-node-b",
+            "gateway_instance_index": 1,
+            "remote_public_ip": "198.51.100.11",
+            "inner_cidr": "169.254.19.0/30",
+            "inner_local_ip": "169.254.19.1",
+            "inner_remote_ip": "169.254.19.2",
+        }
+    )
+    cfg["connections"][0]["tunnels"].append(second_tunnel)
+    validated = validate_config(cfg)
+    normalized = validated.model_dump(mode="python", exclude_none=False)
+
+    first_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    second_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    reordered = deepcopy(normalized)
+    reordered["gateway_group"]["vm_ha"]["members"].reverse()
+    reordered_plan = merge_with_peer_configs(reordered, [])
+
+    assert first_plan.vm_ha == second_plan.vm_ha
+    assert first_plan.vm_ha is not None
+    assert first_plan.gateway_group.vm_ha is not None
+    assert first_plan.gateway_group.vm_ha.cluster_id == "gateway-cluster"
+    assert first_plan.gateway_group.vm_ha.active_instance_index == 0
+    assert reordered_plan.vm_ha is not None
+    assert (
+        reordered_plan.vm_ha.generation.generation_id == first_plan.vm_ha.generation.generation_id
+    )
+    assert len(first_plan.vm_ha.generation.generation_id) == 64
+    static_routes = json.loads(first_plan.vm_ha.generation.logical_manifests.static_routes_json)
+    assert static_routes == [{"connection": "static-peer", "remote_prefixes": ["203.0.113.0/24"]}]
+    assert [node.vm_ha_node.node_id for node in first_plan.per_instance if node.vm_ha_node] == [
+        "gateway-a",
+        "gateway-b",
+    ]
+    manifests = [yaml.safe_load(node.config_yaml)["vm_ha"] for node in first_plan.per_instance]
+    assert {manifest["node"]["role"] for manifest in manifests} == {"active", "passive"}
+    assert len({manifest["generation"]["generation_id"] for manifest in manifests}) == 1
+    assert all(
+        manifest["readiness"]["required_node_ids"] == ["gateway-a", "gateway-b"]
+        for manifest in manifests
+    )
+    assert all("credential_sources" not in yaml.safe_dump(manifest) for manifest in manifests)
+
+
+def _credential_sources(node_id: str) -> dict[str, str]:
+    base = f"/operator-secrets/{node_id}"
+    return {
+        "certificate_authority": f"{base}/peer-ca.pem",
+        "certificate": f"{base}/peer.crt",
+        "private_key": f"{base}/peer.key",
+        "nebius_credentials": f"{base}/nebius-credentials.json",
+    }
+
+
+def test_vm_ha_credential_preflight_accepts_regular_files_and_redacts_paths(
+    tmp_path: Path,
+) -> None:
+    sources: dict[str, str] = {}
+    for name in ("certificate_authority", "certificate", "private_key", "nebius_credentials"):
+        source = tmp_path / name
+        source.write_bytes(f"fixture-{name}".encode())
+        sources[name] = str(source)
+    config = {
+        "gateway_group": {
+            "vm_ha": {
+                "enabled": True,
+                "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+            }
+        }
+    }
+
+    _validate_vm_ha_credential_sources(config)
+
+    missing = tmp_path / "missing-private-value"
+    sources["private_key"] = str(missing)
+    with pytest.raises(ValueError) as exc_info:
+        _validate_vm_ha_credential_sources(config)
+    assert str(missing) not in str(exc_info.value)
+    assert "private_key for gateway-a is unavailable" in str(exc_info.value)
+
+
+def test_vm_ha_credential_preflight_rejects_symlinks_without_reading_them(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.write_bytes(b"fixture-secret")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    sources = {name: str(real) for name in _credential_sources("node")}
+    sources["private_key"] = str(link)
+
+    with pytest.raises(ValueError, match="non-symlink regular file"):
+        _validate_vm_ha_credential_sources(
+            {
+                "gateway_group": {
+                    "vm_ha": {
+                        "enabled": True,
+                        "members": [{"node_id": "gateway-a", "credential_sources": sources}],
+                    }
+                }
+            }
+        )
+
+
+def test_template_and_vm_ha_example_match_the_schema() -> None:
+    example_path = Path(__file__).parents[2] / "examples" / "vm-ha-bgp-example.yaml"
+
+    template = validate_config(yaml.safe_load(DEFAULT_CONFIG_TEMPLATE))
+    example = validate_config(yaml.safe_load(example_path.read_text(encoding="utf-8")))
+
+    assert template.gateway_group.vm_ha is not None
+    assert template.gateway_group.vm_ha.enabled is False
+    assert example.gateway_group.vm_ha is not None
+    assert example.gateway_group.vm_ha.enabled is True
 
 
 def test_load_local_config_reports_missing_environment_variables(

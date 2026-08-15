@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import ipaddress
+import json
 import os
 import re
+import stat
 import typing as t
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +33,79 @@ class GatewayGroupSpec:
     vm_spec: dict
     network_id: str | None = None
     subnet: dict = field(default_factory=dict)
+    vm_ha: VMHAProvisioningSpec | None = None
+
+
+@dataclass(frozen=True)
+class VMHAProvisioningSpec:
+    """Minimum immutable intent required to provision VM-HA cloud identities."""
+
+    cluster_id: str
+    members: tuple[VMHANodeRecord, VMHANodeRecord]
+    generation: VMHAGenerationRecord
+
+    @property
+    def active_instance_index(self) -> int:
+        return next(
+            member.instance_index
+            for member in self.members
+            if member.role is schema.VMHARole.ACTIVE
+        )
+
+
+@dataclass(frozen=True)
+class VMHANodeRecord:
+    """Stable identity and configured role for one VM-HA member."""
+
+    node_id: str
+    instance_index: int
+    role: schema.VMHARole
+    credential_sources: schema.VMHACredentialSourceReferences
+
+
+@dataclass(frozen=True)
+class VMHADigestRecord:
+    """SHA-256 identities for canonical and logical configuration."""
+
+    configuration: str
+    static_routes: str
+    bgp_policy: str
+
+
+@dataclass(frozen=True)
+class VMHALogicalManifests:
+    """Canonical logical intent shared by both VM-HA nodes."""
+
+    static_routes_json: str
+    bgp_policy_json: str
+
+
+@dataclass(frozen=True)
+class VMHAGenerationRecord:
+    """One immutable configuration generation for a VM-HA cluster."""
+
+    generation_id: str
+    digests: VMHADigestRecord
+    logical_manifests: VMHALogicalManifests
+
+
+@dataclass(frozen=True)
+class VMHAReadinessRecord:
+    """Exact parity required before a node is promotion-ready."""
+
+    required_node_ids: tuple[str, str]
+    generation_id: str
+    digests: VMHADigestRecord
+
+
+@dataclass(frozen=True)
+class VMHAClusterRecord:
+    """Resolved immutable VM-HA contract shared by both node plans."""
+
+    cluster_id: str
+    members: tuple[VMHANodeRecord, VMHANodeRecord]
+    generation: VMHAGenerationRecord
+    readiness: VMHAReadinessRecord
 
 
 @dataclass
@@ -39,6 +114,9 @@ class InstanceResolvedConfig:
     hostname: str
     external_ip: str
     config_yaml: str  # serialized per-VM resolved config
+    vm_ha_node: VMHANodeRecord | None = None
+    vm_ha_generation: VMHAGenerationRecord | None = None
+    vm_ha_readiness: VMHAReadinessRecord | None = None
 
 
 @dataclass
@@ -47,6 +125,7 @@ class ResolvedDeploymentPlan:
     gateway: dict = field(default_factory=dict)
     per_instance: list[InstanceResolvedConfig] = field(default_factory=list)
     manage_routes: bool = False
+    vm_ha: VMHAClusterRecord | None = None
 
     def validate(self) -> None:
         if self.gateway_group.instance_count != len(self.per_instance):
@@ -138,6 +217,111 @@ def _enum_to_value(obj: t.Any) -> t.Any:
     return obj
 
 
+def _canonical_json(value: t.Any) -> str:
+    return json.dumps(
+        _enum_to_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
+    vm_ha = (local_cfg.get("gateway_group") or {}).get("vm_ha")
+    if not vm_ha or not vm_ha.get("enabled", False):
+        return None
+
+    members = tuple(
+        VMHANodeRecord(
+            node_id=str(member["node_id"]),
+            instance_index=int(member["instance_index"]),
+            role=schema.VMHARole(member["role"]),
+            credential_sources=schema.VMHACredentialSourceReferences.model_validate(
+                member["credential_sources"]
+            ),
+        )
+        for member in sorted(vm_ha["members"], key=lambda item: int(item["instance_index"]))
+    )
+    if len(members) != 2:
+        raise ValueError("VM-HA resolved plans require exactly two members")
+
+    defaults_mode = ((local_cfg.get("defaults") or {}).get("routing") or {}).get("mode", "bgp")
+    static_routes: list[dict[str, t.Any]] = []
+    bgp_policies: list[dict[str, t.Any]] = []
+    gateway = local_cfg.get("gateway") or {}
+    for connection in local_cfg.get("connections") or []:
+        connection_mode = connection.get("routing_mode") or defaults_mode
+        if connection_mode == "static":
+            remote_prefixes = set(connection.get("remote_prefixes") or [])
+            for tunnel in connection.get("tunnels") or []:
+                remote_prefixes.update(
+                    (tunnel.get("static_routes") or {}).get("remote_prefixes") or []
+                )
+            static_routes.append(
+                {
+                    "connection": connection.get("name"),
+                    "remote_prefixes": sorted(remote_prefixes),
+                }
+            )
+        elif connection_mode == "bgp":
+            bgp = connection.get("bgp") or {}
+            advertise_local_prefixes = bool(bgp.get("advertise_local_prefixes", True))
+            bgp_policies.append(
+                {
+                    "advertise_local_prefixes": advertise_local_prefixes,
+                    "connection": connection.get("name"),
+                    "local_asn": gateway.get("local_asn"),
+                    "local_prefixes": (
+                        sorted(gateway.get("local_prefixes") or [])
+                        if advertise_local_prefixes
+                        else []
+                    ),
+                    "remote_asn": bgp.get("remote_asn"),
+                    "remote_prefixes": sorted(
+                        connection.get("remote_prefixes") or bgp.get("remote_prefixes") or []
+                    ),
+                }
+            )
+
+    canonical_config = copy.deepcopy(local_cfg)
+    canonical_config["gateway_group"]["vm_ha"]["members"] = sorted(
+        canonical_config["gateway_group"]["vm_ha"]["members"],
+        key=lambda item: int(item["instance_index"]),
+    )
+    for member in canonical_config["gateway_group"]["vm_ha"]["members"]:
+        member.pop("credential_sources", None)
+    canonical_configuration = _canonical_json(canonical_config)
+    logical_manifests = VMHALogicalManifests(
+        static_routes_json=_canonical_json(static_routes),
+        bgp_policy_json=_canonical_json(bgp_policies),
+    )
+    digests = VMHADigestRecord(
+        configuration=_sha256_text(canonical_configuration),
+        static_routes=_sha256_text(logical_manifests.static_routes_json),
+        bgp_policy=_sha256_text(logical_manifests.bgp_policy_json),
+    )
+    generation = VMHAGenerationRecord(
+        generation_id=digests.configuration,
+        digests=digests,
+        logical_manifests=logical_manifests,
+    )
+    readiness = VMHAReadinessRecord(
+        required_node_ids=t.cast(tuple[str, str], tuple(member.node_id for member in members)),
+        generation_id=generation.generation_id,
+        digests=digests,
+    )
+    return VMHAClusterRecord(
+        cluster_id=str(vm_ha["cluster_id"]),
+        members=t.cast(tuple[VMHANodeRecord, VMHANodeRecord], members),
+        generation=generation,
+        readiness=readiness,
+    )
+
+
 def load_local_config(
     path: Path,
     *,
@@ -148,6 +332,7 @@ def load_local_config(
         raw = yaml.safe_load(f) or {}
     missing: set[str] = set()
     expanded = _expand_env(raw, missing)
+    vm_ha_was_provided = "vm_ha" in (expanded.get("gateway_group") or {})
     # Allow optional placeholders: if NETWORK_ID is missing and the value
     # is an unresolved placeholder, drop the field to fall back to default network.
     try:
@@ -220,6 +405,10 @@ def load_local_config(
             # Convert back to dict for downstream processing
             # (preserves existing code paths while ensuring schema compliance)
             expanded = validated_config.model_dump(mode="python", exclude_none=False)
+            if not vm_ha_was_provided:
+                expanded["gateway_group"].pop("vm_ha", None)
+            else:
+                _validate_vm_ha_credential_sources(expanded)
         except ValidationError as e:
             # Format Pydantic errors into user-friendly messages
             errors = []
@@ -236,6 +425,36 @@ def load_local_config(
             ) from e
 
     return expanded
+
+
+def _validate_vm_ha_credential_sources(config: dict) -> None:
+    """Fail closed on unsafe operator files without disclosing their paths."""
+
+    vm_ha = (config.get("gateway_group") or {}).get("vm_ha") or {}
+    if not vm_ha.get("enabled", False):
+        return
+    for member in vm_ha.get("members") or []:
+        node_id = str(member.get("node_id") or "unknown")
+        sources = member.get("credential_sources") or {}
+        for name in (
+            "certificate_authority",
+            "certificate",
+            "private_key",
+            "nebius_credentials",
+        ):
+            path = Path(str(sources.get(name) or ""))
+            try:
+                metadata = path.lstat()
+            except OSError as exc:
+                raise ValueError(
+                    f"VM-HA credential source {name} for {node_id} is unavailable"
+                ) from exc
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"VM-HA credential source {name} for {node_id} must be a non-symlink regular file"
+                )
+            if not os.access(path, os.R_OK):
+                raise ValueError(f"VM-HA credential source {name} for {node_id} is not readable")
 
 
 def _detect_vendor(text: str) -> str:
@@ -621,6 +840,7 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     # Build normalized peer specs
     peer_specs = [_parse_peer_file(p) for p in peer_files]
     gg = local_cfg.get("gateway_group", {})
+    vm_ha_cluster = _build_vm_ha_cluster_record(local_cfg)
     instance_count = int(gg.get("instance_count", 1))
     name = gg.get("name", "nebius-vpn-gw")
     # Prefer gateway_group.region, else top-level region_id, else a sane default
@@ -652,6 +872,15 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
         subnet=subnet,
         vm_spec=vm_spec,
         network_id=network_id,
+        vm_ha=(
+            VMHAProvisioningSpec(
+                cluster_id=vm_ha_cluster.cluster_id,
+                members=vm_ha_cluster.members,
+                generation=vm_ha_cluster.generation,
+            )
+            if vm_ha_cluster is not None
+            else None
+        ),
     )
 
     # Build per-instance configs by filtering tunnels for each instance
@@ -795,6 +1024,45 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
             "defaults": local_cfg.get("defaults", {}),
             "connections": merged_connections,
         }
+        vm_ha_node: VMHANodeRecord | None = None
+        if vm_ha_cluster is not None:
+            vm_ha_node = next(
+                member for member in vm_ha_cluster.members if member.instance_index == idx
+            )
+            digests = vm_ha_cluster.generation.digests
+            per_vm_cfg["vm_ha"] = {
+                "cluster_id": vm_ha_cluster.cluster_id,
+                "node": {
+                    "node_id": vm_ha_node.node_id,
+                    "instance_index": vm_ha_node.instance_index,
+                    "role": vm_ha_node.role.value,
+                },
+                "generation": {
+                    "generation_id": vm_ha_cluster.generation.generation_id,
+                    "digests": {
+                        "configuration": digests.configuration,
+                        "static_routes": digests.static_routes,
+                        "bgp_policy": digests.bgp_policy,
+                    },
+                    "logical_manifests": {
+                        "static_routes_json": (
+                            vm_ha_cluster.generation.logical_manifests.static_routes_json
+                        ),
+                        "bgp_policy_json": (
+                            vm_ha_cluster.generation.logical_manifests.bgp_policy_json
+                        ),
+                    },
+                },
+                "readiness": {
+                    "required_node_ids": list(vm_ha_cluster.readiness.required_node_ids),
+                    "generation_id": vm_ha_cluster.readiness.generation_id,
+                    "digests": {
+                        "configuration": digests.configuration,
+                        "static_routes": digests.static_routes,
+                        "bgp_policy": digests.bgp_policy,
+                    },
+                },
+            }
         # Convert Enum objects to their values before YAML serialization
         per_vm_cfg_serializable = _enum_to_value(per_vm_cfg)
         serialized = yaml.safe_dump(per_vm_cfg_serializable, sort_keys=False)
@@ -804,6 +1072,9 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
                 hostname=hostname,
                 external_ip=ip,
                 config_yaml=serialized,
+                vm_ha_node=vm_ha_node,
+                vm_ha_generation=(vm_ha_cluster.generation if vm_ha_cluster is not None else None),
+                vm_ha_readiness=(vm_ha_cluster.readiness if vm_ha_cluster is not None else None),
             )
         )
 
@@ -833,4 +1104,5 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
         gateway=local_cfg.get("gateway", {}),
         per_instance=per_instance,
         manage_routes=manage_routes,
+        vm_ha=vm_ha_cluster,
     )
