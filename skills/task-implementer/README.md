@@ -22,7 +22,8 @@ performs no workspace initialization, project inspection, additional tool
 calls, or private-state changes; it is not a sixth workflow action and does not
 authorize any lifecycle action.
 
-Initialization creates or verifies the private `CODE` + `PROMPTS` workspace,
+Initialization creates or verifies the private
+`CODE — MANAGED PERSISTENT LANE` + `PROMPTS` workspace,
 keeps `00-START-HERE.md` visible, and creates one starter prompt when needed,
 then asks VS Code to reuse its last active
 window. Loading the workspace restarts that window's extension host and may
@@ -39,12 +40,13 @@ unrelated worktree even if its metadata aliases that ref, tolerates dirty or
 active live state, and opens the workspace without lane refresh, prompt
 migration, checkpointing, or execution.
 `run` also resolves from the primary source project, so reopening is optional.
-If a package-manager upgrade removed only the exact resolved Python executable
-recorded in the generated VS Code launcher, explicit `run` refreshes that
-generated file through canonical workspace initialization and repeats full
-verification before intake. It does not repair any other workspace mismatch or
-change lane, prompt, run, orchestration, or Git state; `workspace reuse`
-remains non-mutating and reports the stale launcher instead.
+`workspace init` and explicit `run` migrate only the exact previous generated
+workspace shape, including its consistently recorded now-missing Python
+executable, then re-render every helper and Python path from the trusted running
+implementation. Extra folders or tasks, changed arguments, a forged helper, or
+any other mismatch is tampering and fails before lane creation, refresh,
+permission changes, or other mutation. `workspace reuse` never migrates; it
+returns `WORKFLOW_UPGRADE_REQUIRED` for the exact previous shape.
 
 Only generated metadata and one meaningful `## Ask` are required; every other
 heading is optional, removable, and may be added when it helps. Use the default
@@ -151,8 +153,14 @@ current directory, VS Code window, or checked-out worktree.
    selected-project lifecycle is applied, verified, and sealed. The owner
    records a clean no-change seal or promotes only its exact canonical
    spec/provenance overlay, then cleans the final integration. When final
-   `$align` passes, the run finalizer releases the pending generation. The
+   `$align` passes, the run finalizer prepares a digest-bound deterministic
+   summary, releases the pending generation, seals those exact bytes, updates
+   the handoff projection, and only then activates the queued prompt. The
    primary checkout and source branch are still unchanged.
+   The report counts the complete repository delta, selected and outside-scope
+   files, line changes, binary files, task resources, validation/review, source
+   movement, and the exact next public action. Repeating an unchanged completed
+   run returns the same sealed summary.
 8. From outside the persistent lane, invoke
    `$task-implementer integrate [project-folder]` with the exact primary
    project path. Task Implementer validates a temporary source integration
@@ -166,6 +174,17 @@ current directory, VS Code window, or checked-out worktree.
 10. Push or open a pull request through a separate Git workflow if desired.
    Keep the lane for more managed work, or remove an idle fully integrated lane
    with `$task-implementer workspace remove [project-folder]` from outside it.
+
+The generated editor task `Task Implementer: Show Pending Lane Changes` is a
+manual inspection-only view. It shows the source branch, a redacted managed-lane
+branch label, both commits, active
+and pending-generation state, aggregate project-relative file changes, ordered
+sealed summaries for pending generations, and the exact next public action.
+It never adds the primary checkout to the workspace or creates a dirty overlay.
+Older pending generations without a sealed report display
+`summary unavailable for legacy generation`; the current aggregate comparison
+remains available. `lane-report` is an internal helper command, not a sixth
+public Task Implementer action.
 
 ### What "Clean" Means
 

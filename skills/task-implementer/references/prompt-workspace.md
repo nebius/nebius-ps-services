@@ -50,6 +50,10 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │           ├── resume-control.json
 │           ├── plan-digest-recovery.json
 │           ├── contract-delta-adoption.json
+│           ├── source-observation.json
+│           ├── run-summary-state.json
+│           ├── run-summary.prepared.json
+│           ├── run-summary.json
 │           ├── pending-plans/wave-001/<tasks-sha256>.json
 │           ├── interop.json
 │           ├── lane-checkpoint-preparation.json
@@ -125,9 +129,26 @@ revision, run, result, branch, and worktree record. After explicit removal, it
 may rebind only the same logical workspace to a strictly newer lane
 incarnation. It never starts a run.
 
-The generated workspace exposes `CODE` and `PROMPTS`. Its default build task
-creates a new prompt with a fresh ID only; it does not invoke Codex. Queue list
-and cancel tasks expose metadata only. Do not clone managed prompt files.
+The generated workspace exposes `CODE — MANAGED PERSISTENT LANE` and
+`PROMPTS`; it never adds the primary checkout. Its default build task creates a
+new prompt with a fresh ID only; it does not invoke Codex. Queue list and cancel
+tasks expose metadata only. `Task Implementer: Show Pending Lane Changes`
+invokes the internal inspection-only `lane-report`, which shows the current
+source branch, a redacted managed-lane branch label, both commits, active and
+pending generations, aggregate counts and
+project-relative paths, ordered pending sealed summaries, and the exact next
+public action. It creates no overlay or file decoration dirt. Do not clone
+managed prompt files.
+
+Generated workspace preflight classifies the document as current, the one exact
+previous generated shape, or tampered. `workspace init` and `run` may rewrite
+only the exact previous shape; `workspace reuse` returns
+`WORKFLOW_UPGRADE_REQUIRED` without mutation. A stale Python path is admissible
+only inside that complete previous shape with the trusted helper and consistent
+commands, and is never executed. Expected helper and Python paths always come
+from the trusted running implementation. Extra folders/tasks, changed
+arguments, forged paths, or any other mismatch fail before lane creation,
+refresh, chmod, prompt migration, or Git mutation.
 
 After successful initialization, the helper asks VS Code to reuse its last
 active window for the generated workspace. The CLI does not bind this request
@@ -187,6 +208,10 @@ returns `new`, `continue`, `reconcile`, `steering_queued_after_wave`,
   overtaken.
 - A terminal handoff whose lane generation was not released returns private
   `finalize`/`TASK_LEASE_RELEASE_REQUIRED` and resumes the same run.
+- Successful completion returns the exact sealed `run-summary-v1`. A released
+  but unsealed report remains `finalization_pending`, blocks another
+  generation, and resumes sealing before handoff publication and queue
+  activation. `ALREADY_COMPLETE` reads those bytes without recomputing Git.
 
 Every validated, lock-acquired invocation updates private activity and the
 handoff `Last invoked at`, including no-op and blocked outcomes. Rejected and
@@ -503,6 +528,23 @@ head replay is accepted; missing or different state is a conflict. Successive
 wave promotions append to the lease's ordered head history through expected-
 head compare-and-set. Pending generation receipts and claims remain until
 `$task-implementer integrate` consumes their contiguous range.
+
+The prepared `run-summary-v1` is digest-bound before generation release. It
+contains task/correction/wave and temporary-resource totals; combined
+validation and review outcomes; lane promotion/release; evidence-backed source
+movement; run-local and accumulated pending statistics for the full repository,
+selected scope, outside scope, lines, binary files, and every supported Git
+file status; queued-prompt status; and a structured next action. Source-to-lane
+statistics are explicitly a comparison when histories diverge. Filenames are
+parsed as NUL-delimited bytes and escaped for display; prompt bodies, raw diffs,
+private IDs/paths, and recovery artifacts are excluded.
+
+`lane-report` reads the Worktree anchor, refs, Git objects, private receipts,
+and sealed summaries without calling lane ensure or idle refresh. Pending
+legacy generations display `summary unavailable for legacy generation` rather
+than reconstructed history. After integration it reports no pending
+generation; after lane removal it retains current source-to-last-sealed-lane
+comparison and directs the user to `workspace init`.
 
 `workspace remove` deletes only an idle, clean, fully integrated lane through
 non-forced exact-head proof. It preserves completed private prompt/run and

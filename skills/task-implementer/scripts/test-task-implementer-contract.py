@@ -31,6 +31,7 @@ def main() -> int:
         "contract-delta helper": read("scripts/prompt_workspace_contract_delta.py"),
         "execution helper": read("scripts/prompt_workspace_execution.py"),
         "interop helper": read("scripts/prompt_workspace_interop.py"),
+        "reporting helper": read("scripts/prompt_workspace_reporting.py"),
         "resume helper": read("scripts/prompt_workspace_resume.py"),
         "metadata": read("agents/openai.yaml"),
         "evals": read("evals/trigger-prompts.md"),
@@ -227,6 +228,8 @@ def main() -> int:
             "project-agent-instructions.state.v3",
             "attached",
             "Reload required",
+            "## Completion Report",
+            "task-implementer/run-summary-v1",
         ),
         "wave helper": (
             '"path": f"{prefix}AGENTS.md"',
@@ -259,6 +262,16 @@ def main() -> int:
             "SCHEMA = 4",
             "observe_managed_state",
             "without repairing local interop state",
+        ),
+        "reporting helper": (
+            'SUMMARY_SCHEMA = "task-implementer/run-summary-v1"',
+            '"--no-ext-diff"',
+            '"--no-textconv"',
+            "def diff_statistics",
+            "def record_source_head_at_open",
+            "def lane_report",
+            "summary unavailable for legacy generation",
+            "queue_activation_pending",
         ),
         "resume helper": (
             'RESUME_CONTROL_SCHEMA = "task-implementer/resume-control-v1"',
@@ -320,12 +333,16 @@ def main() -> int:
             "operation ID and accepted projection digest",
             "built-in Task Implementer pre-run checkpoint",
             "$task-implementer workspace reuse [project-folder]",
+            "run-summary-v1",
+            "CODE — MANAGED PERSISTENT LANE",
         ),
         "requirements": (
             "REQ-013",
             "$task-implementer workspace reuse [project-folder]",
             "WORKSPACE_NOT_FOUND",
             "creates nothing",
+            "REQ-020",
+            "run-summary-v1",
         ),
         "design": (
             "FEAT-012",
@@ -334,6 +351,8 @@ def main() -> int:
             "exactly five public actions",
             "FEAT-017",
             "resume-control-v1",
+            "FEAT-019",
+            "Immutable Task Implementer completion reporting",
         ),
     }
     if not source_checkout:

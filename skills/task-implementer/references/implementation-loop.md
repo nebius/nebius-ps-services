@@ -98,6 +98,10 @@ The adapter revalidates this workspace, run, active eligible wave, exact
 integration Git identity, selected project, canonical helper, and every
 run-owned path. The selected-lane lifecycle hook
 rechecks that attestation and command digest during reconciliation-required.
+After an exact intermediate provenance-only seal, the hook may also admit only
+these attested repository-read-only `validate`, `inspect`, and `render`
+actions so a retained planned tail can receive a current run-owned bundle;
+terminal apply, coordinator commits, and product mutations remain excluded.
 The exact head is the original wave base during first preparation. For a
 retained correction it is the recorded contract commit, and an adopted sealed
 contract is eligible only while its owner journal remains authoritative. The
@@ -122,6 +126,13 @@ same prompt revision and intent. Non-final material impact remains blocked.
 If interruption occurs after the new impact receipt is published but before
 its plan basis is settled, cleanup recognizes that exact stale-basis phase and
 replays the same validation and settlement.
+A retained promoted non-final wave created by an older worker contract may
+bind one exact sealed lifecycle only while the lane and integration are clean
+at the same promoted head and the lifecycle produced either no repository delta
+or only a managed `AGENTS.md` provenance-marker refresh with an unchanged body.
+Cleanup must still classify the remaining plan as `retain_plan`. This recovery
+does not authorize future worker edits to shared files; current workers fail
+scope validation before commit when such a path changes.
 If a historical run was released before this terminal boundary existed, do not
 amend it or ignore later lifecycle dirt. The hidden owner may validate the
 exact sealed canonical overlay and absent resources, then use the ordinary
@@ -278,11 +289,15 @@ Each worker must:
    handoff/spec/docs, other refs/worktrees, Git maintenance, or external state.
 7. Run focused and end-to-end validation.
 8. Invoke `code-review`, fix safe scoped findings, and revalidate.
-9. Invoke `$commit` exactly once. The task branch must contain exactly one
-   direct-child commit from the common contract base.
+9. Do not edit coordinator-owned requirements, design, project instructions,
+   README, or changelog paths even when a broad task claim contains them. Report
+   required shared updates in the worker result, complete worker-local
+   validation/alignment, then invoke `$commit` exactly once. The task branch
+   must contain exactly one direct-child commit from the common contract base.
 10. Write one private result with assignment digest, status, commit, exact paths,
    summary, decisions, open risks, validation, end-to-end evidence, and review
-   evidence. Stop. Never reuse this worker session for another task.
+   evidence only after verifying the worktree is clean. Stop. Never reuse this
+   worker session for another task.
 
 Task `committed` means ready for integration, not done.
 
@@ -293,6 +308,13 @@ immediate interruption, stopped-status confirmation, and explicit recovery or
 blocking. Treat `WORKER_SCOPE_VIOLATION` the same way. Never silently wait or
 blind-retry no-progress work. Resume routes a hard guard result to confirmed
 recovery immediately; a fresh final heartbeat never overrides that stop.
+An immutable result file does not override a hard worker guard: resume first
+requires confirmed recovery to refresh exclusive ownership, then routes the
+unchanged result through ordinary `task-finish` verification.
+The atomic recovery launcher detects that retained immutable result before
+starting the replacement and limits the fresh session to the exact recovery
+transition; it must exit immediately after ownership refresh rather than replay
+implementation or publication.
 When the returned recovery cwd is scoped to the observing helper's process
 lifetime, use the hidden atomic recovery-worker form on `run-resume`. It starts
 one fresh ephemeral child before returning and uses the exact `recover_argv` as
@@ -572,14 +594,34 @@ Failure rules:
 Start the next planned wave from the newly promoted project `HEAD`. After the
 last wave is promoted and safely cleaned, run changed-surface `$align`, verify
 managed specification state, record final evidence, and invoke the private run
-finalizer. The finalizer sets the handoff to `done` and releases the active lane
-generation only when the lane is clean at the final promoted head and all
-internal resources are absent. It seals an immutable generation receipt and
-leaves it pending for `$task-implementer integrate`; it never invokes source
-integration or publishes the lane. If release is interrupted, repeat the same
-finalizer; do not start a new run or clear state. A later explicit `run` may
-acquire the next generation immediately. Static validation and observed
-live/runtime proof must be reported separately.
+finalizer. Before release it records the source ref observation and persists
+stable, digest-bound `run-summary-v1` bytes. Run-local changes are the verified
+ancestral commit range from the coordinator's initial head to the final
+promoted head. The report also computes a separately labelled current
+source-to-lane comparison, including full-repository, selected-scope,
+outside-scope, cross-scope, added, modified, deleted, renamed, copied,
+type-changed, insertion, deletion, and binary counts. Git diff configuration,
+rename/copy detection, NUL parsing, filename escaping, time, and output bounds
+are pinned; external diff and text conversion are disabled.
+
+After the Worktree-owned generation release succeeds, seal those exact
+prepared bytes, publish their human handoff projection, and only then activate
+the bound FIFO queue head. Each boundary is idempotent. A released but unsealed
+summary is `finalization_pending` and blocks another generation. Re-entry
+consumes the prepared bytes and queue-head binding; it never recomputes from
+newer source or lane state and never activates a second queued prompt.
+`ALREADY_COMPLETE` returns the exact sealed summary. Historical completed
+generations without one remain legacy history and are not reconstructed.
+
+The report proves source status as `unchanged`, `moved`, or `unknown_legacy`
+from the pre-worker observation. It never claims unchanged without that
+evidence. A moved source warns that public integration rebuilds and revalidates
+its candidate. Clean source and lane state yields the exact
+`$task-implementer integrate "<primary-project-path>"` handoff; a dirty source
+first directs the user to invoke `$commit` in that primary project. The report
+never includes private run/lane IDs, private paths, prompts, raw diffs, or
+recovery artifacts. The finalizer never invokes source integration or
+publishes the lane.
 
 ## Persistent Lane Integration
 

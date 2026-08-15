@@ -85,6 +85,19 @@ from prompt_workspace_interop import (
     record_resource,
     release_interop,
 )
+from prompt_workspace_reporting import (
+    build_run_summary,
+    load_prepared_summary,
+    mark_finalization_complete,
+    mark_handoff_published,
+    prepare_run_summary,
+    public_summary_response,
+    queue_activation_pending,
+    record_source_head_at_open,
+    render_completion_projection,
+    seal_prepared_summary,
+    summary_phase,
+)
 from prompt_workspace_lanes import (
     bind_integration_review_correction,
     claim_generation,
@@ -92,6 +105,7 @@ from prompt_workspace_lanes import (
 )
 from prompt_workspace_runs import (
     _activate_next_queued_prompt_unlocked,
+    load_prompt_queue,
     read_handoff_text,
     scope_lock,
     verify_run,
@@ -1293,7 +1307,8 @@ def _append_promotion_review_corrections(
     integration = Path(str(wave["integration_worktree"]))
     integrated_head = wave.get("integrated_head")
     if integrated_head is not None and (
-        not isinstance(integrated_head, str) or SHA_RE.fullmatch(integrated_head) is None
+        not isinstance(integrated_head, str)
+        or SHA_RE.fullmatch(integrated_head) is None
     ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "correction wave integrated head is invalid"
@@ -1653,9 +1668,7 @@ def plan_waves(
             _existing_run_interop(manifest_path, workspace, run_dir, existing)
             return existing
         base, tasks, claims = _run_checkpoint_inputs(workspace, run_dir)
-        primary = Path(
-            required_string(workspace, "primary_root", "workspace manifest")
-        )
+        primary = Path(required_string(workspace, "primary_root", "workspace manifest"))
         source_head = _git_text(
             primary,
             [
@@ -1664,6 +1677,11 @@ def plan_waves(
                 required_string(workspace, "source_ref", "workspace manifest"),
             ],
             "read the integration source ref",
+        )
+        record_source_head_at_open(
+            run_dir,
+            required_string(workspace, "source_ref", "workspace manifest"),
+            source_head,
         )
         bind_integration_review_correction(
             workspace,
@@ -2059,7 +2077,9 @@ def replan_waves(
                         and result.get("status") == "REPLAN_REQUIRED"
                         and isinstance(changed_paths, list)
                         and bool(changed_paths)
-                        and all(isinstance(path, str) and path for path in changed_paths)
+                        and all(
+                            isinstance(path, str) and path for path in changed_paths
+                        )
                         and sorted(changed_paths) == _dirty_paths(worker)
                     ):
                         _archive_failed_worker_dirt(
@@ -2381,12 +2401,18 @@ def _coordinator_and_wave(
             Path(required_string(workspace, "source_root", "workspace manifest")),
         )
     except PromptWorkspaceError as error:
+        interrupted_promotion = (
+            error.message == "canonical project specs drifted after impact settlement"
+            and _promotion_already_at_target(workspace, coordinator, wave)
+        )
+        promoted_lifecycle_reconciliation = error.message in {
+            "canonical project specs drifted after impact settlement",
+            "prompt impact plan basis is stale",
+        } and terminal_lifecycle_seal_promoted(workspace, run_dir, coordinator, wave)
         if not (
             allow_interrupted_promotion
             and error.code == "REPLAN_REQUIRED"
-            and error.message
-            == "canonical project specs drifted after impact settlement"
-            and _promotion_already_at_target(workspace, coordinator, wave)
+            and (interrupted_promotion or promoted_lifecycle_reconciliation)
         ):
             raise
     return run_dir, coordinator, wave
@@ -2474,16 +2500,11 @@ def _prepared_contract_delta_is_safe(integration: Path, project: Path) -> bool:
         and not untracked
         and not deleted
         and (not staged or staged == allowed)
-        and all(
-            not (integration / relative).is_symlink()
-            for relative in allowed
-        )
+        and all(not (integration / relative).is_symlink() for relative in allowed)
     )
 
 
-def _prepared_contract_stage_delta_is_safe(
-    integration: Path, project: Path
-) -> bool:
+def _prepared_contract_stage_delta_is_safe(integration: Path, project: Path) -> bool:
     allowed = _prepared_contract_paths(integration, project)
     if allowed is None:
         return False
@@ -2493,16 +2514,11 @@ def _prepared_contract_stage_delta_is_safe(
         and not deleted
         and not (staged & unstaged)
         and staged | unstaged == allowed
-        and all(
-            not (integration / relative).is_symlink()
-            for relative in allowed
-        )
+        and all(not (integration / relative).is_symlink() for relative in allowed)
     )
 
 
-def _prepared_contract_paths(
-    integration: Path, project: Path
-) -> set[str] | None:
+def _prepared_contract_paths(integration: Path, project: Path) -> set[str] | None:
     try:
         relative_project = project.resolve().relative_to(integration.resolve())
     except ValueError:
@@ -2790,10 +2806,10 @@ def authorize_project_agent_lifecycle(
         run_id,
         allow_unstaged_contract=coordinator_stage,
     )
-    if (
-        _trusted_python_command(tokens, task_helper)
-        and tokens[2] in {"coordinator-stage", "coordinator-commit"}
-    ):
+    if _trusted_python_command(tokens, task_helper) and tokens[2] in {
+        "coordinator-stage",
+        "coordinator-commit",
+    }:
         flags = _exact_command_flags(tokens, boolean_flags={"--json"})
         if (
             flags is None
@@ -3021,9 +3037,7 @@ def _commit_prepared_coordinator_contract(
         return {
             "status": "reused",
             "commit": recorded,
-            "changed_paths": sorted(
-                _changed_paths(integration, base, recorded)
-            ),
+            "changed_paths": sorted(_changed_paths(integration, base, recorded)),
         }
     allowed = _prepared_contract_paths(integration, project)
     if allowed is None:
@@ -3302,17 +3316,11 @@ def authorize_lifecycle_impact(
             )
     checkpoint = load_checkpoint_receipt(run_dir, required=False)
     _base, _tasks, claims = _run_checkpoint_inputs(workspace, run_dir)
-    preparation = load_checkpoint_preparation(
-        run_dir, claims=claims, required=False
-    )
+    preparation = load_checkpoint_preparation(run_dir, claims=claims, required=False)
     lane_head = (
         str(checkpoint["initial_head"])
         if checkpoint is not None
-        else (
-            str(preparation["before_head"])
-            if preparation is not None
-            else ""
-        )
+        else (str(preparation["before_head"]) if preparation is not None else "")
     )
     primary = Path(required_string(workspace, "primary_root", "workspace manifest"))
     source_head = _git_text(
@@ -3454,6 +3462,17 @@ def authorize_task_commit_lifecycle(
             "worker commit does not belong to one active assigned task",
         )
     assignment, plane_path = matches[0]
+    base = required_string(assignment, "base_commit", "worker assignment")
+    observed_paths = set(_dirty_paths(worker_root))
+    observed_head = _head(worker_root)
+    if observed_head != base:
+        observed_paths.update(_changed_paths(worker_root, base, observed_head))
+    coordinator_owned = _worker_scope_violation_paths(assignment, observed_paths)
+    if coordinator_owned:
+        raise PromptWorkspaceError(
+            "WORKER_SCOPE_VIOLATION",
+            "worker commit includes unassigned or coordinator-owned shared paths",
+        )
     _verify_linked_worktree(
         Path(required_string(workspace, "repo_root", "workspace manifest")),
         worker_root,
@@ -5214,6 +5233,44 @@ def _dirty_paths(repo: Path) -> list[str]:
     return sorted(paths)
 
 
+def _assignment_coordinator_claims(
+    assignment: dict[str, object],
+) -> list[dict[str, str]]:
+    """Return shared paths that remain coordinator-owned inside broad claims."""
+
+    worktree = Path(required_string(assignment, "worktree", "worker assignment"))
+    scope_cwd = Path(required_string(assignment, "scope_cwd", "worker assignment"))
+    try:
+        relative_scope = scope_cwd.resolve(strict=False).relative_to(
+            worktree.resolve(strict=False)
+        )
+    except ValueError as error:
+        raise PromptWorkspaceError(
+            "EXECUTION_STATE_INVALID", "worker scope is outside its assigned worktree"
+        ) from error
+    prefix = "" if relative_scope == Path(".") else f"{relative_scope.as_posix()}/"
+    return [
+        {"kind": "prefix", "path": f"{prefix}docs"},
+        {"kind": "exact", "path": f"{prefix}AGENTS.md"},
+        {"kind": "exact", "path": f"{prefix}README.md"},
+        {"kind": "exact", "path": f"{prefix}CHANGELOG.md"},
+    ]
+
+
+def _worker_scope_violation_paths(
+    assignment: dict[str, object], paths: set[str] | list[str]
+) -> list[str]:
+    """Reject both unclaimed paths and coordinator-owned shared paths."""
+
+    coordinator_claims = _assignment_coordinator_claims(assignment)
+    return sorted(
+        path
+        for path in paths
+        if not _path_allowed(path, assignment["write_claims"])
+        or _path_allowed(path, coordinator_claims)
+    )
+
+
 def _worker_guard_status(
     assignment: dict[str, object],
     plane: dict[str, object],
@@ -5234,14 +5291,8 @@ def _worker_guard_status(
     observed_paths = set(_dirty_paths(worktree))
     if observed_head != base:
         observed_paths.update(_changed_paths(worktree, base, observed_head))
-    scope_violation = any(
-        not _path_allowed(path, assignment["write_claims"]) for path in observed_paths
-    )
-    scope_violation_paths = sorted(
-        path
-        for path in observed_paths
-        if not _path_allowed(path, assignment["write_claims"])
-    )
+    scope_violation_paths = _worker_scope_violation_paths(assignment, observed_paths)
+    scope_violation = bool(scope_violation_paths)
     progress_observed = bool(observed_paths) and not scope_violation
     if scope_violation:
         status = "WORKER_SCOPE_VIOLATION"
@@ -5360,9 +5411,8 @@ def watch_task(
             if observed_head != base:
                 observed_paths.update(_changed_paths(worktree, base, observed_head))
             progress_observed = observed_head != base or bool(observed_paths)
-            scope_violation = any(
-                not _path_allowed(path, assignment["write_claims"])
-                for path in observed_paths
+            scope_violation = bool(
+                _worker_scope_violation_paths(assignment, observed_paths)
             )
             if progress_observed:
                 status = "WORKER_PRESTART_MUTATION"
@@ -5790,12 +5840,11 @@ def accept_task_result(
                 "worker must create exactly one direct-child commit",
             )
         actual = _changed_paths(worktree, base, commit)
+        scope_violations = _worker_scope_violation_paths(assignment, actual)
         if (
             actual != sorted(result.get("changed_paths", []))
             or not actual
-            or any(
-                not _path_allowed(path, assignment["write_claims"]) for path in actual
-            )
+            or scope_violations
         ):
             wave["task_states"][task_id] = "failed"
             wave["status"] = "blocked"
@@ -5808,7 +5857,7 @@ def accept_task_result(
             _save_task_plane(run_dir, plane)
             raise PromptWorkspaceError(
                 "REPLAN_REQUIRED",
-                "worker changed paths outside the locked write claims",
+                "worker changed paths outside task ownership or inside coordinator ownership",
             )
         if any(
             not isinstance(result.get(field), str) or not str(result[field]).strip()
@@ -6363,14 +6412,10 @@ def _reconcile_promoted_spec_impact(
     try:
         verify_prompt_impact_plan(run_dir, coordinator, project_root)
     except PromptWorkspaceError as error:
-        if (
-            error.code != "REPLAN_REQUIRED"
-            or error.message
-            not in {
-                "canonical project specs drifted after impact settlement",
-                "prompt impact plan basis is stale",
-            }
-        ):
+        if error.code != "REPLAN_REQUIRED" or error.message not in {
+            "canonical project specs drifted after impact settlement",
+            "prompt impact plan basis is stale",
+        }:
             raise
     else:
         return False
@@ -6438,13 +6483,20 @@ def _reconcile_promoted_spec_impact(
         save_requirements_refinement(run_dir, refinement)
     settled = verify_requirements_refinement_contract(workspace, run_dir, run_state)
     impact = dict(settled["impact"])
-    if impact.get("plan_action") != "retain_plan" and not (
-        terminal_reconciliation and _final_wave(coordinator, wave)
-    ):
-        raise PromptWorkspaceError(
-            "REPLAN_REQUIRED",
-            "promoted specification reconciliation materially changed the remaining plan",
-        )
+    if impact.get("plan_action") != "retain_plan":
+        if terminal_reconciliation and _final_wave(coordinator, wave):
+            pass
+        elif not _final_wave(coordinator, wave):
+            # Keep the prior plan basis stale until cleanup advances to the
+            # resource-free planned tail. Resume will then route that tail
+            # through wave-replan instead of either deleting retained
+            # resources early or silently accepting a materially changed plan.
+            return False
+        else:
+            raise PromptWorkspaceError(
+                "REPLAN_REQUIRED",
+                "promoted specification reconciliation materially changed the remaining plan",
+            )
     settle_prompt_impact_plan(
         run_dir, coordinator, impact, str(settled["impact_sha256"])
     )
@@ -6468,9 +6520,9 @@ def _promote_terminal_lifecycle_seal(
     wave: dict[str, object],
     clock: Callable[[], datetime],
 ) -> None:
-    """Promote the exact final seal before its retained integration is removed."""
+    """Promote an exact lifecycle seal before its retained integration is removed."""
 
-    if not _final_wave(coordinator, wave) or wave.get("status") != "promoted":
+    if wave.get("status") != "promoted":
         return
     recover_terminal_lifecycle_promotion(workspace, run_dir, coordinator, wave)
     receipt = terminal_lifecycle_seal(run_dir, str(wave["wave_id"]))
@@ -6490,9 +6542,14 @@ def _promote_terminal_lifecycle_seal(
     if terminal_lifecycle_seal_promoted(workspace, run_dir, coordinator, wave):
         return
     if not terminal_lifecycle_seal_active(workspace, run_dir, coordinator, wave):
+        # An intermediate wave may carry an exact zero/provenance-only seal,
+        # but it does not require one merely to advance the planned tail. The
+        # final wave remains fail-closed until its lifecycle is sealed.
+        if not _final_wave(coordinator, wave):
+            return
         raise PromptWorkspaceError(
             "LIFECYCLE_SEAL_REQUIRED",
-            "seal the selected-project lifecycle before final wave cleanup",
+            "seal the selected-project lifecycle before promoted-wave cleanup",
         )
     promotion = prepare_terminal_lifecycle_promotion(
         workspace, run_dir, coordinator, wave
@@ -6556,12 +6613,16 @@ def _cleanup_failed_worker_archives(
             clock,
             check=False,
         )
-        if deleted.returncode != 0 or _git(
-            repo,
-            ["rev-parse", "--verify", archive_ref],
-            "verify failed worker quarantine removal",
-            check=False,
-        ).returncode == 0:
+        if (
+            deleted.returncode != 0
+            or _git(
+                repo,
+                ["rev-parse", "--verify", archive_ref],
+                "verify failed worker quarantine removal",
+                check=False,
+            ).returncode
+            == 0
+        ):
             retained.append(archive_ref)
     return retained
 
@@ -6597,7 +6658,9 @@ def cleanup_wave(
                 preliminary_wave,
                 clock,
             )
-        run_dir, coordinator, wave = _coordinator_and_wave(workspace, run_id)
+        run_dir, coordinator, wave = _coordinator_and_wave(
+            workspace, run_id, allow_interrupted_promotion=True
+        )
         _validate_wave_git_identity(manifest_path, workspace, run_id, wave)
         if wave["status"] == "done":
             _finalize_cleaned_wave(run_dir, coordinator, wave, clock)
@@ -6656,9 +6719,7 @@ def cleanup_wave(
             ):
                 retained.append(f"{worktree} ({branch})")
         if not retained:
-            retained.extend(
-                _cleanup_failed_worker_archives(repo, run_dir, wave, clock)
-            )
+            retained.extend(_cleanup_failed_worker_archives(repo, run_dir, wave, clock))
         wave["cleanup_retained"] = retained
         wave["updated_at"] = _utc(clock)
         if retained:
@@ -6738,46 +6799,75 @@ def finalize_run(
                 "WORKTREE_CONFLICT",
                 "project checkout must be clean at the final promoted head",
             )
-        handoff = read_handoff_text(run_dir)
-        if handoff is None:
-            raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
-        handoff, count = re.subn(
-            r"(?m)^- Overall status:\s*[a-z_]+\s*$",
-            "- Overall status: done",
-            handoff,
-            count=1,
-        )
-        if count != 1:
-            raise PromptWorkspaceError(
-                "RUN_STATE_INVALID", "handoff has no unique overall status"
+        phase = summary_phase(run_dir)
+        scope_dir = runs_root.parent
+        if phase == "complete":
+            return public_summary_response(run_dir)
+        if phase is None:
+            queue = load_prompt_queue(scope_dir)
+            summary = build_run_summary(
+                workspace, run_dir, coordinator, waves, promoted_head, queue
             )
-        final_section = (
-            "## Final Alignment\n\n"
-            f"- Completed at: {_utc(clock)}\n"
-            f"- Promoted commit: {promoted_head}\n"
-            f"- Evidence: {normalized_alignment}\n"
-        )
-        if re.search(r"(?m)^## Final Alignment\s*$", handoff):
-            handoff = re.sub(
-                r"(?ms)^## Final Alignment\s*\n.*?(?=^## |\Z)",
-                final_section,
+            prepare_run_summary(run_dir, summary, queue)
+            phase = "prepared"
+        else:
+            summary = load_prepared_summary(run_dir)
+
+        # Preparation is immutable and precedes the external release. Re-entry
+        # after any later crash consumes those exact bytes instead of newer refs.
+        release_interop(workspace, run_dir, promoted_head)
+        if phase == "prepared":
+            summary = seal_prepared_summary(run_dir)
+            phase = "sealed"
+
+        if phase == "sealed":
+            handoff = read_handoff_text(run_dir)
+            if handoff is None:
+                raise PromptWorkspaceError("RUN_STATE_INVALID", "handoff is missing")
+            handoff, count = re.subn(
+                r"(?m)^- Overall status:\s*[a-z_]+\s*$",
+                "- Overall status: done",
                 handoff,
                 count=1,
             )
-        else:
-            handoff = handoff.rstrip() + "\n\n" + final_section
-        result = release_interop(workspace, run_dir, promoted_head)
-        # Machine completion owns the terminal boundary. Publish the human
-        # projection only after the external lease and local interop receipt
-        # both prove release; replay re-enters this exact idempotent sequence.
-        write_atomic(run_dir / "handoff.md", handoff.encode("utf-8"))
-        next_prompt = _activate_next_queued_prompt_unlocked(manifest_path, clock=clock)
-        response: dict[str, object] = {
-            "status": "done",
-            "run_id": run_id,
-            "promoted_head": promoted_head,
-            "interop": result,
-        }
-        if next_prompt is not None:
-            response["next_prompt"] = next_prompt
-        return response
+            if count != 1:
+                raise PromptWorkspaceError(
+                    "RUN_STATE_INVALID", "handoff has no unique overall status"
+                )
+            final_section = (
+                "## Final Alignment\n\n"
+                f"- Promoted commit: {promoted_head}\n"
+                f"- Evidence: {normalized_alignment}\n"
+            )
+            for heading, section in (
+                ("Final Alignment", final_section),
+                ("Completion Report", render_completion_projection(summary)),
+            ):
+                if re.search(rf"(?m)^## {re.escape(heading)}\s*$", handoff):
+                    handoff = re.sub(
+                        rf"(?ms)^## {re.escape(heading)}\s*\n.*?(?=^## |\Z)",
+                        section,
+                        handoff,
+                        count=1,
+                    )
+                else:
+                    handoff = handoff.rstrip() + "\n\n" + section
+            write_atomic(run_dir / "handoff.md", handoff.encode("utf-8"))
+            mark_handoff_published(run_dir)
+            phase = "handoff_published"
+
+        if phase == "handoff_published":
+            queue = load_prompt_queue(scope_dir)
+            if queue_activation_pending(run_dir, queue):
+                _activate_next_queued_prompt_unlocked(
+                    manifest_path,
+                    clock=clock,
+                    finalizing_run_id=run_id,
+                )
+                if queue_activation_pending(run_dir, load_prompt_queue(scope_dir)):
+                    raise PromptWorkspaceError(
+                        "FINALIZATION_PENDING",
+                        "queued prompt activation is waiting for another run",
+                    )
+            mark_finalization_complete(run_dir)
+        return public_summary_response(run_dir)

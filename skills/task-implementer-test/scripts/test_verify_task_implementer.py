@@ -24,7 +24,7 @@ from verify_task_implementer import (
 
 class VerifyTests(unittest.TestCase):
     def test_default_suite_timeout_covers_full_worktree_regression(self) -> None:
-        self.assertEqual(DEFAULT_SUITE_TIMEOUT_SECONDS, 600)
+        self.assertEqual(DEFAULT_SUITE_TIMEOUT_SECONDS, 900)
 
     def make_skill(self, root: Path, failing: str | None = None) -> Path:
         skill = root / "task-implementer"

@@ -49,6 +49,12 @@ TERMINAL_SEAL_MESSAGE = "chore(task-implementer): adopt terminal lifecycle seal"
 TERMINAL_RECOVERY_SCHEMA = "task-implementer/terminal-lifecycle-recovery-v1"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
+MANAGED_INSTRUCTION_RE = re.compile(
+    rb"<!-- project-agent-instructions:managed-v3 "
+    rb"manifest-sha256=([0-9a-f]{64}) "
+    rb"decision-sha256=([0-9a-f]{64}) "
+    rb"body-sha256=([0-9a-f]{64}) -->\n\n"
+)
 PHASES = {
     "intent",
     "integration-committed",
@@ -965,6 +971,51 @@ def _is_final_active_wave(
     )
 
 
+def _managed_instruction_content(path: Path) -> tuple[bytes, bytes] | None:
+    """Return the human prefix and managed body around one canonical marker."""
+
+    if path.is_symlink() or not path.is_file():
+        return None
+    content = path.read_bytes()
+    if content.count(b"<!-- project-agent-instructions:managed-v3") != 1:
+        return None
+    matches = list(MANAGED_INSTRUCTION_RE.finditer(content))
+    if len(matches) != 1:
+        return None
+    marker = matches[0]
+    if marker.start() == 0:
+        prefix = b""
+    elif (
+        marker.start() >= 2 and content[marker.start() - 2 : marker.start()] == b"\n\n"
+    ):
+        prefix = content[: marker.start() - 2]
+    else:
+        return None
+    body = content[marker.end() :]
+    if marker.group(3).decode("ascii") != _digest(body):
+        return None
+    return prefix, body
+
+
+def _intermediate_terminal_delta_is_proven(
+    workspace: dict[str, object], integration: Path, paths: list[str]
+) -> bool:
+    """Admit only a provenance-marker refresh on an unchanged managed body."""
+
+    contract_paths = _contract_paths(workspace)
+    agent_paths = [
+        path
+        for path in contract_paths
+        if path.endswith("/AGENTS.md") or path == "AGENTS.md"
+    ]
+    if len(agent_paths) != 1 or paths != agent_paths:
+        return False
+    relative = agent_paths[0]
+    lane_content = _managed_instruction_content(contract_paths[relative])
+    integration_content = _managed_instruction_content(integration / relative)
+    return lane_content is not None and lane_content == integration_content
+
+
 def _contract_files_match(root: Path, contract_files: dict[str, str | None]) -> bool:
     for relative, expected in contract_files.items():
         path = root / relative
@@ -1048,6 +1099,7 @@ def _terminal_identity_matches(
         if isinstance(item, dict)
     ]
     active_matches = coordinator.get("active_wave") == wave.get("wave_id")
+    final_wave = bool(indexed) and indexed[-1] == wave.get("wave_id")
     if not before_promotion and coordinator.get("status") == "done":
         active_matches = coordinator.get("active_wave") is None
     if (
@@ -1055,7 +1107,15 @@ def _terminal_identity_matches(
         or journal.get("wave_id") != wave.get("wave_id")
         or journal.get("lane_base") != wave.get("base_commit")
         or not indexed
-        or indexed[-1] != wave.get("wave_id")
+        or (
+            not final_wave
+            and bool(journal.get("paths"))
+            and not _intermediate_terminal_delta_is_proven(
+                workspace,
+                Path(str(wave.get("integration_worktree"))),
+                list(journal["paths"]),
+            )
+        )
         or not active_matches
     ):
         return False
@@ -1082,7 +1142,7 @@ def terminal_lifecycle_seal_active(
     coordinator: dict[str, object],
     wave: dict[str, object],
 ) -> bool:
-    """Prove the final promoted wave retains an exact terminal seal."""
+    """Prove a promoted wave retains an exact lifecycle seal."""
 
     journal = _load_terminal_seal(run_dir, str(wave.get("wave_id")))
     if journal is None or wave.get("status") != "promoted":
@@ -1157,10 +1217,13 @@ def _adopt_terminal_lifecycle_seal(
     lifecycle_state: Path,
     clock: Callable[[], datetime],
 ) -> dict[str, object]:
-    if wave.get("status") != "promoted" or not _is_final_active_wave(coordinator, wave):
+    final_wave = _is_final_active_wave(coordinator, wave)
+    if wave.get("status") != "promoted" or coordinator.get("active_wave") != wave.get(
+        "wave_id"
+    ):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID",
-            "terminal lifecycle seal requires the final promoted wave",
+            "lifecycle seal requires the active promoted wave",
         )
     repo = Path(required_string(workspace, "repo_root", "workspace manifest"))
     integration = Path(str(wave.get("integration_worktree")))
@@ -1183,6 +1246,15 @@ def _adopt_terminal_lifecycle_seal(
             "WORKTREE_CONFLICT", "terminal lifecycle Git identity changed"
         )
     paths, files = _validate_lane_delta(workspace, allow_empty=True)
+    if (
+        paths
+        and not final_wave
+        and not _intermediate_terminal_delta_is_proven(workspace, integration, paths)
+    ):
+        raise PromptWorkspaceError(
+            "REPLAN_REQUIRED",
+            "an intermediate promoted wave may seal only an unchanged managed instruction body",
+        )
     lifecycle, lifecycle_state_sha256, contract_files = _validated_lifecycle_contract(
         workspace,
         lifecycle_state,
@@ -2078,9 +2150,9 @@ def recover_terminal_lifecycle_promotion(
     journal = _load_terminal_seal(run_dir, str(wave.get("wave_id")))
     if journal is None or not journal.get("paths"):
         return False
-    if journal.get("wave_id") != wave.get("wave_id") or not _is_final_active_wave(
-        coordinator, wave
-    ):
+    if journal.get("wave_id") != wave.get("wave_id") or coordinator.get(
+        "active_wave"
+    ) != wave.get("wave_id"):
         raise PromptWorkspaceError(
             "EXECUTION_STATE_INVALID", "terminal lifecycle promotion identity changed"
         )

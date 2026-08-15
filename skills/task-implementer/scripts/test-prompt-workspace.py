@@ -22,6 +22,7 @@ from unittest import mock
 import prompt_workspace_intake as intake
 import prompt_workspace_core as core
 import prompt_workspace_lanes as lanes
+import prompt_workspace_reporting as reporting
 import prompt_workspace_runs as runs
 
 
@@ -348,7 +349,6 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         self.assertEqual(manifest["source_root"], str(self.lane_scope))
         vscode = Path(manifest["vscode_workspace"])
-        vscode_bytes = vscode.read_bytes()
         vscode.write_text("{}\n", encoding="utf-8")
         vscode.chmod(0o600)
         relative = subprocess.run(
@@ -359,10 +359,9 @@ class PromptWorkspaceTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self.assertEqual(relative.returncode, 0, relative.stdout + relative.stderr)
-        relative_result = json.loads(relative.stdout)
-        self.assertEqual(relative_result["workspace"], first_result["workspace"])
-        self.assertEqual(vscode.read_bytes(), vscode_bytes)
+        self.assertEqual(relative.returncode, 2, relative.stdout + relative.stderr)
+        self.assertIn("generated VS Code workspace was tampered with", relative.stderr)
+        self.assertEqual(vscode.read_bytes(), b"{}\n")
         self.assertEqual(starter.read_bytes(), starter_bytes)
         self.assertEqual(starter.stat().st_mtime_ns, starter_mtime)
         self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
@@ -950,19 +949,23 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(
             value["folders"],
             [
-                {"name": "CODE", "path": str(self.lane_scope)},
+                {
+                    "name": "CODE — MANAGED PERSISTENT LANE",
+                    "path": str(self.lane_scope),
+                },
                 {"name": "PROMPTS", "path": "prompts"},
             ],
         )
         tasks = value["tasks"]
         self.assertEqual(tasks["version"], "2.0.0")
-        self.assertEqual(len(tasks["tasks"]), 3)
+        self.assertEqual(len(tasks["tasks"]), 4)
         self.assertEqual(
             [item["label"] for item in tasks["tasks"]],
             [
                 "Task Implementer: New Prompt",
                 "Task Implementer: Prompt Queue",
                 "Task Implementer: Cancel Queued Prompt",
+                "Task Implementer: Show Pending Lane Changes",
             ],
         )
         task = tasks["tasks"][0]
@@ -976,9 +979,97 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertNotIn("security.workspace.trust", json.dumps(value))
         self.assertEqual(tasks["inputs"][0]["type"], "promptString")
         self.assertRegex(self.workspace_result["scope_id"], r"-[0-9a-f]{8}$")
-        with mock.patch.object(core.sys, "executable", "/bin/sh"):
-            verified = pw.verify_workspace(self.workspace)
+        verified = pw.verify_workspace(self.workspace)
         self.assertEqual(verified["scope"], "services/example")
+
+    def test_generated_workspace_tampering_fails_before_lane_mutation(self) -> None:
+        vscode_path = Path(self.workspace_result["vscode_workspace"])
+        original = json.loads(vscode_path.read_text(encoding="utf-8"))
+
+        mutations = {
+            "extra folder": lambda value: value["folders"].append(
+                {"name": "PRIMARY", "path": str(self.repo)}
+            ),
+            "extra task": lambda value: value["tasks"]["tasks"].append(
+                dict(value["tasks"]["tasks"][0])
+            ),
+            "tampered arguments": lambda value: value["tasks"]["tasks"][0][
+                "args"
+            ].append("--unsafe"),
+            "forged helper": lambda value: value["tasks"]["tasks"][0][
+                "args"
+            ].__setitem__(0, str(self.root / "forged/prompt_workspace.py")),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                candidate = json.loads(json.dumps(original))
+                mutate(candidate)
+                core.write_atomic(vscode_path, core.stable_json(candidate))
+                before = {
+                    str(path.relative_to(self.workspace.parent)): path.read_bytes()
+                    for path in self.workspace.parent.rglob("*")
+                    if path.is_file()
+                }
+                with (
+                    mock.patch.object(runs, "ensure_project_lane") as ensure,
+                    self.assertRaises(core.PromptWorkspaceError) as raised,
+                ):
+                    runs.initialize_project_workspace(self.scope, self.codex_home)
+                self.assertEqual(raised.exception.code, "WORKSPACE_STATE_INVALID")
+                ensure.assert_not_called()
+                self.assertEqual(
+                    before,
+                    {
+                        str(path.relative_to(self.workspace.parent)): path.read_bytes()
+                        for path in self.workspace.parent.rglob("*")
+                        if path.is_file()
+                    },
+                )
+        core.write_atomic(vscode_path, core.stable_json(original))
+
+    def test_workspace_manifest_tampering_fails_before_lane_mutation(self) -> None:
+        original = self.workspace.read_bytes()
+        manifest = json.loads(original)
+        manifest["lane_id"] = "0" * 32
+        core.write_atomic(self.workspace, core.stable_json(manifest))
+        before = {
+            str(path.relative_to(self.workspace.parent)): path.read_bytes()
+            for path in self.workspace.parent.rglob("*")
+            if path.is_file()
+        }
+        with (
+            mock.patch.object(runs, "ensure_project_lane") as ensure,
+            self.assertRaises(core.PromptWorkspaceError) as raised,
+        ):
+            runs.initialize_project_workspace(self.scope, self.codex_home)
+        self.assertEqual(raised.exception.code, "WORKSPACE_STATE_INVALID")
+        ensure.assert_not_called()
+        self.assertEqual(
+            before,
+            {
+                str(path.relative_to(self.workspace.parent)): path.read_bytes()
+                for path in self.workspace.parent.rglob("*")
+                if path.is_file()
+            },
+        )
+        core.write_atomic(self.workspace, original)
+
+    def test_workspace_reuse_rejects_exact_previous_shape_without_mutation(
+        self,
+    ) -> None:
+        vscode_path = Path(self.workspace_result["vscode_workspace"])
+        previous = core.previous_workspace_document(
+            self.workspace,
+            self.lane_scope,
+            Path(core.__file__).resolve().with_name("prompt_workspace.py"),
+            Path(sys.executable).resolve(),
+        )
+        core.write_atomic(vscode_path, core.stable_json(previous))
+        before = vscode_path.read_bytes()
+        with self.assertRaises(core.PromptWorkspaceError) as raised:
+            pw.reuse_project_workspace(self.scope, self.codex_home)
+        self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+        self.assertEqual(vscode_path.read_bytes(), before)
 
     def test_slug_rules(self) -> None:
         self.assertEqual(
@@ -1700,6 +1791,50 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(activated["_internal"]["status"], "activated")
         self.assertEqual(pw.queue_rows(self.workspace), [])
 
+    def test_finalizer_activates_exact_queue_head_after_handoff_publication(
+        self,
+    ) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement the queued finalization follow-up",
+            prompt_hex="b" * 32,
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        first_run = str(first["_internal"]["run_id"])
+        queued = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(queued["action"], "queued")
+        self.mark_run_done(first_run)
+
+        def phase(run_dir: Path) -> str | None:
+            return "handoff_published" if run_dir.name == first_run else None
+
+        with mock.patch.object(reporting, "summary_phase", side_effect=phase):
+            waiting = runs._activate_next_queued_prompt_unlocked(
+                self.workspace,
+                clock=lambda: FIXED_UTC.replace(second=2),
+            )
+            self.assertEqual(waiting["status"], "waiting_for_finalization")
+            activated = runs._activate_next_queued_prompt_unlocked(
+                self.workspace,
+                clock=lambda: FIXED_UTC.replace(second=3),
+                finalizing_run_id=first_run,
+            )
+        self.assertEqual(activated["status"], "activated")
+        self.assertEqual(activated["prompt_id"], "prompt-" + "b" * 32)
+        self.assertEqual(pw.queue_rows(self.workspace), [])
+
     def test_completed_follow_up_queues_until_resources_release(self) -> None:
         prompt = self.new_prompt()
         self.complete_prompt(prompt)
@@ -1921,17 +2056,23 @@ class PromptWorkspaceTest(unittest.TestCase):
         prompt = self.new_prompt()
         workspace_manifest = json.loads(self.workspace.read_text(encoding="utf-8"))
         vscode_path = Path(workspace_manifest["vscode_workspace"])
-        vscode = json.loads(vscode_path.read_text(encoding="utf-8"))
-        stale_python = self.root / "removed-python3.12"
+        vscode = core.previous_workspace_document(
+            self.workspace,
+            self.lane_scope,
+            Path(core.__file__).resolve().with_name("prompt_workspace.py"),
+            Path(sys.executable).resolve(),
+        )
+        stale_python = self.root / "python3.12"
         for task in vscode["tasks"]["tasks"]:
             task["command"] = str(stale_python)
         core.write_atomic(vscode_path, core.stable_json(vscode))
 
         with self.assertRaises(core.PromptWorkspaceError) as blocked:
             core.verify_workspace(self.workspace)
-        self.assertEqual(blocked.exception.code, "WORKSPACE_STATE_INVALID")
+        self.assertEqual(blocked.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
         self.assertEqual(
-            blocked.exception.message, "VS Code workspace command is unsafe"
+            blocked.exception.message,
+            "generated workspace requires explicit workspace init migration",
         )
 
         routed = pw.route_project_prompt(

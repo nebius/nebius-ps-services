@@ -1570,5 +1570,88 @@ selected runtime has a requirement, evidence state, owner, acceptance gate,
 and revisit trigger.
 
 <!-- /REQUIREMENT: REQ-019 -->
+
+<!-- REQUIREMENT: REQ-020 status=active priority=P0 type=feature -->
+### REQ-020: Report Task Implementer completion from immutable machine evidence
+
+#### User Story
+
+Task Implementer users need successful runs and pending persistent-lane changes
+to be inspectable from deterministic evidence so they can integrate the correct
+project without relying on coordinator prose or hidden state.
+
+#### Acceptance Criteria
+
+- AC-001: Successful `run` completion seals a versioned `run-summary-v1` with
+  task/correction/wave and temporary-resource totals, combined validation and
+  review, lane promotion/release, source observation, queued-prompt status, and
+  a structured next action.
+- AC-002: Run-local changes use valid ancestral commit objects from the
+  coordinator initial head to the final promoted head. Accumulated pending
+  changes are separately labelled source-to-lane comparisons and include
+  full-repository, selected-scope, outside-scope, cross-scope, file-status,
+  textual, and binary statistics.
+- AC-003: Git reporting disables external diff and text conversion, pins
+  rename/copy behavior, parses NUL-delimited bytes, safely escapes filenames,
+  and enforces time and output bounds.
+- AC-004: The source head is recorded before workers start and completion says
+  only `unchanged`, `moved`, or `unknown_legacy`. Movement warns that public
+  integration rebuilds and revalidates its candidate.
+- AC-005: Summary bytes are prepared and digest-bound before generation
+  release, sealed unchanged after release, projected to the handoff before
+  queue activation, and returned exactly by `ALREADY_COMPLETE`. Interrupted
+  finalization is idempotent and blocks another generation until complete.
+- AC-006: Clean source and lane state reports the exact primary-project
+  `$task-implementer integrate "<primary-project-path>"` command. A dirty
+  primary first directs the user to invoke `$commit` there.
+- AC-007: The generated workspace labels its unchanged lane path
+  `CODE — MANAGED PERSISTENT LANE` and supplies one manual inspection-only task
+  for current source/lane commits, generation state, aggregate changes, ordered
+  pending summaries, and the exact next public action.
+- AC-008: Generated workspace preflight classifies current, the exact previous
+  generated shape, or tampered. Init/run migrate only the exact previous shape;
+  reuse is non-mutating and requests upgrade; tampering fails before mutation.
+- AC-009: Historical pending generations without sealed summaries display
+  `summary unavailable for legacy generation` while retaining a current
+  aggregate comparison. Reporting remains useful after integration and lane
+  removal.
+- AC-010: The public Task Implementer interface remains exactly five actions;
+  hooks and the Worktree mutation API are unchanged, and `lane-report` receives
+  no coordinator privilege.
+
+#### Negative Criteria
+
+- NC-001: Reports must not expose prompt bodies, raw diffs, private run/lane
+  IDs, private state paths, or recovery artifacts, and must not reconstruct
+  historical legacy summaries from current state.
+- NC-002: Reporting must not ensure, refresh, checkpoint, integrate, chmod,
+  create an overlay, dirty a checkout, or otherwise mutate lane, source, Git,
+  prompt, run, or hook state.
+- NC-003: A forged helper/Python path, extra folder/task, changed argument, or
+  released-but-unsealed summary must not be accepted as current or permit a new
+  generation.
+
+#### Validation Method
+
+Run reporting, workspace, wave, resume, interoperability, Worktree, lifecycle
+hook, contract, lint, skill-alignment, and changed-surface alignment checks in
+disposable repositories and isolated Codex homes.
+
+#### Test Method
+
+Cover stable bytes, no-change commits, every supported Git file status, binary
+files, unsafe/non-UTF path bytes, cross-scope renames, source movement, two
+overlapping generations, every finalization crash boundary, legacy pending
+history, integration/removal, exact prior-shape migration, stale Python,
+forged helpers, arbitrary tampering, and zero-mutation report fingerprints.
+
+#### Evaluation Method
+
+Complete and replay a disposable run, inspect its lane before and after public
+integration and removal, and confirm the sealed run-local report stays byte
+identical while the current aggregate comparison changes with authoritative
+refs.
+
+<!-- /REQUIREMENT: REQ-020 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

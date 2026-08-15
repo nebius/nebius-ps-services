@@ -724,6 +724,20 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             )
         )
 
+    def test_lane_report_receives_no_coordinator_privilege(self) -> None:
+        helper = self.user_skills_root / "task-implementer/scripts/prompt_workspace.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        command = (
+            f"python3 {helper} lane-report --workspace "
+            f"{Path(os.environ['CODEX_HOME']) / 'task-implementer/workspace.json'} --json"
+        )
+        self.assertFalse(lifecycle._coordinator_command_shape(command))
+        self.assertIsNone(
+            lifecycle._task_implementer_coordinator(command, self.project)
+        )
+        self.assertIsNone(lifecycle._bound_coordinator_command(command, self.project))
+
     def test_copied_hook_trusts_only_installed_coordinator_surface(self) -> None:
         installed_hook = Path(os.environ["CODEX_HOME"]) / "hooks/lifecycle.py"
         installed_hook.parent.mkdir(parents=True)
@@ -1489,11 +1503,27 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
         with mock.patch.object(
             lifecycle, "_task_implementer_coordinator", return_value=adapter
         ):
-            for phase in ("reconciliation-required", "implementation-open"):
+            for phase in (
+                "reconciliation-required",
+                "implementation-open",
+                "sealed",
+            ):
                 with self.subTest(phase=phase):
                     state = lifecycle._load(state_path)
                     assert state is not None
-                    state["phase"] = phase
+                    state.update(
+                        {
+                            "phase": phase,
+                            "requirements_sha256": "b" * 64,
+                            "design_sha256": "c" * 64,
+                            "project_instructions_state_sha256": (
+                                "d" * 64 if phase == "sealed" else None
+                            ),
+                            "project_instructions_reload_required": (
+                                True if phase == "sealed" else None
+                            ),
+                        }
+                    )
                     lifecycle._write(state_path, state)
                     self.assertEqual(lifecycle.evaluate(payload), {})
             denied = lifecycle.evaluate(
@@ -1530,7 +1560,25 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             "_task_implementer_coordinator",
             return_value=validate_adapter,
         ):
-            self.assertEqual(lifecycle.evaluate(validate_payload), {})
+            for phase in ("implementation-open", "sealed"):
+                with self.subTest(validate_phase=phase):
+                    state = lifecycle._load(state_path)
+                    assert state is not None
+                    state.update(
+                        {
+                            "phase": phase,
+                            "requirements_sha256": "b" * 64,
+                            "design_sha256": "c" * 64,
+                            "project_instructions_state_sha256": (
+                                "d" * 64 if phase == "sealed" else None
+                            ),
+                            "project_instructions_reload_required": (
+                                True if phase == "sealed" else None
+                            ),
+                        }
+                    )
+                    lifecycle._write(state_path, state)
+                    self.assertEqual(lifecycle.evaluate(validate_payload), {})
             wrong_session = validate_command.replace(
                 self.base["session_id"], "019ff65c-3e02-7780-8f24-448c391b5f66"
             )
@@ -1684,9 +1732,7 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             return_value={**impact, "review_correction": False},
         ):
             denied = lifecycle.evaluate(pre_payload)
-        self.assertEqual(
-            denied["hookSpecificOutput"]["permissionDecision"], "deny"
-        )
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_task_implementer_coordinator_contract_is_bound_during_reconciliation(
         self,
@@ -1717,8 +1763,11 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {"command": command},
             }
-            with self.subTest(action=action), mock.patch.object(
-                lifecycle, "_task_implementer_coordinator", return_value=evidence
+            with (
+                self.subTest(action=action),
+                mock.patch.object(
+                    lifecycle, "_task_implementer_coordinator", return_value=evidence
+                ),
             ):
                 allowed = lifecycle.evaluate(
                     {**payload, "hook_event_name": "PreToolUse"}
@@ -2397,6 +2446,77 @@ class ProjectSpecHooksTestCase(unittest.TestCase):
             calls,
             [(git_root, self.base["session_id"]), (worker_root, worker_session)],
         )
+
+    def test_successful_task_worker_execute_delegates_shared_reconciliation(
+        self,
+    ) -> None:
+        lifecycle.evaluate({**self.base, "hook_event_name": "UserPromptSubmit"})
+        _project, git_root, _scope = lifecycle._project(str(self.project))
+        state_path = lifecycle._state_path(git_root, self.base["session_id"])
+        state = lifecycle._load(state_path)
+        assert state is not None
+        state["phase"] = "reconciliation-required"
+        state["write_epoch"] = 1
+        lifecycle._write(state_path, state)
+
+        worker_root = self.root / "worker"
+        worker_session = "worker-session"
+        command = (
+            "python3 /trusted/commit_transaction.py execute "
+            f"--repo-root {worker_root} --session-id {worker_session} "
+            "--claim /private/claim.json --token token "
+            f"--reviewed-tree {'a' * 40} --message worker"
+        )
+        delegated = {
+            "status": "authorized",
+            "action": "execute",
+            "outer_project_root": str(self.project),
+            "worker_root": str(worker_root),
+            "worker_session_id": worker_session,
+            "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        }
+
+        def bind(
+            _command: str,
+            root: Path,
+            session_id: object,
+            *,
+            completed: bool = False,
+        ) -> tuple[str, Path, str, str] | None:
+            del completed
+            if root == worker_root and session_id == worker_session:
+                return (
+                    "execute",
+                    Path("/private/claim.json"),
+                    "task-implementer",
+                    "a" * 64,
+                )
+            return None
+
+        with (
+            mock.patch.object(lifecycle, "_bound_commit_command", side_effect=bind),
+            mock.patch.object(
+                lifecycle, "_task_implementer_commit", return_value=delegated
+            ),
+        ):
+            result = lifecycle.evaluate(
+                {
+                    **self.base,
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                    "tool_response": {"exit_code": 0},
+                }
+            )
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["additionalContext"],
+            "Task worker commit completed; shared spec and project-instruction reconciliation remains delegated to the Task Implementer coordinator.",
+        )
+        delegated_state = lifecycle._load(state_path)
+        assert delegated_state is not None
+        self.assertEqual(delegated_state["phase"], "waived")
+        self.assertEqual(delegated_state["waiver"], "task-worker-delegated")
 
     def test_task_commit_adapter_session_must_match_command_session(self) -> None:
         command = (

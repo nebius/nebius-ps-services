@@ -13,7 +13,7 @@ No flags run the Task Implementer contract, digest-bound resume/adoption, and
 temporary-fixture suites plus the verifier helper, lifecycle, reporting, and
 semantic suites. They do not create a real application, start Docker, or
 dispatch implementation workers.
-The deterministic harness allows each suite up to 600 seconds; this covers the
+The deterministic harness allows each suite up to 900 seconds; this covers the
 full disposable linked-worktree crash matrix without changing worker budgets.
 
 `--create` first replaces any prior exactly owned fixture, then exercises the

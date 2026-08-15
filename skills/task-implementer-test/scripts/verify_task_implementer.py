@@ -22,6 +22,7 @@ TEST_SCRIPTS = (
     "test-task-specs.py",
     "test-task-execution.py",
     "test-task-resume.py",
+    "test-task-reporting.py",
     "test-task-waves.py",
     "test-worktree-interoperability.py",
 )
@@ -35,7 +36,7 @@ HARNESS_TEST_SCRIPTS = (
     "test_verify_task_implementer.py",
 )
 IGNORED_NAMES = {"__pycache__", ".install-source-id"}
-DEFAULT_SUITE_TIMEOUT_SECONDS = 600
+DEFAULT_SUITE_TIMEOUT_SECONDS = 900
 
 
 def default_private_root() -> Path:
@@ -234,9 +235,7 @@ def verify(
         status, detail = parity(source, installed)
         checks.append({"name": "installed parity", "status": status, "detail": detail})
         if dependency_source is not None and dependency_installed is not None:
-            status, detail = dependency_parity(
-                dependency_source, dependency_installed
-            )
+            status, detail = dependency_parity(dependency_source, dependency_installed)
             checks.append(
                 {
                     "name": "project-agent-instructions parity",

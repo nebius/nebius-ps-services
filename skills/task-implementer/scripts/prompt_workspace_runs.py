@@ -30,6 +30,7 @@ from prompt_workspace_core import (
     contains_secret,
     create_prompt,
     complete_prompt_files_v3_migration,
+    classify_generated_workspace,
     ensure_private_dir,
     ensure_prompt_hub,
     ensure_unique_prompt_id,
@@ -42,12 +43,14 @@ from prompt_workspace_core import (
     now_utc,
     parse_frontmatter,
     private_chmod,
+    project_workspace_manifest,
     read_prompt,
     resolve_prompt_reference,
     require_mode,
     required_string,
     stable_json,
     verify_workspace,
+    verify_workspace_for_removal,
     write_atomic,
     write_exclusive,
 )
@@ -805,6 +808,29 @@ def initialize_project_workspace(
             "legacy workspace-v1 state is unsupported; back up its prompt history "
             f"and remove the private workspace before initializing a lane: {legacy}",
         )
+    existing_workspace = project_workspace_manifest(requested, codex_home)
+    if existing_workspace.exists() or existing_workspace.is_symlink():
+        classification = classify_generated_workspace(existing_workspace)
+        if classification == "tampered":
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID",
+                "generated VS Code workspace was tampered with",
+            )
+        existing_manifest = load_json_object(existing_workspace, "workspace manifest")
+        existing_lane = Path(
+            required_string(existing_manifest, "repo_root", "workspace manifest")
+        )
+        if not existing_lane.is_dir():
+            verify_workspace_for_removal(existing_workspace, requested)
+        else:
+            try:
+                verify_workspace(existing_workspace)
+            except PromptWorkspaceError as error:
+                if not (
+                    classification == "previous"
+                    and error.code == "WORKFLOW_UPGRADE_REQUIRED"
+                ):
+                    raise
     lane = ensure_project_lane(requested)
     lane_root = Path(str(lane["worktree"]))
     result = init_workspace(
@@ -1594,8 +1620,10 @@ def _activate_next_queued_prompt_unlocked(
     manifest_path: Path,
     *,
     clock: Callable[[], datetime] = now_utc,
+    finalizing_run_id: str | None = None,
 ) -> dict[str, object] | None:
     from prompt_workspace_interop import load_interop, managed
+    from prompt_workspace_reporting import summary_phase
 
     workspace = verify_workspace(manifest_path)
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
@@ -1621,6 +1649,10 @@ def _activate_next_queued_prompt_unlocked(
                 return recovered
             return {"status": "waiting_for_active_run", "run_id": run_dir.name}
         interop = load_interop(run_dir, required=False)
+        phase = summary_phase(run_dir)
+        if phase in {"prepared", "sealed", "handoff_published"}:
+            if not (run_dir.name == finalizing_run_id and phase == "handoff_published"):
+                return {"status": "waiting_for_finalization"}
         if interop is not None and managed(interop) and interop["released"] is False:
             return {
                 "status": "waiting_for_resource_release",

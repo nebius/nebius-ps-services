@@ -160,8 +160,7 @@ class ResumeDecisionTest(unittest.TestCase):
             scope_cwd.mkdir()
             assignment_path = root / "task-1.json"
             assignment_path.write_text(
-                json.dumps({"result_path": str(root / "missing-result.json")})
-                + "\n",
+                json.dumps({"result_path": str(root / "missing-result.json")}) + "\n",
                 encoding="utf-8",
             )
             with (
@@ -222,9 +221,7 @@ class ResumeDecisionTest(unittest.TestCase):
             "_launch_codex_worker",
             return_value={"mode": "codex-exec", "returncode": 0},
         ) as launched:
-            result = cli._launch_codex_recovery_worker(
-                {"worker_context": context}
-            )
+            result = cli._launch_codex_recovery_worker({"worker_context": context})
         self.assertEqual(result, {"mode": "codex-exec", "returncode": 0})
         launched.assert_called_once_with(
             {
@@ -235,7 +232,45 @@ class ResumeDecisionTest(unittest.TestCase):
                 }
             },
             reasoning_effort="low",
+            recovery_mode=True,
         )
+
+    def test_atomic_recovery_with_existing_result_uses_finish_only_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scope_cwd = root / "worker"
+            scope_cwd.mkdir()
+            result_path = root / "task-1-result.json"
+            result_path.write_text("{}\n", encoding="utf-8")
+            assignment_path = root / "task-1.json"
+            assignment_path.write_text(
+                json.dumps({"result_path": str(result_path)}) + "\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(cli.shutil, "which", return_value="/usr/bin/codex"),
+                mock.patch.object(
+                    cli.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ) as launched,
+            ):
+                result = cli._launch_codex_worker(
+                    {
+                        "start_context": {
+                            "scope_cwd": str(scope_cwd),
+                            "assignment_path": str(assignment_path),
+                            "start_argv": ["/usr/bin/python3", "task-recover"],
+                        }
+                    },
+                    reasoning_effort="low",
+                    recovery_mode=True,
+                )
+        self.assertEqual(result, {"mode": "codex-exec", "returncode": 0})
+        prompt = launched.call_args.args[0][-1]
+        self.assertIn("first and only tool action", prompt)
+        self.assertIn("do not reimplement", prompt)
+        self.assertIn(str(result_path), prompt)
 
     def test_planned_wave_executes_prepare(self) -> None:
         decision = resume._choose_transition(
@@ -363,6 +398,60 @@ class ResumeDecisionTest(unittest.TestCase):
         self.assertEqual(decision["outcome"], "requires_confirmation")
         self.assertEqual(decision["next_transition"], "task-recover")
         self.assertIn("WORKER_READ_ONLY_TIMEOUT", decision["reason"])
+
+    def test_stale_worker_with_ready_result_routes_to_confirmed_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            result_path = (
+                run_dir / "orchestration" / "results" / "wave-001" / "task-1.json"
+            )
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text("{}\n", encoding="utf-8")
+            value = observation(
+                wave_status="running",
+                task_state="running",
+                heartbeat_at=(NOW - timedelta(seconds=241)).isoformat(),
+            )
+            value["tasks"][0]["assignment"] = {
+                "task_id": "task-1",
+                "worktree": "/tmp/task-1",
+            }
+            with mock.patch.object(
+                resume,
+                "_worker_guard_status",
+                return_value={"status": "WORKER_STALLED"},
+            ):
+                decision = resume._choose_transition(run_dir, value, clock=lambda: NOW)
+        self.assertEqual(decision["outcome"], "requires_confirmation")
+        self.assertEqual(decision["next_transition"], "task-recover")
+        self.assertIn("WORKER_STALLED", decision["reason"])
+
+    def test_fresh_worker_with_ready_result_routes_to_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            result_path = (
+                run_dir / "orchestration" / "results" / "wave-001" / "task-1.json"
+            )
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text("{}\n", encoding="utf-8")
+            value = observation(
+                wave_status="running",
+                task_state="running",
+                heartbeat_at=(NOW - timedelta(seconds=1)).isoformat(),
+            )
+            value["tasks"][0]["assignment"] = {
+                "task_id": "task-1",
+                "worktree": "/tmp/task-1",
+            }
+            with mock.patch.object(
+                resume,
+                "_worker_guard_status",
+                return_value={"status": "ACTIVE"},
+            ):
+                decision = resume._choose_transition(run_dir, value, clock=lambda: NOW)
+        self.assertEqual(decision["outcome"], "execute")
+        self.assertEqual(decision["next_transition"], "task-finish")
+        self.assertEqual(decision["arguments"], {"task_id": "task-1"})
 
     def test_blocked_and_complete_are_distinct(self) -> None:
         blocked = observation(coordinator_status="blocked")
@@ -768,9 +857,7 @@ class ResumeControlTest(unittest.TestCase):
         changed["git"]["resources"][0]["present"] = False
 
         core.write_atomic(control_path, stable_json(control))
-        with mock.patch.object(
-            resume, "_machine_observation", return_value=changed
-        ):
+        with mock.patch.object(resume, "_machine_observation", return_value=changed):
             resume.abort_resume_transition_if_unchanged(
                 self.workspace,
                 "run-test",
@@ -789,9 +876,7 @@ class ResumeControlTest(unittest.TestCase):
             ],
         }
         core.write_atomic(control_path, stable_json(control))
-        with mock.patch.object(
-            resume, "_machine_observation", return_value=blocked
-        ):
+        with mock.patch.object(resume, "_machine_observation", return_value=blocked):
             resume.abort_resume_transition_if_unchanged(
                 self.workspace,
                 "run-test",

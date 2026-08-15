@@ -225,6 +225,7 @@ def _valid_state(value: object) -> bool:
             "read-only",
             "non-project",
             "project-policy",
+            "task-worker-delegated",
         }
         and (value.get("phase") == "waived") == (value.get("waiver") is not None)
         and (
@@ -695,6 +696,40 @@ def _record_task_review_correction(path: Path) -> None:
     raise HookError(
         "Task Implementer review correction lifecycle transition did not converge"
     )
+
+
+def _record_task_worker_delegation(path: Path) -> None:
+    """Close a worker lifecycle while shared reconciliation stays coordinator-owned."""
+
+    for _attempt in range(128):
+        state = _load(path)
+        if state is None:
+            raise HookError("Task Implementer worker lifecycle state is missing")
+        if (
+            state.get("phase") == "waived"
+            and state.get("waiver") == "task-worker-delegated"
+        ):
+            return
+        if state.get("phase") not in {
+            "planned",
+            "implementation-open",
+            "reconciliation-required",
+            "seal-armed",
+            "sealed",
+        }:
+            raise HookError(
+                "Task Implementer worker commit completed outside an active lifecycle"
+            )
+        state["phase"] = "waived"
+        state["waiver"] = "task-worker-delegated"
+        try:
+            _write(path, state)
+        except HookError as error:
+            if str(error) != "project spec lifecycle changed before transition":
+                raise
+            continue
+        return
+    raise HookError("Task Implementer worker lifecycle transition did not converge")
 
 
 def _open_stop_reconciliation(path: Path) -> dict[str, Any] | None:
@@ -2929,7 +2964,11 @@ def _pre_tool(payload: dict[str, Any]) -> dict[str, Any]:
             task_coordinator.get("action") != "validate"
             or _argument(shlex.split(command), "--session-id")
             == str(payload.get("session_id"))
-        ) and phase in {"implementation-open", "reconciliation-required"}:
+        ) and phase in {
+            "implementation-open",
+            "reconciliation-required",
+            "sealed",
+        }:
             return {}
         return _deny(
             "Task Implementer project-instructions evidence is not valid in "
@@ -3159,6 +3198,16 @@ def _post_tool(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         task_impact = None
     if commit is not None:
+        if (
+            task_commit is not None
+            and not failed
+            and task_commit.get("action") == "execute"
+        ):
+            _record_task_worker_delegation(state_path)
+            return _context(
+                "PostToolUse",
+                "Task worker commit completed; shared spec and project-instruction reconciliation remains delegated to the Task Implementer coordinator.",
+            )
         return {}
     if commit_shaped:
         if failed:

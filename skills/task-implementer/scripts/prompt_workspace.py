@@ -25,6 +25,7 @@ from prompt_workspace_core import (  # noqa: E402
     RUN_SCHEMA,
     WORKSPACE_SCHEMA,
     PromptWorkspaceError,
+    classify_generated_workspace,
     create_prompt,
     init_workspace,
     project_workspace_manifest,
@@ -43,6 +44,10 @@ from prompt_workspace_lanes import (  # noqa: E402
 )
 from prompt_workspace_intake import route_project_prompt  # noqa: E402
 from prompt_workspace_interop import verify_workspace_anchor  # noqa: E402
+from prompt_workspace_reporting import (  # noqa: E402
+    lane_report,
+    pending_finalization_generations,
+)
 from prompt_workspace_recovery import (  # noqa: E402
     recover_handoff_projection,
     recover_replanned_plan_digest,
@@ -204,6 +209,16 @@ def reuse_project_workspace(
             "Task Implementer workspace does not exist; run workspace init for "
             "this project folder",
         )
+    classification = classify_generated_workspace(workspace_path)
+    if classification == "previous":
+        raise PromptWorkspaceError(
+            "WORKFLOW_UPGRADE_REQUIRED",
+            "generated workspace requires explicit workspace init migration",
+        )
+    if classification == "tampered":
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "generated VS Code workspace was tampered with"
+        )
     workspace = verify_workspace(workspace_path)
     requested_root, _, requested_scope = repo_and_scope(requested, str(requested))
     allowed_roots = {
@@ -242,7 +257,10 @@ def add_common_workspace(parser: argparse.ArgumentParser) -> None:
 
 
 def _launch_codex_worker(
-    result: dict[str, object], *, reasoning_effort: str = "medium"
+    result: dict[str, object],
+    *,
+    reasoning_effort: str = "medium",
+    recovery_mode: bool = False,
 ) -> dict[str, object]:
     """Run one fresh worker while managed worktree resources remain visible."""
 
@@ -280,23 +298,62 @@ def _launch_codex_worker(
             "codex executable is unavailable for the sequential worker fallback",
         )
     exact_start = shlex.join(start_argv)
-    prompt = (
-        "You are one isolated Task Implementer worker. You are not alone in the "
-        "repository; preserve other work and never revert changes you did not make. "
-        f"Your first tool action must run this exact command from the current cwd: "
-        f"{exact_start}. After it succeeds, read only the immutable assignment at "
-        f"{assignment_path} and its referenced incoming handoff, then follow every "
-        "embedded guardrail and context exactly. Implement only the assigned task, "
-        "heartbeat as required, validate and review it, create exactly the authorized "
-        "worker commit, and publish the immutable result. Publish successful work "
-        "with status exactly lower-case committed. If the first transition "
-        "returns replan_required, make no further edit or commit and immediately "
-        "publish a truthful terminal REPLAN_REQUIRED result with its exact changed "
-        "paths. Do not exit merely because start or recovery succeeded: successful "
-        "completion requires the assignment's exact immutable result file. Do not "
-        "access network, "
-        "credentials, external services, or live runtimes."
-    )
+    preexisting_result: Path | None = None
+    if recovery_mode:
+        try:
+            recovery_assignment = json.loads(
+                assignment_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise PromptWorkspaceError(
+                "WORKER_EXEC_CONTEXT_INVALID",
+                "recovery assignment is unreadable before sequential execution",
+            ) from exc
+        if not isinstance(recovery_assignment, dict):
+            raise PromptWorkspaceError(
+                "WORKER_EXEC_CONTEXT_INVALID",
+                "recovery assignment must be a JSON object",
+            )
+        candidate = Path(
+            required_string(recovery_assignment, "result_path", "worker assignment")
+        )
+        if candidate.is_absolute() and candidate.is_file():
+            preexisting_result = candidate
+    if preexisting_result is not None:
+        prompt = (
+            "You are one isolated Task Implementer recovery verifier. You are not "
+            "alone in the repository; preserve other work and never revert changes "
+            "you did not make. Your first and only tool action must run this exact "
+            f"command from the current cwd: {exact_start}. The immutable result "
+            f"already exists at {preexisting_result}. If recovery succeeds without "
+            "replan_required, do not reimplement, modify, validate, commit, heartbeat, "
+            "or republish anything; exit immediately so the coordinator can perform "
+            "ordinary task-finish verification. If recovery reports replan_required, "
+            "follow only its exact terminal reporting context. Do not access network, "
+            "credentials, external services, or live runtimes."
+        )
+    else:
+        prompt = (
+            "You are one isolated Task Implementer worker. You are not alone in the "
+            "repository; preserve other work and never revert changes you did not make. "
+            f"Your first tool action must run this exact command from the current cwd: "
+            f"{exact_start}. After it succeeds, read only the immutable assignment at "
+            f"{assignment_path} and its referenced incoming handoff, then follow every "
+            "embedded guardrail and context exactly. Implement only the assigned task, "
+            "heartbeat as required, validate and review it. Never edit coordinator-owned "
+            "requirements, design, project instructions, README, or changelog paths even "
+            "when a broad task claim contains them; report required shared updates for the "
+            "post-integration coordinator reconciliation. Complete worker-local alignment, "
+            "then create exactly the authorized worker "
+            "commit, verify the worktree is clean, and only then publish the immutable "
+            "result. Publish successful work "
+            "with status exactly lower-case committed. If the first transition "
+            "returns replan_required, make no further edit or commit and immediately "
+            "publish a truthful terminal REPLAN_REQUIRED result with its exact changed "
+            "paths. Do not exit merely because start or recovery succeeded: successful "
+            "completion requires the assignment's exact immutable result file. Do not "
+            "access network, credentials, external services, or live runtimes."
+        )
     completed = subprocess.run(
         [
             codex,
@@ -359,6 +416,7 @@ def _launch_codex_recovery_worker(result: dict[str, object]) -> dict[str, object
             }
         },
         reasoning_effort="low",
+        recovery_mode=True,
     )
 
 
@@ -473,9 +531,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--restart", action="store_true", help=argparse.SUPPRESS
     )
     integrate_parser.add_argument("--review-rejected-head", help=argparse.SUPPRESS)
-    integrate_parser.add_argument(
-        "--review-findings-sha256", help=argparse.SUPPRESS
-    )
+    integrate_parser.add_argument("--review-findings-sha256", help=argparse.SUPPRESS)
     integrate_parser.add_argument("--json", action="store_true")
 
     remove_parser = subparsers.add_parser(
@@ -547,6 +603,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     queue_next_parser = subparsers.add_parser(
         "queue-next", help="Internal: activate the FIFO queue head when idle."
     )
+    lane_report_parser = subparsers.add_parser(
+        "lane-report",
+        help="Internal: inspect pending managed-lane changes without mutation.",
+    )
+    add_common_workspace(lane_report_parser)
     add_common_workspace(queue_next_parser)
 
     snapshot_parser = subparsers.add_parser(
@@ -929,6 +990,11 @@ def main(argv: list[str]) -> int:
                 required_string(workspace, "runs_root", "workspace manifest")
             )
             with scope_lock(runs_root.parent):
+                if pending_finalization_generations(runs_root, workspace):
+                    raise PromptWorkspaceError(
+                        "FINALIZATION_PENDING",
+                        "finish the released Task Implementer run before integration",
+                    )
                 result = integrate_lane(
                     workspace,
                     validated_head=args.validated_head,
@@ -974,6 +1040,8 @@ def main(argv: list[str]) -> int:
             result = cancel_queued_prompt(args.workspace, args.prompt)
         elif args.command == "queue-next":
             result = activate_next_queued_prompt(args.workspace)
+        elif args.command == "lane-report":
+            result = lane_report(args.workspace)
         elif args.command == "snapshot":
             result = snapshot_prompt(
                 args.workspace,

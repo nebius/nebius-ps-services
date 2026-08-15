@@ -10,6 +10,7 @@ from pathlib import Path
 from prompt_workspace_core import (
     TERMINAL_RUN_STATUSES,
     PromptWorkspaceError,
+    classify_generated_workspace,
     iso_seconds,
     load_json_object,
     now_utc,
@@ -20,6 +21,7 @@ from prompt_workspace_core import (
 )
 from prompt_workspace_execution import load_coordinator_state
 from prompt_workspace_interop import load_interop, managed
+from prompt_workspace_reporting import load_sealed_summary, summary_phase
 from prompt_workspace_runs import (
     _activate_next_queued_prompt_unlocked,
     _snapshot_prompt_unlocked,
@@ -122,9 +124,10 @@ def _steering_action(
 
 def _run_resources_active(run_dir: Path) -> bool:
     interop = load_interop(run_dir, required=False)
+    phase = summary_phase(run_dir)
     return bool(
         interop is not None and managed(interop) and interop["released"] is False
-    )
+    ) or phase in {"prepared", "sealed", "handoff_published"}
 
 
 def _resume_route(
@@ -168,6 +171,15 @@ def _resume_route(
         )
     if outcome == "blocked":
         return "blocked", "blocked", "RESUME_BLOCKED", internal
+    summary = load_sealed_summary(run_dir)
+    internal = {
+        **internal,
+        "completion_summary": (
+            summary
+            if summary is not None
+            else "summary unavailable for legacy generation"
+        ),
+    }
     return "done", "done", "ALREADY_COMPLETE", internal
 
 
@@ -187,20 +199,12 @@ def route_project_prompt(
             "project prompt workspace is missing; run "
             "`$task-implementer workspace init [project-folder]` first",
         )
-    try:
-        workspace = verify_workspace(manifest_path)
-    except PromptWorkspaceError as exc:
-        if (
-            exc.code != "WORKSPACE_STATE_INVALID"
-            or exc.message != "VS Code workspace command is unsafe"
-        ):
-            raise
-        # The generated editor launcher records a resolved Python executable so
-        # that it never follows an unreviewed wrapper or symlink. Package-manager
-        # upgrades can remove that exact executable while leaving the managed
-        # lane, prompts, and run state valid. An explicit run may refresh only
-        # this generated workspace surface through the canonical initializer;
-        # every other workspace validation failure remains fail-closed.
+    classification = classify_generated_workspace(manifest_path)
+    if classification == "tampered":
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "generated VS Code workspace was tampered with"
+        )
+    if classification == "previous":
         refreshed = initialize_project_workspace(project_path, codex_home)
         refreshed_manifest = Path(
             required_string(refreshed, "workspace", "workspace refresh")
@@ -210,7 +214,7 @@ def route_project_prompt(
                 "WORKSPACE_MISMATCH",
                 "workspace refresh resolved a different project scope",
             )
-        workspace = verify_workspace(manifest_path)
+    workspace = verify_workspace(manifest_path)
     resolve_prompt_reference(
         manifest_path,
         prompt_reference,
@@ -597,4 +601,6 @@ def route_project_prompt(
         }
         if outcome is not None:
             result["outcome"] = outcome
+        if outcome == "ALREADY_COMPLETE":
+            result["summary"] = internal["completion_summary"]
         return result

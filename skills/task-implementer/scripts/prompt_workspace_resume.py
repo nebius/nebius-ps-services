@@ -43,6 +43,7 @@ from prompt_workspace_execution import (
     sha256_json,
 )
 from prompt_workspace_interop import load_interop, managed, observe_managed_state
+from prompt_workspace_reporting import summary_phase
 from prompt_workspace_runs import read_handoff_text, scope_lock
 from prompt_workspace_specs import verify_prompt_impact_plan
 from prompt_workspace_waves import (
@@ -540,11 +541,7 @@ def _machine_observation(
             verify_prompt_impact_plan(
                 run_dir,
                 coordinator,
-                Path(
-                    required_string(
-                        workspace, "source_root", "workspace manifest"
-                    )
-                ),
+                Path(required_string(workspace, "source_root", "workspace manifest")),
             )
         except PromptWorkspaceError as error:
             if error.code not in {"PROMPT_IMPACT_REQUIRED", "REPLAN_REQUIRED"}:
@@ -612,9 +609,7 @@ def _pending_unindexed_tasks(
     ]
 
 
-def _planned_tail_drifted(
-    run_dir: Path, observation: dict[str, object]
-) -> bool:
+def _planned_tail_drifted(run_dir: Path, observation: dict[str, object]) -> bool:
     """Return whether live pending task bytes differ from a resource-free plan."""
 
     coordinator = observation["coordinator"]
@@ -678,8 +673,7 @@ def _active_planned_wave_is_resource_free(
         or not isinstance(git, dict)
         or not isinstance(journals, list)
         or any(
-            isinstance(entry, dict) and bool(entry.get("pending"))
-            for entry in journals
+            isinstance(entry, dict) and bool(entry.get("pending")) for entry in journals
         )
     ):
         return False
@@ -836,9 +830,11 @@ def _choose_transition(
             )
         handoff = read_handoff_text(run_dir) or ""
         projected_done = re.search(r"(?m)^- Overall status:\s*done\s*$", handoff)
+        finalization_phase = summary_phase(run_dir)
         if (
             interop.get("released") is True
             and projected_done
+            and finalization_phase in {None, "complete"}
             and (
                 observation.get("terminal_lifecycle_seal_promoted") is True
                 or observation.get("terminal_lifecycle_recovery_promoted") is True
@@ -1020,13 +1016,6 @@ def _choose_transition(
                     },
                 )
             if state == "running":
-                if result_path.exists():
-                    return _transition(
-                        "execute",
-                        next_transition="task-finish",
-                        reason="a worker result is ready for coordinator acceptance",
-                        arguments={"task_id": task_id},
-                    )
                 assignment = task.get("assignment")
                 if isinstance(assignment, dict):
                     guard = _worker_guard_status(assignment, plane, clock=clock)
@@ -1040,6 +1029,13 @@ def _choose_transition(
                             ),
                             arguments={"task_id": task_id},
                         )
+                if result_path.exists():
+                    return _transition(
+                        "execute",
+                        next_transition="task-finish",
+                        reason="a worker result is ready for coordinator acceptance",
+                        arguments={"task_id": task_id},
+                    )
                 heartbeat = datetime.fromisoformat(str(plane["last_heartbeat_at"]))
                 age = (clock() - heartbeat).total_seconds()
                 if age < WORKER_STALL_SECONDS:
@@ -1446,9 +1442,8 @@ def begin_resume_transition(
                 decision = _choose_transition(run_dir, observation, clock=clock)
             except PromptWorkspaceError:
                 return result
-            if (
-                transition == "wave-prepare"
-                and _resource_free_prepare_requires_replan(observation, decision)
+            if transition == "wave-prepare" and _resource_free_prepare_requires_replan(
+                observation, decision
             ):
                 _retire_resume_intent(control, observation, clock=clock)
                 write_atomic(_control_path(run_dir), stable_json(control))

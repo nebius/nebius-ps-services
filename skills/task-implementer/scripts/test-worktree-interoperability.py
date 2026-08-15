@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import prompt_workspace as pw
 import prompt_workspace_contract_delta as contract_delta
 import prompt_workspace_interop as task_interop
 import prompt_workspace_lanes as task_lanes
+import prompt_workspace_reporting as task_reporting
 import prompt_workspace_waves as waves
 from prompt_workspace_core import PromptWorkspaceError
 from prompt_workspace_execution import RESULT_SCHEMA, sha256_json
@@ -445,9 +447,7 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
                 source_head=self.initial,
             )
         )
-        bound = task_lanes.load_integration_review_correction(
-            workspace, required=True
-        )
+        bound = task_lanes.load_integration_review_correction(workspace, required=True)
         assert bound is not None
         self.assertEqual(bound["bound_run_id"], "run-follow-up")
         self.assertFalse(
@@ -658,15 +658,191 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         )
         self.assertEqual(routed["action"], "finalize")
         self.assertEqual(routed["outcome"], "TASK_LEASE_RELEASE_REQUIRED")
+        injected = PromptWorkspaceError("FAULT_INJECTED", "test boundary")
+        with (
+            mock.patch.object(waves, "release_interop", side_effect=injected),
+            self.assertRaises(PromptWorkspaceError),
+        ):
+            pw.finalize_run(
+                self.workspace,
+                self.run_id,
+                "changed-surface align passed",
+                clock=lambda: FIXED,
+            )
+        self.assertEqual(task_reporting.summary_phase(self.run_dir), "prepared")
+        prepared_bytes = (
+            self.run_dir / "orchestration" / "run-summary.prepared.json"
+        ).read_bytes()
+
+        original_interop_write = task_interop.write_atomic
+
+        def crash_after_external_release(path: Path, data: bytes) -> None:
+            value = json.loads(data)
+            if path.name == "interop.json" and value.get("released") is True:
+                raise RuntimeError("crash after external release receipt")
+            original_interop_write(path, data)
+
+        primary_before_blocked_integrate = git("rev-parse", "HEAD", cwd=self.primary)
+        with (
+            mock.patch.object(
+                task_interop,
+                "write_atomic",
+                side_effect=crash_after_external_release,
+            ),
+            self.assertRaisesRegex(RuntimeError, "external release receipt"),
+        ):
+            pw.finalize_run(
+                self.workspace,
+                self.run_id,
+                "changed-surface align passed",
+                clock=lambda: FIXED,
+            )
+        self.assertFalse(task_interop.load_interop(self.run_dir)["released"])
+        self.assertEqual(
+            task_reporting.pending_finalization_generations(
+                Path(pw.verify_workspace(self.workspace)["runs_root"]),
+                pw.verify_workspace(self.workspace),
+            ),
+            {int(task_interop.load_interop(self.run_dir)["generation"])},
+        )
+        stderr = io.StringIO()
+        with mock.patch.object(pw.sys, "stderr", stderr):
+            return_code = pw.main(
+                [
+                    "integrate",
+                    str(self.outer_scope),
+                    "--codex-home",
+                    str(self.codex_home),
+                    "--json",
+                ]
+            )
+        self.assertEqual(return_code, 2)
+        self.assertIn("FINALIZATION_PENDING", stderr.getvalue())
+        self.assertEqual(
+            git("rev-parse", "HEAD", cwd=self.primary),
+            primary_before_blocked_integrate,
+        )
+        interop_path = self.run_dir / "orchestration" / "interop.json"
+        interop_bytes = interop_path.read_bytes()
+        tampered_interop = json.loads(interop_bytes)
+        tampered_interop["worktree"] = str(self.root / "mismatched-lane")
+        interop_path.write_text(
+            json.dumps(tampered_interop, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with self.assertRaises(PromptWorkspaceError) as tampered_pending:
+            task_reporting.pending_finalization_generations(
+                Path(pw.verify_workspace(self.workspace)["runs_root"]),
+                pw.verify_workspace(self.workspace),
+            )
+        self.assertEqual(tampered_pending.exception.code, "RUN_STATE_INVALID")
+        tampered_stderr = io.StringIO()
+        with mock.patch.object(pw.sys, "stderr", tampered_stderr):
+            tampered_return_code = pw.main(
+                [
+                    "integrate",
+                    str(self.outer_scope),
+                    "--codex-home",
+                    str(self.codex_home),
+                    "--json",
+                ]
+            )
+        self.assertEqual(tampered_return_code, 2)
+        self.assertIn("RUN_STATE_INVALID", tampered_stderr.getvalue())
+        interop_path.write_bytes(interop_bytes)
+        with (
+            mock.patch.object(waves, "seal_prepared_summary", side_effect=injected),
+            self.assertRaises(PromptWorkspaceError),
+        ):
+            pw.finalize_run(
+                self.workspace,
+                self.run_id,
+                "changed-surface align passed",
+                clock=lambda: FIXED,
+            )
+        self.assertEqual(task_reporting.summary_phase(self.run_dir), "prepared")
+        self.assertTrue(task_interop.load_interop(self.run_dir)["released"])
+
+        def assert_integration_waits_for_finalization(expected_phase: str) -> None:
+            interop = task_interop.load_interop(self.run_dir)
+            assert interop is not None
+            generation = int(interop["generation"])
+            self.assertEqual(task_reporting.summary_phase(self.run_dir), expected_phase)
+            self.assertEqual(
+                task_reporting.pending_finalization_generations(
+                    Path(pw.verify_workspace(self.workspace)["runs_root"]),
+                    pw.verify_workspace(self.workspace),
+                ),
+                {generation},
+            )
+            report = task_reporting.lane_report(self.workspace)
+            self.assertEqual(report["generations"]["finalization_pending"], 1)
+            self.assertEqual(report["next_action"]["action"], "run")
+            self.assertEqual(
+                next(
+                    item["summary"]
+                    for item in report["pending_summaries"]
+                    if item["generation"] == generation
+                ),
+                "summary finalization pending",
+            )
+            stderr = io.StringIO()
+            with mock.patch.object(pw.sys, "stderr", stderr):
+                return_code = pw.main(
+                    [
+                        "integrate",
+                        str(self.outer_scope),
+                        "--codex-home",
+                        str(self.codex_home),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(return_code, 2)
+            self.assertIn("FINALIZATION_PENDING", stderr.getvalue())
+
+        assert_integration_waits_for_finalization("prepared")
+        with (
+            mock.patch.object(waves, "read_handoff_text", side_effect=injected),
+            self.assertRaises(PromptWorkspaceError),
+        ):
+            pw.finalize_run(
+                self.workspace,
+                self.run_id,
+                "changed-surface align passed",
+                clock=lambda: FIXED,
+            )
+        self.assertEqual(task_reporting.summary_phase(self.run_dir), "sealed")
+        assert_integration_waits_for_finalization("sealed")
+        with (
+            mock.patch.object(
+                waves, "mark_finalization_complete", side_effect=injected
+            ),
+            self.assertRaises(PromptWorkspaceError),
+        ):
+            pw.finalize_run(
+                self.workspace,
+                self.run_id,
+                "changed-surface align passed",
+                clock=lambda: FIXED,
+            )
+        self.assertEqual(
+            task_reporting.summary_phase(self.run_dir), "handoff_published"
+        )
+        assert_integration_waits_for_finalization("handoff_published")
         finalized = pw.finalize_run(
             self.workspace,
             self.run_id,
             "changed-surface align passed",
             clock=lambda: FIXED,
         )
-        self.assertEqual(finalized["interop"]["status"], "released")
-        self.assertEqual(finalized["interop"]["primary"], str(self.primary.resolve()))
-        self.assertEqual(finalized["interop"]["source_branch"], "local-source")
+        self.assertEqual(finalized["schema"], "task-implementer/run-summary-v1")
+        self.assertEqual(finalized["lane"]["generation_release"], "released")
+        self.assertEqual(finalized["source_observation"]["status"], "unchanged")
+        self.assertNotIn("run_id", finalized)
+        self.assertNotIn("lane_id", json.dumps(finalized, sort_keys=True))
+        self.assertEqual(
+            prepared_bytes,
+            (self.run_dir / "orchestration" / "run-summary.json").read_bytes(),
+        )
         terminal_receipt = (
             self.run_dir
             / "orchestration"
@@ -690,6 +866,60 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
             clock=lambda: FIXED,
         )
         self.assertEqual(routed_complete["outcome"], "ALREADY_COMPLETE")
+        self.assertEqual(routed_complete["summary"], finalized)
+        interop_path = self.run_dir / "orchestration" / "interop.json"
+        interop_bytes = interop_path.read_bytes()
+        tampered_interop = json.loads(interop_bytes)
+        tampered_interop["worktree"] = str(self.root / "mismatched-lane")
+        interop_path.write_text(
+            json.dumps(tampered_interop, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with self.assertRaises(PromptWorkspaceError) as tampered_summary:
+            task_reporting.lane_report(self.workspace)
+        self.assertEqual(tampered_summary.exception.code, "RUN_STATE_INVALID")
+        interop_path.write_bytes(interop_bytes)
+        private_before = {
+            str(path.relative_to(self.run_dir)): path.read_bytes()
+            for path in self.run_dir.rglob("*")
+            if path.is_file()
+        }
+        git_before = (
+            git("rev-parse", "HEAD", cwd=self.primary),
+            git("rev-parse", "HEAD", cwd=self.outer),
+            git("status", "--porcelain=v2", cwd=self.primary),
+            git("status", "--porcelain=v2", cwd=self.outer),
+        )
+        pending_report = task_reporting.lane_report(self.workspace)
+        self.assertEqual(pending_report["generations"]["pending"], 2)
+        self.assertEqual(
+            pending_report["lane"]["branch"], task_reporting.LANE_BRANCH_DISPLAY
+        )
+        serialized_report = json.dumps(pending_report, sort_keys=True)
+        self.assertNotIn(self.lane_id, serialized_report)
+        self.assertNotIn(self.lane_id[:8], serialized_report)
+        self.assertEqual(pending_report["pending_summaries"][0]["summary"], finalized)
+        self.assertEqual(
+            pending_report["pending_summaries"][1]["summary"],
+            "summary unavailable for legacy generation",
+        )
+        self.assertEqual(pending_report["next_action"]["action"], "integrate")
+        self.assertEqual(
+            private_before,
+            {
+                str(path.relative_to(self.run_dir)): path.read_bytes()
+                for path in self.run_dir.rglob("*")
+                if path.is_file()
+            },
+        )
+        self.assertEqual(
+            git_before,
+            (
+                git("rev-parse", "HEAD", cwd=self.primary),
+                git("rev-parse", "HEAD", cwd=self.outer),
+                git("status", "--porcelain=v2", cwd=self.primary),
+                git("status", "--porcelain=v2", cwd=self.outer),
+            ),
+        )
         inspected = wm.inspect_worktree(
             cwd=self.outer_scope, name=None, require_clean=True
         )
@@ -728,6 +958,9 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         lane_state = wm.load_lane(self.primary, self.lane_id)
         assert lane_state is not None
         self.assertEqual(lane_state["state"], "idle")
+        integrated_report = task_reporting.lane_report(self.workspace)
+        self.assertEqual(integrated_report["generations"]["pending"], 0)
+        self.assertEqual(integrated_report["comparison"]["relationship"], "equal")
         self.assertIsNone(
             wm.load_checkpoint(self.primary, self.lane_id, required=False)
         )
@@ -738,6 +971,64 @@ class WorktreeInteroperabilityTest(unittest.TestCase):
         handoff = (self.run_dir / "handoff.md").read_text(encoding="utf-8")
         self.assertIn("- Overall status: done", handoff)
         self.assertIn("## Final Alignment", handoff)
+        workspace_before_remove = pw.verify_workspace(self.workspace)
+        managed_root_before_remove = str(workspace_before_remove["repo_root"])
+        removed = task_lanes.remove_lane(workspace_before_remove)
+        self.assertEqual(removed["status"], "removed")
+        removed_report = task_reporting.lane_report(self.workspace)
+        self.assertEqual(removed_report["status"], "removed")
+        self.assertEqual(removed_report["generations"]["pending"], 0)
+        self.assertEqual(removed_report["next_action"]["action"], "workspace init")
+
+        reinitialized = pw.initialize_project_workspace(
+            self.primary / "services" / "example",
+            self.codex_home,
+            clock=lambda: FIXED,
+        )
+        rebound_workspace = pw.verify_workspace(Path(reinitialized["workspace"]))
+        self.assertNotEqual(
+            rebound_workspace["repo_root"],
+            managed_root_before_remove,
+        )
+        rebound_root = Path(str(rebound_workspace["repo_root"]))
+        rebound_head = git("rev-parse", "HEAD", cwd=rebound_root)
+        opened = self._open_lane_generation(
+            cwd=rebound_root / "services" / "example",
+            workspace=self.workspace,
+            run_id="d" * 32,
+            task_scope="services/example",
+            expected_head=rebound_head,
+            claims=[],
+        )
+        wm.task_lease_promote(
+            cwd=rebound_root,
+            name=str(rebound_workspace["lane_name"]),
+            lease_id=str(opened["token"]),
+            promoted_head=rebound_head,
+            expected_head=rebound_head,
+            owner_kind="task-implementer",
+        )
+        wm.task_lane_generation_release(
+            cwd=rebound_root,
+            name=str(rebound_workspace["lane_name"]),
+            generation=int(opened["generation"]),
+            lease_id=str(opened["token"]),
+            promoted_head=rebound_head,
+        )
+        rebound_report = task_reporting.lane_report(self.workspace)
+        self.assertEqual(rebound_report["generations"]["pending"], 1)
+        self.assertEqual(
+            rebound_report["pending_summaries"],
+            [
+                {
+                    "generation": int(opened["generation"]),
+                    "summary": "summary unavailable for legacy generation",
+                }
+            ],
+        )
+        self.assertNotEqual(
+            rebound_report["pending_summaries"][0]["summary"], finalized
+        )
 
     def test_plan_checkpoints_dirty_lane_and_uses_post_checkpoint_baseline(
         self,

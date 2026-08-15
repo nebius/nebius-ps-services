@@ -6,6 +6,9 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed the Task Implementer aggregate verifier's per-suite timeout so the
+  measured full wave and linked-worktree crash matrix completes within its
+  bounded validation window instead of being reported as a false timeout.
 - Fixed project-instruction terminal sealing after another authorized workflow
   refreshed only the portable marker projection. A stale active receipt may be
   re-adopted only with explicit approval of the exact current target digest and
@@ -166,6 +169,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added crash-safe Task Implementer `run-summary-v1` completion evidence with
+  immutable replay, evidence-backed source movement, full-repository and scoped
+  Git file/line/binary statistics, queue status, exact integration readiness,
+  and sanitized structured next actions. The generated workspace now labels
+  `CODE — MANAGED PERSISTENT LANE` explicitly and provides a manual read-only
+  pending-lane report without adding a sixth public action or hook privilege.
+- Added fail-closed generated-workspace classification. `workspace init` and
+  `run` migrate only the exact previous shape; non-mutating `workspace reuse`
+  requests an upgrade, and forged helpers, arguments, folders, or tasks fail
+  before lane creation, refresh, chmod, or other mutation.
 - Added authoritative idempotent resume control for long-running Task
   Implementer runs. Repeating `run` now audits coordinator-v7, every indexed
   wave/task/immutable artifact, Git and Worktree identity, the exact generation
@@ -1005,7 +1018,7 @@ All notable changes to the reusable Codex skills are tracked here.
   unit coverage and kept project code, manifests, package managers, builds,
   and tests unexecuted during inspection.
 
-### Fixed
+### Fixed (earlier entries)
 
 - Fixed Task Implementer's run-owned project-contract lifecycle adapter after a
   sealed promotion-review correction advances the retained integration checkout.

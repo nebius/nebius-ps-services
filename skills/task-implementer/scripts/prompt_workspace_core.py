@@ -370,7 +370,12 @@ def repo_and_scope(repo_path: Path, scope_value: str) -> tuple[Path, Path, str]:
         source_root = scope_candidate.resolve()
     else:
         source_root = (root / scope_candidate).resolve()
-    if not source_root.is_dir() or not is_relative_to(source_root, root):
+    if (
+        re.search(r"[\x00-\x1f\x7f]", str(root)) is not None
+        or re.search(r"[\x00-\x1f\x7f]", str(source_root)) is not None
+        or not source_root.is_dir()
+        or not is_relative_to(source_root, root)
+    ):
         raise PromptWorkspaceError(
             "SCOPE_INVALID", "scope must be an existing directory inside the Git root"
         )
@@ -639,7 +644,7 @@ def workspace_document(
 ) -> dict[str, object]:
     return {
         "folders": [
-            {"name": "CODE", "path": str(source_root)},
+            {"name": "CODE — MANAGED PERSISTENT LANE", "path": str(source_root)},
             {"name": "PROMPTS", "path": "prompts"},
         ],
         "settings": {"workbench.editor.labelFormat": "medium"},
@@ -688,6 +693,19 @@ def workspace_document(
                     ],
                     "problemMatcher": [],
                 },
+                {
+                    "label": "Task Implementer: Show Pending Lane Changes",
+                    "type": "process",
+                    "command": str(python_executable),
+                    "args": [
+                        str(helper_path),
+                        "lane-report",
+                        "--workspace",
+                        str(manifest_path),
+                        "--json",
+                    ],
+                    "problemMatcher": [],
+                },
             ],
             "inputs": [
                 {
@@ -705,6 +723,95 @@ def workspace_document(
             ],
         },
     }
+
+
+def previous_workspace_document(
+    manifest_path: Path,
+    source_root: Path,
+    helper_path: Path,
+    python_executable: Path,
+) -> dict[str, object]:
+    """Return the sole generated shape accepted for in-place migration."""
+
+    document = workspace_document(
+        manifest_path, source_root, helper_path, python_executable
+    )
+    document["folders"][0]["name"] = "CODE"
+    document["tasks"]["tasks"] = document["tasks"]["tasks"][:3]
+    return document
+
+
+def classify_generated_workspace(manifest_path: Path) -> str:
+    """Classify a generated editor document without mutating workspace state."""
+
+    requested = manifest_path.expanduser()
+    if requested.is_symlink() or not requested.is_file():
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "workspace manifest is missing or unsafe"
+        )
+    path = requested.resolve()
+    manifest = load_json_object(path, "workspace manifest")
+    source_value = manifest.get("source_root")
+    vscode_value = manifest.get("vscode_workspace")
+    if not isinstance(source_value, str) or not isinstance(vscode_value, str):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "workspace generated paths are invalid"
+        )
+    source_root = Path(source_value)
+    vscode_path = Path(vscode_value)
+    if (
+        not source_root.is_absolute()
+        or not vscode_path.is_absolute()
+        or vscode_path.is_symlink()
+        or not vscode_path.is_file()
+        or vscode_path.parent != path.parent
+    ):
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "VS Code workspace is missing or unsafe"
+        )
+    document = load_json_object(vscode_path, "VS Code workspace")
+    trusted_helper = Path(__file__).resolve().with_name("prompt_workspace.py")
+    trusted_python = Path(sys.executable).resolve()
+    current = workspace_document(path, source_root, trusted_helper, trusted_python)
+    if document == current:
+        return "current"
+    previous = previous_workspace_document(
+        path, source_root, trusted_helper, trusted_python
+    )
+    if document == previous:
+        return "previous"
+
+    # The previous three-task shape may retain one now-removed package-manager
+    # Python executable. It is accepted only as inert migration input: helper,
+    # arguments, task count, and every other byte still come from the trusted
+    # running implementation, and init rewrites it before any command executes.
+    try:
+        tasks = document["tasks"]["tasks"]
+        commands = {str(task["command"]) for task in tasks}
+        helpers = {str(task["args"][0]) for task in tasks}
+    except (KeyError, IndexError, TypeError):
+        tasks = []
+        commands = set()
+        helpers = set()
+    if len(tasks) == 3 and len(commands) == 1 and helpers == {str(trusted_helper)}:
+        stale_text = next(iter(commands))
+        stale = Path(stale_text)
+        stale_shape = previous_workspace_document(
+            path, source_root, trusted_helper, stale
+        )
+        try:
+            stale_missing = not stale.exists()
+        except (OSError, ValueError):
+            stale_missing = False
+        if (
+            document == stale_shape
+            and stale.is_absolute()
+            and re.search(r"[\x00-\x1f\x7f]", stale_text) is None
+            and stale_missing
+            and re.fullmatch(r"python3(?:\.[0-9]+)?", stale.name) is not None
+        ):
+            return "previous"
+    return "tampered"
 
 
 def init_workspace(
@@ -779,6 +886,14 @@ def init_workspace(
     runs_root = scope_dir / "runs"
     manifest_path = scope_dir / "workspace.json"
     vscode_path = scope_dir / f"{scope_slug}-prompts.code-workspace"
+
+    if manifest_path.exists() or manifest_path.is_symlink():
+        classification = classify_generated_workspace(manifest_path)
+        if classification == "tampered":
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID",
+                "generated VS Code workspace was tampered with",
+            )
 
     for directory in (
         state_root,
@@ -1091,14 +1206,8 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
     require_mode(vscode_path, 0o600, "VS Code workspace")
 
     vscode = load_json_object(vscode_path, "VS Code workspace")
-    try:
-        task = vscode["tasks"]["tasks"][0]
-        helper_path = Path(task["args"][0])
-        python_executable = Path(task["command"])
-    except (KeyError, IndexError, TypeError) as exc:
-        raise PromptWorkspaceError(
-            "WORKSPACE_STATE_INVALID", "VS Code workspace task is invalid"
-        ) from exc
+    helper_path = Path(__file__).resolve().with_name("prompt_workspace.py")
+    python_executable = Path(sys.executable).resolve()
     if (
         not helper_path.is_absolute()
         or helper_path.is_symlink()
@@ -1118,6 +1227,12 @@ def verify_workspace(manifest_path: Path) -> dict[str, object]:
         python_executable,
     )
     if vscode != expected_vscode:
+        classification = classify_generated_workspace(path)
+        if classification == "previous":
+            raise PromptWorkspaceError(
+                "WORKFLOW_UPGRADE_REQUIRED",
+                "generated workspace requires explicit workspace init migration",
+            )
         raise PromptWorkspaceError(
             "WORKSPACE_STATE_INVALID",
             "VS Code workspace differs from the generated CODE/PROMPTS contract",

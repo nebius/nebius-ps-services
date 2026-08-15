@@ -590,8 +590,9 @@ needs, and open questions instead of treating principles as universal laws.
 It keeps durable prompts and orchestration evidence under
 `${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/`, outside Git, with one
 editable Markdown file per independent ask. A generated VS Code workspace puts
-`CODE` first and `PROMPTS` second so source and historical asks are visible
-together without making Codex depend on multi-root behavior.
+`CODE — MANAGED PERSISTENT LANE` first and `PROMPTS` second so source and
+historical asks are visible together without making Codex depend on multi-root
+behavior or presenting the primary checkout as another editable folder.
 
 `workspace init [project-folder]` defaults to the exact current directory. It
 creates or reuses a persistent full-repository lane from the exact committed
@@ -613,6 +614,12 @@ mutated. The post-checkpoint clean `HEAD` becomes the generation, coordinator,
 and first-wave baseline.
 Each completed run releases one immutable lane generation; back-to-back runs
 may accumulate pending generations while leaving the source checkout untouched.
+Before release, the finalizer prepares a digest-bound `run-summary-v1`; after
+release it seals those exact bytes, updates the handoff, and only then activates
+the queued prompt. The stable report covers task/resource totals, combined
+validation/review, source movement, full-repository and scoped Git statistics,
+queue status, and the exact next action. `ALREADY_COMPLETE` returns the sealed
+summary without recomputing newer Git state.
 
 `workspace reuse [project-folder]` reopens the exact existing generated VS
 Code workspace from either the primary source project or its owning managed
@@ -621,6 +628,14 @@ workspace and live lane identity, but never refreshes the lane, migrates
 prompts, checkpoints dirt, queues work, or claims readiness. Missing or
 mismatched state fails closed; `run <prompt-ref-or-file>` remains
 valid directly from the primary source project without reopening first.
+Only the exact previous generated workspace shape may be migrated by
+`workspace init` or `run`; reuse reports `WORKFLOW_UPGRADE_REQUIRED` and every
+tampered folder/task/argument/helper fails before lane or filesystem mutation.
+The generated `Task Implementer: Show Pending Lane Changes` task is read-only:
+it reports source/lane commits, aggregate project-relative changes, active and
+pending generations, pending sealed summaries, and the exact next public
+action. A legacy generation is labelled `summary unavailable for legacy
+generation`; `lane-report` remains internal and does not add a sixth action.
 
 An explicit init or run binds the current Codex session. In that bound session,
 every direct prompt still runs normally in the current agent. The separate

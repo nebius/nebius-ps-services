@@ -164,6 +164,10 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
 │           ├── resume-control.json
 │           ├── plan-digest-recovery.json
 │           ├── contract-delta-adoption.json
+│           ├── source-observation.json
+│           ├── run-summary-state.json
+│           ├── run-summary.prepared.json
+│           ├── run-summary.json
 │           ├── pending-plans/wave-001/<tasks-sha256>.json
 │           ├── interop.json
 │           ├── project-agent-spec-receipt.json
@@ -346,14 +350,16 @@ and private result record.
 6. Continue with the next wave from the newly promoted lane `HEAD`. After
    the last cleanup, run final changed-surface `$align`, then invoke private
    `run-finalize` with its concise evidence. Only that transition marks the
-   handoff done, seals an immutable generation receipt, and releases the
-   generation for later lane integration. It does not integrate the source
+   handoff done, seals an immutable `run-summary-v1` and generation receipt,
+   and releases the generation for later lane integration. It does not integrate the source
    branch, push, or open a PR. An unchanged completed prompt returns
    `ALREADY_COMPLETE`. Editing it creates a linked fresh-full-objective run
    against current project truth; `r0001` is not steering and omission does not
    delete prior accepted product truth. An interrupted generation release returns a private
-   finalization-pending outcome and repeats the same final transition. A fresh
-   explicit `run` may immediately acquire the next generation, so multiple
+   finalization-pending outcome and repeats the same final transition. A
+   released generation remains finalization-pending until those exact prepared
+   summary bytes are sealed and projected; it blocks the next generation. A fresh
+   explicit `run` may acquire the next generation after sealing, so multiple
    pending generations can accumulate before `integrate`. After finalization
    releases the active generation, activate the unchanged FIFO queue head
    automatically; never overtake blocked active work or reorder the queue.
@@ -661,6 +667,14 @@ For each wave:
     branch second with an exact expected-old SHA. Never
     run broad prune or gc. Internal branches are never pushed or published.
 
+   A retained promoted non-final wave from an older worker contract may bind a
+   sealed lifecycle solely to recover embedded shared-spec provenance. Require
+   identical lane/integration heads, no delta beyond an unchanged-body managed
+   `AGENTS.md` marker refresh, and a retained remaining plan. This is a recovery
+   boundary; current worker guards reject
+   requirements, design, project instructions, README, and changelog changes
+   even when their lexical task claim is broader.
+
 ## Idempotency
 
 - Every Git mutation is journaled before execution and re-observed afterward.
@@ -850,15 +864,28 @@ For each wave:
 - Successful cleanup leaves no managed temporary refs or worktrees; retained
   resources are reported exactly.
 - Final changed-surface `$align` passes and the private finalizer seals the lane
-  generation, or the run stops with a precise blocker. A successful
+  generation and its exact deterministic completion summary, or the run stops
+  with a precise blocker. A successful
   `integrate` consumes every pending generation and rearms the same lane.
 
 ## Output Contract
 
-Return the project scope, prompt status, current wave/task outcome, validation
-and review status, promotion result, retained recovery inventory, and minimum
-next action. Never print prompt bodies, secrets, private internal IDs, or raw
-logs.
+Successful `run` completion returns the versioned `run-summary-v1` machine
+payload. It reports task, correction, wave, worker-worktree, removed, and
+retained totals; combined validation and review outcomes; lane promotion and
+generation release; evidence-backed source movement; full-repository,
+selected-scope, outside-scope, textual, binary, and file-status statistics for
+both the run-local result and accumulated source-to-lane comparison; queued
+prompt status; and one structured next action. `ALREADY_COMPLETE` returns the
+same sealed bytes instead of recomputing current Git state.
+
+Render the exact primary-project invocation as
+`$task-implementer integrate "<primary-project-path>"`. If the source checkout
+is dirty, direct the user to invoke `$commit` there first and then show that
+integration command. If the source ref moved during the run, warn that
+integration rebuilds and revalidates its candidate. Never expose prompt bodies,
+private run or lane IDs, state paths, raw diffs, recovery artifacts, secrets,
+or raw logs.
 
 ## Learning Loop
 

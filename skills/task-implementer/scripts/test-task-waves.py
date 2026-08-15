@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -159,8 +160,16 @@ class WorktreeWaveTest(unittest.TestCase):
             specs.new_spec_document("requirements", REQUIREMENT_BODY)
         )
         (docs / "design.md").write_bytes(specs.new_spec_document("design", DESIGN_BODY))
-        (self.scope / "AGENTS.md").write_text(
-            "# Project instructions\n\nStable rules.\n", encoding="utf-8"
+        instruction_body = b"# Project instructions\n\nStable rules.\n"
+        (self.scope / "AGENTS.md").write_bytes(
+            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
+            + b"a" * 64
+            + b" decision-sha256="
+            + b"b" * 64
+            + b" body-sha256="
+            + hashlib.sha256(instruction_body).hexdigest().encode()
+            + b" -->\n\n"
+            + instruction_body
         )
         (self.repo / ".gitignore").write_text("ignored.env\n", encoding="utf-8")
         (self.repo / "ignored.env").write_text("must not be copied\n", encoding="utf-8")
@@ -3443,6 +3452,69 @@ class WorktreeWaveTest(unittest.TestCase):
         finally:
             os.chdir(previous)
 
+    def test_broad_worker_claim_still_excludes_coordinator_owned_paths(self) -> None:
+        handoff_path = self.run_dir / "handoff.md"
+        handoff_path.write_text(
+            handoff_path.read_text(encoding="utf-8").replace(
+                "- Write claims: exact: services/example/one.txt",
+                "- Write claims: prefix: services/example",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        handoff_path.chmod(0o600)
+        pw.plan_waves(self.workspace, self.run_id, 1, clock=lambda: FIXED)
+        pw.prepare_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        pw.dispatch_wave(self.workspace, self.run_id, self.initial, clock=lambda: FIXED)
+        assignment = json.loads(
+            (
+                self.run_dir
+                / "orchestration"
+                / "assignments"
+                / "wave-001"
+                / "task-1.json"
+            ).read_text(encoding="utf-8")
+        )
+        scope_cwd = Path(assignment["scope_cwd"])
+        pw.arm_task(self.workspace, self.run_id, "task-1", clock=lambda: FIXED)
+        previous = Path.cwd()
+        os.chdir(scope_cwd)
+        try:
+            started = pw.start_task(
+                self.workspace,
+                self.run_id,
+                "task-1",
+                assignment["assignment_sha256"],
+                FIXED_TEXT,
+                session_id="coordinator-path-worker",
+                clock=lambda: FIXED,
+            )
+            design = scope_cwd / "docs" / "design.md"
+            design.write_text(
+                design.read_text(encoding="utf-8") + "\nworker edit\n",
+                encoding="utf-8",
+            )
+            watched = pw.watch_task(
+                self.workspace,
+                self.run_id,
+                "task-1",
+                clock=lambda: FIXED + timedelta(seconds=1),
+            )
+            self.assertEqual(watched["status"], "WORKER_SCOPE_VIOLATION")
+            self.assertEqual(
+                watched["scope_violation_paths"],
+                ["services/example/docs/design.md"],
+            )
+            with self.assertRaises(PromptWorkspaceError) as commit_guard:
+                waves.authorize_task_commit_lifecycle(
+                    self.workspace,
+                    self.run_id,
+                    shlex.join(started["commit_context"]["prepare_argv"]),
+                )
+            self.assertEqual(commit_guard.exception.code, "WORKER_SCOPE_VIOLATION")
+        finally:
+            os.chdir(previous)
+
     def test_planned_steering_rebuilds_waves_without_head_drift(self) -> None:
         original = pw.plan_waves(self.workspace, self.run_id, 2, clock=lambda: FIXED)
         self.assertEqual(original["active_wave"], "wave-001")
@@ -3790,6 +3862,176 @@ class WorktreeWaveTest(unittest.TestCase):
         cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
         self.assertEqual(cleaned["status"], "done")
 
+    def test_intermediate_promoted_wave_accepts_only_zero_delta_lifecycle_seal(
+        self,
+    ) -> None:
+        _, _, evidence = self._integrated_first_wave()
+        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+
+        sealed = self._seal_terminal_lifecycle()
+        self.assertEqual(sealed["status"], "terminal-sealed")
+        self.assertEqual(sealed["paths"], [])
+        cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        self.assertEqual(cleaned["status"], "done")
+        coordinator = json.loads(
+            (self.run_dir / "orchestration" / "coordinator.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(coordinator["active_wave"], "wave-002")
+
+    def test_intermediate_instruction_proof_preserves_human_prefix(self) -> None:
+        body = b"# Project Agent Instructions\n\nManaged body.\n"
+        marker = (
+            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
+            + b"1" * 64
+            + b" decision-sha256="
+            + b"2" * 64
+            + b" body-sha256="
+            + hashlib.sha256(body).hexdigest().encode("ascii")
+            + b" -->\n\n"
+        )
+        lane = self.root / "lane-prefixed-AGENTS.md"
+        integration = self.root / "integration-prefixed-AGENTS.md"
+        prefix = b"# Human instructions\n\nKeep this prefix."
+        lane.write_bytes(prefix + b"\n\n" + marker + body)
+        integration.write_bytes(prefix + b"\n\n" + marker + body)
+        self.assertEqual(
+            contract_delta._managed_instruction_content(lane),
+            (prefix, body),
+        )
+        self.assertEqual(
+            contract_delta._managed_instruction_content(lane),
+            contract_delta._managed_instruction_content(integration),
+        )
+        integration.write_bytes(b"# Changed human instructions\n\n" + marker + body)
+        self.assertNotEqual(
+            contract_delta._managed_instruction_content(lane),
+            contract_delta._managed_instruction_content(integration),
+        )
+
+    def test_intermediate_promoted_wave_promotes_provenance_only_marker_refresh(
+        self,
+    ) -> None:
+        _, _, evidence = self._integrated_first_wave()
+        promoted = pw.promote_wave(
+            self.workspace, self.run_id, evidence, clock=lambda: FIXED
+        )
+        agents = self.scope / "AGENTS.md"
+        _marker, separator, body = agents.read_bytes().partition(b"\n\n")
+        self.assertTrue(separator)
+        agents.write_bytes(
+            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
+            + b"1" * 64
+            + b" decision-sha256="
+            + b"2" * 64
+            + b" body-sha256="
+            + hashlib.sha256(body).hexdigest().encode()
+            + b" -->\n\n"
+            + body
+        )
+
+        sealed = self._seal_terminal_lifecycle()
+        self.assertEqual(sealed["paths"], ["services/example/AGENTS.md"])
+        self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
+        cleaned = pw.cleanup_wave(self.workspace, self.run_id, clock=lambda: FIXED)
+        self.assertEqual(cleaned["status"], "done")
+        self.assertEqual(
+            git("rev-parse", "HEAD", cwd=self.repo), sealed["contract_head"]
+        )
+
+    def test_intermediate_promoted_wave_rejects_instruction_body_change(self) -> None:
+        _, _, evidence = self._integrated_first_wave()
+        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+        agents = self.scope / "AGENTS.md"
+        agents.write_text(
+            agents.read_text(encoding="utf-8") + "\nworker-owned rule\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(PromptWorkspaceError) as rejected:
+            self._seal_terminal_lifecycle()
+        self.assertEqual(rejected.exception.code, "REPLAN_REQUIRED")
+
+    def test_intermediate_promoted_wave_rejects_invalid_instruction_marker(
+        self,
+    ) -> None:
+        _, _, evidence = self._integrated_first_wave()
+        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+        agents = self.scope / "AGENTS.md"
+        content = agents.read_bytes()
+        agents.write_bytes(
+            re.sub(
+                rb"body-sha256=[0-9a-f]{64}",
+                b"body-sha256=" + b"0" * 64,
+                content,
+                count=1,
+            )
+        )
+
+        with self.assertRaises(PromptWorkspaceError) as rejected:
+            self._seal_terminal_lifecycle()
+        self.assertEqual(rejected.exception.code, "REPLAN_REQUIRED")
+
+    def test_intermediate_material_reconciliation_cleans_before_tail_replan(
+        self,
+    ) -> None:
+        _, _, evidence = self._integrated_first_wave()
+        pw.promote_wave(self.workspace, self.run_id, evidence, clock=lambda: FIXED)
+        agents = self.scope / "AGENTS.md"
+        _marker, separator, body = agents.read_bytes().partition(b"\n\n")
+        self.assertTrue(separator)
+        agents.write_bytes(
+            b"<!-- project-agent-instructions:managed-v3 manifest-sha256="
+            + b"1" * 64
+            + b" decision-sha256="
+            + b"2" * 64
+            + b" body-sha256="
+            + hashlib.sha256(body).hexdigest().encode()
+            + b" -->\n\n"
+            + body
+        )
+        self._seal_terminal_lifecycle()
+
+        current_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
+        assert current_impact is not None
+        material_impact = dict(current_impact[0])
+        material_impact["plan_action"] = "replan_required"
+        material_sha256 = hashlib.sha256(specs.stable_json(material_impact)).hexdigest()
+        drift = PromptWorkspaceError(
+            "REPLAN_REQUIRED",
+            "canonical project specs drifted after impact settlement",
+        )
+        with (
+            mock.patch.object(waves, "verify_prompt_impact_plan", side_effect=drift),
+            mock.patch.object(
+                waves,
+                "verify_requirements_refinement_contract",
+                return_value={
+                    "impact": material_impact,
+                    "impact_sha256": material_sha256,
+                },
+            ),
+            mock.patch.object(waves, "settle_prompt_impact_plan") as settled,
+        ):
+            cleaned = pw.cleanup_wave(
+                self.workspace,
+                self.run_id,
+                clock=lambda: FIXED + timedelta(seconds=21),
+            )
+
+        self.assertEqual(cleaned["status"], "done")
+        settled.assert_not_called()
+        coordinator = waves.load_coordinator_state(self.run_dir)
+        assert coordinator is not None
+        self.assertEqual(coordinator["active_wave"], "wave-002")
+        next_wave = json.loads(
+            (self.run_dir / "orchestration/waves/wave-002.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(next_wave["status"], "planned")
+
     def test_provenance_only_terminal_seal_is_promoted_before_cleanup(self) -> None:
         handoff = self.run_dir / "handoff.md"
         handoff.write_text(
@@ -3856,9 +4098,7 @@ class WorktreeWaveTest(unittest.TestCase):
         self.assertEqual(sealed["paths"], ["services/example/docs/design.md"])
         self.assertNotEqual(sealed["contract_head"], promoted["promoted_head"])
 
-        current_impact = specs.load_current_prompt_impact(
-            self.run_dir, required=True
-        )
+        current_impact = specs.load_current_prompt_impact(self.run_dir, required=True)
         assert current_impact is not None
         terminal_impact = dict(current_impact[0])
         terminal_impact["plan_action"] = "replan_required"
@@ -5232,7 +5472,13 @@ class WorktreeWaveTest(unittest.TestCase):
             assignment["base_commit"],
         )
         self.assertEqual(
-            git("diff", "--name-only", assignment["base_commit"], archive_commit, cwd=self.repo),
+            git(
+                "diff",
+                "--name-only",
+                assignment["base_commit"],
+                archive_commit,
+                cwd=self.repo,
+            ),
             "services/example/two.txt",
         )
         self.assertTrue(waves._clean(Path(assignment["worktree"])))
@@ -5256,7 +5502,9 @@ class WorktreeWaveTest(unittest.TestCase):
                 changed_paths=["services/example/two.txt"],
                 clock=lambda: FIXED + timedelta(seconds=4),
             )
-        self.assertEqual(expanded.read_text(encoding="utf-8"), "changed after archive\n")
+        self.assertEqual(
+            expanded.read_text(encoding="utf-8"), "changed after archive\n"
+        )
         git("restore", "--", "services/example/two.txt", cwd=worker)
         removed = waves._cleanup_failed_worker_archives(
             self.repo,

@@ -2580,7 +2580,7 @@ and direct-child commits. No public Task Implementer action or flag changes.
 - TDD-009: Every controlled CLI argument round-trips through resume state;
   partial correction publication and confirmed recovery replay their original
   immutable input, while committed phases skip the already-applied mutation.
-- TDD-010: The aggregate lightweight verifier uses a 600-second bounded
+- TDD-010: The aggregate lightweight verifier uses a 900-second bounded
   per-suite default so the measured full linked-worktree crash suite completes,
   while a genuine overrun is still reported distinctly as a timeout.
 - TDD-011: The first controlled transition on a new run creates the sidecar
@@ -2799,5 +2799,78 @@ current official documentation, and validation distinguishes source readiness
 from installed or fresh-runtime behavior.
 
 <!-- /FEATURE: FEAT-018 -->
+
+<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready priority=P0 version=1 -->
+### FEAT-019: Immutable Task Implementer completion reporting and lane visibility
+
+#### Requirements Covered
+
+- REQ-020: Produce crash-safe machine completion evidence and a read-only
+  persistent-lane report without expanding public or mutation interfaces.
+
+#### Design Details
+
+A narrow Task Implementer reporting module owns `run-summary-v1`, source-open
+observations, bounded Git diff parsing, exact summary bytes, finalization phase,
+queue-head replay binding, handoff rendering, and lane inspection. Coordinator
+and Worktree schemas remain unchanged. Source observation is a separate
+run-owned artifact so current coordinator-v7 stays canonical and older runs are
+explicitly `unknown_legacy`.
+
+Finalization is a forward-only sequence: prepare stable bytes and digest, call
+the existing Worktree generation release, seal the prepared bytes, publish the
+human projection, activate only the bound queue head, then mark completion.
+Every step is replayable. Released-but-unsealed state remains active for intake
+and queue purposes. `ALREADY_COMPLETE` loads the sealed file; it never reruns
+Git. The public payload contains commits and project paths needed for action but
+omits private identities, state paths, prompts, raw diffs, and recovery data.
+
+Git statistics validate commit objects and require ancestry only for the
+run-local range. Name-status and numstat are separate NUL streams with pinned
+Myers/rename/copy options, disabled external diff/textconv, byte escaping, and
+bounded subprocess output/time. Full-repository totals are authoritative;
+selected, outside, and cross-scope counts explain a full-repository promotion.
+
+The generated VS Code document gains only a managed-lane label and one internal
+read-only task. Its preflight compares trusted current and exact previous
+generator outputs; a consistently recorded missing interpreter is inert
+migration input only. Init/run may rewrite previous, reuse cannot, and tampered
+documents fail before the existing lane ensure boundary. Lane inspection uses
+the existing read-only anchor plus Git/ref and sealed receipt reads; it never
+calls a Worktree mutator or broadens lifecycle hook allowlists.
+
+#### Test-First Success Criteria
+
+- TDD-001: Identical evidence produces identical prepared, sealed, and replayed
+  summary bytes, including no-change runs and two overlapping generations.
+- TDD-002: Git tests cover add/modify/delete/rename/copy/type/binary and unsafe
+  paths, cross-scope movement, ancestry rejection, and bounds.
+- TDD-003: Faults at preparation, release, seal, handoff, and queue boundaries
+  recover forward without recomputation or double activation.
+- TDD-004: Source movement is reported as moved and changes readiness wording.
+- TDD-005: Workspace previous-shape migration succeeds, reuse requests upgrade,
+  and every tamper fails with zero lane/Git/private-state mutation.
+- TDD-006: Lane reports are byte-neutral before/after inspection and remain
+  meaningful before integration, after integration, and after removal.
+- TDD-007: Contract and hook checks retain five public actions and prove
+  `lane-report` has no coordinator privilege.
+
+#### Rollout And Rollback
+
+Validate source and all focused/broad suites first. Install only the updated
+Task Implementer skill through the repository installer, verify source/install
+parity, and smoke-test a fresh session. Do not install or register hooks because
+their runtime contract is unchanged. Roll back the reporting and generated
+workspace change together; do not run an older finalizer over a prepared new
+summary.
+
+#### Done Definition
+
+Completion and lane visibility derive only from immutable or live read-only
+evidence, interrupted finalization is idempotent, migrations are explicit and
+fail closed, the five public actions remain unchanged, and source, installed,
+and fresh-session proof are reported separately.
+
+<!-- /FEATURE: FEAT-019 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

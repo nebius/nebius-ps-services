@@ -252,9 +252,20 @@ Tasks become done only after verified fast-forward promotion.
 
 ## Final Alignment
 
-- Completed at: none
 - Promoted commit: none
 - Evidence: none
+
+## Completion Report
+
+- Schema: task-implementer/run-summary-v1
+- Tasks: none
+- Waves: none
+- Temporary resources: none
+- Validation: none
+- Review: none
+- Source observation: unknown_legacy
+- Run-local files: none
+- Next action: none
 
 ## Next Run Prompt
 

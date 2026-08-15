@@ -110,7 +110,7 @@ evidence, and exact owned runtime resources do not.
    workspace, specification, scheduler, temporary-Git wave, and persistent-lane
    suites, plus the verifier's own helper/lifecycle/semantic suites. It must not
    call Docker, create workers, or touch a real project.
-   The bounded default is 600 seconds per suite so the complete disposable
+   The bounded default is 900 seconds per suite so the complete disposable
    linked-worktree crash matrix is not cut off by the worker's shorter
    per-assignment runtime budget.
    Report the deterministic profile independently; absence of live evidence is
