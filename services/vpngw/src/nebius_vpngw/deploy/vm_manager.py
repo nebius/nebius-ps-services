@@ -1282,8 +1282,9 @@ class VMManager:
         spec: GatewayGroupSpec,
         *,
         lifecycle_state: VMHALifecycleState | None = None,
+        allow_unmarked_runtime_probe: bool = False,
     ) -> dict[str, str]:
-        """Find only exact Compute-persisted former-HA candidates, without VPC reads."""
+        """Find exact two-member runtime-probe candidates without VPC reads."""
 
         self._former_vm_ha_candidate_provenance = None
         if spec.vm_ha is not None or not self.project_id:
@@ -1317,6 +1318,8 @@ class VMManager:
         }
         provenances.discard(None)
         if not provenances:
+            if allow_unmarked_runtime_probe and len(members) == 2:
+                return {name: public_ip for name, (_, public_ip) in members.items()}
             return {}
         if (
             len(members) != 2
@@ -1400,8 +1403,14 @@ class VMManager:
         if evidence.provenance is FormerVMHAProvenance.LIFECYCLE_STATE and (
             lifecycle_state is None
             or self._former_vm_ha_lifecycle is None
-            or lifecycle_state.identity_sha256
-            != self._former_vm_ha_lifecycle.identity_sha256
+            or not lifecycle_state.has_same_identity(self._former_vm_ha_lifecycle)
+            or (
+                lifecycle_state.status is not self._former_vm_ha_lifecycle.status
+                and not (
+                    self._former_vm_ha_lifecycle.status is VMHALifecycleStatus.ACTIVE
+                    and lifecycle_state.status is VMHALifecycleStatus.REMOVAL_IN_PROGRESS
+                )
+            )
         ):
             raise RuntimeError("Former VM-HA lifecycle state is unavailable or stale")
         if evidence.provenance is FormerVMHAProvenance.LIFECYCLE_STATE:

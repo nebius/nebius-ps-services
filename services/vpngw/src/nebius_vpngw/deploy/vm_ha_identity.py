@@ -463,14 +463,26 @@ def classify_former_vm_ha_evidence(
         members[name] = (instance, public_ip)
         instances.append(instance)
         provenances.append(compute_provisioning_provenance(instance))
-    if lifecycle_state is None and provenances == [None, None]:
-        return None
-
     if lifecycle_state is None:
-        candidate_provenances = {item for item in provenances if item is not None}
-        if len(candidate_provenances) != 1 or any(item is None for item in provenances):
-            raise RuntimeError("Former VM-HA Compute provenance is incomplete or mixed")
-        provenance = candidate_provenances.pop()
+        if provenances == [None, None]:
+            if legacy_identities is None:
+                return None
+            expected_names = {f"{gateway_name}-{index}" for index in range(2)}
+            if set(legacy_identities) != expected_names:
+                raise RuntimeError(
+                    "Former VM-HA runtime probe requires both exact member identities"
+                )
+            observed = [legacy_identities[f"{gateway_name}-{index}"] for index in range(2)]
+            if all(item is None for item in observed):
+                return None
+            if any(item is None for item in observed):
+                raise RuntimeError("Former VM-HA runtime evidence is partial or one-sided")
+            provenance = FormerVMHAProvenance.LEGACY_RUNTIME
+        else:
+            candidate_provenances = {item for item in provenances if item is not None}
+            if len(candidate_provenances) != 1 or any(item is None for item in provenances):
+                raise RuntimeError("Former VM-HA Compute provenance is incomplete or mixed")
+            provenance = candidate_provenances.pop()
     else:
         if lifecycle_state.project_id != project_id or lifecycle_state.gateway_name != gateway_name:
             raise RuntimeError("Former VM-HA lifecycle scope does not match cloud discovery")

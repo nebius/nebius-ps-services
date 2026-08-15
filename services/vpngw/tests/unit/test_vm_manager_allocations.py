@@ -966,6 +966,61 @@ def test_retained_lifecycle_compute_identity_mismatch_fails_closed() -> None:
         )
 
 
+def test_removal_lifecycle_transition_rejects_stale_active_reversal() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    active = _retained_lifecycle_state()
+    removing = active.with_status(VMHALifecycleStatus.REMOVAL_IN_PROGRESS)
+    allocation = _former_allocation()
+    service = _FormerAllocationService([], current=allocation)
+    members = {
+        f"gateway-{index}": _former_member(
+            index=index,
+            marker=None,
+            allocation_id="shared-private" if index == 0 else "",
+        )
+        for index in range(2)
+    }
+    identities = {f"gateway-{index}": _legacy_identity(index) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        candidates = vm_mgr.discover_former_vm_ha_candidate_members(
+            spec,
+            lifecycle_state=active,
+        )
+        discovered = vm_mgr.discover_former_vm_ha_members(
+            spec,
+            legacy_identities=identities,
+            lifecycle_state=active,
+        )
+        vm_mgr.verify_former_vm_ha_member_snapshot(
+            spec,
+            discovered,
+            lifecycle_state=removing,
+        )
+        with pytest.raises(RuntimeError, match="unavailable or stale"):
+            vm_mgr.verify_former_vm_ha_member_snapshot(
+                spec,
+                discovered,
+                legacy_identities=identities,
+                lifecycle_state=active,
+            )
+
+    assert candidates == discovered
+    assert service.list_requests == []
+    assert len(service.get_requests) == 3
+
+
 def test_ordinary_compute_without_ha_provenance_does_not_list_allocations() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     spec = _ha_spec()
@@ -1027,6 +1082,128 @@ def test_pre_marker_vm_ha_uses_exact_runtime_allocation_without_list_authority()
     assert vm_mgr.former_vm_ha_candidate_provenance is FormerVMHAProvenance.LEGACY_RUNTIME
     assert service.list_requests == []
     assert len(service.get_requests) == 3
+
+
+def test_unmarked_retained_vm_ha_uses_runtime_first_then_exact_allocation_get() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    allocation = _former_allocation()
+    service = _FormerAllocationService([], current=allocation)
+    members = {
+        f"gateway-{index}": _former_member(
+            index=index,
+            marker=None,
+            allocation_id="shared-private" if index == 0 else "",
+        )
+        for index in range(2)
+    }
+    identities = {f"gateway-{index}": _legacy_identity(index) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        candidates = vm_mgr.discover_former_vm_ha_candidate_members(
+            spec,
+            allow_unmarked_runtime_probe=True,
+        )
+        discovered = vm_mgr.discover_former_vm_ha_members(
+            spec,
+            legacy_identities=identities,
+        )
+        vm_mgr.verify_former_vm_ha_member_snapshot(
+            spec,
+            discovered,
+            legacy_identities=identities,
+        )
+
+    assert (
+        candidates
+        == discovered
+        == {
+            "gateway-0": "203.0.113.10",
+            "gateway-1": "203.0.113.11",
+        }
+    )
+    assert vm_mgr.former_vm_ha_candidate_provenance is None
+    assert service.list_requests == []
+    assert len(service.get_requests) == 3
+
+
+def test_unmarked_two_ordinary_runtimes_need_no_vpc_read_or_teardown_evidence() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    service = _FormerAllocationService([])
+    members = {f"gateway-{index}": _former_member(index=index, marker=None) for index in range(2)}
+    identities = {f"gateway-{index}": None for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        candidates = vm_mgr.discover_former_vm_ha_candidate_members(
+            spec,
+            allow_unmarked_runtime_probe=True,
+        )
+        discovered = vm_mgr.discover_former_vm_ha_members(
+            spec,
+            legacy_identities=identities,
+        )
+
+    assert candidates == {
+        "gateway-0": "203.0.113.10",
+        "gateway-1": "203.0.113.11",
+    }
+    assert discovered == {}
+    assert vm_mgr._former_vm_ha_snapshot is None
+    assert vm_mgr._former_vm_ha_evidence is None
+    assert service.list_requests == []
+    assert service.get_requests == []
+
+
+def test_unmarked_one_sided_runtime_ha_fails_closed_before_vpc_read() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    service = _FormerAllocationService([])
+    members = {f"gateway-{index}": _former_member(index=index, marker=None) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        vm_mgr.discover_former_vm_ha_candidate_members(
+            spec,
+            allow_unmarked_runtime_probe=True,
+        )
+        with pytest.raises(RuntimeError, match="partial or one-sided"):
+            vm_mgr.discover_former_vm_ha_members(
+                spec,
+                legacy_identities={"gateway-0": _legacy_identity(0), "gateway-1": None},
+            )
+
+    assert service.list_requests == []
+    assert service.get_requests == []
 
 
 def test_pre_marker_vm_ha_requires_complete_exact_pinned_runtime_identity() -> None:
