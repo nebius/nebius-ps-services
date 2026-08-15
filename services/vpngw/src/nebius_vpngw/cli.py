@@ -32,6 +32,12 @@ from .deploy.ssh_policy import (
 )
 from .deploy.ssh_push import SSHPush
 from .deploy.vm_ha_identity import FormerVMHAProvenance, LegacyVMHAIdentity
+from .deploy.vm_ha_lifecycle import (
+    VMHALifecycleMember,
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    VMHALifecycleStore,
+)
 from .deploy.vm_manager import VMManager
 
 DEFAULT_CONFIG_FILENAME = "nebius-vpngw.config.yaml"
@@ -801,6 +807,104 @@ def _vm_ha_activation_blockers() -> tuple[str, ...]:
     return vm_ha_runtime_blockers()
 
 
+def _requested_apply_service_account_token(
+    *,
+    sa_name: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    region_id: str | None,
+    vm_ha_enabled: bool,
+) -> str | None:
+    """Create/select the requested SA at the flow's explicitly chosen boundary."""
+
+    print(f"[bold]Ensuring Service Account '{sa_name}' and obtaining token...[/bold]")
+    try:
+        if vm_ha_enabled:
+            from .vpngw_sa import (
+                VM_HA_ROLE_ALLOWLIST,
+                ensure_vm_ha_service_account_and_token,
+            )
+
+            token = ensure_vm_ha_service_account_and_token(
+                sa_name=sa_name,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                region_id=region_id,
+                verified_role_ids=tuple(sorted(VM_HA_ROLE_ALLOWLIST)),
+            )
+        else:
+            from .vpngw_sa import ensure_service_account_and_token
+
+            token = ensure_service_account_and_token(
+                sa_name=sa_name,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                region_id=region_id,
+            )
+        if token:
+            print("[green]Service Account token acquired.[/green]")
+            os.environ["NEBIUS_IAM_TOKEN"] = token
+            return token
+        if vm_ha_enabled:
+            raise RuntimeError("VM-HA Service Account flow returned no access token")
+        print(
+            "[yellow]Service Account flow returned no token; falling back to CLI config.[/yellow]"
+        )
+        return None
+    except Exception as error:
+        if vm_ha_enabled:
+            print(f"[red]VM-HA Service Account setup failed:[/red] {error}")
+            print("[yellow]VM HA grants only its reviewed Compute and VPC role allowlist.[/yellow]")
+            raise typer.Exit(code=1) from error
+        print(f"[yellow]Service Account setup skipped due to error:[/yellow] {error}")
+        return None
+
+
+def _active_vm_ha_lifecycle_state(
+    *,
+    plan: ResolvedDeploymentPlan,
+    runtime_binding: t.Any,
+    staged: t.Iterable[tuple[t.Any, str, t.Any]],
+    project_id: str | None,
+) -> VMHALifecycleState:
+    """Bind staged remote provenance to the exact authoritative runtime identity."""
+
+    if not project_id:
+        raise RuntimeError("VM-HA lifecycle provenance requires an exact project ID")
+    binding_nodes = {node.node_id: node for node in runtime_binding.nodes}
+    members: list[VMHALifecycleMember] = []
+    for inst_cfg, target, receipt in staged:
+        node = inst_cfg.vm_ha_node
+        if node is None or receipt.node_id != node.node_id:
+            raise RuntimeError("VM-HA staged provenance does not match the node manifest")
+        bound = binding_nodes.get(node.node_id)
+        if bound is None or str(bound.role.value) != str(node.role.value):
+            raise RuntimeError("VM-HA staged provenance does not match the runtime binding")
+        members.append(
+            VMHALifecycleMember(
+                instance_index=inst_cfg.instance_index,
+                instance_name=inst_cfg.hostname,
+                node_id=node.node_id,
+                role=str(node.role.value),
+                compute_id=bound.compute_id,
+                network_interface_name=bound.network_interface_name,
+                public_ip=target,
+            )
+        )
+    members.sort(key=lambda member: member.instance_index)
+    return VMHALifecycleState(
+        status=VMHALifecycleStatus.ACTIVE,
+        project_id=project_id,
+        gateway_name=plan.gateway_group.name,
+        cluster_id=runtime_binding.cluster_id,
+        allocation_id=runtime_binding.shared_allocation_id,
+        allocation_name=(
+            f"{plan.gateway_group.name}-{runtime_binding.cluster_id}-shared-private-ip"
+        ),
+        members=t.cast(tuple[VMHALifecycleMember, VMHALifecycleMember], tuple(members)),
+    )
+
+
 def _fetch_vm_ha_agent_status(
     *, target: str, username: str, key_path: Path | None
 ) -> dict[str, t.Any]:
@@ -1103,6 +1207,14 @@ def apply(
         # Skip VM ensure and SSH push in dry-run; just show summary.
         raise typer.Exit(code=0)
 
+    if plan.vm_ha is not None:
+        blockers = _vm_ha_activation_blockers()
+        if blockers:
+            print("[red]VM-HA apply is BLOCKED before external mutation.[/red]")
+            for blocker in blockers:
+                print(f"[yellow]  - {blocker}[/yellow]")
+            raise typer.Exit(code=1)
+
     # Resolve read-only context before VM-HA trust/member preflight. No cloud mutation is
     # allowed until every planned member is classified and every existing identity is pinned.
     tenant_id = (local_cfg.get("tenant_id") or "").strip() or None
@@ -1111,15 +1223,70 @@ def apply(
     vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec", {})
     raw_management_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
     management_key_path = Path(raw_management_key).expanduser() if raw_management_key else None
+    lifecycle_store = VMHALifecycleStore(local_config_file)
+    gateway_name = str(getattr(getattr(plan, "gateway_group", None), "name", "") or "")
+    try:
+        lifecycle_state = lifecycle_store.read(
+            expected_project_id=proj_id,
+            expected_gateway_name=gateway_name,
+        )
+    except ValueError as error:
+        print("[red]VM-HA lifecycle state is invalid; apply is blocked before cloud access:[/red]")
+        print(f"[yellow]  - {error}[/yellow]")
+        raise typer.Exit(code=1) from error
+    if plan.vm_ha is not None and lifecycle_state is not None:
+        vm_ha_spec = plan.gateway_group.vm_ha
+        assert vm_ha_spec is not None
+        if lifecycle_state.status is VMHALifecycleStatus.REMOVAL_IN_PROGRESS:
+            print("[red]VM-HA activation is blocked by an unfinished removal transition.[/red]")
+            raise typer.Exit(code=1)
+        if lifecycle_state.status is VMHALifecycleStatus.ACTIVE:
+            planned_members = {
+                (
+                    member.instance_index,
+                    f"{gateway_name}-{member.instance_index}",
+                    member.node_id,
+                    member.role.value,
+                )
+                for member in vm_ha_spec.members
+            }
+            recorded_members = {
+                (
+                    member.instance_index,
+                    member.instance_name,
+                    member.node_id,
+                    member.role,
+                )
+                for member in lifecycle_state.members
+            }
+            if (
+                lifecycle_state.cluster_id != vm_ha_spec.cluster_id
+                or recorded_members != planned_members
+            ):
+                print("[red]VM-HA lifecycle identity conflicts with the requested HA plan.[/red]")
+                raise typer.Exit(code=1)
 
     ssh_policy: SSHTrustPolicy | None = None
     former_vm_ha_members: dict[str, str] = {}
     legacy_vm_ha_identities: dict[str, LegacyVMHAIdentity | None] | None = None
     discovery_manager: VMManager | None = None
-    # Read-only cloud discovery needs the operator credential even when a later
-    # --sa flow will provision and switch to a service-account token. Token
-    # acquisition itself is non-mutating; SA creation remains after teardown.
-    discovery_auth_token = _ensure_authentication(required=False, show_progress=False)
+    needs_operator_removal = bool(
+        plan.vm_ha is None
+        and lifecycle_state is not None
+        and lifecycle_state.status
+        in {VMHALifecycleStatus.ACTIVE, VMHALifecycleStatus.REMOVAL_IN_PROGRESS}
+    )
+    service_account_selected = bool(plan.vm_ha is None and sa and not needs_operator_removal)
+    if service_account_selected:
+        discovery_auth_token = _requested_apply_service_account_token(
+            sa_name=t.cast(str, sa),
+            tenant_id=tenant_id,
+            project_id=proj_id,
+            region_id=region_id,
+            vm_ha_enabled=False,
+        )
+    else:
+        discovery_auth_token = _ensure_authentication(required=False, show_progress=False)
     if plan.vm_ha is not None:
         blockers = _vm_ha_activation_blockers()
         if blockers:
@@ -1165,7 +1332,7 @@ def apply(
             print("[red]VM-HA SSH trust preflight failed before external mutation:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
-    else:
+    elif needs_operator_removal or (lifecycle_state is None and sa is None):
         try:
             discovery_manager = VMManager(
                 project_id=proj_id,
@@ -1175,9 +1342,15 @@ def apply(
                 region_id=region_id,
                 management_key_path=management_key_path,
             )
-            former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
-                plan.gateway_group
-            )
+            if lifecycle_state is None:
+                former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
+                    plan.gateway_group
+                )
+            else:
+                former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
+                    plan.gateway_group,
+                    lifecycle_state=lifecycle_state,
+                )
             if former_candidates:
                 require_explicit_known_hosts_file()
                 ssh_policy = require_vm_ha_ssh_policy(
@@ -1191,23 +1364,68 @@ def apply(
                         vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                     ),
                 )
-                if (
-                    discovery_manager.former_vm_ha_candidate_provenance
-                    is FormerVMHAProvenance.LEGACY_RUNTIME
+                if discovery_manager.former_vm_ha_candidate_provenance in {
+                    FormerVMHAProvenance.LEGACY_RUNTIME,
+                    FormerVMHAProvenance.LIFECYCLE_STATE,
+                } and (
+                    lifecycle_state is None or lifecycle_state.status is VMHALifecycleStatus.ACTIVE
                 ):
                     inspector = SSHPush(ssh_policy=ssh_policy)
                     legacy_vm_ha_identities = {
                         name: inspector.inspect_legacy_vm_ha_identity(target, name, local_cfg)
                         for name, target in sorted(former_candidates.items())
                     }
-                former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
-                    plan.gateway_group,
-                    legacy_identities=legacy_vm_ha_identities,
-                )
+                if lifecycle_state is None:
+                    former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                        plan.gateway_group,
+                        legacy_identities=legacy_vm_ha_identities,
+                    )
+                else:
+                    former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                        plan.gateway_group,
+                        legacy_identities=legacy_vm_ha_identities,
+                        lifecycle_state=lifecycle_state,
+                    )
+                if former_vm_ha_members and lifecycle_state is None:
+                    adopter = getattr(discovery_manager, "former_vm_ha_lifecycle_state", None)
+                    if callable(adopter):
+                        lifecycle_state = adopter(plan.gateway_group)
+                        if legacy_vm_ha_identities is None:
+                            inspector = SSHPush(ssh_policy=ssh_policy)
+                            legacy_vm_ha_identities = {
+                                name: inspector.inspect_legacy_vm_ha_identity(
+                                    target, name, local_cfg
+                                )
+                                for name, target in sorted(former_vm_ha_members.items())
+                            }
+                        adopted_candidates = (
+                            discovery_manager.discover_former_vm_ha_candidate_members(
+                                plan.gateway_group,
+                                lifecycle_state=lifecycle_state,
+                            )
+                        )
+                        if adopted_candidates != former_vm_ha_members:
+                            raise RuntimeError(
+                                "Former VM-HA lifecycle adoption changed the member set"
+                            )
+                        former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                            plan.gateway_group,
+                            legacy_identities=legacy_vm_ha_identities,
+                            lifecycle_state=lifecycle_state,
+                        )
         except (RuntimeError, ValueError) as error:
             print("[red]Former VM-HA discovery failed before ordinary provisioning:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
+    else:
+        discovery_manager = VMManager(
+            project_id=proj_id,
+            zone=zone or plan.gateway_group.region,
+            auth_token=discovery_auth_token,
+            tenant_id=tenant_id,
+            region_id=region_id,
+            management_key_path=management_key_path,
+        )
 
     # Analyze the desired infrastructure and obtain any destructive-change approval while
     # every current HA member is still untouched. The discovery manager performs read-only
@@ -1274,18 +1492,37 @@ def apply(
     if former_vm_ha_members:
         assert discovery_manager is not None
         try:
-            if legacy_vm_ha_identities is not None:
+            if (
+                lifecycle_state is not None
+                and (lifecycle_state.status is VMHALifecycleStatus.ACTIVE)
+                and (legacy_vm_ha_identities is not None)
+            ):
                 assert ssh_policy is not None
                 inspector = SSHPush(ssh_policy=ssh_policy)
                 legacy_vm_ha_identities = {
                     name: inspector.inspect_legacy_vm_ha_identity(target, name, local_cfg)
                     for name, target in sorted(former_vm_ha_members.items())
                 }
-            discovery_manager.verify_former_vm_ha_member_snapshot(
-                plan.gateway_group,
-                former_vm_ha_members,
-                legacy_identities=legacy_vm_ha_identities,
-            )
+            if discovery_manager.former_vm_ha_candidate_provenance is (
+                FormerVMHAProvenance.LIFECYCLE_STATE
+            ):
+                discovery_manager.verify_former_vm_ha_member_snapshot(
+                    plan.gateway_group,
+                    former_vm_ha_members,
+                    legacy_identities=legacy_vm_ha_identities,
+                    lifecycle_state=lifecycle_state,
+                )
+            else:
+                discovery_manager.verify_former_vm_ha_member_snapshot(
+                    plan.gateway_group,
+                    former_vm_ha_members,
+                    legacy_identities=legacy_vm_ha_identities,
+                )
+            if lifecycle_state is not None:
+                lifecycle_state = lifecycle_state.with_status(
+                    VMHALifecycleStatus.REMOVAL_IN_PROGRESS
+                )
+                lifecycle_store.write_verified(lifecycle_state)
             planned_names = {instance.hostname for instance in plan.iter_instance_configs()}
             transition_ssh = SSHPush(ssh_policy=ssh_policy)
             for name, target in sorted(former_vm_ha_members.items()):
@@ -1300,54 +1537,31 @@ def apply(
                     local_cfg,
                     retire_member=name not in planned_names,
                 )
+            if lifecycle_state is not None:
+                discovery_manager.verify_former_vm_ha_member_snapshot(
+                    plan.gateway_group,
+                    former_vm_ha_members,
+                    lifecycle_state=lifecycle_state,
+                )
+                lifecycle_state = lifecycle_state.with_status(VMHALifecycleStatus.REMOVED)
+                lifecycle_store.write_verified(lifecycle_state)
         except (RuntimeError, ValueError) as error:
             print("[red]Former VM-HA teardown failed before ordinary provisioning:[/red]")
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
 
-    # Optional Service Account provisioning/auth
+    # Optional Service Account provisioning/auth. Ordinary no-transition --sa
+    # selected this token before its first cloud read; proven removal waits until
+    # both members are terminally non-HA.
     auth_token = discovery_auth_token
-    if sa:
-        print(f"[bold]Ensuring Service Account '{sa}' and obtaining token...[/bold]")
-        try:
-            # Defer import to keep optional dependency surface small
-            if plan.vm_ha is not None:
-                from .vpngw_sa import (
-                    VM_HA_ROLE_ALLOWLIST,
-                    ensure_vm_ha_service_account_and_token,
-                )
-
-                auth_token = ensure_vm_ha_service_account_and_token(
-                    sa_name=sa,
-                    tenant_id=tenant_id,
-                    project_id=proj_id,
-                    region_id=region_id,
-                    verified_role_ids=tuple(sorted(VM_HA_ROLE_ALLOWLIST)),
-                )
-            else:
-                from .vpngw_sa import ensure_service_account_and_token
-
-                auth_token = ensure_service_account_and_token(
-                    sa_name=sa, tenant_id=tenant_id, project_id=proj_id, region_id=region_id
-                )
-            if auth_token:
-                print("[green]Service Account token acquired.[/green]")
-                # Make token available to SDKs expecting env var (PyPI SDK)
-                os.environ["NEBIUS_IAM_TOKEN"] = auth_token
-            else:
-                if plan.vm_ha is not None:
-                    raise RuntimeError("VM-HA Service Account flow returned no access token")
-                print(
-                    "[yellow]Service Account flow returned no token; falling back to CLI config.[/yellow]"
-                )
-        except Exception as e:
-            if plan.vm_ha is not None:
-                print(f"[red]VM-HA Service Account setup failed:[/red] {e}")
-                print(
-                    "[yellow]VM HA grants only its reviewed Compute and VPC role allowlist.[/yellow]"
-                )
-                raise typer.Exit(code=1) from e
-            print(f"[yellow]Service Account setup skipped due to error:[/yellow] {e}")
+    if sa and not service_account_selected:
+        auth_token = _requested_apply_service_account_token(
+            sa_name=sa,
+            tenant_id=tenant_id,
+            project_id=proj_id,
+            region_id=region_id,
+            vm_ha_enabled=plan.vm_ha is not None,
+        )
     else:
         # No SA requested; if NEBIUS_IAM_TOKEN is missing, try to read it from CLI config
         if os.environ.get("NEBIUS_IAM_TOKEN"):
@@ -1482,9 +1696,15 @@ def apply(
                     f"[dim]Skipping config push for {inst_cfg.hostname}: No IP address available[/dim]"
                 )
                 continue
-            stale_vm_ha_removed = bool(former_vm_ha_members) or ssh.deactivate_vm_ha(
-                target, local_cfg
-            )
+            if (
+                lifecycle_state is not None
+                and lifecycle_state.status is VMHALifecycleStatus.REMOVED
+            ):
+                stale_vm_ha_removed = False
+            else:
+                stale_vm_ha_removed = bool(former_vm_ha_members) or ssh.deactivate_vm_ha(
+                    target, local_cfg
+                )
             ssh.push_config_and_reload(
                 target,
                 inst_cfg,
@@ -1537,6 +1757,14 @@ def apply(
                 print(f"[yellow]  - {blocker}[/yellow]")
             print("[yellow]Both manifests remain staged and neither node was activated.[/yellow]")
             raise typer.Exit(code=1)
+
+        lifecycle_state = _active_vm_ha_lifecycle_state(
+            plan=plan,
+            runtime_binding=vm_ha_runtime_binding,
+            staged=staged,
+            project_id=proj_id,
+        )
+        lifecycle_store.write_verified(lifecycle_state)
 
         print("[bold]Activating verified VM-HA configs passive-first...[/bold]")
         for inst_cfg, target, receipt in staged:

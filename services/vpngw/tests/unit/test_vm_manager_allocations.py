@@ -12,6 +12,11 @@ from nebius_vpngw.deploy.vm_ha_identity import (
     parse_provisioning_marker,
     render_provisioning_marker,
 )
+from nebius_vpngw.deploy.vm_ha_lifecycle import (
+    VMHALifecycleMember,
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+)
 from nebius_vpngw.deploy.vm_manager import (
     VMManager,
     VMProvisioningConfig,
@@ -813,6 +818,37 @@ def _legacy_identity(index: int) -> LegacyVMHAIdentity:
     )
 
 
+def _retained_lifecycle_state() -> VMHALifecycleState:
+    return VMHALifecycleState(
+        status=VMHALifecycleStatus.ACTIVE,
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id="cluster",
+        allocation_id="shared-private",
+        allocation_name="gateway-cluster-shared-private-ip",
+        members=(
+            VMHALifecycleMember(
+                0,
+                "gateway-0",
+                "node-active",
+                "active",
+                "compute-0",
+                "eth0",
+                "203.0.113.10",
+            ),
+            VMHALifecycleMember(
+                1,
+                "gateway-1",
+                "node-passive",
+                "passive",
+                "compute-1",
+                "eth0",
+                "203.0.113.11",
+            ),
+        ),
+    )
+
+
 def _former_identity_fixture():
     ha_spec = _ha_spec()
     markers = [render_provisioning_marker(ha_spec, index) for index in range(2)]
@@ -849,6 +885,85 @@ def test_vm_ha_enrollment_cloud_init_persists_exact_member_identity() -> None:
         "gateway-0",
         "gateway-1",
     ]
+
+
+def test_retained_ordinary_members_are_adopted_from_exact_lifecycle_and_runtime_proof() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    lifecycle = _retained_lifecycle_state()
+    allocation = _former_allocation()
+    service = _FormerAllocationService([], current=allocation)
+    members = {
+        f"gateway-{index}": _former_member(
+            index=index,
+            marker=None,
+            allocation_id="shared-private" if index == 0 else "",
+        )
+        for index in range(2)
+    }
+    identities = {f"gateway-{index}": _legacy_identity(index) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        candidates = vm_mgr.discover_former_vm_ha_candidate_members(spec, lifecycle_state=lifecycle)
+        discovered = vm_mgr.discover_former_vm_ha_members(
+            spec,
+            legacy_identities=identities,
+            lifecycle_state=lifecycle,
+        )
+        vm_mgr.verify_former_vm_ha_member_snapshot(
+            spec,
+            discovered,
+            legacy_identities=identities,
+            lifecycle_state=lifecycle,
+        )
+
+    assert (
+        candidates
+        == discovered
+        == {
+            "gateway-0": "203.0.113.10",
+            "gateway-1": "203.0.113.11",
+        }
+    )
+    assert vm_mgr.former_vm_ha_candidate_provenance is FormerVMHAProvenance.LIFECYCLE_STATE
+    assert service.list_requests == []
+    assert len(service.get_requests) == 3
+
+
+def test_retained_lifecycle_compute_identity_mismatch_fails_closed() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    members = {f"gateway-{index}": _former_member(index=index, marker=None) for index in range(2)}
+    members["gateway-1"] = _former_member(
+        index=1,
+        marker=None,
+        compute_id="replacement-compute",
+    )
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        pytest.raises(RuntimeError, match="lifecycle member identity changed"),
+    ):
+        vm_mgr.discover_former_vm_ha_candidate_members(
+            spec, lifecycle_state=_retained_lifecycle_state()
+        )
 
 
 def test_ordinary_compute_without_ha_provenance_does_not_list_allocations() -> None:
