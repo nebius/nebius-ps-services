@@ -34,6 +34,7 @@ from nebius_vpngw.config_loader import (
     load_local_config,
 )
 from nebius_vpngw.deploy.vm_diff import ChangeType, VMDiff
+from nebius_vpngw.deploy.vm_ha_identity import FormerVMHAProvenance
 from nebius_vpngw.schema import HARole, RoutingMode
 
 HELP_ENV = {"COLUMNS": "120"}
@@ -157,7 +158,7 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_members(self, spec):
+        def discover_former_vm_ha_candidate_members(self, spec):
             return {}
 
         def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
@@ -189,11 +190,9 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
     assert "<your-config.yaml>" not in result.stdout
 
 
-def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
+def test_never_ha_sa_apply_does_not_require_allocation_list_authority(
     tmp_path: Path,
 ) -> None:
-    from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
-
     config_path = tmp_path / "ordinary.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
     local_cfg = {
@@ -205,6 +204,7 @@ def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
         "defaults": {"routing": {"mode": "static"}},
     }
     requests: list[object] = []
+    sa_calls: list[str] = []
 
     class AllocationService:
         def __init__(self, client) -> None:
@@ -212,9 +212,7 @@ def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
 
         def list(self, request):
             requests.append(request)
-            return SimpleNamespace(
-                wait=lambda: SimpleNamespace(items=[], next_page_token="")
-            )
+            raise PermissionError("allocation list denied")
 
     class FakeSSHPush:
         def deactivate_vm_ha(self, target, cfg) -> bool:
@@ -236,6 +234,10 @@ def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
             return_value=object(),
         ),
         patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager._get_vm_by_name_for_vm_ha_preflight",
+            return_value=None,
+        ),
+        patch(
             "nebius_vpngw.deploy.vm_manager.VMManager.check_changes",
             return_value=[],
         ) as check_changes,
@@ -243,15 +245,21 @@ def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
             "nebius_vpngw.deploy.vm_manager.VMManager.ensure_group",
             return_value={},
         ),
+        patch(
+            "nebius_vpngw.vpngw_sa.ensure_service_account_and_token",
+            side_effect=lambda **kwargs: sa_calls.append(kwargs["sa_name"]) or "sa-token",
+        ),
         patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
     ):
-        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+        result = CliRunner().invoke(
+            app,
+            ["apply", "--local-config-file", str(config_path), "--sa", "test-sa"],
+        )
 
     assert result.exit_code == 0, result.stdout
     check_changes.assert_called_once()
-    assert len(requests) == 1
-    assert isinstance(requests[0], ListAllocationsRequest)
-    assert not hasattr(requests[0], "metadata_filter")
+    assert requests == []
+    assert sa_calls == ["test-sa"]
     assert "Analyzing configuration changes" in result.stdout
 
 
@@ -280,14 +288,31 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
         def __init__(self, *args, **kwargs) -> None:
             manager_tokens.append(kwargs.get("auth_token"))
 
-        def discover_former_vm_ha_members(self, spec):
+        def discover_former_vm_ha_candidate_members(self, spec):
             trace.append(("discover", spec.instance_count))
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return FormerVMHAProvenance.LEGACY_RUNTIME
+
+        def discover_former_vm_ha_members(self, spec, *, legacy_identities=None):
+            assert legacy_identities == {
+                "nebius-vpn-gw-0": "identity-nebius-vpn-gw-0",
+                "nebius-vpn-gw-1": "identity-nebius-vpn-gw-1",
+            }
             return former
 
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
             trace.append(("authenticate", tuple(existing)))
 
-        def verify_former_vm_ha_member_snapshot(self, spec, expected) -> None:
+        def verify_former_vm_ha_member_snapshot(
+            self, spec, expected, *, legacy_identities=None
+        ) -> None:
+            assert legacy_identities == {
+                "nebius-vpn-gw-0": "identity-nebius-vpn-gw-0",
+                "nebius-vpn-gw-1": "identity-nebius-vpn-gw-1",
+            }
             trace.append(("recheck", tuple(expected)))
 
         def check_changes(self, spec):
@@ -302,6 +327,10 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
             return False
 
     class FakeSSHPush:
+        def inspect_legacy_vm_ha_identity(self, target, name, cfg):
+            trace.append(("inspect", name, target))
+            return f"identity-{name}"
+
         def deactivate_vm_ha(self, target, cfg, *, retire_member=False) -> bool:
             trace.append(("deactivate", target, retire_member))
             return True
@@ -338,7 +367,11 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
         ("discovery-auth",),
         ("discover", 1),
         ("authenticate", ("nebius-vpn-gw-0", "nebius-vpn-gw-1")),
+        ("inspect", "nebius-vpn-gw-0", "203.0.113.10"),
+        ("inspect", "nebius-vpn-gw-1", "203.0.113.11"),
         ("check_changes",),
+        ("inspect", "nebius-vpn-gw-0", "203.0.113.10"),
+        ("inspect", "nebius-vpn-gw-1", "203.0.113.11"),
         ("recheck", ("nebius-vpn-gw-0", "nebius-vpn-gw-1")),
         ("deactivate", "203.0.113.10", False),
         ("deactivate", "203.0.113.11", True),
@@ -374,13 +407,22 @@ def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_members(self, spec):
+        def discover_former_vm_ha_candidate_members(self, spec):
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return FormerVMHAProvenance.CURRENT_MARKER
+
+        def discover_former_vm_ha_members(self, spec, *, legacy_identities=None):
             return former
 
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
             return None
 
-        def verify_former_vm_ha_member_snapshot(self, spec, expected) -> None:
+        def verify_former_vm_ha_member_snapshot(
+            self, spec, expected, *, legacy_identities=None
+        ) -> None:
             if failure_stage == "recheck":
                 raise RuntimeError("identity changed")
 
@@ -447,7 +489,14 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_members(self, spec):
+        def discover_former_vm_ha_candidate_members(self, spec):
+            return former
+
+        @property
+        def former_vm_ha_candidate_provenance(self):
+            return FormerVMHAProvenance.CURRENT_MARKER
+
+        def discover_former_vm_ha_members(self, spec, *, legacy_identities=None):
             return former
 
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
@@ -519,7 +568,7 @@ def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def discover_former_vm_ha_members(self, spec):
+        def discover_former_vm_ha_candidate_members(self, spec):
             return {}
 
         def discover_vm_ha_members(self, spec):
