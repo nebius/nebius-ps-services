@@ -16,6 +16,11 @@ from enum import Enum
 from ..config_loader import GatewayGroupSpec
 from ..schema import VMHARole
 from .vm_ha_cloud import HACloudError, allocation_observation
+from .vm_ha_lifecycle import (
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    lifecycle_member_map,
+)
 
 PROVISIONING_MARKER_PREFIX = "# nebius-vpngw-vm-ha-provisioning-v1: "
 PROVISIONING_MARKER_SCHEMA = "nebius-vpngw/vm-ha-provisioning-v1"
@@ -30,6 +35,7 @@ class FormerVMHAProvenance(str, Enum):
 
     CURRENT_MARKER = "current-marker"
     LEGACY_RUNTIME = "legacy-runtime"
+    LIFECYCLE_STATE = "lifecycle-state"
 
 
 @dataclass(frozen=True)
@@ -420,6 +426,7 @@ def classify_former_vm_ha_evidence(
     instance_reader: t.Callable[[t.Any, str], t.Any | None],
     public_ip_reader: t.Callable[[t.Any], str | None],
     legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
+    lifecycle_state: VMHALifecycleState | None = None,
 ) -> tuple[dict[str, tuple[t.Any, str]], FormerVMHAEvidence] | None:
     """Classify one current-marker or exact-pinned legacy HA deployment."""
 
@@ -429,6 +436,7 @@ def classify_former_vm_ha_evidence(
     instances: list[t.Any] = []
     provenances: list[FormerVMHAProvenance | None] = []
     identities: list[_MemberIdentity] = []
+    lifecycle_members = lifecycle_member_map(lifecycle_state) if lifecycle_state else None
     for index in range(2):
         name = f"{gateway_name}-{index}"
         instance = instance_reader(client, name)
@@ -443,16 +451,30 @@ def classify_former_vm_ha_evidence(
         network_interface_name = str(getattr(interfaces[0], "name", "") or "")
         if not network_interface_name:
             return None
+        if lifecycle_members is not None:
+            expected = lifecycle_members.get(name)
+            if (
+                expected is None
+                or expected.compute_id != compute_id
+                or expected.network_interface_name != network_interface_name
+                or expected.public_ip != public_ip
+            ):
+                raise RuntimeError("Former VM-HA lifecycle member identity changed")
         members[name] = (instance, public_ip)
         instances.append(instance)
         provenances.append(compute_provisioning_provenance(instance))
-    if provenances == [None, None]:
+    if lifecycle_state is None and provenances == [None, None]:
         return None
 
-    candidate_provenances = {item for item in provenances if item is not None}
-    if len(candidate_provenances) != 1 or any(item is None for item in provenances):
-        raise RuntimeError("Former VM-HA Compute provenance is incomplete or mixed")
-    provenance = candidate_provenances.pop()
+    if lifecycle_state is None:
+        candidate_provenances = {item for item in provenances if item is not None}
+        if len(candidate_provenances) != 1 or any(item is None for item in provenances):
+            raise RuntimeError("Former VM-HA Compute provenance is incomplete or mixed")
+        provenance = candidate_provenances.pop()
+    else:
+        if lifecycle_state.project_id != project_id or lifecycle_state.gateway_name != gateway_name:
+            raise RuntimeError("Former VM-HA lifecycle scope does not match cloud discovery")
+        provenance = FormerVMHAProvenance.LIFECYCLE_STATE
     allocation: t.Any
     allocation_name: str
     cluster_id: str
@@ -491,7 +513,7 @@ def classify_former_vm_ha_evidence(
             )
         if len(topologies) != 2 or topologies[0] != topologies[1]:
             return None
-    else:
+    elif provenance is FormerVMHAProvenance.LEGACY_RUNTIME:
         expected_names = {f"{gateway_name}-{index}" for index in range(2)}
         if legacy_identities is None or set(legacy_identities) != expected_names:
             raise RuntimeError(
@@ -536,6 +558,79 @@ def classify_former_vm_ha_evidence(
             ):
                 raise RuntimeError("Former VM-HA legacy runtime does not match Compute identity")
             identities.append((name, compute_id, network_interface_name, item.node_id, item.role))
+    else:
+        assert lifecycle_state is not None
+        cluster_id = lifecycle_state.cluster_id
+        allocation_id = lifecycle_state.allocation_id
+        allocation_name = lifecycle_state.allocation_name
+        allocation = _read_exact_former_allocation(
+            client=client,
+            allocation_id=allocation_id,
+            allocation_name=allocation_name,
+            resource_id=resource_id,
+        )
+        if allocation is None:
+            raise RuntimeError("Former VM-HA lifecycle allocation identity changed")
+        lifecycle_topology: _Topology = t.cast(
+            _Topology,
+            tuple(
+                (
+                    member.instance_index,
+                    member.instance_name,
+                    member.node_id,
+                    member.role,
+                )
+                for member in lifecycle_state.members
+            ),
+        )
+        for index, instance in enumerate(instances):
+            member = lifecycle_state.members[index]
+            marker = parse_provisioning_marker(instance)
+            if (
+                marker is not None
+                and validate_provisioning_marker(
+                    marker,
+                    expected_instance_index=index,
+                    gateway_name=gateway_name,
+                    allocation_name=allocation_name,
+                    cluster_id=cluster_id,
+                )
+                != lifecycle_topology
+            ):
+                raise RuntimeError("Former VM-HA Compute marker conflicts with lifecycle identity")
+            identities.append(
+                (
+                    member.instance_name,
+                    member.compute_id,
+                    member.network_interface_name,
+                    member.node_id,
+                    member.role,
+                )
+            )
+        if lifecycle_state.status is VMHALifecycleStatus.ACTIVE:
+            expected_names = {member.instance_name for member in lifecycle_state.members}
+            if legacy_identities is None or set(legacy_identities) != expected_names:
+                raise RuntimeError(
+                    "Former VM-HA active lifecycle requires exact-pinned runtime inspection"
+                )
+            lifecycle_runtime_nodes = {
+                (member.node_id, member.role, member.compute_id, member.network_interface_name)
+                for member in lifecycle_state.members
+            }
+            for member in lifecycle_state.members:
+                observed_identity = legacy_identities.get(member.instance_name)
+                if (
+                    observed_identity is None
+                    or observed_identity.cluster_id != cluster_id
+                    or observed_identity.allocation_id != allocation_id
+                    or observed_identity.instance_index != member.instance_index
+                    or observed_identity.node_id != member.node_id
+                    or observed_identity.role != member.role
+                    or set(observed_identity.nodes) != lifecycle_runtime_nodes
+                ):
+                    raise RuntimeError(
+                        "Former VM-HA runtime identity conflicts with lifecycle state"
+                    )
 
     attachments: list[tuple[str, str]] = []
     for instance, identity in zip(instances, identities, strict=True):

@@ -30,6 +30,12 @@ from .vm_ha_identity import (
     compute_provisioning_provenance,
     render_provisioning_marker,
 )
+from .vm_ha_lifecycle import (
+    VMHALifecycleMember,
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    lifecycle_member_map,
+)
 
 if t.TYPE_CHECKING:
     from .vm_ha_cloud import VMHACloudAdapter
@@ -116,6 +122,7 @@ class VMManager:
         self._former_vm_ha_snapshot: dict[str, tuple[t.Any, str]] | None = None
         self._former_vm_ha_evidence: FormerVMHAEvidence | None = None
         self._former_vm_ha_candidate_provenance: FormerVMHAProvenance | None = None
+        self._former_vm_ha_lifecycle: VMHALifecycleState | None = None
         self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
@@ -1257,6 +1264,7 @@ class VMManager:
         client: t.Any,
         spec: GatewayGroupSpec,
         legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
+        lifecycle_state: VMHALifecycleState | None = None,
     ) -> tuple[dict[str, tuple[t.Any, str]], FormerVMHAEvidence] | None:
         return classify_former_vm_ha_evidence(
             project_id=self.project_id,
@@ -1266,9 +1274,15 @@ class VMManager:
             instance_reader=self._get_vm_by_name_for_vm_ha_preflight,
             public_ip_reader=self._vm_public_ip_from_object,
             legacy_identities=legacy_identities,
+            lifecycle_state=lifecycle_state,
         )
 
-    def discover_former_vm_ha_candidate_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+    def discover_former_vm_ha_candidate_members(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        lifecycle_state: VMHALifecycleState | None = None,
+    ) -> dict[str, str]:
         """Find only exact Compute-persisted former-HA candidates, without VPC reads."""
 
         self._former_vm_ha_candidate_provenance = None
@@ -1278,6 +1292,26 @@ class VMManager:
         if client is None:
             raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
         members = self._discover_vm_ha_members(client, replace(spec, instance_count=2))
+        if lifecycle_state is not None:
+            expected = lifecycle_member_map(lifecycle_state)
+            if set(members) != set(expected):
+                raise RuntimeError("Former VM-HA lifecycle member set changed")
+            for name, (instance, public_ip) in members.items():
+                member = expected[name]
+                interfaces = list(
+                    getattr(getattr(instance, "spec", None), "network_interfaces", []) or []
+                )
+                if (
+                    self._resource_id(instance) != member.compute_id
+                    or len(interfaces) != 1
+                    or str(getattr(interfaces[0], "name", "") or "")
+                    != member.network_interface_name
+                    or public_ip != member.public_ip
+                ):
+                    raise RuntimeError("Former VM-HA lifecycle member identity changed")
+            self._former_vm_ha_candidate_provenance = FormerVMHAProvenance.LIFECYCLE_STATE
+            self._former_vm_ha_lifecycle = lifecycle_state
+            return {name: public_ip for name, (_, public_ip) in members.items()}
         provenances = {
             compute_provisioning_provenance(instance) for instance, _ in members.values()
         }
@@ -1305,6 +1339,7 @@ class VMManager:
         spec: GatewayGroupSpec,
         *,
         legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
+        lifecycle_state: VMHALifecycleState | None = None,
     ) -> dict[str, str]:
         """Discover both former HA members independently of the new member count."""
 
@@ -1316,7 +1351,10 @@ class VMManager:
         if client is None:
             raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
         classified = self._classify_former_vm_ha_evidence(
-            client, spec, legacy_identities=legacy_identities
+            client,
+            spec,
+            legacy_identities=legacy_identities,
+            lifecycle_state=lifecycle_state,
         )
         if classified is None:
             if self._former_vm_ha_candidate_provenance is not None:
@@ -1328,6 +1366,8 @@ class VMManager:
             and evidence.provenance is not self._former_vm_ha_candidate_provenance
         ):
             raise RuntimeError("Former VM-HA provenance changed during classification")
+        if self._former_vm_ha_lifecycle != lifecycle_state:
+            raise RuntimeError("Former VM-HA lifecycle state changed during classification")
         self._former_vm_ha_snapshot = members
         self._former_vm_ha_evidence = evidence
         return {name: public_ip for name, (_, public_ip) in members.items()}
@@ -1338,6 +1378,7 @@ class VMManager:
         expected: t.Mapping[str, str],
         *,
         legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
+        lifecycle_state: VMHALifecycleState | None = None,
     ) -> None:
         """Re-read every former Compute identity immediately before teardown."""
 
@@ -1356,8 +1397,21 @@ class VMManager:
             raise RuntimeError(
                 "Former VM-HA legacy runtime evidence must be re-read immediately before teardown"
             )
+        if evidence.provenance is FormerVMHAProvenance.LIFECYCLE_STATE and (
+            lifecycle_state is None
+            or self._former_vm_ha_lifecycle is None
+            or lifecycle_state.identity_sha256
+            != self._former_vm_ha_lifecycle.identity_sha256
+        ):
+            raise RuntimeError("Former VM-HA lifecycle state is unavailable or stale")
+        if evidence.provenance is FormerVMHAProvenance.LIFECYCLE_STATE:
+            assert lifecycle_state is not None
+            self._former_vm_ha_lifecycle = lifecycle_state
         current = self._classify_former_vm_ha_evidence(
-            client, spec, legacy_identities=legacy_identities
+            client,
+            spec,
+            legacy_identities=legacy_identities,
+            lifecycle_state=lifecycle_state,
         )
         if current is None or current[1] != evidence:
             raise RuntimeError("Former VM-HA allocation or member evidence changed")
@@ -1365,10 +1419,47 @@ class VMManager:
             raise RuntimeError("Former VM-HA member addresses changed")
         self._require_vm_ha_member_snapshot(client, replace(spec, instance_count=2), snapshot)
         final = self._classify_former_vm_ha_evidence(
-            client, spec, legacy_identities=legacy_identities
+            client,
+            spec,
+            legacy_identities=legacy_identities,
+            lifecycle_state=lifecycle_state,
         )
         if final is None or final[1] != evidence:
             raise RuntimeError("Former VM-HA allocation or member evidence changed")
+
+    def former_vm_ha_lifecycle_state(self, spec: GatewayGroupSpec) -> VMHALifecycleState:
+        """Adopt the exact classified cloud snapshot into a durable selector."""
+
+        evidence = self._former_vm_ha_evidence
+        snapshot = self._former_vm_ha_snapshot
+        if not self.project_id or evidence is None or snapshot is None:
+            raise RuntimeError("Former VM-HA lifecycle adoption requires classified evidence")
+        members: list[VMHALifecycleMember] = []
+        for index, identity in enumerate(evidence.members):
+            name, compute_id, network_interface_name, node_id, role = identity
+            observed = snapshot.get(name)
+            if observed is None:
+                raise RuntimeError("Former VM-HA lifecycle adoption snapshot is incomplete")
+            members.append(
+                VMHALifecycleMember(
+                    instance_index=index,
+                    instance_name=name,
+                    node_id=node_id,
+                    role=role,
+                    compute_id=compute_id,
+                    network_interface_name=network_interface_name,
+                    public_ip=observed[1],
+                )
+            )
+        return VMHALifecycleState(
+            status=VMHALifecycleStatus.ACTIVE,
+            project_id=self.project_id,
+            gateway_name=spec.name,
+            cluster_id=evidence.cluster_id,
+            allocation_id=evidence.allocation_id,
+            allocation_name=evidence.allocation_name,
+            members=t.cast(tuple[VMHALifecycleMember, VMHALifecycleMember], tuple(members)),
+        )
 
     def verify_vm_ha_existing_identities(
         self,
