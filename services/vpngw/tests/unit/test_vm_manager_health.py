@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from nebius_vpngw.deploy.vm_manager import VMManager
+from nebius_vpngw.schema import VMHARole
 
 
 def _completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -186,9 +187,15 @@ def test_invalid_enrollment_anchors_block_before_recreate_or_allocation() -> Non
     manager = VMManager(project_id="project-test", zone="eu-west1", ssh_policy=policy)
     spec = SimpleNamespace(
         name="gateway",
-        instance_count=1,
+        instance_count=2,
         region="eu-west1",
-        vm_ha=object(),
+        vm_ha=SimpleNamespace(
+            cluster_id="cluster",
+            members=(
+                SimpleNamespace(node_id="node-a", instance_index=0, role=VMHARole.ACTIVE),
+                SimpleNamespace(node_id="node-b", instance_index=1, role=VMHARole.PASSIVE),
+            ),
+        ),
         vm_spec={"ssh_public_key": None},
     )
     existing = SimpleNamespace()

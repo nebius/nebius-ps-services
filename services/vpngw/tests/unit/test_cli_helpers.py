@@ -189,6 +189,72 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
     assert "<your-config.yaml>" not in result.stdout
 
 
+def test_ordinary_apply_real_allocation_request_reaches_change_analysis(
+    tmp_path: Path,
+) -> None:
+    from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
+
+    config_path = tmp_path / "ordinary.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    requests: list[object] = []
+
+    class AllocationService:
+        def __init__(self, client) -> None:
+            assert client is not None
+
+        def list(self, request):
+            requests.append(request)
+            return SimpleNamespace(
+                wait=lambda: SimpleNamespace(items=[], next_page_token="")
+            )
+
+    class FakeSSHPush:
+        def deactivate_vm_ha(self, target, cfg) -> bool:
+            return False
+
+        def push_config_and_reload(self, *args, **kwargs) -> None:
+            return None
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=_static_route_plan()),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch(
+            "nebius.api.nebius.vpc.v1.AllocationServiceClient",
+            AllocationService,
+        ),
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager._build_sdk_client",
+            return_value=object(),
+        ),
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager.check_changes",
+            return_value=[],
+        ) as check_changes,
+        patch(
+            "nebius_vpngw.deploy.vm_manager.VMManager.ensure_group",
+            return_value={},
+        ),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 0, result.stdout
+    check_changes.assert_called_once()
+    assert len(requests) == 1
+    assert isinstance(requests[0], ListAllocationsRequest)
+    assert not hasattr(requests[0], "metadata_filter")
+    assert "Analyzing configuration changes" in result.stdout
+
+
 def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure_group(
     tmp_path: Path,
 ) -> None:

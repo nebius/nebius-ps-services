@@ -21,6 +21,12 @@ from ..schema import (
 )
 from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
 from .vm_diff import VMDiffAnalyzer, VMSpec
+from .vm_ha_identity import (
+    PROVISIONING_MARKER_PREFIX,
+    FormerVMHAEvidence,
+    classify_former_vm_ha_evidence,
+    render_provisioning_marker,
+)
 
 if t.TYPE_CHECKING:
     from .vm_ha_cloud import VMHACloudAdapter
@@ -105,6 +111,7 @@ class VMManager:
         self._private_alloc_ids: dict[str, list[str]] = {}
         self._vm_ha_shared_allocation_id: str | None = None
         self._former_vm_ha_snapshot: dict[str, tuple[t.Any, str]] | None = None
+        self._former_vm_ha_evidence: FormerVMHAEvidence | None = None
         self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
@@ -1241,53 +1248,34 @@ class VMManager:
             for name, (_, public_ip) in self._discover_vm_ha_members(client, spec).items()
         }
 
-    def _has_durable_vm_ha_allocation(self, client: t.Any, spec: GatewayGroupSpec) -> bool:
-        """Find the shared allocation that durably identifies a former HA cluster."""
-
-        if not self.project_id:
-            return False
-        try:
-            from nebius.api.nebius.common.v1 import ResourceMetadataFilter  # type: ignore
-            from nebius.api.nebius.vpc.v1 import (  # type: ignore
-                AllocationServiceClient,
-                ListAllocationsRequest,
-            )
-
-            request = ListAllocationsRequest(
-                parent_id=self.project_id,
-                metadata_filter=ResourceMetadataFilter(resource_prefix=f"{spec.name}-"),
-            )
-            response = AllocationServiceClient(client).list(request)
-            if hasattr(response, "wait"):
-                response = response.wait()
-            items = list(getattr(response, "items", response) or [])
-        except Exception as error:
-            raise RuntimeError("Former VM-HA allocation evidence could not be read") from error
-        matches = []
-        for allocation in items:
-            name = str(getattr(getattr(allocation, "metadata", None), "name", ""))
-            if name.startswith(f"{spec.name}-") and name.endswith("-shared-private-ip"):
-                matches.append(name)
-        if len(matches) > 1:
-            raise RuntimeError("Former VM-HA allocation evidence is ambiguous")
-        return bool(matches)
+    def _classify_former_vm_ha_evidence(
+        self, client: t.Any, spec: GatewayGroupSpec
+    ) -> tuple[dict[str, tuple[t.Any, str]], FormerVMHAEvidence] | None:
+        return classify_former_vm_ha_evidence(
+            project_id=self.project_id,
+            client=client,
+            gateway_name=spec.name,
+            resource_id=self._resource_id,
+            instance_reader=self._get_vm_by_name_for_vm_ha_preflight,
+            public_ip_reader=self._vm_public_ip_from_object,
+        )
 
     def discover_former_vm_ha_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
         """Discover both former HA members independently of the new member count."""
 
+        self._former_vm_ha_snapshot = None
+        self._former_vm_ha_evidence = None
         if spec.vm_ha is not None or not self.project_id:
             return {}
         client = self._build_sdk_client(spec.region)
         if client is None:
             raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
-        if not self._has_durable_vm_ha_allocation(client, spec):
+        classified = self._classify_former_vm_ha_evidence(client, spec)
+        if classified is None:
             return {}
-        former_spec = replace(spec, instance_count=2)
-        members = self._discover_vm_ha_members(client, former_spec)
-        expected_names = {f"{spec.name}-0", f"{spec.name}-1"}
-        if set(members) != expected_names:
-            raise RuntimeError("Former VM-HA member set is incomplete")
+        members, evidence = classified
         self._former_vm_ha_snapshot = members
+        self._former_vm_ha_evidence = evidence
         return {name: public_ip for name, (_, public_ip) in members.items()}
 
     def verify_former_vm_ha_member_snapshot(
@@ -1296,14 +1284,25 @@ class VMManager:
         """Re-read every former Compute identity immediately before teardown."""
 
         snapshot = self._former_vm_ha_snapshot
+        evidence = self._former_vm_ha_evidence
         if snapshot is None or {
             name: public_ip for name, (_, public_ip) in snapshot.items()
-        } != dict(expected):
+        } != dict(expected) or evidence is None:
             raise RuntimeError("Former VM-HA discovery snapshot is unavailable or stale")
         client = self._build_sdk_client(spec.region)
         if client is None:
             raise RuntimeError("Former VM-HA identity recheck requires the Nebius SDK")
+        current = self._classify_former_vm_ha_evidence(client, spec)
+        if current is None or current[1] != evidence:
+            raise RuntimeError("Former VM-HA allocation or member evidence changed")
+        if {
+            name: public_ip for name, (_, public_ip) in current[0].items()
+        } != dict(expected):
+            raise RuntimeError("Former VM-HA member addresses changed")
         self._require_vm_ha_member_snapshot(client, replace(spec, instance_count=2), snapshot)
+        final = self._classify_former_vm_ha_evidence(client, spec)
+        if final is None or final[1] != evidence:
+            raise RuntimeError("Former VM-HA allocation or member evidence changed")
 
     def verify_vm_ha_existing_identities(
         self,
@@ -1348,14 +1347,28 @@ class VMManager:
             raise RuntimeError(f"Existing VM-HA member {name} is unreachable before cloud mutation")
 
     @staticmethod
-    def _render_vm_ha_enrollment_cloud_init(cloud_init: str, identity: t.Any) -> str:
+    def _render_vm_ha_enrollment_cloud_init(
+        cloud_init: str,
+        identity: t.Any,
+        provisioning_marker: str,
+    ) -> str:
         write_files_anchor = "write_files:\n"
         sshd_anchor = "            Port 22\n"
+        cloud_config_anchor = "#cloud-config\n"
         if cloud_init.count(write_files_anchor) != 1:
             raise RuntimeError("VM-HA cloud-init must contain exactly one write_files anchor")
         if cloud_init.count(sshd_anchor) != 1:
             raise RuntimeError("VM-HA cloud-init must contain exactly one sshd HostKey anchor")
+        if cloud_init.count(cloud_config_anchor) != 1 or "\n" in provisioning_marker:
+            raise RuntimeError("VM-HA cloud-init must contain one safe provisioning marker anchor")
         return cloud_init.replace(
+            cloud_config_anchor,
+            cloud_config_anchor
+            + PROVISIONING_MARKER_PREFIX
+            + provisioning_marker
+            + "\n",
+            1,
+        ).replace(
             write_files_anchor,
             write_files_anchor + identity.cloud_init_entries(),
             1,
@@ -1386,6 +1399,7 @@ class VMManager:
             rendered[name] = self._render_vm_ha_enrollment_cloud_init(
                 base,
                 self._ssh_policy.identity_for(name),
+                render_provisioning_marker(spec, index),
             )
         return rendered
 
