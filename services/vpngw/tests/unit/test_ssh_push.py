@@ -655,6 +655,79 @@ class _VerificationClient(_DeactivationClient):
         return BytesIO(), _CommandStream(output, self.return_code), BytesIO(b"incomplete")
 
 
+class _LegacyInspectionClient(_DeactivationClient):
+    def __init__(self, payload: dict, return_code: int = 0) -> None:
+        super().__init__(return_code)
+        self.payload = payload
+
+    def exec_command(self, command: str, **kwargs):
+        self.command = command
+        output = json.dumps(self.payload).encode() if self.return_code == 0 else b""
+        return BytesIO(), _CommandStream(output, self.return_code), BytesIO(b"denied")
+
+
+def _legacy_identity_payload() -> dict:
+    return {
+        "status": "vm-ha",
+        "cluster_id": "cluster",
+        "allocation_id": "shared-private",
+        "instance_index": 0,
+        "node_id": "node-active",
+        "role": "active",
+        "nodes": [
+            {
+                "node_id": "node-active",
+                "role": "active",
+                "compute_id": "compute-0",
+                "network_interface_name": "eth0",
+            },
+            {
+                "node_id": "node-passive",
+                "role": "passive",
+                "compute_id": "compute-1",
+                "network_interface_name": "eth0",
+            },
+        ],
+    }
+
+
+def test_legacy_vm_ha_inspection_is_exact_pinned_and_secret_free() -> None:
+    client = _LegacyInspectionClient(_legacy_identity_payload())
+    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+
+    with patch("nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification") as configure:
+        identity = push.inspect_legacy_vm_ha_identity(
+            "203.0.113.10", "gateway-0", {"gateway_group": {"vm_spec": {}}}
+        )
+
+    assert identity is not None
+    assert identity.allocation_id == "shared-private"
+    assert identity.node_id == "node-active"
+    assert "config-resolved.yaml" not in client.command
+    assert "private_key" not in client.command
+    assert "base64 -d | sudo python3" in client.command
+    assert configure.call_args.kwargs["hostname"] == "gateway-0"
+    assert configure.call_args.kwargs["transport_host"] == "203.0.113.10"
+    assert client.closed
+
+
+def test_legacy_vm_ha_inspection_denial_fails_closed() -> None:
+    client = _LegacyInspectionClient({}, return_code=1)
+    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+
+    with (
+        patch("nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification"),
+        pytest.raises(RuntimeError, match="could not be read"),
+    ):
+        push.inspect_legacy_vm_ha_identity(
+            "203.0.113.10", "gateway-0", {"gateway_group": {"vm_spec": {}}}
+        )
+
+    assert client.closed
+
+
 def test_vm_ha_deactivation_verification_checks_terminal_state() -> None:
     client = _VerificationClient(return_code=0)
     push = SSHPush()

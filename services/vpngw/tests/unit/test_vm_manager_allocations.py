@@ -7,6 +7,8 @@ import pytest
 
 from nebius_vpngw.config_loader import GatewayGroupSpec
 from nebius_vpngw.deploy.vm_ha_identity import (
+    FormerVMHAProvenance,
+    LegacyVMHAIdentity,
     parse_provisioning_marker,
     render_provisioning_marker,
 )
@@ -758,6 +760,7 @@ def _former_member(
     marker: str | None,
     allocation_id: str = "",
     compute_id: str | None = None,
+    legacy_signature: bool = False,
 ):
     name = f"gateway-{index}"
     return SimpleNamespace(
@@ -765,10 +768,17 @@ def _former_member(
         metadata=SimpleNamespace(id=compute_id or f"compute-{index}", name=name),
         spec=SimpleNamespace(
             cloud_init_user_data=(
-                "#cloud-config\n"
-                f"# nebius-vpngw-vm-ha-provisioning-v1: {marker}\n"
+                f"#cloud-config\n# nebius-vpngw-vm-ha-provisioning-v1: {marker}\n"
                 if marker is not None
-                else "#cloud-config\n"
+                else (
+                    "#cloud-config\n"
+                    "write_files:\n"
+                    "  - path: /etc/ssh/ssh_host_vpngw_key\n"
+                    "    content: fixture\n"
+                    "            HostKey /etc/ssh/ssh_host_vpngw_key\n"
+                    if legacy_signature
+                    else "#cloud-config\n"
+                )
             ),
             network_interfaces=[
                 SimpleNamespace(
@@ -784,6 +794,22 @@ def _former_member(
                 )
             ]
         ),
+    )
+
+
+def _legacy_identity(index: int) -> LegacyVMHAIdentity:
+    nodes = (
+        ("node-active", "active", "compute-0", "eth0"),
+        ("node-passive", "passive", "compute-1", "eth0"),
+    )
+    return LegacyVMHAIdentity(
+        instance_name=f"gateway-{index}",
+        cluster_id="cluster",
+        allocation_id="shared-private",
+        instance_index=index,
+        node_id=nodes[index][0],
+        role=nodes[index][1],
+        nodes=nodes,
     )
 
 
@@ -807,9 +833,7 @@ def _former_identity_fixture():
 
 def test_vm_ha_enrollment_cloud_init_persists_exact_member_identity() -> None:
     spec = _ha_spec()
-    identity = SimpleNamespace(
-        cloud_init_entries=lambda: "  - path: /etc/ssh/ssh_host_vpngw_key\n"
-    )
+    identity = SimpleNamespace(cloud_init_entries=lambda: "  - path: /etc/ssh/ssh_host_vpngw_key\n")
     base = "#cloud-config\nwrite_files:\n  - content: |\n            Port 22\n"
     marker = render_provisioning_marker(spec, 0)
 
@@ -827,9 +851,7 @@ def test_vm_ha_enrollment_cloud_init_persists_exact_member_identity() -> None:
     ]
 
 
-def test_former_vm_ha_allocation_list_uses_real_generated_request_shape() -> None:
-    from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
-
+def test_ordinary_compute_without_ha_provenance_does_not_list_allocations() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     spec = _ha_spec()
     spec.vm_ha = None
@@ -838,18 +860,113 @@ def test_former_vm_ha_allocation_list_uses_real_generated_request_shape() -> Non
 
     with (
         patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            return_value=None,
+        ),
         patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
     ):
         result = vm_mgr.discover_former_vm_ha_members(spec)
 
     assert result == {}
-    assert len(service.list_requests) == 1
-    request = service.list_requests[0]
-    assert isinstance(request, ListAllocationsRequest)
-    assert request.parent_id == "project-1"
-    assert request.page_size == 1000
-    assert request.page_token == ""
-    assert not hasattr(request, "metadata_filter")
+    assert service.list_requests == []
+
+
+def test_pre_marker_vm_ha_uses_exact_runtime_allocation_without_list_authority() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    allocation = _former_allocation()
+    service = _FormerAllocationService([], current=allocation)
+    members = {
+        f"gateway-{index}": _former_member(
+            index=index,
+            marker=None,
+            legacy_signature=True,
+            allocation_id="shared-private" if index == 0 else "",
+        )
+        for index in range(2)
+    }
+    identities = {f"gateway-{index}": _legacy_identity(index) for index in range(2)}
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
+    ):
+        candidates = vm_mgr.discover_former_vm_ha_candidate_members(spec)
+        result = vm_mgr.discover_former_vm_ha_members(spec, legacy_identities=identities)
+        vm_mgr.verify_former_vm_ha_member_snapshot(spec, result, legacy_identities=identities)
+
+    assert candidates == {
+        "gateway-0": "203.0.113.10",
+        "gateway-1": "203.0.113.11",
+    }
+    assert result == candidates
+    assert vm_mgr.former_vm_ha_candidate_provenance is FormerVMHAProvenance.LEGACY_RUNTIME
+    assert service.list_requests == []
+    assert len(service.get_requests) == 3
+
+
+def test_pre_marker_vm_ha_requires_complete_exact_pinned_runtime_identity() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    members = {
+        f"gateway-{index}": _former_member(
+            index=index,
+            marker=None,
+            legacy_signature=True,
+            allocation_id="shared-private" if index == 0 else "",
+        )
+        for index in range(2)
+    }
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+    ):
+        vm_mgr.discover_former_vm_ha_candidate_members(spec)
+        with pytest.raises(RuntimeError, match="exact-pinned runtime inspection"):
+            vm_mgr.discover_former_vm_ha_members(spec)
+
+
+def test_partial_pre_marker_vm_ha_signature_fails_closed() -> None:
+    vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
+    spec = _ha_spec()
+    spec.vm_ha = None
+    spec.instance_count = 1
+    members = {
+        "gateway-0": _former_member(
+            index=0,
+            marker=None,
+            legacy_signature=True,
+            allocation_id="shared-private",
+        ),
+        "gateway-1": _former_member(index=1, marker=None),
+    }
+
+    with (
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
+        pytest.raises(RuntimeError, match="incomplete or mixed"),
+    ):
+        vm_mgr.discover_former_vm_ha_candidate_members(spec)
 
 
 def test_name_collision_and_two_ordinary_vms_do_not_infer_former_vm_ha() -> None:
@@ -882,6 +999,7 @@ def test_name_collision_and_two_ordinary_vms_do_not_infer_former_vm_ha() -> None
     assert result == {}
     assert vm_mgr._former_vm_ha_snapshot is None
     assert vm_mgr._former_vm_ha_evidence is None
+    assert service.list_requests == []
 
 
 def test_mismatched_member_marker_does_not_infer_former_vm_ha() -> None:
@@ -909,7 +1027,7 @@ def test_mismatched_member_marker_does_not_infer_former_vm_ha() -> None:
 
 def test_ambiguous_allocation_names_do_not_infer_former_vm_ha() -> None:
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
-    spec, _, allocation = _former_identity_fixture()
+    spec, members, allocation = _former_identity_fixture()
     other = _former_allocation(
         alloc_id="other-private",
         name="gateway-other-cluster-shared-private-ip",
@@ -918,6 +1036,11 @@ def test_ambiguous_allocation_names_do_not_infer_former_vm_ha() -> None:
 
     with (
         patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(
+            vm_mgr,
+            "_get_vm_by_name_for_vm_ha_preflight",
+            side_effect=lambda _, name: members[name],
+        ),
         patch("nebius.api.nebius.vpc.v1.AllocationServiceClient", return_value=service),
     ):
         result = vm_mgr.discover_former_vm_ha_members(spec)
@@ -996,6 +1119,8 @@ def test_unattached_private_allocation_does_not_infer_former_vm_ha() -> None:
 
 
 def test_former_vm_ha_discovery_requires_coherent_allocation_and_member_records() -> None:
+    from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
+
     vm_mgr = VMManager(project_id="project-1", zone="eu-north1-a")
     spec, members, allocation = _former_identity_fixture()
     service = _FormerAllocationService([allocation])
@@ -1019,6 +1144,13 @@ def test_former_vm_ha_discovery_requires_coherent_allocation_and_member_records(
     assert vm_mgr._former_vm_ha_evidence is not None
     assert vm_mgr._former_vm_ha_evidence.cluster_id == "cluster"
     assert vm_mgr._former_vm_ha_evidence.owner_instance_id == "compute-0"
+    assert len(service.list_requests) == 1
+    request = service.list_requests[0]
+    assert isinstance(request, ListAllocationsRequest)
+    assert request.parent_id == "project-1"
+    assert request.page_size == 1000
+    assert request.page_token == ""
+    assert not hasattr(request, "metadata_filter")
 
 
 def test_former_vm_ha_identity_drift_blocks_teardown_after_classification() -> None:

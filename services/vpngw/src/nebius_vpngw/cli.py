@@ -31,6 +31,7 @@ from .deploy.ssh_policy import (
     require_vm_ha_ssh_policy,
 )
 from .deploy.ssh_push import SSHPush
+from .deploy.vm_ha_identity import FormerVMHAProvenance, LegacyVMHAIdentity
 from .deploy.vm_manager import VMManager
 
 DEFAULT_CONFIG_FILENAME = "nebius-vpngw.config.yaml"
@@ -1113,6 +1114,7 @@ def apply(
 
     ssh_policy: SSHTrustPolicy | None = None
     former_vm_ha_members: dict[str, str] = {}
+    legacy_vm_ha_identities: dict[str, LegacyVMHAIdentity | None] | None = None
     discovery_manager: VMManager | None = None
     # Read-only cloud discovery needs the operator credential even when a later
     # --sa flow will provision and switch to a service-account token. Token
@@ -1173,21 +1175,34 @@ def apply(
                 region_id=region_id,
                 management_key_path=management_key_path,
             )
-            former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+            former_candidates = discovery_manager.discover_former_vm_ha_candidate_members(
                 plan.gateway_group
             )
-            if former_vm_ha_members:
+            if former_candidates:
                 require_explicit_known_hosts_file()
                 ssh_policy = require_vm_ha_ssh_policy(
-                    tuple(former_vm_ha_members.items()),
+                    tuple(former_candidates.items()),
                     enrollment_hosts=set(),
                 )
                 discovery_manager.verify_vm_ha_existing_identities(
-                    former_vm_ha_members,
+                    former_candidates,
                     policy=ssh_policy,
                     username=(
                         vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                     ),
+                )
+                if (
+                    discovery_manager.former_vm_ha_candidate_provenance
+                    is FormerVMHAProvenance.LEGACY_RUNTIME
+                ):
+                    inspector = SSHPush(ssh_policy=ssh_policy)
+                    legacy_vm_ha_identities = {
+                        name: inspector.inspect_legacy_vm_ha_identity(target, name, local_cfg)
+                        for name, target in sorted(former_candidates.items())
+                    }
+                former_vm_ha_members = discovery_manager.discover_former_vm_ha_members(
+                    plan.gateway_group,
+                    legacy_identities=legacy_vm_ha_identities,
                 )
         except (RuntimeError, ValueError) as error:
             print("[red]Former VM-HA discovery failed before ordinary provisioning:[/red]")
@@ -1259,8 +1274,17 @@ def apply(
     if former_vm_ha_members:
         assert discovery_manager is not None
         try:
+            if legacy_vm_ha_identities is not None:
+                assert ssh_policy is not None
+                inspector = SSHPush(ssh_policy=ssh_policy)
+                legacy_vm_ha_identities = {
+                    name: inspector.inspect_legacy_vm_ha_identity(target, name, local_cfg)
+                    for name, target in sorted(former_vm_ha_members.items())
+                }
             discovery_manager.verify_former_vm_ha_member_snapshot(
-                plan.gateway_group, former_vm_ha_members
+                plan.gateway_group,
+                former_vm_ha_members,
+                legacy_identities=legacy_vm_ha_identities,
             )
             planned_names = {instance.hostname for instance in plan.iter_instance_configs()}
             transition_ssh = SSHPush(ssh_policy=ssh_policy)

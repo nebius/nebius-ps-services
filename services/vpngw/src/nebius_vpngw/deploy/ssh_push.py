@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -24,6 +25,54 @@ from ..schema import (
     VMHARuntimeBinding,
 )
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
+from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
+
+_LEGACY_VM_HA_IDENTITY_SCRIPT = r"""
+import json
+import sys
+
+import yaml
+
+path = "/etc/nebius-vpngw/config-resolved.yaml"
+try:
+    with open(path, encoding="utf-8") as stream:
+        payload = yaml.safe_load(stream)
+except FileNotFoundError:
+    print(json.dumps({"status": "ordinary"}, sort_keys=True))
+    raise SystemExit(0)
+except Exception:
+    raise SystemExit(2)
+vm_ha = payload.get("vm_ha") if isinstance(payload, dict) else None
+if vm_ha is None:
+    print(json.dumps({"status": "ordinary"}, sort_keys=True))
+    raise SystemExit(0)
+if not isinstance(vm_ha, dict):
+    raise SystemExit(2)
+node = vm_ha.get("node")
+binding = vm_ha.get("runtime_binding")
+nodes = binding.get("nodes") if isinstance(binding, dict) else None
+if not isinstance(node, dict) or not isinstance(nodes, list):
+    raise SystemExit(2)
+result = {
+    "status": "vm-ha",
+    "cluster_id": vm_ha.get("cluster_id"),
+    "allocation_id": binding.get("shared_allocation_id"),
+    "instance_index": node.get("instance_index"),
+    "node_id": node.get("node_id"),
+    "role": node.get("role"),
+    "nodes": [
+        {
+            "node_id": item.get("node_id"),
+            "role": item.get("role"),
+            "compute_id": item.get("compute_id"),
+            "network_interface_name": item.get("network_interface_name"),
+        }
+        for item in nodes
+        if isinstance(item, dict)
+    ],
+}
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+"""
 
 
 def _host_identity_failure(error: Exception, paramiko: Any, ssh_target: str) -> RuntimeError | None:
@@ -499,6 +548,60 @@ printf "VM_HA_DEACTIVATED=%s\\n" "$stale"
                 detail = stderr.read().decode().strip()
                 raise RuntimeError(f"VM-HA deactivation failed: {detail or return_code}")
             return "VM_HA_DEACTIVATED=1" in stdout.read().decode().splitlines()
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
+
+    def inspect_legacy_vm_ha_identity(
+        self,
+        ssh_target: str,
+        instance_name: str,
+        local_cfg: dict,
+    ) -> LegacyVMHAIdentity | None:
+        """Read only the secret-free legacy runtime identity through an exact SSH pin."""
+
+        if not ssh_target or self._ssh_policy is None:
+            raise ValueError("Legacy VM-HA inspection requires an exact-pinned SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        key_path: str | None = vm_spec.get("ssh_private_key_path") or os.environ.get(
+            "VPNGW_SSH_KEY"
+        )
+        key_file = Path(key_path).expanduser() if key_path else None
+        encoded = base64.b64encode(_LEGACY_VM_HA_IDENTITY_SCRIPT.encode("utf-8")).decode("ascii")
+        command = f"printf %s {encoded} | base64 -d | sudo python3"
+        client = paramiko.SSHClient()
+        try:
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=instance_name,
+                transport_host=ssh_target,
+            )
+            client.connect(
+                hostname=ssh_target,
+                username=username,
+                key_filename=str(key_file) if key_file else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=15,
+            )
+            stdin, stdout, stderr = client.exec_command(command, timeout=30)
+            return_code = stdout.channel.recv_exit_status()
+            output = stdout.read().decode().strip()
+            if return_code != 0:
+                raise RuntimeError("Former VM-HA runtime identity could not be read")
+            try:
+                payload = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise RuntimeError("Former VM-HA runtime identity is malformed") from error
+            return parse_legacy_vm_ha_identity(payload, instance_name=instance_name)
         except Exception as error:
             identity_failure = _host_identity_failure(error, paramiko, ssh_target)
             if identity_failure is not None:

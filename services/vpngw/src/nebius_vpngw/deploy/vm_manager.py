@@ -24,7 +24,10 @@ from .vm_diff import VMDiffAnalyzer, VMSpec
 from .vm_ha_identity import (
     PROVISIONING_MARKER_PREFIX,
     FormerVMHAEvidence,
+    FormerVMHAProvenance,
+    LegacyVMHAIdentity,
     classify_former_vm_ha_evidence,
+    compute_provisioning_provenance,
     render_provisioning_marker,
 )
 
@@ -112,6 +115,7 @@ class VMManager:
         self._vm_ha_shared_allocation_id: str | None = None
         self._former_vm_ha_snapshot: dict[str, tuple[t.Any, str]] | None = None
         self._former_vm_ha_evidence: FormerVMHAEvidence | None = None
+        self._former_vm_ha_candidate_provenance: FormerVMHAProvenance | None = None
         self._vm_ha_route_targets: tuple[VMHARouteTarget, ...] | None = None
 
     def get_ha_instance(self, instance_id: str) -> t.Any:
@@ -1249,7 +1253,10 @@ class VMManager:
         }
 
     def _classify_former_vm_ha_evidence(
-        self, client: t.Any, spec: GatewayGroupSpec
+        self,
+        client: t.Any,
+        spec: GatewayGroupSpec,
+        legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
     ) -> tuple[dict[str, tuple[t.Any, str]], FormerVMHAEvidence] | None:
         return classify_former_vm_ha_evidence(
             project_id=self.project_id,
@@ -1258,9 +1265,47 @@ class VMManager:
             resource_id=self._resource_id,
             instance_reader=self._get_vm_by_name_for_vm_ha_preflight,
             public_ip_reader=self._vm_public_ip_from_object,
+            legacy_identities=legacy_identities,
         )
 
-    def discover_former_vm_ha_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+    def discover_former_vm_ha_candidate_members(self, spec: GatewayGroupSpec) -> dict[str, str]:
+        """Find only exact Compute-persisted former-HA candidates, without VPC reads."""
+
+        self._former_vm_ha_candidate_provenance = None
+        if spec.vm_ha is not None or not self.project_id:
+            return {}
+        client = self._build_sdk_client(spec.region)
+        if client is None:
+            raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
+        members = self._discover_vm_ha_members(client, replace(spec, instance_count=2))
+        provenances = {
+            compute_provisioning_provenance(instance) for instance, _ in members.values()
+        }
+        provenances.discard(None)
+        if not provenances:
+            return {}
+        if (
+            len(members) != 2
+            or len(provenances) != 1
+            or any(
+                compute_provisioning_provenance(instance) is None
+                for instance, _ in members.values()
+            )
+        ):
+            raise RuntimeError("Former VM-HA Compute provenance is incomplete or mixed")
+        self._former_vm_ha_candidate_provenance = provenances.pop()
+        return {name: public_ip for name, (_, public_ip) in members.items()}
+
+    @property
+    def former_vm_ha_candidate_provenance(self) -> FormerVMHAProvenance | None:
+        return self._former_vm_ha_candidate_provenance
+
+    def discover_former_vm_ha_members(
+        self,
+        spec: GatewayGroupSpec,
+        *,
+        legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
+    ) -> dict[str, str]:
         """Discover both former HA members independently of the new member count."""
 
         self._former_vm_ha_snapshot = None
@@ -1270,37 +1315,58 @@ class VMManager:
         client = self._build_sdk_client(spec.region)
         if client is None:
             raise RuntimeError("Former VM-HA discovery requires the Nebius SDK")
-        classified = self._classify_former_vm_ha_evidence(client, spec)
+        classified = self._classify_former_vm_ha_evidence(
+            client, spec, legacy_identities=legacy_identities
+        )
         if classified is None:
+            if self._former_vm_ha_candidate_provenance is not None:
+                raise RuntimeError("Former VM-HA candidate evidence is not authoritative")
             return {}
         members, evidence = classified
+        if (
+            self._former_vm_ha_candidate_provenance is not None
+            and evidence.provenance is not self._former_vm_ha_candidate_provenance
+        ):
+            raise RuntimeError("Former VM-HA provenance changed during classification")
         self._former_vm_ha_snapshot = members
         self._former_vm_ha_evidence = evidence
         return {name: public_ip for name, (_, public_ip) in members.items()}
 
     def verify_former_vm_ha_member_snapshot(
-        self, spec: GatewayGroupSpec, expected: t.Mapping[str, str]
+        self,
+        spec: GatewayGroupSpec,
+        expected: t.Mapping[str, str],
+        *,
+        legacy_identities: t.Mapping[str, LegacyVMHAIdentity | None] | None = None,
     ) -> None:
         """Re-read every former Compute identity immediately before teardown."""
 
         snapshot = self._former_vm_ha_snapshot
         evidence = self._former_vm_ha_evidence
-        if snapshot is None or {
-            name: public_ip for name, (_, public_ip) in snapshot.items()
-        } != dict(expected) or evidence is None:
+        if (
+            snapshot is None
+            or {name: public_ip for name, (_, public_ip) in snapshot.items()} != dict(expected)
+            or evidence is None
+        ):
             raise RuntimeError("Former VM-HA discovery snapshot is unavailable or stale")
         client = self._build_sdk_client(spec.region)
         if client is None:
             raise RuntimeError("Former VM-HA identity recheck requires the Nebius SDK")
-        current = self._classify_former_vm_ha_evidence(client, spec)
+        if evidence.provenance is FormerVMHAProvenance.LEGACY_RUNTIME and legacy_identities is None:
+            raise RuntimeError(
+                "Former VM-HA legacy runtime evidence must be re-read immediately before teardown"
+            )
+        current = self._classify_former_vm_ha_evidence(
+            client, spec, legacy_identities=legacy_identities
+        )
         if current is None or current[1] != evidence:
             raise RuntimeError("Former VM-HA allocation or member evidence changed")
-        if {
-            name: public_ip for name, (_, public_ip) in current[0].items()
-        } != dict(expected):
+        if {name: public_ip for name, (_, public_ip) in current[0].items()} != dict(expected):
             raise RuntimeError("Former VM-HA member addresses changed")
         self._require_vm_ha_member_snapshot(client, replace(spec, instance_count=2), snapshot)
-        final = self._classify_former_vm_ha_evidence(client, spec)
+        final = self._classify_former_vm_ha_evidence(
+            client, spec, legacy_identities=legacy_identities
+        )
         if final is None or final[1] != evidence:
             raise RuntimeError("Former VM-HA allocation or member evidence changed")
 
@@ -1361,21 +1427,22 @@ class VMManager:
             raise RuntimeError("VM-HA cloud-init must contain exactly one sshd HostKey anchor")
         if cloud_init.count(cloud_config_anchor) != 1 or "\n" in provisioning_marker:
             raise RuntimeError("VM-HA cloud-init must contain one safe provisioning marker anchor")
-        return cloud_init.replace(
-            cloud_config_anchor,
-            cloud_config_anchor
-            + PROVISIONING_MARKER_PREFIX
-            + provisioning_marker
-            + "\n",
-            1,
-        ).replace(
-            write_files_anchor,
-            write_files_anchor + identity.cloud_init_entries(),
-            1,
-        ).replace(
-            sshd_anchor,
-            sshd_anchor + "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
-            1,
+        return (
+            cloud_init.replace(
+                cloud_config_anchor,
+                cloud_config_anchor + PROVISIONING_MARKER_PREFIX + provisioning_marker + "\n",
+                1,
+            )
+            .replace(
+                write_files_anchor,
+                write_files_anchor + identity.cloud_init_entries(),
+                1,
+            )
+            .replace(
+                sshd_anchor,
+                sshd_anchor + "            HostKey /etc/ssh/ssh_host_vpngw_key\n",
+                1,
+            )
         )
 
     def _prepare_vm_ha_enrollment_cloud_inits(
