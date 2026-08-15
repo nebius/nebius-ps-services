@@ -1259,6 +1259,29 @@ class ProjectSpecsTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ProjectSpecError, "only valid before"):
             lifecycle_module.waive(self.project, "session-carry", "turn-2", "read-only")
 
+    def test_new_prompt_reopens_task_worker_delegation_waiver(self) -> None:
+        self.write_canonical()
+        session = "session-worker-delegation"
+        delegated = start_prompt(self.project, session, "turn-1")
+        _state, path, _project = lifecycle_module.load_for_project(
+            self.project, session
+        )
+        delegated.update(
+            {
+                "phase": "waived",
+                "waiver": "task-worker-delegated",
+            }
+        )
+        lifecycle_module._write_private(path, delegated)
+
+        reopened = start_prompt(self.project, session, "turn-2")
+
+        self.assertEqual(reopened["phase"], "planning-required")
+        self.assertIsNone(reopened["waiver"])
+        self.assertEqual(
+            reopened["turn_sha256"], lifecycle_module._turn_hash("turn-2")
+        )
+
     def test_incomplete_rich_records_cannot_issue_current_receipt(self) -> None:
         (self.docs / "requirements.md").write_bytes(
             canonical_document("requirements", rich_requirement_body("draft"))

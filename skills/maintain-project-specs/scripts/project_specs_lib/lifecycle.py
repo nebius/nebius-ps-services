@@ -99,6 +99,7 @@ def _valid_state(value: object) -> bool:
             "read-only",
             "non-project",
             "project-policy",
+            "task-worker-delegated",
         }
         and (value.get("phase") == "waived") == (value.get("waiver") is not None)
         and (

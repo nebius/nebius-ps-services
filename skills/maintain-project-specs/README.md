@@ -50,6 +50,9 @@ other alternate same-project bundle and malformed coordinator-shaped command
 fails closed. Delegated worker commits retain their command-derived worker
 session after the adapter matches it to the running task plane and canonical
 evidence, while direct commits remain bound to the outer hook payload session.
+The resulting `task-worker-delegated` waiver is a valid terminal worker state;
+a later prompt in that same session reopens normal project planning instead of
+being rejected as malformed lifecycle state.
 An attested delegated command may use either the hook runtime or an exact
 PATH-canonical executable named `python3` or `python3.N`. A different canonical
 Python version is therefore valid, while arbitrary same-name paths, wrappers,

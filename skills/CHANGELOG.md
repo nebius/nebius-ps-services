@@ -6,6 +6,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Fixed
 
+- Fixed project-contract recovery after a Task Implementer worker commit. The
+  canonical lifecycle library now accepts the hook-owned
+  `task-worker-delegated` waiver and lets a later prompt reopen normal planning,
+  matching the state already produced and validated by the installed hook.
 - Fixed the Task Implementer aggregate verifier's per-suite timeout so the
   measured full wave and linked-worktree crash matrix completes within its
   bounded validation window instead of being reported as a false timeout.
