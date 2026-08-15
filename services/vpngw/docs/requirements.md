@@ -111,7 +111,11 @@
 #### Acceptance criteria
 
 - Non-HA command syntax, defaults, output meaning, and exit behavior remain supported.
-- Removing explicit VM HA acquires only the operator credential needed for read-only cloud access, uses durable shared-allocation evidence to discover both former members independently of the new instance count, completes read-only change analysis and any required operator confirmation before touching either member, strictly authenticates and identity-rechecks both, stops and disables HA services and every product mutation service on a retired member, removes HA-only systemd state and credential references, verifies the terminal non-HA state, and only then creates or switches to a requested service account or starts provisioning.
+- Removing explicit VM HA first selects the requested service-account credential when configured, or the operator credential otherwise, so a default-disabled ordinary apply never requires broader operator Compute or VPC read authority merely to prove that no HA teardown is needed.
+- Current managed HA state is selected by a secret-free local lifecycle record whose whole-record digest binds schema, status, project, gateway, allocation, and both member identities. The only cached status progression is `ACTIVE` to `REMOVAL_IN_PROGRESS`; a verified `REMOVED` tombstone makes later ordinary applies teardown-free and idempotent.
+- With no lifecycle record, removal migration reads the two exact member names under the selected credential and inspects both through the prevalidated exact-pin SSH policy. Two ordinary runtime identities return to ordinary apply without a VPC read; denied, partial, mixed, mismatched, or incoherent evidence fails closed, and allocation names alone never authorize teardown.
+- Coherent two-member HA runtime evidence drives an exact allocation read plus repeated Compute, NIC, attachment, owner, and runtime identity checks. The migration persists and rereads `ACTIVE` provenance before change analysis or teardown; rejected change or confirmation paths leave both members untouched.
+- An approved removal checkpoints `REMOVAL_IN_PROGRESS`, revalidates the complete evidence immediately before mutation, strictly authenticates and deactivates both members, stops every product mutation service on a retired member, removes HA-only systemd state and credential references, and writes `REMOVED` only after both terminal non-HA states are independently verified. Ordinary provisioning begins only after that terminal proof, apart from selecting or creating the requested service account needed for the read-only migration probe.
 - VM-HA status explains why a passive is promotable or blocked and names the safe operator recovery action.
 - Manual failback follows the same fencing, ownership-transfer, readiness, and route-reconciliation invariants as automatic failover.
 - HA activation aborts on the first critical remote failure, revalidates the remote generation and digest immediately before installation, and never reports success from stale staging acknowledgements or unverified guard/controller state.
@@ -131,6 +135,11 @@
 
 ## Task Implementer Requirements Change Log
 
+- 2026-08-14: Reconciled TI-REQ-006 after retained compatibility review. HA
+  removal now selects the requested credential before no-sidecar discovery,
+  adopts only coherent exact-pinned two-member runtime and exact allocation
+  evidence, binds lifecycle status into whole-record integrity, and persists a
+  verified removed tombstone so repeated ordinary apply remains idempotent.
 - 2026-08-14: Strengthened TI-REQ-006 so HA removal independently discovers,
   authenticates, deactivates, and verifies both former members before any
   ordinary mutation, while abort and confirmation paths leave the live cluster
